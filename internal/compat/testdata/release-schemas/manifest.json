@@ -651,6 +651,14 @@
       "AppliedVersion": 18,
       "HasSourceMetadata": false,
       "Provenance": "Migration v18 adds a nullable versioned ingestion-semantics fingerprint to indexed source accounting."
+    },
+    {
+      "Fixture": "v19.sql",
+      "ProvenanceSHA256": "94c259907d998eb2cfa2227f94a3ba182e3cc0bf5e812ba2a11b7a4321de0939",
+      "Signature": "sha256:0e3693d95d44a7ef7033f9f10f4ded7a07e266e2c4f1dd7146c36d8219a55abd",
+      "AppliedVersion": 19,
+      "HasSourceMetadata": false,
+      "Provenance": "Migration v19 adds nullable native call identity to derived tool events, independently of canonical message UUIDs."
     }
   ]
 }

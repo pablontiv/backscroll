@@ -79,7 +79,7 @@ internal/
 ├── hybrid/            — Reciprocal Rank Fusion helpers for merged lexical retrieval
 ├── sequences/         — F4 PrefixSpan mining (deterministic discovery of frequent tool-call sequences per session)
 ├── services/          — Concrete typed read-only query orchestration over storage
-└── storage/           — SQLite adapter (dual FTS5 indexes: tool_fts + messages_fts, BM25, WAL mode, migrations v1–v18, search_items, session_tags, tool_events, message_templates, template_matches, correction_signals, annotations, AggregateCommands, AggregateFailures, AggregateTemplates, AggregateCorrections, UpsertAnnotation, LoadToolSequences)
+└── storage/           — SQLite adapter (dual FTS5 indexes: tool_fts + messages_fts, BM25, WAL mode, migrations v1–v19, search_items, session_tags, tool_events, message_templates, template_matches, correction_signals, annotations, AggregateCommands, AggregateFailures, AggregateTemplates, AggregateCorrections, UpsertAnnotation, LoadToolSequences)
 scripts/
 └── recall-eval/       — isolated legacy/synthetic recall evaluator and cohort reporter
 ```
@@ -121,7 +121,7 @@ External knowledge sources are configured with active `*.inputs.toml` manifests 
 
 - **Optional project registry**: `~/.config/backscroll/projects.toml` remains independent of `BACKSCROLL_CONFIG_DIR`. `projects.LoadGlobalRegistry()` returns `(ProjectRegistry, error)`; only not-exist is optional empty. Invalid TOML, directory paths, and read/permission failures are fatal preflight configuration errors before startup lock/database side effects, even with explicit project scope. Scope, ingest, and rebuild callers propagate errors; direct ingest/rebuild runners validate before opening/preparing the database. Absent registries retain local-hint/basename fallback. See `docs/configuration.md#optional-project-registry`.
 
-- **Codex rollout boundary**: `internal/readers/codex_reader.go` and `docs/input-contract.md` own supported records and exclusions; `docs/research/codex-input-evidence.md` records privacy-safe shape evidence and the native RED/GREEN test. The exact local-build install and commit verification path is `docs/runbooks/local-install.md`; development builds must retain `version=dev` and verify `vcs.revision` via `go version -m` rather than inventing a release version.
+- **Codex rollout boundary**: `internal/readers/codex_reader.go` and `docs/input-contract.md` own supported records and exclusions; `docs/research/codex-input-evidence.md` records privacy-safe shape evidence and the native RED/GREEN test. Epoch 2 maps native calls/results into tool metadata; V19 `native_call_id` remains derived metadata separate from canonical UUID ownership, and Codex retains whole-file snapshot semantics. The exact local-build install and commit verification path is `docs/runbooks/local-install.md`; development builds must retain `version=dev` and verify `vcs.revision` via `go version -m` rather than inventing a release version.
 
 - **OMP native v3 boundary**: `internal/readers/omp_reader.go`, `inputs/omp.inputs.toml`, and `docs/input-contract.md#complete-omp-example` own dedicated filesystem ingestion. Canonical discovery includes only `~/.omp/agent/sessions/*/*.jsonl`, excluding nested children. Native session ID + entry ID + physical block index provide perennial UUIDs; raw attribution/tool boundaries prove origin, and raw result details prove Bash exit/interruption before truncation. No Pi alias, schema migration, or provider-specific source value.
 
@@ -264,7 +264,7 @@ github.com/pablontiv/backscroll/internal/categories    — F4 category map loade
 github.com/pablontiv/backscroll/internal/hybrid        — Reciprocal Rank Fusion helpers for merged lexical retrieval
 github.com/pablontiv/backscroll/internal/sequences     — F4 PrefixSpan mining (deterministic pattern discovery per session)
 github.com/pablontiv/backscroll/internal/services      — Concrete typed read-only query orchestration over storage
-github.com/pablontiv/backscroll/internal/storage       — Database schema, migrations v1–v18, FTS5 indexes
+github.com/pablontiv/backscroll/internal/storage       — Database schema, migrations v1–v19, FTS5 indexes
 github.com/pablontiv/backscroll/internal/projects      — Project identity registry
 github.com/pablontiv/backscroll/internal/readers       — SessionReader interface, Registry, ClaudeReader (text+tool_use+tool_result), PiReader (text+toolCall+custom results), OMPReader (native v3 text+thinking+toolCall+toolResult; parser-backed identities and origin), OpenCodeReader (text+tool state.input+state.output), CodexReader (rollout response items; docs/input-contract.md), MarkdownDocumentReader (`markdown_document`), MarkdownSectionsReader (`markdown_sections`); toolfmt serializer
 github.com/pablontiv/backscroll/internal/recovery      — Stranded database recovery orchestration, durable backup, atomic replacement, and post-install sync

@@ -408,8 +408,20 @@ Codex global configuration or interpolate that environment variable.
 The Codex reader indexes `response_item` user/assistant `input_text`/`output_text`,
 JSON-string function arguments, free-form custom-tool inputs, and string or text-block
 tool outputs. It uses `session_meta.cwd` for ordinary project identity and the
-record timestamp for date filtering. Tool names and arguments are searchable as
-`--content-type tool`; rich error/exit-code/UUID metadata is not synthesized.
+record timestamp for date filtering. Supported function/custom calls each emit one
+tool event with the native tool name and nullable `native_call_id` from `call_id`.
+Results pair to calls by that ID across interleaving, including later appended
+results. Calls and outputs remain searchable as `--content-type tool`; outputs
+are automation-origin text, not additional call events.
+
+`exec_command.cmd` and `shell.command` argv prove shell command heads. Custom-tool
+input and generic `exec` wrapper code have unknown command heads. Native result
+`is_error` booleans preserve true/false; shell JSON `metadata.exit_code` and native
+`Process exited with code …`/`Output:` envelopes prove shell outcomes before text
+truncation. `exec` `Script completed`/`Script failed` envelopes describe only the
+wrapper: nested tool success/failure is unknown. Other responses and missing
+outputs remain unsignalled. The serialized direct-search predicate and paired
+echo exclusion are unchanged; explicit tool searches still expose those records.
 
 Verification after installation (these commands update only Backscroll's index;
 Codex files remain read-only):
@@ -443,11 +455,18 @@ Limits (observed format boundary and RED/GREEN evidence: [Codex input evidence](
 - Malformed JSON/blocks, invalid response timestamps and unsupported payload shapes
   are skipped; valid neighboring records still ingest. File I/O errors are returned.
 - Text is normalized by existing cleaning/classification; tool text is capped at
-  4,000 Unicode code points. Native item/session IDs and Git metadata are not new
-  storage fields. No Codex-specific migration or direct Codex database access is
-  needed; the shared V16 message-origin migration applies to every indexed format.
-- Like Pi/OpenCode, changed files use the UUID-less per-file reload path; unchanged
-  hashes skip work, and missing source files keep their indexed history. Moving an
+  4,000 Unicode code points after outcome extraction. Shared migration V19 adds
+  nullable `tool_events.native_call_id` independently of canonical `message_uuid`.
+  Codex search rows remain UUID-less snapshots; native call IDs do not establish
+  perennial row identity or cross-file ownership. Native session/item IDs and Git
+  metadata retain their existing indexing boundary.
+- Codex reader epoch 2 schedules available epoch-1 inputs through the shared
+  200-path replay queue, even when source bytes are unchanged. Missing sources
+  retain history and their prior fingerprint. Migration leaves historical native
+  IDs NULL; recovery rederives tool events from canonical text with unknown native
+  identity until an available native source is reparsed.
+- Changed files use the UUID-less per-file reload path; unchanged matching
+  fingerprints skip work, and missing files keep their indexed history. Moving an
   already-indexed file into the archive can retain both path identities; there is
   no cross-path/session-ID deduplication. Fork/subagent histories are not specially
   filtered by Codex metadata; narrow discovery roots/excludes as needed.

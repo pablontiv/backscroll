@@ -212,6 +212,16 @@ Legacy Pi sources without a native session ID keep snapshot semantics.
 Unavailable sources keep their existing rows and fingerprint; their missing
 native metadata remains unknown.
 
+Codex reader epoch 2 replays native function/custom call metadata through the
+same shared 200-path bounded queue. Its canonical search records keep NULL
+message UUIDs and snapshot semantics, so appending a paired result refreshes
+the call's proven outcome together with ordinary appended prose. Native `call_id`
+is stored only as nullable V19 satellite metadata in `tool_events.native_call_id`;
+the canonical `message_uuid` association and extraction-policy version are
+unchanged. Unavailable history keeps its fingerprint and existing metadata.
+Recovery lossily rederives tool events from stored text with unknown native
+call identity; ingestion replay restores native metadata from available sources.
+
 Startup coordination uses owner/follower branches: snapshot-read, metadata-read, and mutation owners acquire the canonical lock and perform prepare/migrate/sync before the handler runs; a remediation owner acquires and retains the same mutation-grade lock but bypasses ordinary compatible-open and pre-handler sync; a read-safe follower validates the existing database read-only and continues on a compatible snapshot; metadata-read followers avoid opening the database; mutation and remediation followers wait up to five seconds for ownership or fail retryably with `sync_in_progress`. WAL snapshot followers remain compatible only on the same local host.
 
 The SQLite database is the perennial event store, not a disposable cache. When a source file expires, its indexed rows remain available; the perennial store has no deletion path.

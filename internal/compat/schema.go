@@ -407,6 +407,7 @@ var allMigrationSteps = []MigrationStep{
 	{Version: 16, Name: "V16 parser-backed message origin"},
 	{Version: 17, Name: "V17 project attribution evidence"},
 	{Version: 18, Name: "V18 ingestion semantics fingerprint"},
+	{Version: 19, Name: "V19 native tool call identity"},
 }
 
 func hasObject(objects []sqliteObject, typ, name string) bool {

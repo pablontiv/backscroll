@@ -68,13 +68,25 @@ than shell tools. `bash` arguments supply command heads before searchable input
 is truncated. Native `toolResult` output is paired by `toolCallId` and contributes
 no additional call event.
 
+Codex function/custom calls each contribute one event under their native tool
+name. Only `exec_command.cmd` and `shell.command` argv prove shell heads; generic
+`exec` wrapper code and free-form custom inputs belong to the unknown-head group.
+Nullable `tool_events.native_call_id` is V19 derived satellite metadata, separate
+from the canonical `message_uuid` association used for eligibility. V19 leaves
+historical IDs NULL. Recovery lossily rederives tool events from stored text,
+leaving native identity unknown; ingestion replay restores native metadata when
+the source is available.
+
 ### failures — what breaks
 
 Failure signatures `(tool_name, is_error, exit_code)` for events with
 `is_error = 1`. The census declares its coverage: events with no error
 signal (`is_error` NULL) are excluded and counted. `exit_code=?` means no
-exit code was recoverable (non-Bash tools have none; Bash text is
-regex-mined and capped at 4000 runes by toolfmt).
+exit code was recoverable. Codex pairs native results by call ID and reads proven
+shell JSON exit metadata/native process envelopes before the 4,000-code-point
+text cap. Explicit native error booleans retain true/false; missing or unsupported
+responses remain unknown. `exec` script envelopes prove only wrapper success or
+failure, never a nested tool's outcome.
 
 Pi uses only explicit native `isError` true/false as its result signal.
 Interleaved and out-of-order results are matched by call ID. A missing result
