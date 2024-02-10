@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"testing"
@@ -226,6 +227,85 @@ Investigation needed for test purposes.`,
 				}
 				if item.Content == "" {
 					t.Errorf("item %d: content is empty", i)
+				}
+			}
+		})
+	}
+}
+
+func TestMarkdownPreparationContracts(t *testing.T) {
+	tests := []struct {
+		name     string
+		content  string
+		source   string
+		baseID   string
+		headed   bool
+		sections []string
+	}{
+		{
+			name:     "frontmatter ID and headed sections",
+			content:  "\n---\nid: document-id\n---\n# Preamble\nDiscarded in section mode.\n\n## First\nBody with trailing spaces.  \n\n### Nested\nNested body.\n\n## Second\n  Indented body.\n\n",
+			source:   "decision",
+			baseID:   "document-id",
+			headed:   true,
+			sections: []string{"## First\nBody with trailing spaces.  \n\n### Nested\nNested body.", "## Second\n  Indented body."},
+		},
+		{
+			name:     "single headed section",
+			content:  "# Preamble\n\n## Only\nBody.\n",
+			source:   "spec",
+			baseID:   "spec-default",
+			headed:   true,
+			sections: []string{"## Only\nBody."},
+		},
+		{
+			name:     "frontmatter name and trimmed fallback",
+			content:  " \n---\nname: named-document\n---\n# Title\n\nBody with trailing spaces.  \n### Nested\nText.\n \n",
+			source:   "backlog",
+			baseID:   "named-document",
+			sections: []string{"---\nname: named-document\n---\n# Title\n\nBody with trailing spaces.  \n### Nested\nText."},
+		},
+		{
+			name:     "source default and long line",
+			content:  " \n# Title\n" + string(bytes.Repeat([]byte("x"), sourceReadBufferSize*3)) + "\n \n",
+			source:   "memory",
+			baseID:   "memory-default",
+			sections: []string{"# Title\n" + string(bytes.Repeat([]byte("x"), sourceReadBufferSize*3))},
+		},
+		{
+			name:     "empty document",
+			source:   "rule",
+			baseID:   "rule-default",
+			sections: []string{""},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			path := filepath.Join(t.TempDir(), "document.md")
+			if err := os.WriteFile(path, []byte(tt.content), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			item, err := ParseDocumentContext(context.Background(), path, tt.source)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if want := (SourceItem{ID: tt.baseID, Source: tt.source, Content: tt.content, Path: path}); item != want {
+				t.Fatal("whole document must retain its exact bytes, base ID, source, and path")
+			}
+			items, err := ParseSectionedContext(context.Background(), path, tt.source)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if len(items) != len(tt.sections) {
+				t.Fatalf("section count = %d, want %d", len(items), len(tt.sections))
+			}
+			for i, content := range tt.sections {
+				id := tt.baseID
+				if tt.headed {
+					id = fmt.Sprintf("%s-%d", id, i+1)
+				}
+				if want := (SourceItem{ID: id, Source: tt.source, Content: content, Path: path}); items[i] != want {
+					t.Fatalf("section %d must retain its exact content, ordinal ID, source, and path", i)
 				}
 			}
 		})
