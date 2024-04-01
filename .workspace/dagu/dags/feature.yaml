@@ -1,7 +1,7 @@
-# dagu-feature-bundle: @a4s/omp-dagu@0.3.93 source=pablontiv/a4s@fc678c92df21c7307089ab7c226c16388ef89d80 bootstrap=bootstrap-backscroll-v0-3-93 dagu=2.20.1
+# dagu-feature-bundle: @a4s/omp-dagu@0.3.94 source=pablontiv/a4s@f34a300525812f2c87c351e832d9a24321ecadc1 bootstrap=bootstrap-backscroll-v0-3-94 dagu=2.20.1
 labels:
   - workspace=backscroll
-  - dagu-feature-bundle=0.3.93
+  - dagu-feature-bundle=0.3.94
 queue: backscroll
 type: graph
 dotenv: []
@@ -41,7 +41,7 @@ env:
   - REQUIRED_CHECK: "candidate"
   - WORKTREE: ${PRIMARY}/.workspace/worktrees/issue-${ISSUE}
   - RUN: ${context.run.id}
-  - DAGU_FEATURE_BUNDLE: "dagu-feature-bundle=0.3.93 source=pablontiv/a4s@fc678c92df21c7307089ab7c226c16388ef89d80 bootstrap=bootstrap-backscroll-v0-3-93"
+  - DAGU_FEATURE_BUNDLE: "dagu-feature-bundle=0.3.94 source=pablontiv/a4s@f34a300525812f2c87c351e832d9a24321ecadc1 bootstrap=bootstrap-backscroll-v0-3-94"
   - DAGU_RESOURCE_GUARD: |
       resource_lock() {
         local operation=$1 primary root expected actual common key attempt owner run status candidate branch issue
@@ -507,7 +507,10 @@ steps:
       mkdir -p "$STATE"
       printf '%s\n' "$identity" > "$owner"
       printf '%s\n' "$identity" > "$STATE/identity"
-      if ! test -f "$STATE/base"; then git -C "$WORKTREE" rev-parse HEAD > "$STATE/base"; fi
+      if ! test -f "$STATE/base"; then
+        git -C "$WORKTREE" rev-parse HEAD > "$STATE/initial-head"
+        git -C "$WORKTREE" merge-base HEAD "origin/$BASE_BRANCH" > "$STATE/base"
+      fi
       worktree_path=$(cd "$WORKTREE" && pwd -P)
       jq -n --arg run "$RUN" --arg primary "$primary_path" --arg branch "$BRANCH" --arg worktree "$worktree_path" \
         '{run:$run,primary:$primary,branch:$branch,worktree:$worktree}' > "$STATE/resource.json"
@@ -578,6 +581,7 @@ steps:
       base=$(cat "$STATE/base")
       head=$(git rev-parse HEAD)
       expected=$base
+      if test -f "$STATE/initial-head"; then expected=$(cat "$STATE/initial-head"); fi
       if test -f "$STATE/candidate.json"; then expected=$(jq -r .sha "$STATE/candidate.json"); fi
       test "$head" = "$expected" || fail "HEAD differs from Dagu candidate"
       # Resolve every changed path and symlink lexically and physically, including dangling links.
@@ -815,6 +819,7 @@ steps:
           if test -f "$STATE/$artifact"; then mv "$STATE/$artifact" "$STATE/historical/$before/"; fi
         done
         printf '%s\n' "$base" > "$STATE/base"
+        git -C "$WORKTREE" rev-parse HEAD > "$STATE/initial-head"
         test -s "$STATE/conflict-files"
         printf 'rewind\n' > "$STATE/conflict-action"
         sed 's/^/conflict_files=/' "$STATE/conflict-files"
@@ -901,6 +906,8 @@ steps:
     depends: quality_prepare
     action: human.task
     with:
+      push_back:
+        rewind_to: implement
       prompt: "Read quality_prepare's current request and markers. Launch task agent=qa and task agent=reviewer as two named subagents, distinct from IMPLEMENTER. Each assignment includes its exact FEATURE_QUALITY marker, repo/run/iteration/attempt/SHA, read-only worktree ${WORKTREE}, targeted QA commands and structured verdict contract from SKILL.md. Each reads git -C ${WORKTREE} rev-parse HEAD. Complete with QA and REVIEW allocated ids. The OMP extension verifies effective JSONL identities and provenance; fabricated reports, ineligible fallback and indeterminate identity block locally. QA/reviewer FAIL returns to implement with findings."
       form:
         type: object

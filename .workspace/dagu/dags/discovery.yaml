@@ -1,7 +1,7 @@
-# dagu-feature-bundle: @a4s/omp-dagu@0.3.93 source=pablontiv/a4s@fc678c92df21c7307089ab7c226c16388ef89d80 bootstrap=bootstrap-backscroll-v0-3-93 dagu=2.20.1
+# dagu-feature-bundle: @a4s/omp-dagu@0.3.94 source=pablontiv/a4s@f34a300525812f2c87c351e832d9a24321ecadc1 bootstrap=bootstrap-backscroll-v0-3-94 dagu=2.20.1
 labels:
   - workspace=backscroll
-  - dagu-feature-bundle=0.3.93
+  - dagu-feature-bundle=0.3.94
 queue: backscroll
 type: graph
 dotenv: []
@@ -25,7 +25,7 @@ params:
     default: ""
 env:
   - RUN: ${context.run.id}
-  - DAGU_FEATURE_BUNDLE: "dagu-feature-bundle=0.3.93 source=pablontiv/a4s@fc678c92df21c7307089ab7c226c16388ef89d80 bootstrap=bootstrap-backscroll-v0-3-93"
+  - DAGU_FEATURE_BUNDLE: "dagu-feature-bundle=0.3.94 source=pablontiv/a4s@f34a300525812f2c87c351e832d9a24321ecadc1 bootstrap=bootstrap-backscroll-v0-3-94"
 steps:
   - id: snapshot
     run: |

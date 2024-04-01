@@ -45,9 +45,9 @@ verify a development (`dev`) build.
 
 ## Dagu issue flow
 
-The repository adopts `@a4s/omp-dagu@0.3.93` from
-`pablontiv/a4s@fc678c92df21c7307089ab7c226c16388ef89d80`, rendered by
-`bootstrap-backscroll-v0-3-93` for Dagu `2.20.1`. The exact bootstrap artifacts
+The repository adopts `@a4s/omp-dagu@0.3.94` from
+`pablontiv/a4s@f34a300525812f2c87c351e832d9a24321ecadc1`, rendered by
+`bootstrap-backscroll-v0-3-94` for Dagu `2.20.1`. The exact bootstrap artifacts
 are versioned under `.workspace/dagu/dags/`: `feature.yaml` delivers issues,
 `poc.yaml` proves feasibility, `discovery.yaml` investigates repositories, and
 `planning.yaml` imports prepared backlog units for independent review, operator
