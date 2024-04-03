@@ -630,7 +630,7 @@ func TestSearch(t *testing.T) {
 	}
 
 	// Search for a term
-	results, err := db.Search("error", models.SearchOptions{
+	results, _, err := db.Search("error", models.SearchOptions{
 		Limit:  10,
 		Offset: 0,
 	})
@@ -675,7 +675,7 @@ func TestSearchPreservesNullableUUID(t *testing.T) {
 		t.Fatalf("store empty UUID fixture: %v", err)
 	}
 
-	results, err := db.Search("nullable identity sentinel", models.SearchOptions{ContentType: "text", Limit: 10})
+	results, _, err := db.Search("nullable identity sentinel", models.SearchOptions{ContentType: "text", Limit: 10})
 	if err != nil {
 		t.Fatalf("search nullable UUID fixtures: %v", err)
 	}
@@ -747,7 +747,7 @@ func TestSearchWithFilters(t *testing.T) {
 	}
 
 	// Search with project filter
-	results, err := db.Search("feature", models.SearchOptions{
+	results, _, err := db.Search("feature", models.SearchOptions{
 		Project: "proj1",
 		Limit:   10,
 	})
@@ -767,7 +767,7 @@ func TestSearchWithFilters(t *testing.T) {
 	}
 
 	// Search with role filter
-	results, err = db.Search("build", models.SearchOptions{
+	results, _, err = db.Search("build", models.SearchOptions{
 		Role:  "user",
 		Limit: 10,
 	})
@@ -782,7 +782,7 @@ func TestSearchWithFilters(t *testing.T) {
 	}
 
 	// Search with tag filter
-	results, err = db.Search("debug", models.SearchOptions{
+	results, _, err = db.Search("debug", models.SearchOptions{
 		Tag:   "debugging",
 		Limit: 10,
 	})
@@ -1067,7 +1067,7 @@ func TestOptimizeFTS(t *testing.T) {
 	}
 
 	// Verify we can still search
-	results, err := db.Search("test", models.SearchOptions{Limit: 10})
+	results, _, err := db.Search("test", models.SearchOptions{Limit: 10})
 	if err != nil {
 		t.Fatalf("search after optimize failed: %v", err)
 	}
@@ -1119,7 +1119,7 @@ func TestSearch_UnfilteredMergesToolAndProseWithRRF(t *testing.T) {
 		Project: "proj1",
 		Limit:   100,
 	}
-	results, err := db.Search("timeout", opts)
+	results, _, err := db.Search("timeout", opts)
 	if err != nil {
 		t.Fatalf("search: %v", err)
 	}

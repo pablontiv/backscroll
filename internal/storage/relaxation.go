@@ -107,18 +107,18 @@ func recallExpression(terms []recallTerm, table string) string {
 // protected terms and the retained core cannot vanish.
 // Stemming/prefix expansion is already supplied by FTS; scope widening is never
 // permitted. Only lowest-IDF term dropping is applicable after a zero-row stage.
-func (d *Database) SearchRelaxed(query string, opts models.SearchOptions) ([]SearchResult, []string, error) {
+func (d *Database) SearchRelaxed(query string, opts models.SearchOptions) ([]SearchResult, []string, SearchProvenance, error) {
 	return d.SearchRelaxedContext(context.Background(), query, opts)
 }
 
 // SearchRelaxedContext is SearchRelaxed with cancellation propagated through every stage.
-func (d *Database) SearchRelaxedContext(ctx context.Context, query string, opts models.SearchOptions) ([]SearchResult, []string, error) {
+func (d *Database) SearchRelaxedContext(ctx context.Context, query string, opts models.SearchOptions) ([]SearchResult, []string, SearchProvenance, error) {
 	if err := ctx.Err(); err != nil {
-		return nil, nil, err
+		return nil, nil, SearchProvenance{}, err
 	}
 	terms, err := parseRecallTerms(query)
 	if err != nil {
-		return nil, nil, err
+		return nil, nil, SearchProvenance{}, err
 	}
 	stages := []string{"strict"}
 	strictQuery := query
@@ -128,12 +128,12 @@ func (d *Database) SearchRelaxedContext(ctx context.Context, query string, opts 
 			break
 		}
 	}
-	results, exists, err := d.recallStageContext(ctx, terms, opts, strictQuery)
+	results, provenance, exists, err := d.recallStageContext(ctx, terms, opts, strictQuery)
 	if err != nil {
-		return nil, stages, err
+		return nil, stages, SearchProvenance{}, err
 	}
 	if exists {
-		return results, stages, nil
+		return results, stages, provenance, nil
 	}
 
 	// For a fixed corpus, IDF is monotone decreasing in document frequency.
@@ -150,12 +150,12 @@ func (d *Database) SearchRelaxedContext(ctx context.Context, query string, opts 
 		}
 	}
 	if len(candidates) <= 2 {
-		return results, stages, nil
+		return results, stages, provenance, nil
 	}
 	for i := range candidates {
 		docs, err := d.recallFrequencyContext(ctx, terms[candidates[i].index], opts.ContentType)
 		if err != nil {
-			return nil, stages, err
+			return nil, stages, SearchProvenance{}, err
 		}
 		candidates[i].docs = docs
 	}
@@ -173,43 +173,43 @@ func (d *Database) SearchRelaxedContext(ctx context.Context, query string, opts 
 			}
 		}
 		stages = append(stages, fmt.Sprintf("drop-terms/%d", len(dropped)))
-		results, exists, err = d.recallStageContext(ctx, remaining, opts, "")
+		results, provenance, exists, err = d.recallStageContext(ctx, remaining, opts, "")
 		if err != nil {
-			return nil, stages, err
+			return nil, stages, SearchProvenance{}, err
 		}
 		if exists {
 			for i := range results {
 				results[i].MatchStage = "drop-terms"
 				results[i].DroppedTerms = append([]string(nil), dropped...)
 			}
-			return results, stages, nil
+			return results, stages, provenance, nil
 		}
 	}
 	if err := ctx.Err(); err != nil {
-		return nil, stages, err
+		return nil, stages, SearchProvenance{}, err
 	}
-	return results, stages, nil
+	return results, stages, provenance, nil
 }
 
-func (d *Database) recallStageContext(ctx context.Context, terms []recallTerm, opts models.SearchOptions, strictQuery string) ([]SearchResult, bool, error) {
+func (d *Database) recallStageContext(ctx context.Context, terms []recallTerm, opts models.SearchOptions, strictQuery string) ([]SearchResult, SearchProvenance, bool, error) {
 	search := func(table string, page models.SearchOptions) ([]SearchResult, error) {
 		if strictQuery != "" {
 			return d.searchTableContext(ctx, table, strictQuery, page)
 		}
 		return d.searchTableQueryContext(ctx, table, recallExpression(terms, table), page)
 	}
-	results, err := searchTables(ctx, opts, search)
+	results, provenance, err := searchTables(ctx, opts, search)
 	if err != nil || len(results) > 0 || opts.Offset <= 0 {
-		return results, len(results) > 0, err
+		return results, provenance, len(results) > 0, err
 	}
 	// An exhausted page is not a zero-result query. Check before pagination;
 	// do not widen a successful earlier stage to fill a later empty page.
 	opts.Offset, opts.Limit = 0, 1
-	first, err := searchTables(ctx, opts, search)
+	first, _, err := searchTables(ctx, opts, search)
 	if err != nil {
-		return nil, false, err
+		return nil, SearchProvenance{}, false, err
 	}
-	return results, len(first) > 0, nil
+	return results, provenance, len(first) > 0, nil
 }
 
 func (d *Database) recallFrequency(term recallTerm, contentType string) (int, error) {

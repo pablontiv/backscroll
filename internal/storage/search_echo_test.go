@@ -90,7 +90,7 @@ func TestV15EchoBackfillPreservesPerennialIdentity(t *testing.T) {
 		t.Fatalf("backlog=%v err=%v", paths, err)
 	}
 	// An unproven expired output remains visible; no adjacency/output guessing.
-	got, err := db.Search("orchard", models.SearchOptions{AllProjects: true})
+	got, _, err := db.Search("orchard", models.SearchOptions{AllProjects: true})
 	if err != nil || len(got) != 3 {
 		t.Fatalf("migration lost rows: %v %v", got, err)
 	}
@@ -113,11 +113,11 @@ func TestV15EchoBackfillPreservesPerennialIdentity(t *testing.T) {
 	if err != nil || !slices.Equal(slices.Sorted(slices.Values(paths)), slices.Sorted(slices.Values(wantPaths))) {
 		t.Fatalf("backfill failed to converge: %v %v", paths, err)
 	}
-	got, err = db.Search("orchard", models.SearchOptions{AllProjects: true})
+	got, _, err = db.Search("orchard", models.SearchOptions{AllProjects: true})
 	if err != nil || len(got) != 2 {
 		t.Fatalf("unfiltered echo leak: %v %v", got, err)
 	}
-	got, err = db.Search("orchard", models.SearchOptions{AllProjects: true, ContentType: "tool"})
+	got, _, err = db.Search("orchard", models.SearchOptions{AllProjects: true, ContentType: "tool"})
 	if err != nil || len(got) != 2 {
 		t.Fatalf("explicit tool lost data: %v %v", got, err)
 	}
@@ -327,7 +327,7 @@ func TestEchoProvenanceDoesNotAffectProse(t *testing.T) {
 	if err := db.SyncFiles([]IndexedFile{{Source: "session", SourcePath: "p", Hash: "h", Messages: []IndexedMessage{{Text: "orchard", UUID: "u", Role: "assistant", ContentType: "text", SearchEcho: true}}}}); err != nil {
 		t.Fatal(err)
 	}
-	got, err := db.Search("orchard", models.SearchOptions{AllProjects: true})
+	got, _, err := db.Search("orchard", models.SearchOptions{AllProjects: true})
 	if err != nil || len(got) != 1 {
 		t.Fatalf("prose filtered: %v %v", got, err)
 	}

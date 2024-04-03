@@ -36,6 +36,7 @@ type SearchRequest struct {
 
 // SearchProvenance describes the retrieval stages attempted by a search.
 type SearchProvenance struct {
+	storage.SearchProvenance
 	RelaxationStages []string
 }
 
@@ -95,17 +96,18 @@ func (s QueryService) Search(ctx context.Context, request SearchRequest) (Search
 	}
 
 	if request.Relax {
-		results, stages, err := s.DB.SearchRelaxedContext(ctx, request.Query, request.Options)
+		results, stages, provenance, err := s.DB.SearchRelaxedContext(ctx, request.Query, request.Options)
 		return SearchResponse{
 			Results: results,
 			Provenance: SearchProvenance{
+				SearchProvenance: provenance,
 				RelaxationStages: stages,
 			},
 		}, err
 	}
 
-	results, err := s.DB.SearchContext(ctx, request.Query, request.Options)
-	return SearchResponse{Results: results}, err
+	results, provenance, err := s.DB.SearchContext(ctx, request.Query, request.Options)
+	return SearchResponse{Results: results, Provenance: SearchProvenance{SearchProvenance: provenance}}, err
 }
 
 // ContextRequest selects an exact anchor and its surrounding indexed records.

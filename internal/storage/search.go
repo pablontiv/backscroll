@@ -33,53 +33,63 @@ type SearchResult struct {
 	DroppedTerms []string
 }
 
+// SearchProvenance describes the bounded candidate pool before page selection.
+// CandidateLimitReached is true only after an eligible 201st unique non-echo
+// result was observed in at least one stream, including on an empty late page.
+type SearchProvenance struct {
+	CandidateLimit        int
+	CandidateLimitReached bool
+}
+
 // Search performs a hybrid search (BM25 + optional vector) on the indexed content.
 // It applies all filters and returns results ranked by BM25 score.
 // When ContentType is empty, it queries both FTS tables and merges via RRF.
-func (d *Database) Search(query string, opts models.SearchOptions) ([]SearchResult, error) {
+func (d *Database) Search(query string, opts models.SearchOptions) ([]SearchResult, SearchProvenance, error) {
 	return d.SearchContext(context.Background(), query, opts)
 }
 
 // SearchContext is Search with cancellation propagated to every database query.
-func (d *Database) SearchContext(ctx context.Context, query string, opts models.SearchOptions) ([]SearchResult, error) {
-	results, err := searchTables(ctx, opts, func(table string, page models.SearchOptions) ([]SearchResult, error) {
+func (d *Database) SearchContext(ctx context.Context, query string, opts models.SearchOptions) ([]SearchResult, SearchProvenance, error) {
+	return searchTables(ctx, opts, func(table string, page models.SearchOptions) ([]SearchResult, error) {
 		return d.searchTableContext(ctx, table, query, page)
 	})
-	if err != nil {
-		return nil, err
-	}
-	return results, nil
 }
 
 // searchTables shares filtering, echo exclusion, RRF and pagination between
 // ordinary lexical queries and opt-in relaxation. Query syntax stays private.
-func searchTables(ctx context.Context, opts models.SearchOptions, search func(string, models.SearchOptions) ([]SearchResult, error)) ([]SearchResult, error) {
+func searchTables(ctx context.Context, opts models.SearchOptions, search func(string, models.SearchOptions) ([]SearchResult, error)) ([]SearchResult, SearchProvenance, error) {
 	if err := ctx.Err(); err != nil {
-		return nil, err
-	}
-	if opts.ContentType == "tool" {
-		return search("tool_fts", opts)
+		return nil, SearchProvenance{}, err
 	}
 	if opts.ContentType != "" {
-		return search("messages_fts", opts)
+		table := "messages_fts"
+		if opts.ContentType == "tool" {
+			table = "tool_fts"
+		}
+		results, err := search(table, opts)
+		return results, SearchProvenance{}, err
 	}
-	candidates := func(table string) ([]SearchResult, error) {
+	candidates := func(table string) ([]SearchResult, bool, error) {
 		return refillCandidatesWithoutDirectEchoesContext(ctx, withoutPaging(opts), func(page models.SearchOptions) ([]SearchResult, error) {
 			return search(table, page)
 		})
 	}
-	prose, err := candidates("messages_fts")
+	prose, proseCapped, err := candidates("messages_fts")
 	if err != nil {
-		return nil, err
+		return nil, SearchProvenance{}, err
 	}
-	tool, err := candidates("tool_fts")
+	tool, toolCapped, err := candidates("tool_fts")
 	if err != nil {
-		return nil, err
+		return nil, SearchProvenance{}, err
 	}
 	if err := ctx.Err(); err != nil {
-		return nil, err
+		return nil, SearchProvenance{}, err
 	}
-	return paginate(mergeRRF(prose, tool), opts.Limit, opts.Offset), nil
+	provenance := SearchProvenance{
+		CandidateLimit:        unfilteredSearchCandidateLimit,
+		CandidateLimitReached: proseCapped || toolCapped,
+	}
+	return paginate(mergeRRF(prose, tool), opts.Limit, opts.Offset), provenance, nil
 }
 
 // searchTableContext queries a single FTS table with all filters applied.
@@ -370,19 +380,19 @@ func sanitizeFTS5QueryTrigram(query string, stopwords map[string]struct{}) strin
 
 const unfilteredSearchCandidateLimit = 200
 
-// withoutPaging returns a copy of opts with Limit/Offset cleared so each
-// table query returns its full candidate set for cross-table merging.
+// withoutPaging selects the bounded per-stream window used before RRF and
+// page selection. Refill probes beyond this window to establish provenance.
 func withoutPaging(o models.SearchOptions) models.SearchOptions {
 	o.Limit = unfilteredSearchCandidateLimit
 	o.Offset = 0
 	return o
 }
 
-func refillCandidatesWithoutDirectEchoes(opts models.SearchOptions, loadPage func(models.SearchOptions) ([]SearchResult, error)) ([]SearchResult, error) {
+func refillCandidatesWithoutDirectEchoes(opts models.SearchOptions, loadPage func(models.SearchOptions) ([]SearchResult, error)) ([]SearchResult, bool, error) {
 	return refillCandidatesWithoutDirectEchoesContext(context.Background(), opts, loadPage)
 }
 
-func refillCandidatesWithoutDirectEchoesContext(ctx context.Context, opts models.SearchOptions, loadPage func(models.SearchOptions) ([]SearchResult, error)) ([]SearchResult, error) {
+func refillCandidatesWithoutDirectEchoesContext(ctx context.Context, opts models.SearchOptions, loadPage func(models.SearchOptions) ([]SearchResult, error)) ([]SearchResult, bool, error) {
 	target := opts.Limit
 	if target <= 0 {
 		target = unfilteredSearchCandidateLimit
@@ -392,13 +402,13 @@ func refillCandidatesWithoutDirectEchoesContext(ctx context.Context, opts models
 
 	filtered := make([]SearchResult, 0, target)
 	seen := make(map[int]struct{})
-	for len(filtered) < target {
+	for {
 		if err := ctx.Err(); err != nil {
-			return nil, err
+			return nil, false, err
 		}
 		page, err := loadPage(pageOpts)
 		if err != nil {
-			return nil, err
+			return nil, false, err
 		}
 		if len(page) == 0 {
 			break
@@ -409,10 +419,14 @@ func refillCandidatesWithoutDirectEchoesContext(ctx context.Context, opts models
 			}
 			seen[result.ID] = struct{}{}
 			if !isDirectBackscrollSearchEcho(result) {
-				filtered = append(filtered, result)
 				if len(filtered) == target {
-					break
+					// This extra eligible row proves truncation but never enters RRF.
+					if err := ctx.Err(); err != nil {
+						return nil, false, err
+					}
+					return filtered, true, nil
 				}
+				filtered = append(filtered, result)
 			}
 		}
 		if len(page) < pageOpts.Limit {
@@ -421,9 +435,9 @@ func refillCandidatesWithoutDirectEchoesContext(ctx context.Context, opts models
 		pageOpts.Offset += len(page)
 	}
 	if err := ctx.Err(); err != nil {
-		return nil, err
+		return nil, false, err
 	}
-	return filtered, nil
+	return filtered, false, nil
 }
 
 func isDirectBackscrollSearchEcho(result SearchResult) bool {

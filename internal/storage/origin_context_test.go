@@ -46,7 +46,7 @@ func TestIndexedContextReadsPersistedOrigin(t *testing.T) {
 	}
 	assertOriginsByOrdinal(t, "indexed records", recordOrigins(records), want)
 
-	results, err := db.Search("sentinel", models.SearchOptions{
+	results, _, err := db.Search("sentinel", models.SearchOptions{
 		ContentType: "text",
 		SourcePath:  sourcePath,
 		Limit:       len(want),

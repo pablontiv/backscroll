@@ -44,11 +44,11 @@ func TestRecoveryPreservesPositiveEchoEvidenceAcrossLegacyDuplicates(t *testing.
 		if err != nil {
 			t.Fatal(err)
 		}
-		results, err := out.Search("orchard", models.SearchOptions{AllProjects: true})
+		results, _, err := out.Search("orchard", models.SearchOptions{AllProjects: true})
 		if err != nil || len(results) != 0 {
 			t.Errorf("recovered echo reappeared: %v %v", results, err)
 		}
-		results, err = out.Search("orchard", models.SearchOptions{AllProjects: true, ContentType: "tool"})
+		results, _, err = out.Search("orchard", models.SearchOptions{AllProjects: true, ContentType: "tool"})
 		if err != nil || len(results) != 1 {
 			t.Errorf("recovered explicit tool lost: %v %v", results, err)
 		}

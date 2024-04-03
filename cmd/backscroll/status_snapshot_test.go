@@ -75,11 +75,11 @@ func TestStatusRetainsInvocationSnapshot(t *testing.T) {
 					t.Fatal(err)
 				}
 				defer db.Close()
-				results, err := db.Search("statusoriginalsentinel", models.SearchOptions{Limit: 10})
+				results, _, err := db.Search("statusoriginalsentinel", models.SearchOptions{Limit: 10})
 				if err != nil || len(results) != 1 || results[0].SourcePath != filepath.Join(originalRoot, "evidence.md") {
 					t.Fatalf("original input not indexed: %+v, %v", results, err)
 				}
-				results, err = db.Search("statusreplacementsentinel", models.SearchOptions{Limit: 10})
+				results, _, err = db.Search("statusreplacementsentinel", models.SearchOptions{Limit: 10})
 				if err != nil || len(results) != 0 {
 					t.Fatalf("replacement input was indexed: %+v, %v", results, err)
 				}

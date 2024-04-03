@@ -163,7 +163,7 @@ func TestPatternEligibilityHalfOpenDates(t *testing.T) {
 				}
 				upper = &v
 			}
-			found, err := db.Search("fixture", models.SearchOptions{After: lower, Before: upper, ContentType: "tool", AllProjects: true})
+			found, _, err := db.Search("fixture", models.SearchOptions{After: lower, Before: upper, ContentType: "tool", AllProjects: true})
 			if err != nil {
 				t.Fatal(err)
 			}

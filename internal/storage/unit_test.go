@@ -328,14 +328,14 @@ func TestSearchWithSourceFilter(t *testing.T) {
 	}
 
 	// Test with source=sessions (normalized to session)
-	results, err := db.Search("hello", models.SearchOptions{Source: "sessions", Limit: 10})
+	results, _, err := db.Search("hello", models.SearchOptions{Source: "sessions", Limit: 10})
 	if err != nil {
 		t.Fatalf("Search with source sessions: %v", err)
 	}
 	_ = results
 
 	// Test with source=all (no filter)
-	results, err = db.Search("hello", models.SearchOptions{Source: "all", Limit: 10})
+	results, _, err = db.Search("hello", models.SearchOptions{Source: "all", Limit: 10})
 	if err != nil {
 		t.Fatalf("Search with source all: %v", err)
 	}
@@ -431,7 +431,7 @@ func TestSearchWithAfterBefore(t *testing.T) {
 	before, _ := time.Parse("2006-01-02", "2025-01-01")
 
 	// Search with after/before filters
-	results, err := db.Search("hello", models.SearchOptions{
+	results, _, err := db.Search("hello", models.SearchOptions{
 		After:  &after,
 		Before: &before,
 		Limit:  10,
@@ -442,7 +442,7 @@ func TestSearchWithAfterBefore(t *testing.T) {
 	_ = results
 
 	// Search with role filter
-	results, err = db.Search("hello", models.SearchOptions{
+	results, _, err = db.Search("hello", models.SearchOptions{
 		Role:  "user",
 		Limit: 10,
 	})
@@ -1153,7 +1153,7 @@ func TestSearchErrorHandling(t *testing.T) {
 	defer cleanup()
 
 	// Search on empty database should return empty results, not error
-	results, err := db.Search("nonexistent", models.SearchOptions{Limit: 10})
+	results, _, err := db.Search("nonexistent", models.SearchOptions{Limit: 10})
 	if err != nil {
 		t.Fatalf("Search on empty DB: %v", err)
 	}
@@ -1198,7 +1198,7 @@ func TestSearchWithAllProjectsFilter(t *testing.T) {
 		t.Fatalf("SyncFiles: %v", err)
 	}
 
-	results, err := db.Search("search", models.SearchOptions{AllProjects: true})
+	results, _, err := db.Search("search", models.SearchOptions{AllProjects: true})
 	if err != nil {
 		t.Fatalf("Search all projects: %v", err)
 	}
@@ -1244,7 +1244,7 @@ func TestOptimizeFTSSucceeds(t *testing.T) {
 	}
 
 	// Verify search still works after optimization
-	results, err := db.Search("optimize", models.SearchOptions{Limit: 10})
+	results, _, err := db.Search("optimize", models.SearchOptions{Limit: 10})
 	if err != nil {
 		t.Fatalf("Search after optimize: %v", err)
 	}
@@ -1313,7 +1313,7 @@ func TestSearchWithContentTypeFilter(t *testing.T) {
 	}
 
 	// Search with content type filter
-	results, err := db.Search("search", models.SearchOptions{
+	results, _, err := db.Search("search", models.SearchOptions{
 		ContentType: "text",
 		Limit:       10,
 	})
@@ -1688,7 +1688,7 @@ func TestSearchWithMultipleFilters(t *testing.T) {
 	}
 
 	// Search with multiple filters combined
-	results, err := db.Search("search", models.SearchOptions{
+	results, _, err := db.Search("search", models.SearchOptions{
 		Project:     "myproject",
 		Role:        "user",
 		Tag:         "feature",
@@ -1763,7 +1763,7 @@ func TestSearchProjectFiltering(t *testing.T) {
 	}
 
 	// Search with project filter
-	results, err := db.Search("code", models.SearchOptions{
+	results, _, err := db.Search("code", models.SearchOptions{
 		Project: "proj1",
 		Limit:   10,
 	})
@@ -2050,7 +2050,7 @@ func TestSearchAllProjectsOption(t *testing.T) {
 	}
 
 	// Search with AllProjects=true should return results from both
-	results, err := db.Search("search", models.SearchOptions{
+	results, _, err := db.Search("search", models.SearchOptions{
 		AllProjects: true,
 		Limit:       10,
 	})
@@ -2091,7 +2091,7 @@ func TestSearchSourceFilter(t *testing.T) {
 	}
 
 	// Search with Source filter for sessions
-	results, err := db.Search("source", models.SearchOptions{
+	results, _, err := db.Search("source", models.SearchOptions{
 		Source: "session",
 		Limit:  10,
 	})
@@ -2359,7 +2359,7 @@ func TestSearchComplexQuery(t *testing.T) {
 	}
 
 	// Search with maximum filters
-	results, err := db.Search("complex", models.SearchOptions{
+	results, _, err := db.Search("complex", models.SearchOptions{
 		Project:     "test",
 		Role:        "user",
 		Tag:         "feature",
@@ -2405,7 +2405,7 @@ func TestSearchWithOffset(t *testing.T) {
 	}
 
 	// Search with offset
-	results, err := db.Search("search", models.SearchOptions{
+	results, _, err := db.Search("search", models.SearchOptions{
 		Limit:  2,
 		Offset: 1,
 	})
@@ -2439,7 +2439,7 @@ func TestIntegrationFullWorkflow(t *testing.T) {
 	}
 
 	// 2. Search
-	results, err := db.Search("integrate", models.SearchOptions{AllProjects: true, Limit: 10})
+	results, _, err := db.Search("integrate", models.SearchOptions{AllProjects: true, Limit: 10})
 	if err != nil {
 		t.Fatalf("Search: %v", err)
 	}
@@ -2516,7 +2516,7 @@ func TestIntegrationFullWorkflow(t *testing.T) {
 	_ = vresults
 
 	// 12. Lexical search
-	searchResults, err := db.Search("workflow", models.SearchOptions{AllProjects: true})
+	searchResults, _, err := db.Search("workflow", models.SearchOptions{AllProjects: true})
 	if err != nil {
 		t.Fatalf("Search: %v", err)
 	}
@@ -2606,7 +2606,7 @@ func TestSearchWithSourcePathFilter(t *testing.T) {
 	}
 
 	// Exact path match
-	results, err := db.Search("needle", models.SearchOptions{SourcePath: "/proj/a/session.jsonl", Limit: 10})
+	results, _, err := db.Search("needle", models.SearchOptions{SourcePath: "/proj/a/session.jsonl", Limit: 10})
 	if err != nil {
 		t.Fatalf("Search exact source-path: %v", err)
 	}
@@ -2615,7 +2615,7 @@ func TestSearchWithSourcePathFilter(t *testing.T) {
 	}
 
 	// Glob match
-	results, err = db.Search("needle", models.SearchOptions{SourcePath: "/proj/b/*", Limit: 10})
+	results, _, err = db.Search("needle", models.SearchOptions{SourcePath: "/proj/b/*", Limit: 10})
 	if err != nil {
 		t.Fatalf("Search glob source-path: %v", err)
 	}
@@ -2624,7 +2624,7 @@ func TestSearchWithSourcePathFilter(t *testing.T) {
 	}
 
 	// Non-matching path
-	results, err = db.Search("needle", models.SearchOptions{SourcePath: "/nope/*", Limit: 10})
+	results, _, err = db.Search("needle", models.SearchOptions{SourcePath: "/nope/*", Limit: 10})
 	if err != nil {
 		t.Fatalf("Search non-matching source-path: %v", err)
 	}
@@ -2950,7 +2950,7 @@ func TestToolSearchRanksExactPathFirst(t *testing.T) {
 		t.Fatalf("seed: %v", err)
 	}
 
-	results, err := db.Search("internal/storage/sync.go", models.SearchOptions{ContentType: "tool", Limit: 5})
+	results, _, err := db.Search("internal/storage/sync.go", models.SearchOptions{ContentType: "tool", Limit: 5})
 	if err != nil {
 		t.Fatalf("search: %v", err)
 	}
@@ -2978,7 +2978,7 @@ func TestSearchEverythingReturnsBothProseAndTool(t *testing.T) {
 		t.Fatalf("seed: %v", err)
 	}
 
-	results, err := db.Search("retry", models.SearchOptions{Limit: 10})
+	results, _, err := db.Search("retry", models.SearchOptions{Limit: 10})
 	if err != nil {
 		t.Fatalf("search: %v", err)
 	}
@@ -3028,7 +3028,7 @@ func TestSearchScopedTextRouting(t *testing.T) {
 	}
 
 	// Search with ContentType:"text" should only return text/code rows
-	results, err := db.Search("retry", models.SearchOptions{ContentType: "text", Limit: 10})
+	results, _, err := db.Search("retry", models.SearchOptions{ContentType: "text", Limit: 10})
 	if err != nil {
 		t.Fatalf("search text: %v", err)
 	}
@@ -3061,7 +3061,7 @@ func TestSearchScopedCodeRouting(t *testing.T) {
 	}
 
 	// Search with ContentType:"code" should only return code rows
-	results, err := db.Search("golang", models.SearchOptions{ContentType: "code", Limit: 10})
+	results, _, err := db.Search("golang", models.SearchOptions{ContentType: "code", Limit: 10})
 	if err != nil {
 		t.Fatalf("search code: %v", err)
 	}

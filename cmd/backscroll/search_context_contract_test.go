@@ -12,41 +12,11 @@ import (
 	"github.com/pablontiv/backscroll/internal/storage"
 )
 
-func TestSearchModelConversionPreservesExactIdentity(t *testing.T) {
-	uuid := "conversion-uuid"
-	empty := ""
-	got := searchModelResults([]storage.SearchResult{
-		{UUID: &uuid, Ordinal: 41, SourcePath: "/present"},
-		{UUID: nil, Ordinal: 42, SourcePath: "/nil"},
-		{UUID: &empty, Ordinal: 43, SourcePath: "/empty"},
-	})
-
-	if len(got) != 3 || got[0].UUID == nil || *got[0].UUID != uuid || got[0].Ordinal != 41 {
-		t.Fatalf("present identity was not copied: %+v", got)
-	}
-	if got[1].UUID != nil || got[1].Ordinal != 42 {
-		t.Fatalf("nil identity was not preserved: %+v", got[1])
-	}
-	if got[2].UUID != nil || got[2].Ordinal != 43 {
-		t.Fatalf("empty UUID must be published as null without losing ordinal: %+v", got[2])
-	}
-	for name, results := range map[string][]storage.SearchResult{
-		"nil":   nil,
-		"empty": {},
-	} {
-		t.Run(name, func(t *testing.T) {
-			if got := searchModelResults(results); got != nil {
-				t.Fatalf("zero model results = %#v, want nil", got)
-			}
-		})
-	}
-}
-
 func TestSearchEmptyJSONPreservesFieldContracts(t *testing.T) {
 	cfg := newSearchIdentityContractIndex(t)
 
-	if got := strings.TrimSpace(runSearchContract(t, cfg, "no-such-identity-result", "full", true, false)); got != "null" {
-		t.Fatalf("empty full JSON = %q, want null", got)
+	if got := strings.TrimSpace(runSearchContract(t, cfg, "no-such-identity-result", "full", true, false)); got != "[]" {
+		t.Fatalf("empty full JSON = %q, want []", got)
 	}
 	if got := strings.TrimSpace(runSearchContract(t, cfg, "no-such-identity-result", "minimal", true, false)); got != "[]" {
 		t.Fatalf("empty minimal JSON = %q, want []", got)
@@ -58,7 +28,7 @@ func TestSearchRobotIdentityEscapesUUIDInMinimalAndFull(t *testing.T) {
 	for _, fields := range []string{"minimal", "full"} {
 		payload := strings.Join(searchRobotLines([]storage.SearchResult{{
 			UUID: &uuid, Ordinal: 51, SourcePath: "/identity", Text: "full", Snippet: "snippet",
-		}}, fields, 0), "\n")
+		}}, fields, 0, storage.SearchProvenance{}), "\n")
 		if !strings.Contains(payload, `result_0_uuid=uuid\\part\nnext`) || !strings.Contains(payload, "result_0_ordinal=51") {
 			t.Fatalf("%s robot identity was not escaped as an indivisible result: %q", fields, payload)
 		}

@@ -19,7 +19,7 @@ func TestSearchRelaxationBudgetKeepsProvenanceWithEachResult(t *testing.T) {
 	}
 	for _, fields := range []string{"minimal", "full"} {
 		for budget := 1; budget < 100; budget++ {
-			lines := searchRobotLines(results, fields, budget)
+			lines := searchRobotLines(results, fields, budget, storage.SearchProvenance{})
 			payload := strings.Join(lines, "\n")
 			if picokitoutput.TokenCount(payload) > budget {
 				t.Fatalf("payload exceeds %d tokens: %s", budget, payload)

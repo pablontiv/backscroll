@@ -215,7 +215,10 @@ func runSearch(ctx context.Context, stdout, stderr io.Writer, cfg *config.Config
 	}
 	results := response.Results
 
-	if len(results) == 0 {
+	if response.Provenance.CandidateLimitReached && mode != outputRobot {
+		writeSearchCandidateNotice(stderr, response.Provenance.SearchProvenance)
+	}
+	if len(results) == 0 && !response.Provenance.CandidateLimitReached {
 		writeSearchHints(stderr, allProjects, contentType == "tool")
 		if relax {
 			fmt.Fprintf(stderr, "relaxation stages tried: %s; stemming/phrase expansion and scope widening skipped\n", strings.Join(response.Provenance.RelaxationStages, ", "))
@@ -262,7 +265,10 @@ func runSearch(ctx context.Context, stdout, stderr io.Writer, cfg *config.Config
 	} else if format == picokitoutput.FormatRobot {
 		// Robot format is projected from storage results so minimal mode can use
 		// bounded snippets rather than loading full indexed content into output.
-		lines := searchRobotLines(results, fields, maxTokens)
+		lines := searchRobotLines(results, fields, maxTokens, response.Provenance.SearchProvenance)
+		if response.Provenance.CandidateLimitReached && len(lines) == 0 {
+			writeSearchCandidateNotice(stderr, response.Provenance.SearchProvenance)
+		}
 		for _, line := range lines {
 			if _, err := fmt.Fprintln(stdout, line); err != nil {
 				return fmt.Errorf("write results: %w", err)
@@ -279,6 +285,10 @@ func runSearch(ctx context.Context, stdout, stderr io.Writer, cfg *config.Config
 	}
 
 	return nil
+}
+
+func writeSearchCandidateNotice(stderr io.Writer, provenance storage.SearchProvenance) {
+	fmt.Fprintf(stderr, "search: unfiltered candidate limit reached (%d eligible results per FTS stream); pagination covers only the bounded merged pool; use --content-type for SQL pagination\n", provenance.CandidateLimit)
 }
 
 func searchTextLines(results []models.SearchResult, maxTokens int) []string {
@@ -300,33 +310,41 @@ func searchTextLines(results []models.SearchResult, maxTokens int) []string {
 	return lines
 }
 
-func searchRobotLines(results []storage.SearchResult, fields string, maxTokens int) []string {
+func searchRobotLines(results []storage.SearchResult, fields string, maxTokens int, provenance storage.SearchProvenance) []string {
 	groups := make([][]string, len(results))
 	for i, result := range results {
 		groups[i] = searchRobotResultLines(result, i, fields)
 	}
-
+	var metadata []string
+	if provenance.CandidateLimitReached {
+		metadata = []string{
+			fmt.Sprintf("candidate_limit=%d", provenance.CandidateLimit),
+			"candidate_limit_reached=true",
+		}
+	}
+	payload := func(included int) []string {
+		lines := flattenRobotGroups(groups[:included])
+		if included < len(groups) {
+			lines = append(lines, searchRobotTruncationLines(included, len(groups)-included)...)
+		}
+		return append(lines, metadata...)
+	}
 	if maxTokens <= 0 {
-		return flattenRobotGroups(groups)
+		return payload(len(groups))
 	}
 
 	included := 0
 	for included < len(groups) {
-		if robotLinesTokenCount(flattenRobotGroups(groups[:included+1])) > maxTokens {
+		lines := append(flattenRobotGroups(groups[:included+1]), metadata...)
+		if robotLinesTokenCount(lines) > maxTokens {
 			break
 		}
 		included++
 	}
-
-	if included == len(groups) {
-		return flattenRobotGroups(groups)
-	}
-
 	for {
-		marker := searchRobotTruncationLines(included, len(groups)-included)
-		payload := append(flattenRobotGroups(groups[:included]), marker...)
-		if robotLinesTokenCount(payload) <= maxTokens {
-			return payload
+		lines := payload(included)
+		if robotLinesTokenCount(lines) <= maxTokens {
+			return lines
 		}
 		if included == 0 {
 			return nil
@@ -397,7 +415,7 @@ func searchRobotTruncationLines(index, omitted int) []string {
 }
 
 func robotLinesTokenCount(lines []string) int {
-	// Round once for the complete escaped payload, including omission metadata.
+	// Round once for the complete escaped payload, including omission and cap metadata.
 	// Summing separately rounded lines or results undercounts the total.
 	return picokitoutput.TokenCount(strings.Join(lines, "\n"))
 }
@@ -426,7 +444,7 @@ type minimalSearchResult struct {
 }
 
 func searchModelResults(results []storage.SearchResult) []models.SearchResult {
-	var modelResults []models.SearchResult
+	modelResults := make([]models.SearchResult, 0, len(results))
 	for i, result := range results {
 		modelResults = append(modelResults, models.SearchResult{
 			SessionID:    result.SessionID,

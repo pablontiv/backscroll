@@ -612,3 +612,100 @@ func TestQueryServiceExplicitNegativeAnnotationSelector(t *testing.T) {
 		t.Fatal(err)
 	}
 }
+
+func TestSearchCandidatePaginationProvenance(t *testing.T) {
+	db, err := storage.Open(filepath.Join(t.TempDir(), "candidate.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	file := storage.IndexedFile{SourcePath: "/pool/core.jsonl", Source: "session", Project: "alpha", Hash: "core", Tags: []string{"testing"}}
+	for _, kind := range []string{"text", "tool"} {
+		for range 200 {
+			file.Messages = append(file.Messages, storage.IndexedMessage{
+				Ordinal: len(file.Messages), Role: "assistant", ContentType: kind,
+				Text: "orchard handshake exactboundary", Timestamp: "2026-01-01T00:00:00Z",
+			})
+		}
+	}
+	for i := range 205 {
+		file.Messages = append(file.Messages, storage.IndexedMessage{
+			Ordinal: len(file.Messages), Role: "assistant", ContentType: "tool",
+			Text:       "Bash command=backscroll search orchard handshake exactboundary",
+			SearchEcho: i%2 == 0, Timestamp: "2026-01-01T00:00:00Z",
+		})
+	}
+	if err := db.SyncFiles([]storage.IndexedFile{file}); err != nil {
+		t.Fatal(err)
+	}
+	service := QueryService{DB: db}
+	options := models.SearchOptions{Project: "alpha", Source: "session", SourcePath: "/pool/*", Role: "assistant", Tag: "testing", Limit: 300}
+	search := func(query string, opts models.SearchOptions, relax bool) SearchResponse {
+		t.Helper()
+		response, err := service.Search(context.Background(), SearchRequest{Query: query, Options: opts, Relax: relax})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return response
+	}
+	baseline := search("orchard handshake", options, false)
+	if len(baseline.Results) != 300 || baseline.Provenance.CandidateLimit != 200 || baseline.Provenance.CandidateLimitReached {
+		t.Fatalf("exact boundary with hidden echoes = %d, %+v", len(baseline.Results), baseline.Provenance)
+	}
+	extra := storage.IndexedFile{SourcePath: "/pool/extra.jsonl", Source: "session", Project: "alpha", Hash: "extra", Tags: []string{"testing"}}
+	for _, kind := range []string{"text", "tool"} {
+		extra.Messages = append(extra.Messages, storage.IndexedMessage{Ordinal: len(extra.Messages), Role: "assistant", ContentType: kind, Text: "orchard handshake overflowboundary", Timestamp: "2026-01-01T00:00:00Z"})
+	}
+	for range 450 {
+		extra.Messages = append(extra.Messages, storage.IndexedMessage{Ordinal: len(extra.Messages), Role: "assistant", ContentType: "text", Text: "adaptation unrelated distractor", Timestamp: "2026-01-01T00:00:00Z"})
+	}
+	if err := db.SyncFiles([]storage.IndexedFile{extra}); err != nil {
+		t.Fatal(err)
+	}
+	capped := search("orchard handshake", options, false)
+	if !capped.Provenance.CandidateLimitReached || !reflect.DeepEqual(capped.Results, baseline.Results) {
+		t.Fatalf("overflow changed first 200 per stream or lost provenance: %+v", capped.Provenance)
+	}
+	late := options
+	late.Offset = 300
+	page := search("orchard handshake", late, false)
+	if len(page.Results) != 100 || !page.Provenance.CandidateLimitReached || page.Results[0].ID == capped.Results[0].ID {
+		t.Fatalf("late merged page = %d, %+v", len(page.Results), page.Provenance)
+	}
+	late.Offset = 400
+	for _, relax := range []bool{false, true} {
+		response := search("orchard handshake", late, relax)
+		if len(response.Results) != 0 || !response.Provenance.CandidateLimitReached {
+			t.Fatalf("empty capped page relax=%t: %+v", relax, response)
+		}
+	}
+	for _, kind := range []string{"text", "tool"} {
+		typed := options
+		typed.ContentType, typed.Offset = kind, 200
+		response := search("orchard handshake", typed, false)
+		if len(response.Results) == 0 || response.Provenance.CandidateLimit != 0 || response.Provenance.CandidateLimitReached {
+			t.Fatalf("typed late %s page = %+v", kind, response)
+		}
+	}
+	exact := search("exactboundary", options, false)
+	if exact.Provenance.CandidateLimitReached {
+		t.Fatalf("exactly 200 plus echo-only overflow marked capped: %+v", exact.Provenance)
+	}
+	scoped := options
+	scoped.SourcePath = "/pool/core.jsonl"
+	if response := search("orchard handshake", scoped, false); response.Provenance.CandidateLimitReached {
+		t.Fatalf("out-of-scope 201st row marked capped: %+v", response.Provenance)
+	}
+	for _, offset := range []int{0, 400} {
+		relaxed := options
+		relaxed.Offset = offset
+		response := search("orchard handshake adaptation", relaxed, true)
+		if !response.Provenance.CandidateLimitReached || !reflect.DeepEqual(response.Provenance.RelaxationStages, []string{"strict", "drop-terms/1"}) {
+			t.Fatalf("relaxed producing-stage provenance offset=%d: %+v", offset, response.Provenance)
+		}
+	}
+	direct, provenance, err := db.Search("orchard handshake", late)
+	if err != nil || len(direct) != 0 || !provenance.CandidateLimitReached || provenance.CandidateLimit != 200 {
+		t.Fatalf("direct consumer late-page provenance: %d %+v %v", len(direct), provenance, err)
+	}
+}

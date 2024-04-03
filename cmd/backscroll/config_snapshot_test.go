@@ -216,14 +216,14 @@ func TestStartupFileSwapSnapshotFeedsDiscoveryIngestAndConfig(t *testing.T) {
 				t.Fatal(err)
 			}
 			defer db.Close()
-			results, err := db.Search("snapshotoriginalsentinel", models.SearchOptions{Limit: 10})
+			results, _, err := db.Search("snapshotoriginalsentinel", models.SearchOptions{Limit: 10})
 			if err != nil {
 				t.Fatal(err)
 			}
 			if len(results) != 1 || results[0].Source != "custom-label" || results[0].SourcePath != filepath.Join(originalRoot, "evidence.md") {
 				t.Fatalf("ingest lost original contract: %+v", results)
 			}
-			results, err = db.Search("snapshotreplacementsentinel", models.SearchOptions{Limit: 10})
+			results, _, err = db.Search("snapshotreplacementsentinel", models.SearchOptions{Limit: 10})
 			if err != nil || len(results) != 0 {
 				t.Fatalf("replacement ingested: %+v, %v", results, err)
 			}
