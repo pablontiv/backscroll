@@ -1,7 +1,7 @@
-# dagu-feature-bundle: @a4s/omp-dagu@0.3.10 source=pablontiv/a4s@85fe2c1040c24678d4026685d56e176e4f02e4dd bootstrap=bootstrap-backscroll-v0-3-10 dagu=2.20.1
+# dagu-feature-bundle: @a4s/omp-dagu@0.3.93 source=pablontiv/a4s@fc678c92df21c7307089ab7c226c16388ef89d80 bootstrap=bootstrap-backscroll-v0-3-93 dagu=2.20.1
 labels:
   - workspace=backscroll
-  - dagu-feature-bundle=0.3.10
+  - dagu-feature-bundle=0.3.93
 queue: backscroll
 type: graph
 dotenv: []
@@ -11,9 +11,6 @@ params:
   - name: LENSES
     type: string
     required: true
-  - name: POLICY
-    type: string
-    default: defecto
   - name: SOURCE
     type: string
     default: ""
@@ -28,7 +25,7 @@ params:
     default: ""
 env:
   - RUN: ${context.run.id}
-  - DAGU_FEATURE_BUNDLE: "dagu-feature-bundle=0.3.10 source=pablontiv/a4s@85fe2c1040c24678d4026685d56e176e4f02e4dd bootstrap=bootstrap-backscroll-v0-3-10"
+  - DAGU_FEATURE_BUNDLE: "dagu-feature-bundle=0.3.93 source=pablontiv/a4s@fc678c92df21c7307089ab7c226c16388ef89d80 bootstrap=bootstrap-backscroll-v0-3-93"
 steps:
   - id: snapshot
     run: |
@@ -38,7 +35,6 @@ steps:
       test "$(git -C "$PRIMARY" rev-parse --show-toplevel)" = "$PRIMARY"
       [[ "$RUN" =~ ^[A-Za-z0-9][A-Za-z0-9._-]*$ ]]
       [[ "$LENSES" =~ ^[0-4](,[0-4])*$ ]]
-      [[ "$POLICY" =~ ^(defecto|mejora|duplicado)(,(defecto|mejora|duplicado))*$ ]]
       test "$(jq -nr --arg value "$LENSES" '$value / "," | length')" = \
         "$(jq -nr --arg value "$LENSES" '$value / "," | unique | length')"
       metadata=$(cd "$PRIMARY" && gh repo view --json nameWithOwner,defaultBranchRef)
@@ -228,10 +224,12 @@ steps:
     action: human.task
     with:
       prompt: >-
-        Consolida los hallazgos confirmados en unidades de trabajo autocontenidas y
-        escribe ${steps.snapshot.outputs.OUT_DIR}/units.jsonl. Cada unidad conserva
-        el linaje de ids en findings; cada confirmado aparece exactamente una vez.
-        El id de unidad debe ser estable y derivarse de los ids ordenados.
+        Consolidate confirmed findings into self-contained feature units and write
+        ${steps.snapshot.outputs.OUT_DIR}/units.jsonl. Each row has id, title, body,
+        classification (defecto, mejora, or duplicado), and findings (finding IDs).
+        The body includes ## Problem, ## Change, and ## Acceptance. Each confirmed
+        finding appears exactly once. Derive a stable kebab-case unit id from the
+        sorted finding IDs.
 
   - id: check_units
     depends: consolidate
@@ -282,116 +280,28 @@ steps:
         exit 1
       fi
 
-  - id: approve
+  - id: handoff
     depends: check_units
-    action: human.task
-    with:
-      prompt: >-
-        Revisa ${steps.snapshot.outputs.OUT_DIR}/units.jsonl. APPROVED acepta `all`
-        o una lista separada por comas de ids de unidad. Ninguna escritura en GitHub
-        ocurre antes de completar este formulario. Puedes devolver la tarea a
-        consolidate para corregir las unidades.
-      form:
-        type: object
-        additionalProperties: false
-        properties:
-          APPROVED:
-            type: string
-            minLength: 1
-        required: [APPROVED]
-      push_back:
-        rewind_to: consolidate
-
-  - id: materialize
-    depends: approve
     env:
-      - APPROVED: ${steps.approve.outputs.APPROVED}
       - OUT_DIR: ${steps.snapshot.outputs.OUT_DIR}
-      - NWO: ${steps.snapshot.outputs.NWO}
     run: |
       set -euo pipefail
-      units="$OUT_DIR/units.jsonl"
-      issues="$OUT_DIR/issues.jsonl"
-      if [[ "$APPROVED" == all ]]; then
-        jq -sc '.' "$units" > "$OUT_DIR/approved-units.json"
+      OUT_DIR=$(cd "$OUT_DIR" && pwd -P)
+      units="$OUT_DIR/breakdown-units.jsonl"
+      jq -c '{
+        id, title, dag:"feature", labels:[.classification],
+        body:(.body + "\n\n<!-- discovery-unit: " + .id + " -->"),
+        source:"discovery", findings
+      }' "$OUT_DIR/units.jsonl" > "$units"
+      backend_run_id=""
+      if test -s "$units"; then
+        backend_run_id="breakdown-$RUN"
+        dagu-feature-bundle enqueue --run-id "$backend_run_id" "$PRIMARY/.workspace/dagu/dags/planning.yaml" -- \
+          UNITS_FROM="$units" SOURCE=discovery PRIMARY="$PRIMARY" \
+          OMP_SESSION_ID="$OMP_SESSION_ID"
       else
-        if [[ "$APPROVED" == *, || "$APPROVED" == ,* || "$APPROVED" == *,,* ]]; then
-          printf '%s:1: rule=approved-unit-list\n' "$units" >&2
-          exit 1
-        fi
-        jq -nr --arg approved "$APPROVED" '$approved / ","' > "$OUT_DIR/approved-ids.json"
-        if ! jq -sc --slurpfile ids "$OUT_DIR/approved-ids.json" '
-          . as $units | $ids[0] as $ids |
-          if ($ids | length) != ($ids | unique | length) then error("duplicate approved id")
-          elif any($ids[]; . as $id | ($units | map(.id) | index($id)) == null) then error("unknown approved id")
-          else [$ids[] as $id | $units[] | select(.id == $id)] end
-        ' "$units" > "$OUT_DIR/approved-units.json" 2>/dev/null; then
-          printf '%s:1: rule=approved-unit-list\n' "$units" >&2
-          exit 1
-        fi
+        printf 'outcome=no-units\n'
       fi
-      existing=$(gh issue list --repo "$NWO" --state all --limit 1000 --json number,body,url)
-      jq -e 'type == "array"' >/dev/null <<<"$existing"
-      tmp="$issues.tmp"
-      : > "$tmp"
-      index=0
-      while IFS= read -r unit; do
-        index=$((index + 1))
-        id=$(jq -er '.id' <<<"$unit")
-        marker="<!-- discovery-unit: $id -->"
-        matches=$(jq -c --arg marker "$marker" '[.[] | select((.body // "") | contains($marker))]' <<<"$existing")
-        count=$(jq 'length' <<<"$matches")
-        if test "$count" -gt 1; then
-          printf '%s:1: rule=unique-issue-marker unit=%s\n' "$issues" "$id" >&2
-          exit 1
-        elif test "$count" -eq 1; then
-          number=$(jq -er '.[0].number' <<<"$matches")
-          url=$(jq -er '.[0].url' <<<"$matches")
-          reused=true
-        else
-          body_file="$OUT_DIR/issue-body-$index.md"
-          { jq -r '.body' <<<"$unit"; printf '\n\n%s\n' "$marker"; } > "$body_file"
-          title=$(jq -er '.title' <<<"$unit")
-          url=$(gh issue create --repo "$NWO" --title "$title" --body-file "$body_file")
-          number=${url##*/}
-          [[ "$number" =~ ^[1-9][0-9]*$ ]]
-          reused=false
-          existing=$(jq -c --argjson number "$number" --arg url "$url" --arg body "$(cat "$body_file")" \
-            '. + [{number:$number,url:$url,body:$body}]' <<<"$existing")
-        fi
-        jq -nc --arg unit "$id" --argjson number "$number" --arg url "$url" --argjson reused "$reused" \
-          '{unit:$unit,number:$number,url:$url,reused:$reused}' >> "$tmp"
-      done < <(jq -c '.[]' "$OUT_DIR/approved-units.json")
-      mv "$tmp" "$issues"
-
-  - id: dispose
-    depends: materialize
-    env:
-      - OUT_DIR: ${steps.snapshot.outputs.OUT_DIR}
-      - NWO: ${steps.snapshot.outputs.NWO}
-    run: |
-      set -euo pipefail
-      repo=${NWO##*/}
-      jq -nc --slurpfile issues "$OUT_DIR/issues.jsonl" --slurpfile units "$OUT_DIR/units.jsonl" '
-        $issues[] as $issue | $units[] | select(.id == $issue.unit) |
-        {unit:.id,classification:.classification,number:$issue.number}
-      ' | while IFS= read -r row; do
-        classification=$(jq -r '.classification' <<<"$row")
-        if ! jq -ne --arg policy "$POLICY" --arg classification "$classification" \
-          '$policy / "," | index($classification) != null' >/dev/null; then
-          continue
-        fi
-        number=$(jq -r '.number' <<<"$row")
-        run_id="$repo-issue-$number"
-        if dagu status --run-id "$run_id" feature >/dev/null 2>&1; then
-          printf 'exists=%s issue=%s\n' "$run_id" "$number"
-        else
-          dagu enqueue --run-id "$run_id" "$PRIMARY/.workspace/dagu/dags/feature.yaml" -- \
-            ISSUE="$number" PRIMARY="$PRIMARY" BRANCH="dagu/issue-$number" PR_NUMBER="" \
-            OMP_SESSION_ID="$OMP_SESSION_ID"
-          printf 'enqueued=%s issue=%s\n' "$run_id" "$number"
-        fi
-      done
       root=$(dirname "$OUT_DIR")
       IFS=',' read -r -a lenses <<<"$LENSES"
       for lens in "${lenses[@]}"; do
@@ -400,4 +310,9 @@ steps:
         install -m 0644 "$OUT_DIR/findings-$lens.jsonl" "$history/findings.jsonl"
         install -m 0644 "$OUT_DIR/temporal-$lens.jsonl" "$history/temporal.jsonl"
       done
+      printf '%s\n' "$backend_run_id" > "$OUT_DIR/breakdown-run-id"
+      printf 'backend_run_id=%s\n' "$backend_run_id"
+      printf 'BACKEND_RUN_ID=%s\n' "$backend_run_id" >> "$DAGU_OUTPUT_FILE"
+    outputs:
+      - name: BACKEND_RUN_ID
 
