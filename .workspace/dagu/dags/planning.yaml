@@ -1,7 +1,7 @@
-# dagu-feature-bundle: @a4s/omp-dagu@0.3.94 source=pablontiv/a4s@f34a300525812f2c87c351e832d9a24321ecadc1 bootstrap=bootstrap-backscroll-v0-3-94 dagu=2.20.1
+# dagu-feature-bundle: @a4s/omp-dagu@0.3.101 source=pablontiv/a4s@04846df5940d65b8e230eafadff6621ae9186122 bootstrap=bootstrap-backscroll-v0-3-101 dagu=2.20.1
 labels:
   - workspace=backscroll
-  - dagu-feature-bundle=0.3.94
+  - dagu-feature-bundle=0.3.101
 queue: backscroll
 type: graph
 dotenv: []
@@ -22,7 +22,7 @@ params:
     required: true
 env:
   - RUN: ${context.run.id}
-  - DAGU_FEATURE_BUNDLE: "dagu-feature-bundle=0.3.94 source=pablontiv/a4s@f34a300525812f2c87c351e832d9a24321ecadc1 bootstrap=bootstrap-backscroll-v0-3-94"
+  - DAGU_FEATURE_BUNDLE: "dagu-feature-bundle=0.3.101 source=pablontiv/a4s@04846df5940d65b8e230eafadff6621ae9186122 bootstrap=bootstrap-backscroll-v0-3-101"
   - FEEDBACK: ""
 steps:
   - id: init
@@ -86,86 +86,12 @@ steps:
       iteration=$(jq -er '[.dagRunDetails.nodes[]? | select(.step.id == "review")] | select(length == 1) | .[0] | (if has("approvalIteration") then .approvalIteration else 0 end) | select(type == "number" and . >= 0 and floor == .)' <<<"$rest")
       printf 'PLAN_REVIEW AGENT=plan-reviewer DAG=planning RUN=%s ITERATION=%s END\n' "$RUN" "$iteration" > "$OUT_DIR/generation"
       printf 'GENERATION=%s\n' "$(cat "$OUT_DIR/generation")" >> "$DAGU_OUTPUT_FILE"
-      reject() {
-        printf 'units.jsonl:%s: rule=%s%s\n' "$1" "$2" "${3:+ $3}" | tee "$OUT_DIR/findings.md" >&2
+      if test -f "$OUT_DIR/import-error"; then
+        printf '{"line":1,"field":"$input","rule":"import-units","expected":"completed upstream import","observed":"import-error"}\n' | tee "$OUT_DIR/findings.md" >&2
         exit 1
-      }
-      test ! -f "$OUT_DIR/import-error" || reject 1 import-units
-      file="$OUT_DIR/units.jsonl"
-      test -s "$file" || reject 1 required-units
-      line=0
-      ids='[]'
-      while IFS= read -r row || test -n "$row"; do
-        line=$((line + 1))
-        jq -se 'length == 1 and (.[0] | type == "object")' >/dev/null 2>&1 <<<"$row" || reject "$line" json-object
-        rule=$(jq -r --argjson ids "$ids" '
-          def nonempty: type == "string" and test("\\S");
-          def sections($names): .body as $body | all($names[]; . as $name | $body | test("(?m)^## " + $name + "[ \\t]*\\r?$"));
-          if (keys - ["id","title","dag","labels","body","question","source","findings","relationships"] | length) > 0 then "unit-fields"
-          elif (.id | type != "string") then "kebab-id"
-          elif (.id | test("^[a-z0-9]+(-[a-z0-9]+)*$") | not) then "kebab-id"
-          elif (.id as $id | $ids | index($id)) != null then "unique-id"
-          elif (.title | nonempty | not) then "title"
-          elif (.dag != "feature" and .dag != "poc") then "dag"
-          elif .dag == "poc" and (.question | nonempty | not) then "poc-question"
-          elif (.labels | type != "array") then "labels"
-          elif (.labels | all(nonempty) | not) then "labels"
-          elif has("source") and (.source != "refine" and .source != "discovery" and .source != "plan") then "source"
-          elif has("findings") and ((.findings | type != "array") or (.findings | all(nonempty) | not)) then "findings"
-          elif has("findings") and ((.findings | length) != (.findings | unique | length)) then "unique-findings"
-          elif has("relationships") and (.relationships | type != "array") then "relationships"
-          elif (.body | nonempty | not) then "body"
-          elif .dag == "feature" and (sections(["(Problema|Problem)","(Cambio|Change)","(Aceptación|Acceptance)"]) | not) then "required-sections"
-          elif .dag == "poc" and (sections(["PoC","(Veredicto|Verdict)","(Después del PASS|After PASS)"]) | not) then "required-sections"
-          else "" end' <<<"$row")
-        test -z "$rule" || reject "$line" "$rule"
-        ids=$(jq -c --arg id "$(jq -r .id <<<"$row")" '. + [$id]' <<<"$ids")
-      done < "$file"
-      diagnostic=$(jq -sc '
-        . as $units |
-        def reaches($kind; $from; $to; $seen):
-          if $from == $to then true
-          elif ($seen | index($from)) != null then false
-          else any($units[] | select(.id == $from) | .relationships[]? |
-            select(.kind == $kind and (.target | has("unit")));
-            reaches($kind; .target.unit; $to; $seen + [$from])) end;
-        [to_entries[] as $row | $row.value as $unit |
-          ($unit.relationships // []) | to_entries[] |
-          .key as $index | .value as $edge |
-          {line: ($row.key + 1), field: ("relationships[" + ($index|tostring) + "]"), unit: $unit.id} as $where |
-          (if ($edge | type) != "object" then "relationship-object"
-          elif ($edge | keys) != ["kind","target"] then "relationship-fields"
-          elif ($edge.kind != "blocked_by" and $edge.kind != "parent") then "relationship-kind"
-          elif ($edge.target | type) != "object" then "relationship-target"
-          elif ($edge.target | keys) == ["unit"] then
-            if ($edge.target.unit | type) != "string" then "relationship-unit"
-            elif ($edge.target.unit | test("^[a-z0-9]+(-[a-z0-9]+)*$") | not) then "relationship-unit"
-            elif $edge.target.unit == $unit.id then "relationship-self"
-            elif ($units | map(.id) | index($edge.target.unit)) == null then "relationship-unknown-unit"
-            else "" end
-          elif ($edge.target | keys) == ["issue"] then
-            if ($edge.target.issue | type) != "number" then "relationship-issue"
-            elif ($edge.target.issue <= 0 or $edge.target.issue > 9007199254740991 or ($edge.target.issue | floor) != $edge.target.issue) then "relationship-issue"
-            else "" end
-          else "relationship-target" end) as $rule |
-          select($rule != "") | $where + {rule: $rule, observed: $edge}
-        ] as $malformed |
-        if ($malformed | length) > 0 then $malformed[0]
-        else [ $units | to_entries[] as $row | $row.value as $unit |
-          ($unit.relationships // []) | to_entries[] |
-          .key as $index | .value as $edge |
-          (if any(($unit.relationships // [])[0:$index][]; . == $edge) then "relationship-duplicate"
-          elif $edge.kind == "parent" and ([$unit.relationships[] | select(.kind == "parent")] | length) > 1 then "relationship-parent"
-          elif ($edge.target | has("unit")) and reaches($edge.kind; $edge.target.unit; $unit.id; []) then "relationship-cycle"
-          else "" end) as $rule |
-          select($rule != "") |
-          {line: ($row.key + 1), rule: $rule, field: ("relationships[" + ($index|tostring) + "]"), unit: $unit.id, observed: $edge}
-        ][0] // empty end
-      ' "$file")
-      if test -n "$diagnostic"; then
-        reject "$(jq -r .line <<<"$diagnostic")" "$(jq -r .rule <<<"$diagnostic")" "$(jq -c 'del(.line,.rule)' <<<"$diagnostic")"
       fi
-      cp "$file" "$OUT_DIR/validated-units.jsonl"
+      dagu-feature-bundle validate-planning-units --input "$OUT_DIR/units.jsonl" \
+        --snapshot "$OUT_DIR/validated-units.jsonl" --findings "$OUT_DIR/findings.md"
     outputs:
       - name: GENERATION
 
@@ -249,8 +175,9 @@ steps:
         [ .[] | select(.type == "session_init") ] as $inits |
         [ .[] | select(.type == "message" and .message.role == "toolResult" and .message.toolName == "yield") ] as $yields |
         $yields[-1].message.details.data as $data |
-        if ($sessions | length) != 1 or ($inits | length) != 1 then error("ambiguous transcript")
+        if ($sessions | length) != 1 or ($inits | length) < 1 then error("ambiguous transcript")
         elif $sessions[0].parentSession != $parent or $inits[0].agent != "plan-reviewer" then error("foreign transcript")
+        elif ($inits | all(.agent == $inits[0].agent and .task == $inits[0].task) | not) then error("mixed init identity")
         elif (($inits[0].task // "") | contains($marker) | not) then error("generation marker")
         elif ($inits[0].timestamp | epoch) <= ($cutoff | epoch) then error("stale transcript")
         elif ($data | type) != "object" then error("last yield")
@@ -310,8 +237,17 @@ steps:
       iteration=$(jq -er '[.dagRunDetails.nodes[]? | select(.step.id == "review")] | select(length == 1) | .[0] | (if has("approvalIteration") then .approvalIteration else 0 end) | select(type == "number" and . >= 0 and floor == .)' <<<"$rest")
       test "$(cat "$OUT_DIR/review-accepted")" = "PLAN_REVIEW AGENT=plan-reviewer DAG=planning RUN=$RUN ITERATION=$iteration END"
       jq -e '.verdict == "accept" and (.findings | all(.severity != "blocker"))' "$OUT_DIR/review-$iteration.json" >/dev/null
+      [[ "$RUN" =~ ^[A-Za-z0-9][A-Za-z0-9._-]*$ ]]
+      [[ "$NWO" =~ ^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$ ]]
       units="$OUT_DIR/units.jsonl"
       issues="$OUT_DIR/issues.jsonl"
+      state="$OUT_DIR/materialization-$RUN-$iteration.json"
+      snapshot="$OUT_DIR/materialization-$RUN-$iteration-units.jsonl"
+      reject() {
+        printf 'issues.jsonl:1: rule=%s%s; inspect %s, correct approved input or remote state, then retry materialize.\n' "$1" "${2:+ $2}" "$state" | tee -a "$OUT_DIR/findings.md" >&2
+        exit 1
+      }
+      trap 'printf "issues.jsonl:1: rule=materialization-command line=%s; inspect command stderr and %s; successful progress is retained, retry materialize after correcting the cause.\n" "$LINENO" "$state" | tee -a "$OUT_DIR/findings.md" >&2' ERR
       if [[ "$APPROVED" == all ]]; then
         jq -sc '.' "$units" > "$OUT_DIR/approved-units.json"
       else
@@ -331,51 +267,269 @@ steps:
         if ($missing | length) > 0 then error("rule=approved-relationship-target " + ($missing | tojson))
         else true end
       ' "$OUT_DIR/approved-units.json" >/dev/null
-      existing=$(gh api --paginate --slurp "repos/$NWO/issues?state=all&per_page=100" | jq -ec 'add | select(type == "array")')
-      : > "$issues.tmp"
+      scope=$(jq -nc --arg run "$RUN" --arg repo "$NWO" --arg source "$SOURCE" --argjson iteration "$iteration" '{run:$run,repo:$repo,source:$source,iteration:$iteration}')
+      if test -f "$state"; then
+        jq -e --argjson scope "$scope" '.scope == $scope' "$state" >/dev/null || reject materialization-scope
+        cmp "$snapshot" "$units" || reject materialization-snapshot
+      else
+        cp "$units" "$snapshot.tmp"
+        mv "$snapshot.tmp" "$snapshot"
+        jq -n --argjson scope "$scope" '{scope:$scope,units:{},baseline:{},edges:[],status:"preflight"}' > "$state.tmp"
+        mv "$state.tmp" "$state"
+      fi
+      # Every state update and public identity projection is atomic; failed side effects
+      # leave their pending intent intact for authoritative reconciliation on reentry.
+      save() {
+        mv "$state.tmp" "$state"
+      }
+      project() {
+        jq -c --slurpfile approved "$OUT_DIR/approved-units.json" '
+          .units as $units | $approved[0][] | .id as $id | $units[$id] |
+          select(.number != null) | {id:$id,number,url,reused}
+        ' "$state" > "$issues.tmp"
+        mv "$issues.tmp" "$issues"
+      }
+      # Full repository pagination, rather than search indexing, resolves publication
+      # whose response/checkpoint may have been lost after GitHub accepted the write.
+      gh api --paginate --slurp "repos/$NWO/issues?state=all&per_page=100" > "$OUT_DIR/materialization-list.json.tmp"
+      jq -e 'add | select(type == "array") | map(select(.pull_request == null))' "$OUT_DIR/materialization-list.json.tmp" > "$OUT_DIR/materialization-list.json"
+      : > "$OUT_DIR/materialization-plan.jsonl"
       index=0
       while IFS= read -r unit; do
         index=$((index + 1))
-        id=$(jq -er '.id' <<<"$unit")
+        id=$(jq -er .id <<<"$unit")
         marker="<!-- breakdown-unit: $RUN/$id -->"
         source_marker=""
         if [[ "$(jq -r --arg source "$SOURCE" '.source // $source' <<<"$unit")" == discovery ]]; then
           candidate="<!-- discovery-unit: $id -->"
-          if jq -e --arg marker "$candidate" '.body | contains($marker)' <<<"$unit" >/dev/null; then
-            source_marker=$candidate
-          fi
+          if jq -e --arg marker "$candidate" '.body | contains($marker)' <<<"$unit" >/dev/null; then source_marker=$candidate; fi
         fi
         matches=$(jq -c --arg marker "$marker" --arg source_marker "$source_marker" '
-          [.[] | select((.body // "") | contains($marker) or
-            ($source_marker != "" and contains($source_marker)))]
-        ' <<<"$existing")
-        count=$(jq 'length' <<<"$matches")
-        if test "$count" -gt 1; then
-          printf 'issues.jsonl:1: rule=unique-issue-marker unit=%s\n' "$id" >&2
-          exit 1
-        elif test "$count" -eq 1; then
-          number=$(jq -er '.[0].number' <<<"$matches")
-          url=$(jq -er '.[0].html_url // .[0].url' <<<"$matches")
-          reused=true
-        else
-          body_file="$OUT_DIR/issue-body-$index.md"
-          {
-            jq -r '.body' <<<"$unit"
-            jq -r '.relationships[]? | "\nRelationship intent: " + .kind + " " + (if .target.unit then "unit:" + .target.unit else "issue:#" + (.target.issue|tostring) end)' <<<"$unit"
-            printf '\n\n%s\n' "$marker"
-            jq -r --arg source "$SOURCE" '"\nBreakdown source: " + (.source // $source), (if has("findings") then "Finding lineage: " + (.findings | join(", ")) else empty end)' <<<"$unit"
-          } > "$body_file"
-          title=$(jq -er '.title' <<<"$unit")
-          labels=()
-          while IFS= read -r label; do labels+=(--label "$label"); done < <(jq -r '.labels[]' <<<"$unit")
-          url=$(gh issue create --repo "$NWO" --title "$title" --body-file "$body_file" "${labels[@]}")
-          number=${url##*/}
-          [[ "$number" =~ ^[1-9][0-9]*$ ]]
-          reused=false
-          existing=$(jq -c --argjson number "$number" --arg url "$url" --arg body "$(cat "$body_file")" '. + [{number:$number,html_url:$url,body:$body}]' <<<"$existing")
+          [.[] | select((.body // "") | contains($marker) or ($source_marker != "" and contains($source_marker)))]
+        ' "$OUT_DIR/materialization-list.json")
+        count=$(jq length <<<"$matches")
+        test "$count" -le 1 || reject unique-issue-marker "unit=$id"
+        marker_number=$(jq -c '.[0].number // null' <<<"$matches")
+        previous_number=$(jq -c --arg id "$id" '.units[$id].number // null' "$state")
+        revision_number=$(jq -c '.revision.issue // null' <<<"$unit")
+        identities=$(jq -nc --argjson a "$marker_number" --argjson b "$previous_number" --argjson c "$revision_number" '[$a,$b,$c] | map(select(. != null)) | unique')
+        test "$(jq length <<<"$identities")" -le 1 || reject ambiguous-issue-identity "unit=$id identities=$identities"
+        number=$(jq -c '.[0] // null' <<<"$identities")
+        if [[ "$number" != null ]]; then
+          jq -e --argjson number "$number" 'any(.[]; .number == $number)' "$OUT_DIR/materialization-list.json" >/dev/null || reject missing-issue-identity "unit=$id issue=$number"
         fi
-        jq -nc --arg id "$id" --argjson number "$number" --arg url "$url" --argjson reused "$reused" '{id:$id,number:$number,url:$url,reused:$reused}' >> "$issues.tmp"
-      done < <(jq -c '.[]' "$OUT_DIR/approved-units.json")
-      mv "$issues.tmp" "$issues"
+        body_file="$OUT_DIR/issue-body-$index.md"
+        {
+          jq -r '.body' <<<"$unit"
+          jq -r '.relationships[]? | "\nRelationship intent: " + .kind + " " + (if .target.unit then "unit:" + .target.unit else "issue:#" + (.target.issue|tostring) end)' <<<"$unit"
+          printf '\n\n%s\n' "$marker"
+          jq -r --arg source "$SOURCE" '"\nBreakdown source: " + (.source // $source), (if has("findings") then "Finding lineage: " + (.findings | join(", ")) else empty end)' <<<"$unit"
+        } > "$body_file"
+        jq -nc --argjson unit "$unit" --argjson number "$number" --arg marker "$marker" --rawfile body "$body_file" '
+          {id:$unit.id,unit:$unit,number:$number,marker:$marker,
+           payload:{title:$unit.title,body:$body,labels:($unit.labels|unique)},
+           origin:(if $unit.revision then "revision" elif $number != null then "marker" else "create" end)}
+        ' >> "$OUT_DIR/materialization-plan.jsonl"
+      done < <(jq -c . "$units")
+      jq -s '.' "$OUT_DIR/materialization-plan.jsonl" > "$OUT_DIR/materialization-plan.json"
+      # Resolve aliases through the shared validator without changing reviewed bytes
+      # or turning implicit identity reuse into an approved field revision.
+      jq -c '.[] | .number as $number | .unit |
+        if $number != null and (has("revision") | not)
+        then . + {revision:{issue:$number,fields:[]}} else . end
+      ' "$OUT_DIR/materialization-plan.json" > "$OUT_DIR/materialization-validation-units.jsonl"
+      if ! dagu-feature-bundle validate-planning-units \
+        --input "$OUT_DIR/materialization-validation-units.jsonl" \
+        --findings "$OUT_DIR/materialization-validation-findings.jsonl"; then
+        cat "$OUT_DIR/materialization-validation-findings.jsonl" >> "$OUT_DIR/findings.md"
+        reject resolved-planning-units "see materialization-validation-findings.jsonl"
+      fi
+      jq --slurpfile approved "$OUT_DIR/approved-units.json" '. as $plan | [$approved[0][] as $unit | $plan[] | select(.id == $unit.id)]' "$OUT_DIR/materialization-plan.json" > "$OUT_DIR/materialization-selected.json"
+      jq '[.[] | .number, (.unit.relationships[]?.target.issue // empty)] | map(select(. != null)) | unique' "$OUT_DIR/materialization-selected.json" > "$OUT_DIR/materialization-numbers.json"
+      # Grouped GraphQL reads include the complete preserved native graph. Every
+      # connection follows cursors, including labels; a truncated read is never proof.
+      read_group() {
+        local numbers=$1 destination=$2 offset=0 size query number connection cursor next fields page
+        size=$(jq length "$numbers")
+        printf '{}\n' > "$destination"
+        while test "$offset" -lt "$size"; do
+          query=$(jq -r --arg owner "${NWO%/*}" --arg repo "${NWO#*/}" --argjson offset "$offset" '
+            "query{repository(owner:" + ($owner|tojson) + ",name:" + ($repo|tojson) + "){" +
+            (.[ $offset : ($offset+30) ] | map("i" + tostring + ":issue(number:" + tostring + "){id fullDatabaseId repository{nameWithOwner} number url title body parent{fullDatabaseId number repository{nameWithOwner}} labels(first:100){totalCount nodes{name} pageInfo{hasNextPage endCursor}} blockedBy(first:100){totalCount nodes{fullDatabaseId number repository{nameWithOwner}} pageInfo{hasNextPage endCursor}} blocking(first:100){totalCount nodes{fullDatabaseId number repository{nameWithOwner}} pageInfo{hasNextPage endCursor}} subIssues(first:100){totalCount nodes{fullDatabaseId number repository{nameWithOwner}} pageInfo{hasNextPage endCursor}}}") | join(" ")) + "}}"
+          ' "$numbers")
+          jq -n --arg query "$query" '{query:$query}' > "$OUT_DIR/materialization-query.json"
+          gh api graphql --input "$OUT_DIR/materialization-query.json" > "$OUT_DIR/materialization-response.json"
+          jq -e '((.errors // [])|length) == 0 and (.data.repository|type) == "object" and all(.data.repository[]; . != null)' "$OUT_DIR/materialization-response.json" >/dev/null || reject remote-readback "missing or inaccessible issue; inspect materialization-response.json"
+          jq '.data.repository' "$OUT_DIR/materialization-response.json" > "$OUT_DIR/materialization-chunk.json"
+          while IFS= read -r number; do
+            for connection in labels blockedBy blocking subIssues; do
+              while [[ "$(jq -r --arg key "i$number" --arg connection "$connection" '.[$key][$connection].pageInfo.hasNextPage' "$OUT_DIR/materialization-chunk.json")" == true ]]; do
+                cursor=$(jq -er --arg key "i$number" --arg connection "$connection" '.[$key][$connection].pageInfo.endCursor | select(type == "string" and length > 0)' "$OUT_DIR/materialization-chunk.json")
+                fields='fullDatabaseId number repository{nameWithOwner}'; if [[ "$connection" == labels ]]; then fields=name; fi
+                query=$(jq -nr --arg owner "${NWO%/*}" --arg repo "${NWO#*/}" --arg number "$number" --arg connection "$connection" --arg cursor "$cursor" --arg fields "$fields" '"query{repository(owner:" + ($owner|tojson) + ",name:" + ($repo|tojson) + "){i:issue(number:" + $number + "){" + $connection + "(first:100,after:" + ($cursor|tojson) + "){totalCount nodes{" + $fields + "} pageInfo{hasNextPage endCursor}}}}}"')
+                jq -n --arg query "$query" '{query:$query}' > "$OUT_DIR/materialization-query.json"
+                gh api graphql --input "$OUT_DIR/materialization-query.json" > "$OUT_DIR/materialization-response.json"
+                page=$(jq -ec --arg connection "$connection" 'select(((.errors // [])|length) == 0) | .data.repository.i[$connection] | select((.nodes|type) == "array" and (.pageInfo.hasNextPage|type) == "boolean")' "$OUT_DIR/materialization-response.json")
+                next=$(jq -r '.pageInfo.endCursor // ""' <<<"$page")
+                if [[ "$(jq -r .pageInfo.hasNextPage <<<"$page")" == true && "$next" == "$cursor" ]]; then reject remote-pagination "issue=$number connection=$connection cursor did not advance"; fi
+                jq --arg key "i$number" --arg connection "$connection" --argjson page "$page" '.[$key][$connection] |= {nodes:(.nodes + $page.nodes),totalCount:$page.totalCount,pageInfo:$page.pageInfo}' "$OUT_DIR/materialization-chunk.json" > "$OUT_DIR/materialization-chunk.json.tmp"
+                mv "$OUT_DIR/materialization-chunk.json.tmp" "$OUT_DIR/materialization-chunk.json"
+              done
+            done
+          done < <(jq -r --argjson offset "$offset" '.[$offset:($offset+30)][]' "$numbers")
+          jq -e 'def issue_number: type == "number" and . > 0 and . <= 9007199254740991 and floor == .;
+            def native_issue: (.number|issue_number) and (.fullDatabaseId|tostring|test("^[1-9][0-9]*$")) and (.repository.nameWithOwner | type == "string" and test("^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$"));
+            all(.[]; native_issue and (.title|type) == "string" and (.body|type) == "string" and
+              (.parent == null or (.parent|native_issue)) and
+              all(.labels,.blockedBy,.blocking,.subIssues; (.nodes|type) == "array" and .pageInfo.hasNextPage == false and (.nodes|length) == .totalCount) and
+              all(.labels.nodes[]; (.name|type) == "string") and
+              all(.blockedBy.nodes[],.blocking.nodes[],.subIssues.nodes[]; native_issue))
+          ' "$OUT_DIR/materialization-chunk.json" >/dev/null || reject remote-readback "invalid or incomplete issue graph"
+          jq '
+            def reference:
+              if . == null then null
+              else {database_id:(.fullDatabaseId|tostring),repo:(.repository.nameWithOwner|ascii_downcase),number} end;
+            to_entries | map({key:(.value.number|tostring),value:(.value | {number,repo:(.repository.nameWithOwner|ascii_downcase),url,node_id:.id,database_id:(.fullDatabaseId|tostring),title,body,labels:([.labels.nodes[].name]|unique),parent:(.parent|reference),blocked_by:([.blockedBy.nodes[]|reference]|unique_by(.database_id)),blocking:([.blocking.nodes[]|reference]|unique_by(.database_id)),sub_issues:([.subIssues.nodes[]|reference]|unique_by(.database_id))})}) | from_entries
+          ' "$OUT_DIR/materialization-chunk.json" > "$OUT_DIR/materialization-normalized.json"
+          jq -s '.[0] * .[1]' "$destination" "$OUT_DIR/materialization-normalized.json" > "$destination.tmp"
+          mv "$destination.tmp" "$destination"
+          offset=$((offset + 30))
+        done
+      }
+      read_group "$OUT_DIR/materialization-numbers.json" "$OUT_DIR/materialization-before.json"
+      conflict=$(jq -c --slurpfile before "$OUT_DIR/materialization-before.json" --slurpfile all "$OUT_DIR/materialization-plan.json" '
+        [.[] | select(.number != null) | . as $unit | .unit.relationships[]? | select(.kind == "parent") |
+         .target as $target | (if $target.issue then $target.issue else ($all[0][] | select(.id == $target.unit) | .number) end) as $parent |
+         $before[0][($unit.number|tostring)].parent as $actual |
+         select($actual != null and $actual.database_id != $before[0][($parent|tostring)].database_id) | {unit:$unit.id,issue:$unit.number,expected:($before[0][($parent|tostring)] | if . == null then {unit:$target.unit,issue:$parent} else {database_id,repo,number} end),observed:$actual}]
+      ' "$OUT_DIR/materialization-selected.json")
+      test "$conflict" = '[]' || reject conflicting-parent "$conflict"
+      # Preserve first-observed baselines across failures and expanded subset approvals.
+      jq --slurpfile before "$OUT_DIR/materialization-before.json" '.baseline = ($before[0] * .baseline) | .status="publishing"' "$state" > "$state.tmp"; save
+      while IFS= read -r item; do
+        id=$(jq -r .id <<<"$item")
+        jq --argjson item "$item" --slurpfile before "$OUT_DIR/materialization-before.json" '
+          $item.id as $id | .units[$id] as $old |
+          ($before[0][($item.number|tostring)] // null) as $pre |
+          ($item.unit.revision.fields // []) as $fields |
+          .units[$id] = (if $old != null then $old + {number:$item.number,url:($pre.url // $old.url),reused:($item.number != null)}
+            else {id:$id,number:$item.number,url:($pre.url // null),origin:$item.origin,reused:($item.number != null),
+              fields:$fields,prestate:$pre,payload:$item.payload,
+              intended:(if $item.number == null then $item.payload
+                else ($pre | {title,body,labels}) + ($item.unit | with_entries(select(.key as $key | $fields | index($key)))) end | .labels |= unique),
+              field_status:($fields | map({key:.,value:"pending"}) | from_entries),status:(if $item.number == null then "pending-create" else "bound" end)} end)
+        ' "$state" > "$state.tmp"; save
+        project
+      done < <(jq -c '.[]' "$OUT_DIR/materialization-selected.json")
+      jq --slurpfile selected "$OUT_DIR/materialization-selected.json" '
+        . as $state | .units as $units |
+        reduce ($selected[0][] | . as $unit | (.unit.relationships // [] | to_entries[]) |
+          {key:($unit.id + "/" + (.key|tostring)),unit:$unit.id,kind:.value.kind,target:.value.target,
+           source_number:$units[$unit.id].number,
+           target_number:(if .value.target.issue then .value.target.issue else $units[.value.target.unit].number end),status:"pending"}) as $edge
+          (.; if any(.edges[]; .key == $edge.key) then .
+            else .edges += [$edge + {prestate:($state.baseline[($edge.source_number|tostring)] // null)}] end)
+      ' "$state" > "$state.tmp"; save
+      # Unapproved fields are never repaired implicitly, even on reentry.
+      mismatch=$(jq -c --slurpfile selected "$OUT_DIR/materialization-selected.json" --slurpfile before "$OUT_DIR/materialization-before.json" '
+        [.units as $units | $selected[0][] | .id as $id | $units[$id] | select(.number != null) | . as $unit |
+         ["title","body","labels"][] as $field | select(($unit.fields | index($field)) == null) |
+         $before[0][($unit.number|tostring)][$field] as $actual | select($actual != $unit.intended[$field]) |
+         {unit:$id,issue:$unit.number,field:$field,expected:$unit.intended[$field],observed:$actual}]
+      ' "$state")
+      test "$mismatch" = '[]' || reject remote-unapproved-field-mismatch "$mismatch"
+      while IFS= read -r id; do
+        number=$(jq -c --arg id "$id" '.units[$id].number' "$state")
+        if [[ "$number" == null ]]; then
+          jq --arg id "$id" '.units[$id].payload' "$state" > "$OUT_DIR/materialization-write.json"
+          gh api --method POST "repos/$NWO/issues" --input "$OUT_DIR/materialization-write.json" > "$OUT_DIR/materialization-write-response.json"
+          number=$(jq -er '.number | select(type == "number" and . > 0 and floor == .)' "$OUT_DIR/materialization-write-response.json")
+          jq --arg id "$id" --argjson number "$number" --slurpfile response "$OUT_DIR/materialization-write-response.json" '.units[$id] += {number:$number,url:$response[0].html_url,status:"created",reused:false}' "$state" > "$state.tmp"; save
+          project
+        fi
+      done < <(jq -r '.[].id' "$OUT_DIR/materialization-selected.json")
+      jq --slurpfile selected "$OUT_DIR/materialization-selected.json" '[.units as $units | $selected[0][] | $units[.id].number, (.unit.relationships[]?.target.issue // empty)] | unique' "$state" > "$OUT_DIR/materialization-numbers.json"
+      read_group "$OUT_DIR/materialization-numbers.json" "$OUT_DIR/materialization-current.json"
+      jq --slurpfile current "$OUT_DIR/materialization-current.json" '
+        .baseline = ($current[0] * .baseline) |
+        .units |= with_entries(.value as $unit |
+          if $current[0][($unit.number|tostring)] then .value += ($current[0][($unit.number|tostring)] | {database_id,node_id,repo}) else . end)
+      ' "$state" > "$state.tmp"; save
+      # Only explicit revision.fields produce PATCH keys. Canonical root values are
+      # used verbatim; bind-only revisions and marker reuse have no implicit updates.
+      while IFS= read -r id; do
+        number=$(jq -r --arg id "$id" '.units[$id].number' "$state")
+        jq --arg id "$id" --slurpfile current "$OUT_DIR/materialization-current.json" '
+          .units[$id] as $unit | $unit.intended | with_entries(select(.key as $field | ($unit.fields | index($field)) != null and .value != $current[0][($unit.number|tostring)][$field]))
+        ' "$state" > "$OUT_DIR/materialization-write.json"
+        if test "$(jq length "$OUT_DIR/materialization-write.json")" -gt 0; then
+          gh api --method PATCH "repos/$NWO/issues/$number" --input "$OUT_DIR/materialization-write.json" > "$OUT_DIR/materialization-write-response.json"
+          jq --arg id "$id" '.units[$id].field_status |= with_entries(.value="applied") | .units[$id].status="revised"' "$state" > "$state.tmp"; save
+        fi
+      done < <(jq -r '.[].id' "$OUT_DIR/materialization-selected.json")
+      jq --slurpfile current "$OUT_DIR/materialization-current.json" '.units as $units | .edges |= map(.source_number=$units[.unit].number |
+        .target_number=(if .target.issue then .target.issue else $units[.target.unit].number end) |
+        .source_database_id=($current[0][(.source_number|tostring)].database_id // .source_database_id) |
+        .target_database_id=($current[0][(.target_number|tostring)].database_id // .target_database_id))' "$state" > "$state.tmp"; save
+      while IFS= read -r edge; do
+        key=$(jq -r .key <<<"$edge")
+        number=$(jq -r .source_number <<<"$edge")
+        target=$(jq -r .target_number <<<"$edge")
+        kind=$(jq -r .kind <<<"$edge")
+        target_id=$(jq -er --arg number "$target" '.[$number].database_id' "$OUT_DIR/materialization-current.json")
+        if [[ "$kind" == parent ]]; then
+          actual=$(jq -c --arg number "$number" '.[$number].parent' "$OUT_DIR/materialization-current.json")
+          actual_id=$(jq -r --arg number "$number" '.[$number].parent.database_id // "null"' "$OUT_DIR/materialization-current.json")
+          [[ "$actual_id" == null || "$actual_id" == "$target_id" ]] || reject conflicting-parent "unit=$(jq -r .unit <<<"$edge") expected_repo=$NWO expected_issue=$target expected_database_id=$target_id observed=$actual"
+          present=false; [[ "$actual_id" != "$target_id" ]] || present=true
+          database_id=$(jq -er --arg number "$number" '.[$number].database_id' "$OUT_DIR/materialization-current.json")
+          endpoint="repos/$NWO/issues/$target/sub_issues"
+          printf '{"sub_issue_id":%s}\n' "$database_id" > "$OUT_DIR/materialization-write.json"
+        else
+          present=$(jq -r --arg number "$number" --arg target_id "$target_id" 'any(.[$number].blocked_by[]; .database_id == $target_id)' "$OUT_DIR/materialization-current.json")
+          database_id=$(jq -er --arg number "$target" '.[$number].database_id' "$OUT_DIR/materialization-current.json")
+          endpoint="repos/$NWO/issues/$number/dependencies/blocked_by"
+          printf '{"issue_id":%s}\n' "$database_id" > "$OUT_DIR/materialization-write.json"
+        fi
+        if [[ "$present" == false ]]; then
+          gh api --method POST "$endpoint" --input "$OUT_DIR/materialization-write.json" > "$OUT_DIR/materialization-write-response.json"
+          jq --arg key "$key" '(.edges[] | select(.key == $key)).status="applied"' "$state" > "$state.tmp"; save
+          # Update the in-memory graph so aliases of the same native edge do not POST twice.
+          jq --arg number "$number" --arg target "$target" --arg kind "$kind" '
+            (.[$number] | {database_id,repo,number}) as $source | (.[$target] | {database_id,repo,number}) as $destination |
+            if $kind == "parent" then .[$number].parent=$destination | .[$target].sub_issues |= (. + [$source]|unique_by(.database_id))
+            else .[$number].blocked_by |= (. + [$destination]|unique_by(.database_id)) | .[$target].blocking |= (. + [$source]|unique_by(.database_id)) end
+          ' "$OUT_DIR/materialization-current.json" > "$OUT_DIR/materialization-current.json.tmp"
+          mv "$OUT_DIR/materialization-current.json.tmp" "$OUT_DIR/materialization-current.json"
+        fi
+      done < <(jq -c --slurpfile selected "$OUT_DIR/materialization-selected.json" '.edges[] | select(.unit as $id | $selected[0] | any(.id == $id))' "$state")
+      # Compute complete intended state, preserving both directions of every native
+      # edge observed before publication, and all core fields outside explicit intent.
+      jq --slurpfile selected "$OUT_DIR/materialization-selected.json" '
+        . as $state | .baseline |
+        reduce $selected[0][] as $unit (.; $state.units[$unit.id] as $mapped | .[($mapped.number|tostring)] += $mapped.intended) |
+        reduce ($state.edges[] | select(.status == "applied" or .status == "verified" or (.unit as $id | $selected[0] | any(.id == $id)))) as $edge (.;
+          ($edge.source_number|tostring) as $source | ($edge.target_number|tostring) as $target |
+          (.[$source] | {database_id,repo,number}) as $source_identity | (.[$target] | {database_id,repo,number}) as $target_identity |
+          if $edge.kind == "parent" then .[$source].parent=$target_identity | .[$target].sub_issues |= (. + [$source_identity]|unique_by(.database_id))
+          else .[$source].blocked_by |= (. + [$target_identity]|unique_by(.database_id)) | .[$target].blocking |= (. + [$source_identity]|unique_by(.database_id)) end)
+      ' "$state" > "$OUT_DIR/materialization-expected.json"
+      read_group "$OUT_DIR/materialization-numbers.json" "$OUT_DIR/materialization-readback.json"
+      jq --slurpfile expected "$OUT_DIR/materialization-expected.json" '
+        . as $observed | [keys[] as $number | ["title","body","labels","parent","blocked_by","blocking","sub_issues"][] as $field |
+          select($observed[$number][$field] != $expected[0][$number][$field]) |
+          {rule:"remote-state-mismatch",issue:($number|tonumber),field:$field,expected:$expected[0][$number][$field],observed:$observed[$number][$field]}]
+      ' "$OUT_DIR/materialization-readback.json" > "$OUT_DIR/materialization-diagnostics.json"
+      jq --slurpfile expected "$OUT_DIR/materialization-expected.json" --slurpfile observed "$OUT_DIR/materialization-readback.json" --slurpfile diagnostics "$OUT_DIR/materialization-diagnostics.json" --slurpfile selected "$OUT_DIR/materialization-selected.json" '
+        .readback={expected:$expected[0],observed:$observed[0],diagnostics:$diagnostics[0]} |
+        .status=(if ($diagnostics[0]|length) == 0 then "verified" else "mismatch" end) |
+        if .status == "verified" then
+          .baseline=$expected[0] |
+          reduce $selected[0][] as $unit (.; .units[$unit.id].status="verified" | .units[$unit.id].field_status |= with_entries(.value="verified")) |
+          (.edges[] | select(.unit as $id | $selected[0] | any(.id == $id))).status="verified"
+        else . end
+      ' "$state" > "$state.tmp"; save
+      project
+      test "$(jq length "$OUT_DIR/materialization-diagnostics.json")" -eq 0 || reject remote-state-mismatch "$(jq -c . "$OUT_DIR/materialization-diagnostics.json")"
 
 

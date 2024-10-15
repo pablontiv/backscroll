@@ -1,7 +1,7 @@
-# dagu-feature-bundle: @a4s/omp-dagu@0.3.94 source=pablontiv/a4s@f34a300525812f2c87c351e832d9a24321ecadc1 bootstrap=bootstrap-backscroll-v0-3-94 dagu=2.20.1
+# dagu-feature-bundle: @a4s/omp-dagu@0.3.101 source=pablontiv/a4s@04846df5940d65b8e230eafadff6621ae9186122 bootstrap=bootstrap-backscroll-v0-3-101 dagu=2.20.1
 labels:
   - workspace=backscroll
-  - dagu-feature-bundle=0.3.94
+  - dagu-feature-bundle=0.3.101
 queue: backscroll
 type: graph
 dotenv: []
@@ -39,9 +39,10 @@ env:
   - GATE: "just check && just ci"
   - REBASE_RESOLVER: ""
   - REQUIRED_CHECK: "candidate"
+  - A4S_BLOCKER_REPORTING: "ask"
   - WORKTREE: ${PRIMARY}/.workspace/worktrees/issue-${ISSUE}
   - RUN: ${context.run.id}
-  - DAGU_FEATURE_BUNDLE: "dagu-feature-bundle=0.3.94 source=pablontiv/a4s@f34a300525812f2c87c351e832d9a24321ecadc1 bootstrap=bootstrap-backscroll-v0-3-94"
+  - DAGU_FEATURE_BUNDLE: "dagu-feature-bundle=0.3.101 source=pablontiv/a4s@04846df5940d65b8e230eafadff6621ae9186122 bootstrap=bootstrap-backscroll-v0-3-101"
   - DAGU_RESOURCE_GUARD: |
       resource_lock() {
         local operation=$1 primary root expected actual common key attempt owner run status candidate branch issue
@@ -186,7 +187,7 @@ steps:
   - id: admission
     run: |
       set -euo pipefail
-      rejected=$(jq -er 'keys[] | select(. == "GATE" or . == "REBASE_RESOLVER" or . == "REQUIRED_CHECK" or . == "PRIMARY" or . == "BRANCH")' <<<"$DAGU_PARAMS_JSON") || [[ $? == 4 ]]
+      rejected=$(jq -er 'keys[] | select(. == "GATE" or . == "REBASE_RESOLVER" or . == "REQUIRED_CHECK" or . == "PRIMARY" or . == "BRANCH" or . == "A4S_BLOCKER_REPORTING")' <<<"$DAGU_PARAMS_JSON") || [[ $? == 4 ]]
       if [[ -n "$rejected" ]]; then
         printf 'admission rejected run parameter: %s\n' "$rejected" >&2
         printf 'adopted policy PRIMARY=%q GATE=%q REBASE_RESOLVER=%q REQUIRED_CHECK=%q BRANCH=%q\n' "$PRIMARY" "$GATE" "${REBASE_RESOLVER:-}" "$REQUIRED_CHECK" "$BRANCH" >&2
@@ -341,8 +342,10 @@ steps:
               | $base + $fraction - $offset
             ) catch null end;
           . as $rows
-          | ($rows | map(select(.type == "session")) | first) as $session
-          | ($rows | map(select(.type == "session_init")) | first) as $init
+          | ($rows | map(select(.type == "session"))) as $sessions
+          | ($rows | map(select(.type == "session_init"))) as $inits
+          | ($sessions | first) as $session
+          | ($inits | first) as $init
           | ($rows | map(select(.type == "message" and .message.role == "toolResult" and .message.toolName == "yield")) | last) as $yield
           | ($init.timestamp | rfc3339_epoch) as $started
           | ($cutoff | rfc3339_epoch) as $cutoff_epoch
@@ -355,6 +358,8 @@ steps:
                 poc: $yield.message.details.data.poc
               },
               checks: {
+                session_identity: (($sessions | length) == 1 and ($inits | length) >= 1
+                  and ($inits | all(.agent == $init.agent and .task == $init.task))),
                 parentSession: ($session.parentSession == $expected_parent),
                 agent: ($init.agent == "triage-reviewer"),
                 task: (($init.task // "") | contains("TRIAGE_REVIEW AGENT=triage-reviewer DAG=feature RUN=\($run) ")),
@@ -369,6 +374,7 @@ steps:
             "session_init.timestamp=\(.fields.timestamp // "<missing>")",
             "last_yield.details.data.poc=\(.fields.poc // "<missing>")",
             "cutoff=\($cutoff)",
+            "check.session_identity=\(if .checks.session_identity then "PASS" else "FAIL" end)",
             "check.parentSession=\(if .checks.parentSession then "PASS" else "FAIL" end)",
             "check.agent=\(if .checks.agent then "PASS" else "FAIL" end)",
             "check.task_run_marker=\(if .checks.task then "PASS" else "FAIL" end)",
