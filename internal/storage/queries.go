@@ -919,7 +919,7 @@ func (d *Database) StalePaths(currentVersion int) ([]string, error) {
 // StalePathsContext is StalePaths with cancellation propagated through all
 // discovery queries and row iteration.
 func (d *Database) StalePathsContext(ctx context.Context, currentVersion int) ([]string, error) {
-	return d.stalePathsContext(ctx, currentVersion, false)
+	return d.stalePathsContext(ctx, currentVersion)
 }
 
 // PendingSearchEchoPaths distinguishes the v15 backlog from older extraction
@@ -931,7 +931,7 @@ func (d *Database) StalePathsContext(ctx context.Context, currentVersion int) ([
 // Candidate discovery uses a broad SQL prefilter (searchEchoZeroPrefilterSQL:
 // any echo-zero tool row containing the literal substring "backscroll") and
 // the strict per-shape decision happens in Go via
-// directsearch.IsSerializedDirectSearchCall (filterEchoZeroPaths). Enumerating
+// directsearch.IsSerializedDirectSearchCall. Enumerating
 // the accepted separator byte-sequences in SQL is provably unbounded —
 // strings.Fields accepts every unicode.IsSpace rune and the shell argv adds
 // JSON escaping on top — so no SQL-side shape matching exists to drift out of
@@ -940,36 +940,64 @@ func (d *Database) PendingSearchEchoPaths() ([]string, error) {
 	return d.PendingSearchEchoPathsContext(context.Background())
 }
 
-// PendingSearchEchoPathsContext is PendingSearchEchoPaths with cancellation
-// propagated through discovery and strict echo filtering.
+// PendingSearchEchoPathsContext streams the indexed candidate population once.
+// The SQL predicate is a broad superset; only the shared Go predicate decides
+// whether an echo-zero serialized call requires parser-backed pairing.
 func (d *Database) PendingSearchEchoPathsContext(ctx context.Context) ([]string, error) {
-	return d.stalePathsContext(ctx, 0, true)
-}
-
-func (d *Database) stalePathsContext(ctx context.Context, currentVersion int, echoOnly bool) ([]string, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
-	query := `
+	rows, err := d.db.QueryContext(ctx, `
+		SELECT candidates.source_path, candidates.text, candidates.pending
+		FROM (
+			SELECT source_path, '' AS text, 1 AS pending
+			FROM search_items WHERE source = 'session' AND search_echo IS NULL
+			UNION ALL
+			SELECT source_path, text, 0 AS pending
+			FROM search_items WHERE source = 'session' AND search_echo IS NOT NULL
+			  AND `+searchEchoZeroPrefilterSQL("search_items")+`
+		) candidates
+		LEFT JOIN indexed_files ON candidates.source_path = indexed_files.path
+		ORDER BY indexed_files.last_indexed ASC, candidates.source_path ASC`)
+	if err != nil {
+		return nil, fmt.Errorf("query pending search echoes: %w", err)
+	}
+	defer func() { _ = rows.Close() }()
+	var paths []string
+	kept := make(map[string]bool)
+	for rows.Next() {
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
+		var path, text string
+		var pending bool
+		if err := rows.Scan(&path, &text, &pending); err != nil {
+			return nil, fmt.Errorf("scan pending search echo: %w", err)
+		}
+		if !kept[path] && (pending || directsearch.IsSerializedDirectSearchCall(text)) {
+			kept[path] = true
+			paths = append(paths, path)
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate pending search echoes: %w", err)
+	}
+	return paths, ctx.Err()
+}
+
+func (d *Database) stalePathsContext(ctx context.Context, currentVersion int) ([]string, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	rows, err := d.db.QueryContext(ctx, `
 		SELECT DISTINCT search_items.source_path
 		FROM search_items
 		LEFT JOIN indexed_files ON search_items.source_path = indexed_files.path
 		WHERE search_items.source = 'session'
-		  AND ((? AND (search_items.extraction_version IS NULL OR search_items.extraction_version < ?))
-		       OR search_items.search_echo IS NULL`
-	if echoOnly {
-		// Broad prefilter for echo-zero candidates: any tool row whose stored
-		// text contains the literal "backscroll" substring. The strict
-		// per-shape check happens in Go (filterEchoZeroPaths) via
-		// directsearch.IsSerializedDirectSearchCall.
-		query += `
-		       OR (` + searchEchoZeroPrefilterSQL("search_items") + `)`
-	}
-	query += `)
+		  AND (search_items.extraction_version IS NULL OR search_items.extraction_version < ?
+		       OR search_items.search_echo IS NULL)
 		ORDER BY indexed_files.last_indexed ASC, search_items.source_path ASC
-	`
-
-	rows, err := d.db.QueryContext(ctx, query, !echoOnly, currentVersion)
+	`, currentVersion)
 	if err != nil {
 		return nil, fmt.Errorf("query stale paths: %w", err)
 	}
@@ -994,95 +1022,7 @@ func (d *Database) stalePathsContext(ctx context.Context, currentVersion int, ec
 		return nil, fmt.Errorf("iterate stale paths: %w", err)
 	}
 
-	if echoOnly {
-		filtered, err := d.filterEchoZeroPathsContext(ctx, paths)
-		if err != nil {
-			return nil, err
-		}
-		paths = filtered
-	}
-
 	return paths, nil
-}
-
-// filterEchoZeroPaths drops paths whose only echo-zero candidate rows are
-// rejected by the strict serialized-text predicate. A path survives if it has
-// a v15 NULL search_echo row (those are always kept), or at least one
-// echo-zero row that directsearch.IsSerializedDirectSearchCall accepts — for
-// any of the three stored shapes (bash, exec_command, shell).
-func (d *Database) filterEchoZeroPathsContext(ctx context.Context, paths []string) ([]string, error) {
-	if err := ctx.Err(); err != nil {
-		return nil, err
-	}
-	if len(paths) == 0 {
-		return paths, nil
-	}
-	keep := make(map[string]bool, len(paths))
-	for _, path := range paths {
-		if err := ctx.Err(); err != nil {
-			return nil, err
-		}
-		// Reason 1: v15 NULL search_echo backlog — always keep.
-		var nullHit int
-		err := d.db.QueryRowContext(ctx, `
-			SELECT 1 FROM search_items
-			WHERE source_path = ? AND search_echo IS NULL
-			LIMIT 1
-		`, path).Scan(&nullHit)
-		if err != nil && err != sql.ErrNoRows {
-			return nil, fmt.Errorf("check NULL backlog for %s: %w", path, err)
-		}
-		if nullHit == 1 {
-			keep[path] = true
-			continue
-		}
-		// Reason 2: echo-zero serialized candidate. Apply the strict
-		// chokepoint predicate — keep the path if ANY row matches.
-		rows, err := d.db.QueryContext(ctx, `
-			SELECT text FROM search_items
-			WHERE source_path = ?
-			  AND `+searchEchoZeroPrefilterSQL("search_items")+`
-		`, path)
-		if err != nil {
-			return nil, fmt.Errorf("query echo-zero rows for %s: %w", path, err)
-		}
-		matched := false
-		for rows.Next() {
-			if err := ctx.Err(); err != nil {
-				_ = rows.Close()
-				return nil, err
-			}
-			var text string
-			if err := rows.Scan(&text); err != nil {
-				_ = rows.Close()
-				return nil, fmt.Errorf("scan echo-zero row for %s: %w", path, err)
-			}
-			if directsearch.IsSerializedDirectSearchCall(text) {
-				matched = true
-				break
-			}
-		}
-		_ = rows.Close()
-		if err := ctx.Err(); err != nil {
-			return nil, err
-		}
-		if err := rows.Err(); err != nil {
-			return nil, fmt.Errorf("iterate echo-zero rows for %s: %w", path, err)
-		}
-		if matched {
-			keep[path] = true
-		}
-	}
-	out := make([]string, 0, len(keep))
-	for _, p := range paths {
-		if err := ctx.Err(); err != nil {
-			return nil, err
-		}
-		if keep[p] {
-			out = append(out, p)
-		}
-	}
-	return out, nil
 }
 
 // ReresolveProjects retains the context-taking API used by existing callers.

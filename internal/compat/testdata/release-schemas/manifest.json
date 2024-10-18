@@ -667,6 +667,14 @@
       "AppliedVersion": 20,
       "HasSourceMetadata": false,
       "Provenance": "Migration v20 adds canonical nullable native session identity and retained-payload identity-scoped tags."
+    },
+    {
+      "Fixture": "v21.sql",
+      "ProvenanceSHA256": "b5dda144af458b187d0ca6d66508adfa2b71b7e904749eb42e7a9b64c89a8097",
+      "Signature": "sha256:6826bae924cada3504875d9d4b54c035afe368393ca1063516a11093e3de1f53",
+      "AppliedVersion": 21,
+      "HasSourceMetadata": false,
+      "Provenance": "Migration v21 restricts FTS updates to indexed payload changes and indexes pending echo candidates."
     }
   ]
 }

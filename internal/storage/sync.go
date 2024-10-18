@@ -134,6 +134,14 @@ func reconcilePerennialOrdinals(ctx context.Context, tx *sql.Tx, file IndexedFil
 	return messages, nil
 }
 
+// The UUID unique index contains the global legacy NULL population; cleanup
+// owns one path and must use its bounded access path instead.
+const legacySearchCleanupSQL = "DELETE FROM search_items INDEXED BY idx_search_items_source_path WHERE source_path = ? AND uuid IS NULL"
+
+func isProseContentType(contentType string) bool {
+	return contentType == "text" || contentType == "code" || contentType == "reasoning"
+}
+
 // SyncFiles syncs a batch of files into the database without cancellation.
 // It is retained for compatibility with existing callers.
 func (d *Database) SyncFiles(files []IndexedFile) error {
@@ -173,6 +181,8 @@ func (d *Database) SyncFilesContext(ctx context.Context, files []IndexedFile) (r
 	if err != nil {
 		return fmt.Errorf("validate sync UUIDs: %w", err)
 	}
+
+	proseChanged := false
 
 	for _, file := range files {
 		if err := ctx.Err(); err != nil {
@@ -215,16 +225,28 @@ func (d *Database) SyncFilesContext(ctx context.Context, files []IndexedFile) (r
 			if _, err := tx.ExecContext(ctx, "DELETE FROM template_matches WHERE source_path = ?", file.SourcePath); err != nil {
 				return fmt.Errorf("delete old template_matches for %s: %w", file.SourcePath, err)
 			}
-			if _, err := tx.ExecContext(ctx, "DELETE FROM search_items WHERE source_path = ?", file.SourcePath); err != nil {
+			result, err := tx.ExecContext(ctx, "DELETE FROM search_items WHERE source_path = ?", file.SourcePath)
+			if err != nil {
 				return fmt.Errorf("delete old search_items for %s: %w", file.SourcePath, err)
 			}
+			deleted, err := result.RowsAffected()
+			if err != nil {
+				return err
+			}
+			proseChanged = proseChanged || deleted > 0
 			if _, err := tx.ExecContext(ctx, "DELETE FROM tool_events WHERE source_path = ?", file.SourcePath); err != nil {
 				return fmt.Errorf("delete old tool_events for %s: %w", file.SourcePath, err)
 			}
 		} else if legacyTransition {
-			if _, err := tx.ExecContext(ctx, "DELETE FROM search_items WHERE source_path = ? AND uuid IS NULL", file.SourcePath); err != nil {
+			result, err := tx.ExecContext(ctx, legacySearchCleanupSQL, file.SourcePath)
+			if err != nil {
 				return fmt.Errorf("delete legacy rows for %s: %w", file.SourcePath, err)
 			}
+			deleted, err := result.RowsAffected()
+			if err != nil {
+				return err
+			}
+			proseChanged = proseChanged || deleted > 0
 			if _, err := tx.ExecContext(ctx, "DELETE FROM tool_events WHERE source_path = ? AND message_uuid IS NULL", file.SourcePath); err != nil {
 				return fmt.Errorf("delete legacy tool_events for %s: %w", file.SourcePath, err)
 			}
@@ -259,6 +281,9 @@ func (d *Database) SyncFilesContext(ctx context.Context, files []IndexedFile) (r
 			retained := owner != nil && owner.retained
 			if owner == nil || !owner.crossPath {
 				msg = effectiveSyncMessage(file, msg)
+			}
+			if (!perennial || msg.UUID == "" || !retained) && isProseContentType(msg.ContentType) {
+				proseChanged = true
 			}
 			if err := syncIndexedMessage(ctx, tx, file, msg, perennial, retained); err != nil {
 				return err
@@ -406,10 +431,12 @@ func (d *Database) SyncFilesContext(ctx context.Context, files []IndexedFile) (r
 		}
 	}
 
-	// Refresh dynamic stopwords before commit so a refresh failure or
-	// cancellation rolls back the complete synchronization batch.
-	if err := refreshStopwordsContext(ctx, tx); err != nil {
-		return fmt.Errorf("refresh stopwords: %w", err)
+	// Metadata-only perennial replays and tool-only additions leave the prose
+	// vocabulary unchanged. Refresh atomically only when corpus membership changes.
+	if proseChanged {
+		if err := refreshStopwordsContext(ctx, tx); err != nil {
+			return fmt.Errorf("refresh stopwords: %w", err)
+		}
 	}
 	if err := gate.commit(); err != nil {
 		return err
@@ -482,11 +509,11 @@ func syncIndexedMessage(ctx context.Context, tx *sql.Tx, file IndexedFile, msg I
 			}
 		}
 		if msg.SessionID != "" && evidence == "native_cwd" {
-			if _, err := tx.ExecContext(ctx, `UPDATE search_items SET project=?,project_evidence='native_cwd' WHERE source_path=? AND uuid=? AND session_id=? AND COALESCE(project_evidence,'unknown') IN ('unknown','path_fallback')`, project, file.SourcePath, msg.UUID, msg.SessionID); err != nil {
+			if _, err := tx.ExecContext(ctx, `UPDATE search_items INDEXED BY sqlite_autoindex_search_items_1 SET project=?,project_evidence='native_cwd' WHERE source_path=? AND uuid=? AND session_id=? AND COALESCE(project_evidence,'unknown') IN ('unknown','path_fallback')`, project, file.SourcePath, msg.UUID, msg.SessionID); err != nil {
 				return fmt.Errorf("enrich native project proof for %s: %w", file.SourcePath, err)
 			}
 		}
-		if _, err := tx.ExecContext(ctx, `UPDATE search_items SET project = ?, project_evidence = ?
+		if _, err := tx.ExecContext(ctx, `UPDATE search_items INDEXED BY sqlite_autoindex_search_items_1 SET project = ?, project_evidence = ?
      WHERE source_path = ? AND uuid = ? AND text = ? AND content_type = ?
      AND (session_id IS NULL OR session_id IS ?)
      AND COALESCE(project_evidence,'unknown') IN ('unknown','path_fallback') AND ? IN ('path_fallback','registry','native_cwd')`,

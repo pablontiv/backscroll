@@ -24,7 +24,7 @@ func TestV19AddsNullableNativeCallIdentity(t *testing.T) {
 	if err != nil || diag != nil {
 		t.Fatalf("inspect v18: %v %+v", err, diag)
 	}
-	if len(plan.Steps) != 2 || plan.Steps[0] != (compat.MigrationStep{Version: 19, Name: "V19 native tool call identity"}) || plan.Steps[1] != (compat.MigrationStep{Version: 20, Name: "V20 native session identity"}) {
+	if len(plan.Steps) != 3 || plan.Steps[0] != (compat.MigrationStep{Version: 19, Name: "V19 native tool call identity"}) || plan.Steps[1] != (compat.MigrationStep{Version: 20, Name: "V20 native session identity"}) || plan.Steps[2] != (compat.MigrationStep{Version: 21, Name: "V21 incremental FTS maintenance"}) {
 		t.Fatalf("v18 plan: %+v", plan.Steps)
 	}
 	if err := applyMigrationPlanForTest(context.Background(), db, plan); err != nil {

@@ -51,7 +51,7 @@ func enrichOrigin(ctx context.Context, tx *sql.Tx, uuid string, incoming models.
 		return nil
 	}
 	_, err := tx.ExecContext(ctx, `
-		UPDATE search_items
+		UPDATE search_items INDEXED BY sqlite_autoindex_search_items_1
 		SET origin = CASE WHEN origin = 'unknown' THEN ? ELSE origin END,
 		    origin_version = ?
 		WHERE uuid = ?

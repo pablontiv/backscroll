@@ -409,6 +409,7 @@ var allMigrationSteps = []MigrationStep{
 	{Version: 18, Name: "V18 ingestion semantics fingerprint"},
 	{Version: 19, Name: "V19 native tool call identity"},
 	{Version: 20, Name: "V20 native session identity"},
+	{Version: 21, Name: "V21 incremental FTS maintenance"},
 }
 
 // MigrationSteps returns the authoritative ordered migration registrations.

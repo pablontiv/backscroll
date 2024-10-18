@@ -464,6 +464,12 @@ func (s *startupSyncService) syncWithProgress(ctx context.Context, cfg *config.C
 		return err
 	}
 
+	// Metadata reads and durable replay discovery are database work too. Keep
+	// them in the existing phase so the elapsed interval remains non-overlapping.
+	if diag {
+		report.beginPhase("Database", &report.database, &report.hasDatabase)
+	}
+
 	// Get existing file metadata for prefiltering
 	existingMetadata, err := db.GetFileMetadataContext(ctx)
 	if err != nil {
@@ -489,6 +495,9 @@ func (s *startupSyncService) syncWithProgress(ctx context.Context, cfg *config.C
 		return fmt.Errorf("discover project proof paths: %w", err)
 	}
 	originPaths = append(originPaths, projectPaths...)
+	if diag {
+		report.finishPhase()
+	}
 	const replayParsesCap = 200
 
 	// Build reader registry
@@ -665,10 +674,6 @@ func (s *startupSyncService) syncWithProgress(ctx context.Context, cfg *config.C
 		if err := ctx.Err(); err != nil {
 			return err
 		}
-		if diag {
-			report.finishPhase()
-		}
-
 		// Use session cwd for project identification; fall back to file path if cwd is empty
 		identPath := pf.Cwd
 		if identPath == "" {
@@ -750,6 +755,9 @@ func (s *startupSyncService) syncWithProgress(ctx context.Context, cfg *config.C
 			FileSize:             fileSize,
 			FileMtime:            fileMtime,
 		})
+		if diag {
+			report.finishPhase()
+		}
 	}
 
 	// Phase 5: Database
@@ -811,10 +819,6 @@ func (s *startupSyncService) syncWithProgress(ctx context.Context, cfg *config.C
 
 	if err := ctx.Err(); err != nil {
 		return err
-	}
-
-	if diag {
-		report.finishPhase()
 	}
 
 	return nil

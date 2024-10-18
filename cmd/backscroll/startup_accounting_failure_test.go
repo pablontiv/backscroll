@@ -131,7 +131,8 @@ func TestStartupAccountingFailedSyncKeepsMeasuredPhases(t *testing.T) {
 				}
 				var out bytes.Buffer
 				d.render(&out)
-				want := map[string]time.Duration{"Discovery": 100 * time.Millisecond}
+				// Replay-queue database reads precede discovery on every attempt.
+				want := map[string]time.Duration{"Database": 0, "Discovery": 100 * time.Millisecond}
 				if phase != "Discovery" {
 					want["Metadata"] = 0
 					want["Hashing"] = 200 * time.Millisecond

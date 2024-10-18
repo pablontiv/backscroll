@@ -231,6 +231,13 @@ recognized, and only in that reader. Text that mentions Backscroll and
 unrelated tool commands are unchanged. There is no opt-in flag or shell
 parsing, query relaxation, or whole-session exclusion.
 
+Migration v21 maintains the split external-content indexes only when indexed
+text, row ID, or content type changes. Metadata-only enrichment preserves the
+FTS rows and search results; content-type changes move rows between the tool
+and prose indexes atomically. Pending echo discovery scans indexed NULL and
+echo-zero candidates once, retaining the same strict Go predicate and replay
+order. Perennial replays with unchanged prose skip dynamic-stopword refresh.
+
 Migration v15 adds nullable `search_echo` provenance. Already-indexed Claude
 session rows with surviving sources reparse through the existing bounded
 incremental backfill, even when hashes and file metadata match. This updates

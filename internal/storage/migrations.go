@@ -26,10 +26,11 @@ func newDatabaseMigrations() []migrationApplier {
 		applyV9, applyV10, applyV11, applyV12,
 		applyV13, applyV14, applyV15, applyV16,
 		applyV17, applyV18, applyV19, applyV20,
+		applyV21,
 	}
 }
 
-// schema objects and migration records from V1 through V20 are committed as a
+// schema objects and migration records from V1 through V21 are committed as a
 // single unit. Existing databases still migrate through OpenCompatible.
 func (d *Database) setupNewDatabaseSchema(ctx context.Context, migrations []migrationApplier) (err error) {
 	tx, err := d.db.BeginTx(ctx, nil)
