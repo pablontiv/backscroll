@@ -152,6 +152,34 @@ Recovery is remediation, not a missing-input discovery command:
    copy as a dry-run recovery input first. Retire backups only after explicitly
    accepting the recovered/restored state.
 
+### Immutable connections and recovery source verification
+
+`storage.OpenImmutableReadOnly` opens an existing canonical main database with
+SQLite `mode=ro&immutable=1`, preserving the database and its SQLite sidecars.
+It rejects a nonempty WAL observed before opening, since committed frames may
+still be outside the main file. Its caller supplies a fully checkpointed,
+quiescent database in a trusted filesystem namespace for the connection's entire
+lifetime.
+
+Recovery adds a distinct source-verification policy: WAL is absent or an empty
+regular file; a leftover regular SHM is accepted in either case; every journal
+namespace entry is rejected. File-set fingerprinting requires regular files,
+including SHM, and checks content hashes and file identity before and after
+immutable reads. Consequently WAL/SHM symlinks are rejected by recovery even
+when an immutable connection alone could open the main file. A synthetic journal
+entry can likewise be left untouched by the standalone opener while recovery
+refuses the file set; that observation establishes a namespace-policy difference,
+not a real hot-journal stale-read or data-loss reproduction.
+
+Dry-run applies these checks to both inputs. Apply reads the active input under
+a SQLite writer reservation and revalidates its main file and preserved backup
+around replacement; a distinct stranded input gets the immutable before/after
+file-set checks. Fingerprints detect observed changes rather than reserve the
+stranded writer. Keep its writers stopped throughout recovery, even when WAL is
+empty or absent. The connection-level and recovery-level policies intentionally
+remain separate.
+
+
 
 V20 preserves nullable native session identity as canonical recovery evidence.
 Compatible unknown ownership/project proof can be enriched, while contradictory

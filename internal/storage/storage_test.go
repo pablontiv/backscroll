@@ -354,6 +354,49 @@ func TestOpenImmutableReadOnlyDoesNotCreateSidecars(t *testing.T) {
 	assertStorageSidecarMissing(t, dbPath+"-shm")
 }
 
+func TestOpenImmutableReadOnlyPreservesExistingSidecars(t *testing.T) {
+	for _, tt := range []struct {
+		name     string
+		sidecars map[string][]byte
+	}{
+		{name: "regular SHM", sidecars: map[string][]byte{"-shm": []byte("leftover SHM")}},
+		{name: "empty WAL with SHM", sidecars: map[string][]byte{"-wal": nil, "-shm": []byte("leftover SHM")}},
+		{name: "synthetic journal namespace", sidecars: map[string][]byte{"-journal": []byte("synthetic namespace entry, not a hot journal")}},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			dbPath := filepath.Join(t.TempDir(), "immutable_sidecars.db")
+			writer := openTestDBWithLiveWAL(t, dbPath)
+			if err := writer.Close(); err != nil {
+				t.Fatalf("close checkpointed fixture: %v", err)
+			}
+			for suffix, data := range tt.sidecars {
+				if err := os.WriteFile(dbPath+suffix, data, 0o600); err != nil {
+					t.Fatalf("write sidecar %s: %v", suffix, err)
+				}
+			}
+			before := snapshotRecoveryDB(t, dbPath)
+
+			immutable, err := OpenImmutableReadOnly(dbPath)
+			if err != nil {
+				t.Fatalf("OpenImmutableReadOnly checkpointed fixture: %v", err)
+			}
+			var count int
+			err = immutable.DB().QueryRow("SELECT COUNT(*) FROM search_items WHERE text = 'live WAL committed row'").Scan(&count)
+			closeErr := immutable.Close()
+			if err != nil {
+				t.Fatalf("read checkpointed row: %v", err)
+			}
+			if closeErr != nil {
+				t.Fatalf("close immutable fixture: %v", closeErr)
+			}
+			if count != 1 {
+				t.Fatalf("checkpointed row count = %d, want 1", count)
+			}
+			assertRecoveryDBSnapshot(t, dbPath, before)
+		})
+	}
+}
+
 // TestOpenReadOnlyNonExistent verifies that opening a non-existent database fails.
 func TestOpenReadOnlyNonExistent(t *testing.T) {
 	_, err := OpenReadOnly("/nonexistent/path/db.sqlite")

@@ -189,6 +189,9 @@ func planRecoveryFromImmutablePaths(ctx context.Context, paths []resolvedPath, r
 	return plan, diagnostics, nil
 }
 
+// readImmutableRecoveryInput layers recovery's sidecar namespace and before/after
+// file-set content/identity checks over storage's immutable connection. Callers
+// keep stranded writers quiescent; apply reserves the active input separately.
 func readImmutableRecoveryInput(ctx context.Context, path string, dryRun bool, deps recoveryOperationDeps) (compat.RecoveryInput, error) {
 	if err := deps.ensureSidecars(path); err != nil {
 		return compat.RecoveryInput{}, recoveryOpenError(path, err, dryRun)
@@ -934,7 +937,7 @@ func restoreBackup(activePath, backupPath string, backupSidecars []string, plann
 }
 
 func ensureSourceSidecarsSafe(dbPath string) error {
-	// Check WAL file status first to determine if -shm is safe
+	// An absent or empty regular WAL makes a leftover SHM eligible for inspection.
 	walPath := dbPath + "-wal"
 	walInfo, walErr := os.Lstat(walPath)
 	walIsSafe := walErr != nil || (walInfo != nil && walInfo.Mode().IsRegular() && walInfo.Size() == 0)
@@ -949,8 +952,8 @@ func ensureSourceSidecarsSafe(dbPath string) error {
 				}
 				return fmt.Errorf("%w: unexpected SQLite sidecar namespace entry %s", storage.ErrImmutableReadOnlyWALUnsafe, path)
 			}
-			// For -shm and -journal files, tolerate them if the WAL is safe (zero bytes or absent)
-			// This matches the safety property: no active writer modifies the database if WAL has no pending changes
+			// SHM is eligible with an absent/empty WAL. File-set fingerprinting
+			// separately requires regular files and stable content/identity.
 			if suffix == "-shm" && walIsSafe {
 				continue
 			}
