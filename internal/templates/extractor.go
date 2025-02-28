@@ -18,11 +18,6 @@ func ExtractErrorLines(toolName string, text string) []string {
 	var relevant []string
 
 	switch toolName {
-	case "Bash":
-		// Bash: prefer last non-empty line + any line with error/fail/panic/denied/fatal.
-		// This handles both "exit code 1" cases (signal in last line) and
-		// explicit error output.
-		relevant = extractBashErrors(lines)
 	case "Go":
 		// Go compiler/test: first error line, any FAIL line.
 		relevant = extractGoErrors(lines)
@@ -34,8 +29,8 @@ func ExtractErrorLines(toolName string, text string) []string {
 	return relevant
 }
 
-// extractBashErrors returns the last non-empty line plus any error/fail/panic line.
-func extractBashErrors(lines []string) []string {
+// extractGenericErrors returns the last non-empty line plus error-matching lines.
+func extractGenericErrors(lines []string) []string {
 	var result []string
 	var lastNonEmpty string
 	errorPattern := regexp.MustCompile(`(?i)(error|fail|panic|denied|fatal)`)
@@ -87,38 +82,5 @@ func extractGoErrors(lines []string) []string {
 			result = append(result, line)
 		}
 	}
-	return result
-}
-
-// extractGenericErrors returns the last non-empty line plus error-matching lines.
-func extractGenericErrors(lines []string) []string {
-	var result []string
-	var lastNonEmpty string
-	errorPattern := regexp.MustCompile(`(?i)(error|fail|panic|denied|fatal)`)
-
-	for _, line := range lines {
-		line = strings.TrimSpace(line)
-		if line == "" {
-			continue
-		}
-		lastNonEmpty = line
-		if errorPattern.MatchString(line) {
-			result = append(result, line)
-		}
-	}
-
-	if lastNonEmpty != "" {
-		found := false
-		for _, r := range result {
-			if r == lastNonEmpty {
-				found = true
-				break
-			}
-		}
-		if !found {
-			result = append(result, lastNonEmpty)
-		}
-	}
-
 	return result
 }

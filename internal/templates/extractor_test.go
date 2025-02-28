@@ -1,9 +1,46 @@
 package templates
 
 import (
+	"reflect"
 	"strings"
 	"testing"
 )
+
+func TestExtractExactLines(t *testing.T) {
+	tests := []struct {
+		name string
+		text string
+		want []string
+	}{
+		{"matching and normal tail", " setup \n ERROR: alpha \n denied beta \n normal tail \n \t", []string{"ERROR: alpha", "denied beta", "normal tail"}},
+		{"repeated error", " error alpha \nerror alpha\n normal tail", []string{"error alpha", "error alpha", "normal tail"}},
+		{"last already seen", "error alpha\nFAIL beta\nerror alpha\n", []string{"error alpha", "FAIL beta", "error alpha"}},
+		{"last matching once", "setup\nfatal alpha\n\n", []string{"fatal alpha"}},
+		{"ordinary tail", "first\n final \n", []string{"final"}},
+		{"empty", "", nil},
+		{"whitespace", " \t\n\r\n\u2003", nil},
+	}
+	for _, tool := range []string{"Bash", "UnknownTool", ""} {
+		for _, tt := range tests {
+			t.Run(tool+"/"+tt.name, func(t *testing.T) {
+				if got := ExtractErrorLines(tool, tt.text); !reflect.DeepEqual(got, tt.want) {
+					t.Fatalf("got %#v, want %#v", got, tt.want)
+				}
+			})
+		}
+	}
+}
+
+func TestExtractGoExactLines(t *testing.T) {
+	text := "plain error signal\n file.go: error: compiler \n --- FAIL: TestProbe \n panic(marker) \nFAIL\tpkg\nnormal tail\n"
+	want := []string{"file.go: error: compiler", "--- FAIL: TestProbe", "panic(marker)", "FAIL\tpkg"}
+	if got := ExtractErrorLines("Go", text); !reflect.DeepEqual(got, want) {
+		t.Fatalf("got %#v, want %#v", got, want)
+	}
+	if got := ExtractErrorLines("Go", "plain error signal\nnormal tail"); got != nil {
+		t.Fatalf("got %#v, want nil", got)
+	}
+}
 
 func TestExtractBashErrors(t *testing.T) {
 	output := `running test
@@ -197,7 +234,7 @@ func TestBashErrorsPatterns(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			result := extractBashErrors(tt.input)
+			result := ExtractErrorLines("Bash", strings.Join(tt.input, "\n"))
 			if len(result) < tt.expectCount {
 				t.Errorf("%s: expected >= %d results, got %d: %v", tt.name, tt.expectCount, len(result), result)
 			}

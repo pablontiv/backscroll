@@ -137,6 +137,8 @@ Unchanged bytes are skipped only while their versioned ingestion-semantics finge
 
 **Exact context, discovery, and census are different questions.** `context` retrieves the immediate indexed neighborhood of one exact UUID or exact source-path-plus-ordinal anchor. `search` discovers ranked records from terms and filters. `patterns` computes a census: it counts commands, failures, recurring error templates, correction candidates and repeated tool sequences across the whole corpus. No individual document contains a pattern, so ranking cannot surface one.
 
+Error-template line selection shares one policy for Bash and generic tools: trim whitespace, retain error/fail/panic/denied/fatal matches in order (including repeated matches), then include the last non-empty line if it is not already selected. Explicit Go extraction uses its separate compiler/test/panic policy.
+
 ---
 
 ## What You Can Do
