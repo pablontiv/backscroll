@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"iter"
 	"time"
 
 	"github.com/pablontiv/backscroll/internal/corrections"
@@ -58,95 +59,12 @@ type IndexedFile struct {
 	FileMtime *string // populated by sync_helpers.go if available; RFC3339 format
 }
 
-// validateSyncUUIDs checks every non-empty UUID in the full synchronization
-// batch before any file is mutated. It returns the identities already retained
-// by their incoming source path so perennial replays can preserve those rows
-// without relying on INSERT conflict handling.
-func validateSyncUUIDs(ctx context.Context, tx *sql.Tx, files []IndexedFile) (map[string]bool, error) {
-	seen := make(map[string]string)
-	type incomingOwnership struct{ session, project, evidence string }
-	incoming := make(map[string]incomingOwnership)
-	type sessionKey struct{ path, session string }
-	nativeProjects := make(map[sessionKey]string)
-	for _, file := range files {
-		if err := ctx.Err(); err != nil {
-			return nil, err
-		}
-		for _, message := range file.Messages {
-			if err := ctx.Err(); err != nil {
-				return nil, err
-			}
-			if message.SessionID != "" && message.ProjectEvidence == "native_cwd" {
-				key := sessionKey{file.SourcePath, message.SessionID}
-				if project, seen := nativeProjects[key]; seen {
-					if project != message.Project {
-						return nil, fmt.Errorf("session %q contradicts incoming native project ownership", message.SessionID)
-					}
-				} else {
-					var conflict bool
-					if err := tx.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM search_items WHERE source_path=? AND session_id=? AND project_evidence='native_cwd' AND project IS NOT ?)`, file.SourcePath, message.SessionID, message.Project).Scan(&conflict); err != nil {
-						return nil, err
-					}
-					if conflict {
-						return nil, fmt.Errorf("session %q contradicts retained native project ownership", message.SessionID)
-					}
-					nativeProjects[key] = message.Project
-				}
-			}
-			if message.UUID == "" {
-				continue
-			}
-			if firstPath, duplicate := seen[message.UUID]; duplicate {
-				return nil, fmt.Errorf("duplicate UUID %q in sync batch (source paths %q and %q)", message.UUID, firstPath, file.SourcePath)
-			}
-			seen[message.UUID] = file.SourcePath
-			incoming[message.UUID] = incomingOwnership{message.SessionID, message.Project, message.ProjectEvidence}
-		}
-	}
-
-	existing := make(map[string]bool, len(seen))
-	for uuid, sourcePath := range seen {
-		if err := ctx.Err(); err != nil {
-			return nil, err
-		}
-		var owner, session, project, evidence string
-		err := tx.QueryRowContext(ctx, `SELECT source_path,COALESCE(session_id,''),COALESCE(project,''),COALESCE(project_evidence,'') FROM search_items WHERE uuid = ?`, uuid).Scan(&owner, &session, &project, &evidence)
-		switch {
-		case err == sql.ErrNoRows:
-		case err != nil:
-			return nil, fmt.Errorf("inspect UUID %q: %w", uuid, err)
-		case owner != sourcePath:
-			return nil, fmt.Errorf("UUID %q belongs to source_path %q, not %q", uuid, owner, sourcePath)
-		default:
-			m := incoming[uuid]
-			if session != "" && m.session != "" && session != m.session {
-				return nil, fmt.Errorf("UUID %q contradicts retained session ownership", uuid)
-			}
-			if m.session != "" && m.evidence == "native_cwd" && evidence == "native_cwd" && project != m.project {
-				return nil, fmt.Errorf("UUID %q contradicts retained native project ownership", uuid)
-			}
-			existing[uuid] = true
-		}
-
-		var eventOwner string
-		err = tx.QueryRowContext(ctx, `SELECT source_path FROM tool_events WHERE message_uuid = ? LIMIT 1`, uuid).Scan(&eventOwner)
-		switch {
-		case err == sql.ErrNoRows:
-		case err != nil:
-			return nil, fmt.Errorf("inspect tool event UUID %q: %w", uuid, err)
-		case eventOwner != sourcePath:
-			return nil, fmt.Errorf("UUID %q belongs to tool_event source_path %q, not %q", uuid, eventOwner, sourcePath)
-		}
-	}
-	return existing, nil
-}
-
 // reconcilePerennialOrdinals reserves the entire persisted path before allocating
 // any incoming identity, including unknown identities and historical shared
 // search ordinals. Existing UUIDs keep their anchors; new collisions use the
-// lowest free non-negative ordinal, in incoming order. The caller's slice is not
-// mutated, and every downstream consumer receives the same reconciled copy.
-func reconcilePerennialOrdinals(ctx context.Context, tx *sql.Tx, file IndexedFile) ([]IndexedMessage, error) {
+// lowest free non-negative ordinal, in incoming order. A normalized slice is
+// already owned by sync; otherwise clone before reconciling caller coordinates.
+func reconcilePerennialOrdinals(ctx context.Context, tx *sql.Tx, file IndexedFile, ownsMessages bool) ([]IndexedMessage, error) {
 	rows, err := tx.QueryContext(ctx, `SELECT ordinal, COALESCE(uuid, '') FROM search_items WHERE source_path = ?
  UNION ALL SELECT ordinal, COALESCE(message_uuid, '') FROM tool_events WHERE source_path = ?`, file.SourcePath, file.SourcePath)
 	if err != nil {
@@ -181,7 +99,10 @@ func reconcilePerennialOrdinals(ctx context.Context, tx *sql.Tx, file IndexedFil
 	if err := rows.Close(); err != nil {
 		return nil, err
 	}
-	messages := append([]IndexedMessage(nil), file.Messages...)
+	messages := file.Messages
+	if !ownsMessages {
+		messages = append([]IndexedMessage(nil), messages...)
+	}
 	nextFree := 0
 	for i := range messages {
 		msg := &messages[i]
@@ -248,7 +169,7 @@ func (d *Database) SyncFilesContext(ctx context.Context, files []IndexedFile) (r
 		}
 	}()
 
-	existingUUIDs, err := validateSyncUUIDs(ctx, tx, files)
+	identities, err := reconcileSyncUUIDs(ctx, tx, files)
 	if err != nil {
 		return fmt.Errorf("validate sync UUIDs: %w", err)
 	}
@@ -309,20 +230,21 @@ func (d *Database) SyncFilesContext(ctx context.Context, files []IndexedFile) (r
 			}
 		}
 
+		var normalized bool
+		file.Messages, normalized = identities.messages(file)
+		if normalized {
+			file.Tags = canonicalSyncTags(file.Messages)
+		}
+
 		if perennial {
-			file.Messages, err = reconcilePerennialOrdinals(ctx, tx, file)
+			file.Messages, err = reconcilePerennialOrdinals(ctx, tx, file, normalized)
 			if err != nil {
 				return fmt.Errorf("reconcile ordinals for %s: %w", file.SourcePath, err)
 			}
 		}
 
-		// Insert new search_items. UUID ownership and batch uniqueness were
-		// validated before any mutation. Existing UUID rows owned by this path
-		// are retained explicitly; INSERT conflict handling is not used to
-		// condense invalid input. Use nil (SQL NULL) when uuid is absent —
-		// SQLite's UNIQUE constraint allows multiple NULLs but not multiple "".
-		// For perennial files, skip messages without UUIDs (flap guard: don't
-		// introduce uuid-less rows into a perennial file).
+		// Every downstream consumer receives only this path's canonical events.
+		// File completeness above describes the original successful parse.
 		hasNativeSession := false
 		for _, msg := range file.Messages {
 			hasNativeSession = hasNativeSession || msg.SessionID != ""
@@ -333,167 +255,15 @@ func (d *Database) SyncFilesContext(ctx context.Context, files []IndexedFile) (r
 			if perennial && msg.UUID == "" {
 				continue
 			}
-
-			project, evidence := file.Project, file.ProjectEvidence
-			if msg.SessionID != "" {
-				project, evidence = msg.Project, msg.ProjectEvidence
+			owner := identities.byUUID[msg.UUID]
+			retained := owner != nil && owner.retained
+			if owner == nil || !owner.crossPath {
+				msg = effectiveSyncMessage(file, msg)
 			}
-			origin := normalizedOrigin(msg.Origin)
-			if err := rejectConflictingOrigin(ctx, tx, msg.UUID, origin); err != nil {
-				return fmt.Errorf("validate message origin for %s: %w", file.SourcePath, err)
-			}
-
-			var uuidVal interface{}
-			if msg.UUID != "" {
-				uuidVal = msg.UUID
-			}
-			var isErrVal interface{}
-			if msg.IsError != nil {
-				isErrVal = *msg.IsError
-			}
-			var timestampVal interface{}
-			if msg.Timestamp != "" {
-				timestampVal = msg.Timestamp
-			}
-			if !perennial || msg.UUID == "" || !existingUUIDs[msg.UUID] {
-				_, err := tx.ExecContext(ctx, `
-					INSERT INTO search_items
-					(source, source_path, ordinal, role, origin, text, timestamp, uuid, project, content_type, extraction_version, was_interrupted, search_echo, origin_version, project_evidence, session_id)
-					VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-				`,
-					file.Source,
-					file.SourcePath,
-					msg.Ordinal,
-					msg.Role,
-					origin,
-					msg.Text,
-					timestampVal,
-					uuidVal,
-					project,
-					msg.ContentType,
-					msg.ExtractionVersion,
-					msg.WasInterrupted,
-					msg.SearchEcho,
-					CurrentOriginVersion,
-					projectEvidence(evidence),
-					nullableSessionID(msg.SessionID),
-				)
-				if err != nil {
-					return fmt.Errorf("insert search_item for %s: %w", file.SourcePath, err)
-				}
+			if err := syncIndexedMessage(ctx, tx, file, msg, perennial, retained); err != nil {
+				return err
 			}
 
-			// Re-parsing a perennial row must enrich provenance without replacing
-			// its ID, original text, or extraction epoch. NULL is migration backlog;
-			// a later paired result may also supply positive evidence. Never erase
-			// previously proven linkage when a partial source no longer has the call.
-			if perennial {
-				if msg.SessionID != "" {
-					if _, err := tx.ExecContext(ctx, `UPDATE search_items SET session_id=? WHERE uuid=? AND session_id IS NULL`, msg.SessionID, msg.UUID); err != nil {
-						return err
-					}
-				}
-				if msg.SessionID != "" && evidence == "native_cwd" {
-					if _, err := tx.ExecContext(ctx, `UPDATE search_items SET project=?,project_evidence='native_cwd' WHERE source_path=? AND uuid=? AND session_id=? AND COALESCE(project_evidence,'unknown') IN ('unknown','path_fallback')`, project, file.SourcePath, msg.UUID, msg.SessionID); err != nil {
-						return fmt.Errorf("enrich native project proof for %s: %w", file.SourcePath, err)
-					}
-				}
-				if _, err := tx.ExecContext(ctx, `UPDATE search_items SET project = ?, project_evidence = ?
-     WHERE source_path = ? AND uuid = ? AND text = ? AND content_type = ?
-     AND (session_id IS NULL OR session_id IS ?)
-     AND COALESCE(project_evidence,'unknown') IN ('unknown','path_fallback') AND ? IN ('path_fallback','registry','native_cwd')`,
-					project, projectEvidence(evidence), file.SourcePath, msg.UUID, msg.Text, msg.ContentType, nullableSessionID(msg.SessionID), projectEvidence(evidence)); err != nil {
-					return fmt.Errorf("enrich project proof for %s: %w", file.SourcePath, err)
-				}
-				if _, err := tx.ExecContext(ctx, `UPDATE search_items SET search_echo = ?
-					WHERE source_path = ? AND uuid = ? AND text = ? AND content_type = ?
-					AND (search_echo IS NULL OR (search_echo = 0 AND ? = 1))`,
-					msg.SearchEcho, file.SourcePath, msg.UUID, msg.Text, msg.ContentType, msg.SearchEcho); err != nil {
-					return fmt.Errorf("update search echo provenance for %s: %w", file.SourcePath, err)
-				}
-				// Interruption is positive evidence: later partial parses cannot erase it.
-				if _, err := tx.ExecContext(ctx, `UPDATE search_items
-					SET was_interrupted = 1
-					WHERE source_path = ? AND uuid = ? AND ? = 1
-					AND COALESCE(was_interrupted, 0) = 0`,
-					file.SourcePath, msg.UUID, msg.WasInterrupted); err != nil {
-					return fmt.Errorf("enrich interruption proof for %s: %w", file.SourcePath, err)
-				}
-				if err := enrichOrigin(ctx, tx, msg.UUID, origin); err != nil {
-					return fmt.Errorf("update message origin provenance for %s: %w", file.SourcePath, err)
-				}
-			}
-
-			if msg.ToolName != "" {
-				// Q2: use the code the reader extracted from the untruncated output.
-				// Re-extracting from msg.Text here would miss any code beyond the
-				// toolfmt truncation cap — the exact bug Q2 exists to fix.
-				exitCode := msg.ExitCode
-				exitCodeVal := interface{}(nil)
-				if exitCode != nil {
-					exitCodeVal = *exitCode
-				}
-				var eventUUID sql.NullString
-				eventErr := tx.QueryRowContext(ctx, `SELECT message_uuid FROM tool_events WHERE source_path = ? AND ordinal = ?`, file.SourcePath, msg.Ordinal).Scan(&eventUUID)
-				if eventErr != nil && eventErr != sql.ErrNoRows {
-					return fmt.Errorf("inspect tool_event ordinal for %s: %w", file.SourcePath, eventErr)
-				}
-				if eventErr == nil && eventUUID.String != "" && eventUUID.String != msg.UUID {
-					return fmt.Errorf("tool_event ordinal %d for %s belongs to another identity", msg.Ordinal, file.SourcePath)
-				}
-				if eventErr == sql.ErrNoRows {
-					if _, err := tx.ExecContext(ctx, `
-					INSERT INTO tool_events
-					(message_uuid, source_path, ordinal, tool_name, command_head, is_error, exit_code, extraction_version, native_call_id)
-					VALUES (?, ?, ?, ?, ?, ?, ?, ?, NULLIF(?, ''))
-				`, uuidVal, file.SourcePath, msg.Ordinal, msg.ToolName, msg.CommandHead, isErrVal, exitCodeVal, msg.ExtractionVersion, msg.ToolUseID); err != nil {
-						return fmt.Errorf("insert tool_event for %s: %w", file.SourcePath, err)
-					}
-				}
-				// Lossy backfill deliberately leaves identity unknown. A retained
-				// search anchor proves which incoming call can claim this coordinate.
-				// Fill missing metadata only: false, zero, and known names/heads
-				// remain evidence, and extraction epochs can only advance.
-				if eventErr == nil && eventUUID.String == "" && msg.UUID != "" {
-					if _, err := tx.ExecContext(ctx, `UPDATE tool_events
-                        SET message_uuid = ?,
-                            tool_name = COALESCE(NULLIF(tool_name, ''), ?),
-                            command_head = COALESCE(NULLIF(command_head, ''), ?),
-                            is_error = COALESCE(is_error, ?),
-                            exit_code = COALESCE(exit_code, ?),
-                            extraction_version = MAX(COALESCE(extraction_version, 0), ?)
-                        WHERE source_path = ? AND ordinal = ?
-                          AND COALESCE(message_uuid, '') = ''`,
-						msg.UUID, msg.ToolName, msg.CommandHead, isErrVal, exitCodeVal,
-						msg.ExtractionVersion, file.SourcePath, msg.Ordinal); err != nil {
-						return fmt.Errorf("claim lossy tool_event for %s: %w", file.SourcePath, err)
-					}
-				}
-				// Native call identity is independent of a search row UUID. Fill
-				// missing proof, and reject contradictory identities transactionally.
-				if eventErr == nil && msg.ToolUseID != "" {
-					var nativeID sql.NullString
-					if err := tx.QueryRowContext(ctx, `SELECT native_call_id FROM tool_events WHERE source_path = ? AND ordinal = ?`, file.SourcePath, msg.Ordinal).Scan(&nativeID); err != nil {
-						return fmt.Errorf("inspect native call identity for %s: %w", file.SourcePath, err)
-					}
-					if nativeID.Valid && nativeID.String != "" && nativeID.String != msg.ToolUseID {
-						return fmt.Errorf("conflicting native call identity for %s ordinal %d", file.SourcePath, msg.Ordinal)
-					}
-					if _, err := tx.ExecContext(ctx, `UPDATE tool_events SET native_call_id = ? WHERE source_path = ? AND ordinal = ? AND NULLIF(native_call_id, '') IS NULL`, msg.ToolUseID, file.SourcePath, msg.Ordinal); err != nil {
-						return fmt.Errorf("enrich native call identity for %s: %w", file.SourcePath, err)
-					}
-				}
-				// A stable call may precede its result. Fill only unknown signals;
-				// false and zero are established proof, not missing values.
-				if perennial && msg.UUID != "" {
-					if _, err := tx.ExecContext(ctx, `UPDATE tool_events
-						SET is_error = COALESCE(is_error, ?), exit_code = COALESCE(exit_code, ?)
-						WHERE source_path = ? AND message_uuid = ? AND tool_name = ?`,
-						isErrVal, exitCodeVal, file.SourcePath, msg.UUID, msg.ToolName); err != nil {
-						return fmt.Errorf("enrich tool result proof for %s: %w", file.SourcePath, err)
-					}
-				}
-			}
 		}
 
 		// Close omitted-row provenance in the same transaction as every other
@@ -507,11 +277,8 @@ func (d *Database) SyncFilesContext(ctx context.Context, files []IndexedFile) (r
 
 		// Native cwd proves ownership for every retained record in the same logical session.
 		if hasNativeSession {
-			if _, err := tx.ExecContext(ctx, `UPDATE search_items AS si
-	 SET project=(SELECT proof.project FROM search_items proof WHERE proof.source_path=si.source_path AND proof.session_id=si.session_id AND proof.project_evidence='native_cwd' LIMIT 1), project_evidence='native_cwd'
-	 WHERE si.source_path=? AND si.session_id IS NOT NULL AND COALESCE(si.project_evidence,'unknown') IN ('unknown','path_fallback')
-	 AND EXISTS(SELECT 1 FROM search_items proof WHERE proof.source_path=si.source_path AND proof.session_id=si.session_id AND proof.project_evidence='native_cwd')`, file.SourcePath); err != nil {
-				return fmt.Errorf("enrich retained native project proof for %s: %w", file.SourcePath, err)
+			if err := enrichNativeSessionProject(ctx, tx, file.SourcePath); err != nil {
+				return err
 			}
 		}
 
@@ -596,27 +363,46 @@ func (d *Database) SyncFilesContext(ctx context.Context, files []IndexedFile) (r
 
 		// Run detectors with prose-only filter: lexicon, rephrase, denial on
 		// content_type='text'|'code' + role='user'; interrupt on all user messages.
-		detections, err := detectSessionCorrections(ctx, file.Messages)
-		if err != nil {
-			return fmt.Errorf("detect corrections for %s: %w", file.SourcePath, err)
+		if err := persistSyncCorrections(ctx, tx, file); err != nil {
+			return err
 		}
-		for ordinal, dets := range detections {
-			if err := ctx.Err(); err != nil {
-				return err
-			}
-			for _, det := range dets {
-				if err := ctx.Err(); err != nil {
-					return err
-				}
-				_, err := tx.ExecContext(ctx, `
-					INSERT OR IGNORE INTO correction_signals
-					(item_uuid, source_path, ordinal, detector, confidence, extraction_version)
-					VALUES (?, ?, ?, ?, ?, ?)
-				`, file.Messages[ordinal].UUID, file.SourcePath, file.Messages[ordinal].Ordinal, det.DetectorName, det.Confidence, CurrentExtractionVersion)
-				if err != nil {
-					return fmt.Errorf("insert correction_signal for %s: %w", file.SourcePath, err)
-				}
-			}
+	}
+
+	// A retained owner may be absent or expired. Apply each event at its actual
+	// coordinate, then derive once per owner path from the complete copied batch.
+	// Link existing owners rather than allocating or copying messages per event.
+	type copiedPath struct{ head, tail *syncUUIDOwner }
+	copiedPaths := make(map[string]copiedPath)
+	for _, owner := range identities.owners {
+		if owner.applied {
+			continue
+		}
+		file := IndexedFile{SourcePath: owner.path, Source: owner.source}
+		if err := syncIndexedMessage(ctx, tx, file, owner.message, true, true); err != nil {
+			return err
+		}
+		group := copiedPaths[owner.path]
+		if group.head == nil {
+			group.head = owner
+		} else {
+			group.tail.next = owner
+		}
+		group.tail = owner
+		copiedPaths[owner.path] = group
+	}
+	for path, group := range copiedPaths {
+		messages := copiedSyncMessages(group.head)
+		if err := d.mineTemplatesForMessages(ctx, tx, path, messages, templates.NewMiner()); err != nil {
+			return err
+		}
+		if err := persistSyncCorrectionsForMessages(ctx, tx, path, messages); err != nil {
+			return err
+		}
+		if err := enrichNativeSessionProject(ctx, tx, path); err != nil {
+			return err
+		}
+		if err := rebuildNativeSessionTags(ctx, tx, path); err != nil {
+			return err
 		}
 	}
 
@@ -629,6 +415,214 @@ func (d *Database) SyncFilesContext(ctx context.Context, files []IndexedFile) (r
 		return err
 	}
 
+	return nil
+}
+
+// syncIndexedMessage applies one canonical event, independently of file replay
+// bookkeeping. Copied evidence uses this path without closing omitted rows or
+// changing the canonical owner's indexed_files metadata.
+func syncIndexedMessage(ctx context.Context, tx *sql.Tx, file IndexedFile, msg IndexedMessage, perennial, retained bool) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	project, evidence := msg.Project, msg.ProjectEvidence
+	origin := normalizedOrigin(msg.Origin)
+	if err := rejectConflictingOrigin(ctx, tx, msg.UUID, origin); err != nil {
+		return fmt.Errorf("validate message origin for %s: %w", file.SourcePath, err)
+	}
+
+	var uuidVal interface{}
+	if msg.UUID != "" {
+		uuidVal = msg.UUID
+	}
+	var isErrVal interface{}
+	if msg.IsError != nil {
+		isErrVal = *msg.IsError
+	}
+	var timestampVal interface{}
+	if msg.Timestamp != "" {
+		timestampVal = msg.Timestamp
+	}
+	if !perennial || msg.UUID == "" || !retained {
+		_, err := tx.ExecContext(ctx, `
+					INSERT INTO search_items
+					(source, source_path, ordinal, role, origin, text, timestamp, uuid, project, content_type, extraction_version, was_interrupted, search_echo, origin_version, project_evidence, session_id)
+					VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+				`,
+			file.Source,
+			file.SourcePath,
+			msg.Ordinal,
+			msg.Role,
+			origin,
+			msg.Text,
+			timestampVal,
+			uuidVal,
+			project,
+			msg.ContentType,
+			msg.ExtractionVersion,
+			msg.WasInterrupted,
+			msg.SearchEcho,
+			CurrentOriginVersion,
+			projectEvidence(evidence),
+			nullableSessionID(msg.SessionID),
+		)
+		if err != nil {
+			return fmt.Errorf("insert search_item for %s: %w", file.SourcePath, err)
+		}
+	}
+
+	// Re-parsing a perennial row must enrich provenance without replacing
+	// its ID, original text, or extraction epoch. NULL is migration backlog;
+	// a later paired result may also supply positive evidence. Never erase
+	// previously proven linkage when a partial source no longer has the call.
+	if perennial {
+		if msg.SessionID != "" {
+			if _, err := tx.ExecContext(ctx, `UPDATE search_items SET session_id=? WHERE uuid=? AND session_id IS NULL`, msg.SessionID, msg.UUID); err != nil {
+				return err
+			}
+		}
+		if msg.SessionID != "" && evidence == "native_cwd" {
+			if _, err := tx.ExecContext(ctx, `UPDATE search_items SET project=?,project_evidence='native_cwd' WHERE source_path=? AND uuid=? AND session_id=? AND COALESCE(project_evidence,'unknown') IN ('unknown','path_fallback')`, project, file.SourcePath, msg.UUID, msg.SessionID); err != nil {
+				return fmt.Errorf("enrich native project proof for %s: %w", file.SourcePath, err)
+			}
+		}
+		if _, err := tx.ExecContext(ctx, `UPDATE search_items SET project = ?, project_evidence = ?
+     WHERE source_path = ? AND uuid = ? AND text = ? AND content_type = ?
+     AND (session_id IS NULL OR session_id IS ?)
+     AND COALESCE(project_evidence,'unknown') IN ('unknown','path_fallback') AND ? IN ('path_fallback','registry','native_cwd')`,
+			project, projectEvidence(evidence), file.SourcePath, msg.UUID, msg.Text, msg.ContentType, nullableSessionID(msg.SessionID), projectEvidence(evidence)); err != nil {
+			return fmt.Errorf("enrich project proof for %s: %w", file.SourcePath, err)
+		}
+		if _, err := tx.ExecContext(ctx, `UPDATE search_items SET search_echo = ?
+					WHERE source_path = ? AND uuid = ? AND text = ? AND content_type = ?
+					AND (search_echo IS NULL OR (search_echo = 0 AND ? = 1))`,
+			msg.SearchEcho, file.SourcePath, msg.UUID, msg.Text, msg.ContentType, msg.SearchEcho); err != nil {
+			return fmt.Errorf("update search echo provenance for %s: %w", file.SourcePath, err)
+		}
+		// Interruption is positive evidence: later partial parses cannot erase it.
+		if _, err := tx.ExecContext(ctx, `UPDATE search_items
+					SET was_interrupted = 1
+					WHERE source_path = ? AND uuid = ? AND ? = 1
+					AND COALESCE(was_interrupted, 0) = 0`,
+			file.SourcePath, msg.UUID, msg.WasInterrupted); err != nil {
+			return fmt.Errorf("enrich interruption proof for %s: %w", file.SourcePath, err)
+		}
+		if err := enrichOrigin(ctx, tx, msg.UUID, origin); err != nil {
+			return fmt.Errorf("update message origin provenance for %s: %w", file.SourcePath, err)
+		}
+	}
+
+	if msg.ToolName != "" {
+		// Q2: use the code the reader extracted from the untruncated output.
+		// Re-extracting from msg.Text here would miss any code beyond the
+		// toolfmt truncation cap — the exact bug Q2 exists to fix.
+		exitCode := msg.ExitCode
+		exitCodeVal := interface{}(nil)
+		if exitCode != nil {
+			exitCodeVal = *exitCode
+		}
+		var eventUUID sql.NullString
+		eventErr := tx.QueryRowContext(ctx, `SELECT message_uuid FROM tool_events WHERE source_path = ? AND ordinal = ?`, file.SourcePath, msg.Ordinal).Scan(&eventUUID)
+		if eventErr != nil && eventErr != sql.ErrNoRows {
+			return fmt.Errorf("inspect tool_event ordinal for %s: %w", file.SourcePath, eventErr)
+		}
+		if eventErr == nil && eventUUID.String != "" && eventUUID.String != msg.UUID {
+			return fmt.Errorf("tool_event ordinal %d for %s belongs to another identity", msg.Ordinal, file.SourcePath)
+		}
+		if eventErr == sql.ErrNoRows {
+			if _, err := tx.ExecContext(ctx, `
+					INSERT INTO tool_events
+					(message_uuid, source_path, ordinal, tool_name, command_head, is_error, exit_code, extraction_version, native_call_id)
+					VALUES (?, ?, ?, ?, ?, ?, ?, ?, NULLIF(?, ''))
+				`, uuidVal, file.SourcePath, msg.Ordinal, msg.ToolName, msg.CommandHead, isErrVal, exitCodeVal, msg.ExtractionVersion, msg.ToolUseID); err != nil {
+				return fmt.Errorf("insert tool_event for %s: %w", file.SourcePath, err)
+			}
+		}
+		// Lossy backfill deliberately leaves identity unknown. A retained
+		// search anchor proves which incoming call can claim this coordinate.
+		// Fill missing metadata only: false, zero, and known names/heads
+		// remain evidence, and extraction epochs can only advance.
+		if eventErr == nil && eventUUID.String == "" && msg.UUID != "" {
+			if _, err := tx.ExecContext(ctx, `UPDATE tool_events
+                        SET message_uuid = ?,
+                            tool_name = COALESCE(NULLIF(tool_name, ''), ?),
+                            command_head = COALESCE(NULLIF(command_head, ''), ?),
+                            is_error = COALESCE(is_error, ?),
+                            exit_code = COALESCE(exit_code, ?),
+                            extraction_version = MAX(COALESCE(extraction_version, 0), ?)
+                        WHERE source_path = ? AND ordinal = ?
+                          AND COALESCE(message_uuid, '') = ''`,
+				msg.UUID, msg.ToolName, msg.CommandHead, isErrVal, exitCodeVal,
+				msg.ExtractionVersion, file.SourcePath, msg.Ordinal); err != nil {
+				return fmt.Errorf("claim lossy tool_event for %s: %w", file.SourcePath, err)
+			}
+		}
+		// Native call identity is independent of a search row UUID. Fill
+		// missing proof, and reject contradictory identities transactionally.
+		if eventErr == nil && msg.ToolUseID != "" {
+			var nativeID sql.NullString
+			if err := tx.QueryRowContext(ctx, `SELECT native_call_id FROM tool_events WHERE source_path = ? AND ordinal = ?`, file.SourcePath, msg.Ordinal).Scan(&nativeID); err != nil {
+				return fmt.Errorf("inspect native call identity for %s: %w", file.SourcePath, err)
+			}
+			if nativeID.Valid && nativeID.String != "" && nativeID.String != msg.ToolUseID {
+				return fmt.Errorf("conflicting native call identity for %s ordinal %d", file.SourcePath, msg.Ordinal)
+			}
+			if _, err := tx.ExecContext(ctx, `UPDATE tool_events SET native_call_id = ? WHERE source_path = ? AND ordinal = ? AND NULLIF(native_call_id, '') IS NULL`, msg.ToolUseID, file.SourcePath, msg.Ordinal); err != nil {
+				return fmt.Errorf("enrich native call identity for %s: %w", file.SourcePath, err)
+			}
+		}
+		// A stable call may precede its result. Fill only unknown signals;
+		// false and zero are established proof, not missing values.
+		if perennial && msg.UUID != "" {
+			if _, err := tx.ExecContext(ctx, `UPDATE tool_events
+						SET tool_name = COALESCE(NULLIF(tool_name, ''), ?),
+						    command_head = COALESCE(NULLIF(command_head, ''), ?),
+						    is_error = COALESCE(is_error, ?), exit_code = COALESCE(exit_code, ?)
+						WHERE source_path = ? AND message_uuid = ? AND (tool_name = ? OR tool_name = '')`,
+				msg.ToolName, msg.CommandHead, isErrVal, exitCodeVal, file.SourcePath, msg.UUID, msg.ToolName); err != nil {
+				return fmt.Errorf("enrich tool result proof for %s: %w", file.SourcePath, err)
+			}
+		}
+	}
+	return nil
+}
+
+func enrichNativeSessionProject(ctx context.Context, tx *sql.Tx, path string) error {
+	_, err := tx.ExecContext(ctx, `UPDATE search_items AS si
+	 SET project=(SELECT proof.project FROM search_items proof WHERE proof.source_path=si.source_path AND proof.session_id=si.session_id AND proof.project_evidence='native_cwd' LIMIT 1), project_evidence='native_cwd'
+	 WHERE si.source_path=? AND si.session_id IS NOT NULL AND COALESCE(si.project_evidence,'unknown') IN ('unknown','path_fallback')
+	 AND EXISTS(SELECT 1 FROM search_items proof WHERE proof.source_path=si.source_path AND proof.session_id=si.session_id AND proof.project_evidence='native_cwd')`, path)
+	return err
+}
+
+func persistSyncCorrections(ctx context.Context, tx *sql.Tx, file IndexedFile) error {
+	return persistSyncCorrectionsForMessages(ctx, tx, file.SourcePath, indexedSyncMessages(file.Messages))
+}
+
+func persistSyncCorrectionsForMessages(ctx context.Context, tx *sql.Tx, path string, messages iter.Seq2[int, *IndexedMessage]) error {
+	detections, err := detectSyncCorrections(ctx, messages)
+	if err != nil {
+		return fmt.Errorf("detect corrections for %s: %w", path, err)
+	}
+	for index, message := range messages {
+		dets := detections[index]
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		for _, det := range dets {
+			if err := ctx.Err(); err != nil {
+				return err
+			}
+			_, err := tx.ExecContext(ctx, `
+					INSERT OR IGNORE INTO correction_signals
+					(item_uuid, source_path, ordinal, detector, confidence, extraction_version)
+					VALUES (?, ?, ?, ?, ?, ?)
+				`, message.UUID, path, message.Ordinal, det.DetectorName, det.Confidence, CurrentExtractionVersion)
+			if err != nil {
+				return fmt.Errorf("insert correction_signal for %s: %w", path, err)
+			}
+		}
+	}
 	return nil
 }
 
@@ -861,6 +855,10 @@ func rebuildNativeSessionTags(ctx context.Context, tx *sql.Tx, path string) erro
 
 // detectSessionCorrections preserves physical indices while isolating logical conversations.
 func detectSessionCorrections(ctx context.Context, messages []IndexedMessage) (map[int][]corrections.Detection, error) {
+	return detectSyncCorrections(ctx, indexedSyncMessages(messages))
+}
+
+func detectSyncCorrections(ctx context.Context, messages iter.Seq2[int, *IndexedMessage]) (map[int][]corrections.Detection, error) {
 	// Detectors see logical sessions, not interleaved siblings in a database.
 	detectionMsgs := make(map[string][]models.Message)
 	detectionIndices := make(map[string][]int)

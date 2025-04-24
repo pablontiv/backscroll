@@ -208,6 +208,19 @@ The Claude reader extracts text, tool inputs/results, stable message UUIDs,
 timestamps, interruption markers, exit codes, and provider noise directly from
 Claude's session schema.
 
+Claude may copy native message UUIDs into resumed or forked transcript files.
+Compatible copies represent one canonical indexed event, including each stable
+tool-block UUID. The retained event keeps its original row ID, opaque UUID,
+payload, source path, and ordinal even after its source expires. For a newly
+observed shared UUID, the lexically first source path in the sync batch owns it.
+Copies can enrich unknown parser-backed origin, project, native call identity,
+or outcome evidence at that canonical coordinate. Each genuinely new fork-tail
+event belongs to its own source path; exact UUID context returns the canonical
+owner's indexed neighborhood. Every successfully parsed transcript records its
+own file progress, including transcripts consisting entirely of shared history.
+Conflicting cross-path payload or established identity/outcome proof rejects the
+whole sync transaction, preserving retained rows and file progress.
+
 ## Complete Pi example
 
 ```toml

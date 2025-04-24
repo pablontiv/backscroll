@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"iter"
 	"strings"
 	"unicode"
 
@@ -118,10 +119,14 @@ func shouldMineToolLine(contentType, text string, isError bool) bool {
 // and writes message_templates + template_matches rows inside the tx.
 // Deterministic: same input → same templates + signatures.
 func (d *Database) mineTemplatesForFile(ctx context.Context, tx *sql.Tx, file IndexedFile, miner *templates.Miner) error {
+	return d.mineTemplatesForMessages(ctx, tx, file.SourcePath, indexedSyncMessages(file.Messages), miner)
+}
+
+func (d *Database) mineTemplatesForMessages(ctx context.Context, tx *sql.Tx, path string, messages iter.Seq2[int, *IndexedMessage], miner *templates.Miner) error {
 	// Collect error-bearing messages by tool_name.
 	var errorLines []templateErrorLine
 
-	for _, msg := range file.Messages {
+	for _, msg := range messages {
 		if err := ctx.Err(); err != nil {
 			return err
 		}
@@ -149,7 +154,7 @@ func (d *Database) mineTemplatesForFile(ctx context.Context, tx *sql.Tx, file In
 		}
 	}
 
-	return mineAndPersistTemplates(ctx, tx, file.SourcePath, errorLines, miner)
+	return mineAndPersistTemplates(ctx, tx, path, errorLines, miner)
 }
 
 // templateErrorLine is an already-proven, adapter-selected error line. Sync and
