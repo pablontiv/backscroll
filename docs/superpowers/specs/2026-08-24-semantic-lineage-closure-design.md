@@ -12,6 +12,8 @@ Backscroll will replace textual migration-lineage identity with a hybrid semanti
 
 A schema's current meaning will select its migration plan. Historical `schema_migrations` rows remain inspectable provenance, but formatting differences and known historical checksum variants will not multiply otherwise equivalent schema identities. Unknown semantic shapes continue to fail closed.
 
+Migration registration names and versions are shared through `compat.MigrationSteps`; storage derives upgrade dispatch from those registrations and the same ordered appliers used for fresh creation. The shared historical appliers retain ledger names and checksum bodies as their authority. Fresh creation remains one atomic transaction; existing-index upgrades retain their write reservation and pre-mutation snapshot lifecycle.
+
 The `recover` command also becomes a true remediation path: it retains startup-lock ownership but bypasses ordinary compatible-open and startup-sync preparation, because recovery must remain reachable when normal preparation cannot open the index.
 
 ## Context

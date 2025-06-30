@@ -11,6 +11,24 @@ import (
 	_ "modernc.org/sqlite"
 )
 
+func TestMigrationRegistrationsPreserveCatalogPlanOwnership(t *testing.T) {
+	steps := MigrationSteps()
+	db := openFixtureCopy(t, "v5-with-source-metadata.sql")
+	defer db.Close()
+	plan, diag, err := InspectIndex(context.Background(), db)
+	if err != nil || diag != nil {
+		t.Fatalf("inspect fixture: diagnostic=%v error=%v", diag, err)
+	}
+	steps[5].Name = "operation-local override"
+	next, diag, err := InspectIndex(context.Background(), db)
+	if err != nil || diag != nil {
+		t.Fatalf("inspect fixture again: diagnostic=%v error=%v", diag, err)
+	}
+	if next.Steps[0] != plan.Steps[0] {
+		t.Fatalf("caller changed catalog plan: got %+v, want %+v", next.Steps[0], plan.Steps[0])
+	}
+}
+
 func TestInspectIndexUsesObservedShapeNotVersionAlone(t *testing.T) {
 	tests := []struct {
 		fixture       string
