@@ -226,6 +226,10 @@ then intentionally apply without `--dry-run`. The configured active database mus
 already exist. Recovery preserves an active backup, but a post-install sync error
 leaves the replacement installed; it is **not automatic rollback**. Follow the
 [recovery runbook](docs/sync.md#recovery-runbook), including backup restoration.
+Recovery apply is supported on macOS and Linux when the filesystem supports the
+required atomic no-clobber moves. On other platforms, including Windows, dry-run
+can inspect compatible inputs, but apply fails at the unsupported move before
+mutating the active database; the stranded input remains intact.
 Automatic migration snapshots are sibling `*.snapshot-v<from>-<signature12>-to-v<to>`
 files with collision suffixes and two validated snapshots retained; they are
 distinct from recovery backups. See [snapshot retention](docs/sync.md#migration-snapshots-and-recovery-backups).

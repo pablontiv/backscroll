@@ -79,6 +79,23 @@ is using it, or mix database files with sidecars from a different state.
 
 ## Recovery runbook
 
+### Platform capability
+
+Recovery apply uses atomic no-clobber moves for backup, installation, and
+restoration. These moves are implemented on macOS and Linux, subject to kernel
+and filesystem support. On other platforms, including Windows, the fallback
+returns `atomic no-clobber move unsupported before mutation`: apply stops before
+moving the active database to its backup or installing a replacement, preserving
+the active and stranded inputs. Temporary destination preparation and startup
+lock activity can still occur before that failure.
+
+Dry-run does not perform replacement moves and can inspect compatible inputs
+on fallback platforms; a successful plan does not establish apply support.
+The fallback's exact-function probe and existing injected unsupported-move tests
+demonstrate fail-before-mutation behavior, not native Windows end-to-end execution.
+
+### Procedure
+
 Recovery is remediation, not a missing-input discovery command:
 
 1. Stop processes that might write the stranded database; do not bypass a busy
