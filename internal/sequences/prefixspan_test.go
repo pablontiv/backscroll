@@ -1,6 +1,7 @@
 package sequences
 
 import (
+	"reflect"
 	"testing"
 )
 
@@ -143,6 +144,81 @@ func TestMineRepeatedItemWithinSession(t *testing.T) {
 	}
 	if !found {
 		t.Errorf("A→B should be counted once per session, patterns: %+v", patterns)
+	}
+}
+
+func TestMineSequenceMembership(t *testing.T) {
+	membership := []Sequence{
+		{SessionID: "s1", Items: []string{"x", "x", "y"}},
+		{SessionID: "s2", Items: []string{"x", "y", "y"}},
+		{SessionID: "s3", Items: []string{"z"}},
+	}
+	projected := []Sequence{
+		{SessionID: "s1", Items: []string{"y", "x", "x", "y"}},
+		{SessionID: "s2", Items: []string{"y", "x", "y", "y"}},
+		{SessionID: "s3", Items: []string{"z"}},
+	}
+	tests := []struct {
+		name       string
+		seqs       []Sequence
+		minSupport int
+		minLen     int
+		maxLen     int
+		want       []Pattern
+	}{
+		{
+			name: "initial membership", seqs: membership, minSupport: 2, minLen: 1, maxLen: 2,
+			want: []Pattern{
+				{Items: []string{"x"}, Support: 2},
+				{Items: []string{"x", "y"}, Support: 2},
+				{Items: []string{"y"}, Support: 2},
+			},
+		},
+		{
+			name: "initial support boundary", seqs: membership, minSupport: 3, minLen: 1, maxLen: 3,
+		},
+		{
+			name: "projected tail membership", seqs: projected, minSupport: 2, minLen: 1, maxLen: 2,
+			want: []Pattern{
+				{Items: []string{"x"}, Support: 2},
+				{Items: []string{"x", "y"}, Support: 2},
+				{Items: []string{"y"}, Support: 2},
+				{Items: []string{"y", "x"}, Support: 2},
+				{Items: []string{"y", "y"}, Support: 2},
+			},
+		},
+		{
+			name: "projected support boundary", seqs: projected, minSupport: 3, minLen: 1, maxLen: 3,
+		},
+		{
+			name: "recursive projection", seqs: projected, minSupport: 2, minLen: 3, maxLen: 3,
+			want: []Pattern{
+				{Items: []string{"y", "x", "y"}, Support: 2},
+			},
+		},
+		{
+			name: "minimum length", seqs: projected, minSupport: 2, minLen: 2, maxLen: 2,
+			want: []Pattern{
+				{Items: []string{"x", "y"}, Support: 2},
+				{Items: []string{"y", "x"}, Support: 2},
+				{Items: []string{"y", "y"}, Support: 2},
+			},
+		},
+		{
+			name: "maximum length", seqs: projected, minSupport: 2, minLen: 1, maxLen: 1,
+			want: []Pattern{
+				{Items: []string{"x"}, Support: 2},
+				{Items: []string{"y"}, Support: 2},
+			},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := Mine(tt.seqs, tt.minSupport, tt.minLen, tt.maxLen)
+			if !reflect.DeepEqual(got, tt.want) {
+				t.Fatalf("Mine() = %#v, want %#v", got, tt.want)
+			}
+		})
 	}
 }
 

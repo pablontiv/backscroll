@@ -171,6 +171,9 @@ versioned; embedded default wins over an older config copy).
 explodes combinatorially on repetitive sessions without it).
 `--limit`/`--offset` paginate the MINED patterns; the input corpus is
 never truncated.
+Support counts each pattern once per session, including repeated tokens in
+projected suffixes. Initial and recursive mining share this membership
+bookkeeping while retaining separate corpus and projection phases.
 
 ```bash
 backscroll patterns --kind sequences --after 2026-01-01 --before 2027-01-01 --json
