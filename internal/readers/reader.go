@@ -8,9 +8,11 @@ import (
 	"encoding/hex"
 	"fmt"
 	"strconv"
+	"strings"
 
 	"github.com/pablontiv/backscroll/internal/input_config"
 	"github.com/pablontiv/backscroll/internal/models"
+	"github.com/pablontiv/backscroll/internal/sync"
 )
 
 // SessionReader abstracts reading sessions from a source (file, database, etc.).
@@ -127,4 +129,20 @@ func messageOriginForRole(role string) models.MessageOrigin {
 	default:
 		return models.OriginUnknown
 	}
+}
+
+// cleanText retains the established JSONL provider removals before applying the
+// common text policy. Native decoders handle their structural wrappers first.
+func cleanText(text string) (string, string) {
+	return normalizeText(sync.RemoveContentNoise(text))
+}
+
+// normalizeText classifies decoded text before collapsing whitespace. OpenCode
+// opts into this whitespace-only policy after selecting its native text parts.
+func normalizeText(text string) (string, string) {
+	kind := "text"
+	if strings.Contains(text, "```") {
+		kind = "code"
+	}
+	return sync.NormalizeWhitespace(text), kind
 }

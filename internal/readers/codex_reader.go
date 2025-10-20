@@ -176,8 +176,7 @@ func codexMessage(ctx context.Context, item codexItem, ts time.Time, reasoning b
 				parts[i] = stripCodexInjectedWrappers(text)
 			}
 		}
-		msg.Content = sync.CleanContent(strings.Join(parts, "\n"))
-		msg.ContentType = classifyText(msg.Content)
+		msg.Content, msg.ContentType = cleanText(strings.Join(parts, "\n"))
 	case "function_call":
 		// Codex stores arguments as JSON encoded inside a JSON string.
 		var args map[string]json.RawMessage

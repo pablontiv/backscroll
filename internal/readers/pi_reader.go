@@ -228,11 +228,11 @@ func extractPiMessages(ctx context.Context, rec piRecord, indexReasoning bool) (
 	// content as a plain string
 	var s string
 	if err := json.Unmarshal(rec.Message.Content, &s); err == nil {
-		text := sync.CleanContent(s)
+		text, kind := cleanText(s)
 		if text == "" {
 			return nil, nil
 		}
-		return []models.Message{{Role: role, Origin: piMessageOrigin(role), Content: text, ContentType: classifyText(text), Timestamp: ts, UUID: piRecordIdentity(rec.ID, "text")}}, nil
+		return []models.Message{{Role: role, Origin: piMessageOrigin(role), Content: text, ContentType: kind, Timestamp: ts, UUID: piRecordIdentity(rec.ID, "text")}}, nil
 	}
 
 	// content as an array of blocks
@@ -242,14 +242,18 @@ func extractPiMessages(ctx context.Context, rec piRecord, indexReasoning bool) (
 	}
 	var out []models.Message
 	var textParts []string
+	textKind := "text"
 	for i, b := range blocks {
 		if err := ctx.Err(); err != nil {
 			return nil, err
 		}
 		switch b.Type {
 		case "text":
-			if c := sync.CleanContent(b.Text); c != "" {
+			if c, kind := cleanText(b.Text); c != "" {
 				textParts = append(textParts, c)
+				if kind == "code" {
+					textKind = kind
+				}
 			}
 		case "toolCall":
 			if t := SerializeToolInput(b.Name, b.Arguments); strings.TrimSpace(t) != "" {
@@ -274,7 +278,7 @@ func extractPiMessages(ctx context.Context, rec piRecord, indexReasoning bool) (
 	}
 	if len(textParts) > 0 {
 		text := strings.TrimSpace(strings.Join(textParts, " "))
-		out = append([]models.Message{{Role: role, Origin: piMessageOrigin(role), Content: text, ContentType: classifyText(text), Timestamp: ts, UUID: piRecordIdentity(rec.ID, "text")}}, out...)
+		out = append([]models.Message{{Role: role, Origin: piMessageOrigin(role), Content: text, ContentType: textKind, Timestamp: ts, UUID: piRecordIdentity(rec.ID, "text")}}, out...)
 	}
 	return out, nil
 }

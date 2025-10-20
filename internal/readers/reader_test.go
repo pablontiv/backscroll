@@ -135,3 +135,24 @@ func TestIngestionFingerprintCoversSupportedSemantics(t *testing.T) {
 		})
 	}
 }
+
+func TestIngestionFingerprintNormalizationEpochs(t *testing.T) {
+	for _, tc := range []struct {
+		reader SessionReader
+		epoch  uint64
+	}{
+		{&ClaudeReader{}, 1},
+		{&PiReader{}, 2},
+		{&CodexReader{}, 2},
+		{&OMPReader{}, 1},
+		{&OpenCodeReader{}, 3},
+	} {
+		t.Run(tc.reader.Name(), func(t *testing.T) {
+			def := input_config.InputDefinition{Source: "session"}
+			want := IngestionFingerprint(&mockReader{name: tc.reader.Name(), epoch: tc.epoch}, def)
+			if got := IngestionFingerprint(tc.reader, def); got != want {
+				t.Fatalf("fingerprint=%q, want epoch %d fingerprint %q", got, tc.epoch, want)
+			}
+		})
+	}
+}

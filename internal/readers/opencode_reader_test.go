@@ -304,8 +304,8 @@ func TestOpenCodeReader_Parse_MultipleTextParts(t *testing.T) {
 	if len(pf.Records) != 1 {
 		t.Fatalf("expected 1 record, got %d", len(pf.Records))
 	}
-	if pf.Records[0].Content != "line1\nline2" {
-		t.Errorf("Content = %q, want %q", pf.Records[0].Content, "line1\nline2")
+	if pf.Records[0].Content != "line1 line2" {
+		t.Errorf("Content = %q, want %q", pf.Records[0].Content, "line1 line2")
 	}
 }
 

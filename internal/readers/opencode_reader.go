@@ -23,7 +23,7 @@ import (
 type OpenCodeReader struct{}
 
 func (r *OpenCodeReader) Name() string           { return "opencode" }
-func (r *OpenCodeReader) IngestionEpoch() uint64 { return 2 }
+func (r *OpenCodeReader) IngestionEpoch() uint64 { return 3 }
 
 // Discover returns paths to OpenCode database files matching the definition's discover config.
 func (r *OpenCodeReader) Discover(ctx context.Context, def input_config.InputDefinition) ([]string, error) {
@@ -209,13 +209,14 @@ func parseOpenCodeSnapshot(ctx context.Context, tx *sql.Tx, dbPath string) (mode
 			return err
 		}
 		if len(textParts) > 0 {
+			text, kind := normalizeText(strings.Join(textParts, "\n"))
 			msgs = append(msgs, models.Message{
 				UUID:      openCodeUUID("message", currentMsgID),
 				SessionID: currentSession, Cwd: currentCwd,
 				Role:        normalizeOpenCodeRole(currentRole),
 				Origin:      openCodeOriginForRole(currentRole),
-				Content:     strings.Join(textParts, "\n"),
-				ContentType: "text",
+				Content:     text,
+				ContentType: kind,
 				Timestamp:   time.UnixMilli(currentTime),
 			})
 		}
