@@ -617,10 +617,15 @@ A single SQLite capability remains one `source_path`; it can contain many native
 sessions. Each indexed record carries the structured `message.session_id` and,
 when available, the joined `session.directory`. A present directory is used for
 project-registry identification. When native cwd is absent, project proof remains
-unknown; the database location supplies no native project attribution. Missing rows in a present
-session table, empty identities, contradictory message/part session IDs, and
-relative or NUL-bearing directories fail the parse conservatively. Message/part-only
-exports remain supported without inventing native cwd.
+unknown; the database location supplies no native project attribution. When the
+session table exists, messages with a matching native session row and their parts
+are eligible for indexing. Messages whose native session row is missing are
+skipped together with their parts, counted once per message, and reported on
+stderr during startup sync. Previously indexed native records retain their
+payloads and anchors. Empty identities, contradictory message/part session IDs,
+parts without a message row, and relative or NUL-bearing directories fail the
+parse conservatively. Message/part-only exports remain supported without
+inventing native cwd.
 
 Text identity is a deterministic UUIDv5 over a namespace-qualified native message
 ID. Tool identity is a deterministic UUIDv5 over native message and part IDs, with

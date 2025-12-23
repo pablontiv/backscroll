@@ -149,3 +149,42 @@ func TestOpenCodeSnapshotCancellation(t *testing.T) {
 		t.Fatal("Parse ignored cancellation")
 	}
 }
+
+func TestOpenCodeSnapshotSkipsMissingSessionGroups(t *testing.T) {
+	path := createOpenCodeDB(t)
+	db, err := sql.Open("sqlite", path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	if _, err := db.Exec(`CREATE TABLE session(id TEXT PRIMARY KEY,directory TEXT); INSERT INTO session VALUES('sess-1','/projects/native')`); err != nil {
+		t.Fatal(err)
+	}
+	reader := &OpenCodeReader{}
+	before, err := reader.Parse(context.Background(), path, input_config.InputDefinition{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec(`INSERT INTO message VALUES('orphan-a','missing',0,0,'{"role":"user"}'),('orphan-b','missing',0,0,'{"role":"assistant"}'),('orphan-empty','missing',0,0,'{"role":"user"}'); INSERT INTO part VALUES('orphan-p1','orphan-a','missing',0,0,'{"type":"text","text":"orphan"}'),('orphan-p2','orphan-a','missing',0,0,'{"type":"text","text":"also orphan"}'),('orphan-p3','orphan-b','missing',0,0,'{"type":"tool","tool":"Bash","state":{"input":{"command":"echo orphan"},"output":"orphan"}}')`); err != nil {
+		t.Fatal(err)
+	}
+	after, err := reader.Parse(context.Background(), path, input_config.InputDefinition{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if after.SkippedMessages != 3 || len(after.Records) != len(before.Records) {
+		t.Fatalf("skipped groups: %+v", after)
+	}
+	for i, message := range after.Records {
+		want := before.Records[i]
+		if message != want || message.UUID == "" || message.SessionID != "sess-1" || message.Cwd != "/projects/native" || message.Origin == "" {
+			t.Fatalf("native record changed: %+v want %+v", message, want)
+		}
+	}
+	if _, err := db.Exec(`INSERT INTO part VALUES('broken','absent-message','missing',0,0,'{"type":"text","text":"broken"}')`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := reader.Parse(context.Background(), path, input_config.InputDefinition{}); err == nil || err.Error() != "invalid OpenCode message/part relationship" {
+		t.Fatalf("relationship error: %v", err)
+	}
+}

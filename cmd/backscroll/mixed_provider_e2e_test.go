@@ -1,10 +1,12 @@
 package main
 
 import (
+	"bytes"
 	"database/sql"
 	"encoding/json"
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"reflect"
 	"strings"
@@ -197,7 +199,39 @@ func TestMixedProviderNativeOwnershipReplayAndRecovery(t *testing.T) {
 	available.run("rebuild")
 	equal(query(available.database, snapshot), stable)
 	equal(query(available.database, outcomes), signals)
-	for _, path := range []string{omp, pi, codex, oc} {
+	// A mixed sync keeps perennial records from both orphaned native groups
+	// and an expired filesystem capability.
+	if err := os.Remove(omp); err != nil {
+		t.Fatal(err)
+	}
+	native, err = sql.Open("sqlite", oc)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := native.Exec(`DELETE FROM session WHERE id='s0'`); err != nil {
+		t.Fatal(err)
+	}
+	if err := native.Close(); err != nil {
+		t.Fatal(err)
+	}
+	cmd := exec.Command(e.binary, "search", "--text", "mixedproviderquartz", "--all-projects", "--json")
+	cmd.Dir, cmd.Env = e.root, e.environment
+	var stderr bytes.Buffer
+	cmd.Stderr = &stderr
+	output, err := cmd.Output()
+	if err != nil {
+		t.Fatalf("mixed orphan sync: %v stderr=%s", err, &stderr)
+	}
+	if strings.Count(stderr.String(), "warning: opencode: skipped 1 messages without native session metadata\n") != 1 {
+		t.Fatalf("orphan warning: %s", &stderr)
+	}
+	var retained []json.RawMessage
+	if err := json.Unmarshal(output, &retained); err != nil || len(retained) != 5 {
+		t.Fatalf("stdout JSON: %s err=%v", output, err)
+	}
+	equal(query(e.database, snapshot), stable)
+	equal(query(e.database, outcomes), signals)
+	for _, path := range []string{pi, codex, oc} {
 		if err := os.Remove(path); err != nil {
 			t.Fatal(err)
 		}

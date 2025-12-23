@@ -252,6 +252,7 @@ query merges both by rank position (RRF).`,
 				return nil
 			}
 			ctx := cmd.Context()
+			ctx = context.WithValue(ctx, startupWarningWriterKey{}, stderr)
 			if syncService.diagnostics {
 				ctx = context.WithValue(ctx, startupDiagnosticsWriterKey{}, stderr)
 			}
