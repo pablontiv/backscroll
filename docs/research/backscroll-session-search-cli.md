@@ -4,7 +4,7 @@
 **Tipo**: Research
 **Ecosistema**: Backscroll provee Tier 2 search para [Kedral](kedral/README.md) (Known Error Database). Backscroll = event store + búsqueda. Kedral = bridge entity + lifecycle. Rootline = structured store + validación.
 
-> Estado: Fase 3 parcial. CAP-02 (vs CASS) pendiente evaluación empírica. Fases 4-5 en construcción.
+> Estado: Fase 3 completa. Go confirmado. Fases 4-5 en construcción.
 
 ---
 
@@ -168,7 +168,7 @@ C5 (74.9% subagents) + M3 (scoping por proyecto)
 | S2: Subagent sessions tienen valor | Empírico | No investigado aún | — | ❓ unknown |
 | S3: FTS5 performance suficiente | Empírico | Benchmark: modernc ~2x slower INSERT, 10-100% slower SELECT vs CGO. Regression 3.51.0 en prepared statements (8.4x). No bloqueante para scope personal | Media | ⚠️ parcial |
 | S4: Scoping via sessions-index.json | Empírico | Solo 5/11 proyectos tienen sessions-index.json. Fallback necesario para los 6 restantes | Alta | ⚠️ parcial |
-| CAP-02: Backscroll vs CASS | Empírico | CASS v0.1.53: BM25+semántica, 11 providers, <60ms. Backscroll diferencia: Go binary, LLM output, Kedral integration, plan indexing (v2) | Alta | ❓ pendiente evaluación |
+| CAP-02: Backscroll vs CASS | Empírico | CASS evaluado: LLM output bueno (`--robot`, `--fields`, `--max-tokens`), pero organización pobre (god-files 1.5MB, 91 deps, 20+ subsistemas, 1 contributor), no usable como librería (git deps no publicados), conector Claude Code = shim 6 líneas. Cubre 1/4 criterios. | Alta | ✅ Go confirmado |
 
 ### Evidencia lógica: Invariantes
 
@@ -192,19 +192,17 @@ C5 (74.9% subagents) + M3 (scoping por proyecto)
 
 | Item | Estado | Impacto si falso | Severidad |
 |------|--------|-----------------|-----------|
-| CAP-02: CASS cubre el gap | ❓ pendiente | Si CASS cubre LLM output + Kedral integration → Backscroll innecesario | **Alta** (Go/Stop) |
 | S2: Valor de subagent sessions | ❓ unknown | Si no tienen valor → excluir 1,640 archivos, reducir corpus 75% | Media |
 | S3: FTS5 regression 3.51.0 | ⚠️ parcial | Si prepared statements son 8.4x más lentos → primera indexación ~2min en vez de ~15s | Baja (one-time cost) |
 | S4: Scoping en 6 proyectos sin index | ⚠️ parcial | Si fallback falla → búsqueda no filtrada en esos proyectos | Baja (fallback simple) |
 
 ### Conclusión provisional
 
-**Go condicional a CAP-02**: La evidencia lógica y empírica soporta H1 excepto por la incertidumbre de CAP-02 (vs CASS). El camino crítico es:
+**Go confirmado**: CASS evaluado empíricamente — cubre 1/4 criterios (LLM output bueno, pero no usable como librería, no integrable con Kedral, organización pobre). Backscroll procede como proyecto independiente.
 
-1. **Evaluar CASS** (CAP-02): instalar, probar con corpus real, verificar si produce output útil para LLM
-2. Si CASS no cubre → **Go**: construir Backscroll v1 (sessions only)
-3. Si CASS cubre parcialmente → **Pivot**: wrapper sobre CASS para LLM output + Kedral
-4. Si CASS cubre todo → **Stop**: adoptar CASS
+**Lección de diseño adoptada de CASS**: implementar flags `--robot`/`--json`, `--fields minimal|full`, `--max-tokens N` para output LLM-friendly. Patrón probado que Backscroll debe replicar.
+
+**Incertidumbres restantes** (no bloqueantes): S2 (valor de subagent sessions), spikes T-01..T-04 (se resuelven durante implementación).
 
 ---
 
@@ -236,7 +234,7 @@ Referencian C1-C7 y CD-01 a CD-04. No se duplican.
 ### Regla Go/No-Go
 
 **Go** si y solo si:
-1. CAP-02 ≠ Stop (CASS no cubre >=2 de: LLM output, plan indexing v2, Kedral integration)
+1. ~~CAP-02 ≠ Stop~~ ✅ Resuelto: CASS cubre 1/4 criterios (solo LLM output)
 2. T-01 pasa (FTS5 funciona en modernc)
 3. T-02 pasa (>=95% parse rate)
 
@@ -289,7 +287,7 @@ El prototipo NO demuestra: superioridad sobre CASS (requiere CAP-02), ni viabili
 | CAP | Claim | Fase actual | Método | Resultado | Confianza | Decisión |
 |-----|-------|-------------|--------|-----------|-----------|----------|
 | CAP-01 | FTS5 funciona en modernc para volumen requerido | Fase 3 | Empírico | ⚠️ parcial (docs confirman, no spike) | Media | Go condicional a spike T-01 |
-| CAP-02 | Backscroll aporta valor vs CASS | Fase 3 | Empírico | ❓ pendiente evaluación | — | **Bloqueante**: evaluar antes de implementar |
+| CAP-02 | Backscroll aporta valor vs CASS | Fase 3 | Empírico | ✅ CASS cubre 1/4 criterios | Alta | Go confirmado. Adoptar patrón `--robot` |
 | CAP-03 | Parser maneja formatos actuales | Fase 3 | Empírico | ❓ pendiente spike T-02 | — | Go condicional a spike |
 | CAP-04 | Scoping funciona en 11 proyectos | Fase 3 | Empírico | ⚠️ 5/11 con index, 6 requieren fallback | Media | Go con fallback CD-02 |
 | CAP-05 | Sync incremental <50ms | Fase 3 | Empírico | ⚠️ lógicamente viable, no medido | Media | Go condicional a spike T-03 |
@@ -392,7 +390,7 @@ Disponible en 5 de 11 proyectos. Los 6 restantes no lo generan (posiblemente por
 | Tool | Lenguaje | Search | Index | LLM Output | Estado |
 |------|----------|--------|-------|-----------|--------|
 | **cc-sessions** v1.3.2 | Rust | fzf + Ctrl+S grep | sessions-index.json | No | Activo |
-| **CASS** v0.1.53 | Rust/Tantivy | BM25 + semántica (MiniLM) | Tantivy segments | No (TUI) | Activo, 11 providers |
+| **CASS** v0.1.53 | Rust/Tantivy | BM25 + semántica (MiniLM) | Tantivy segments | Sí (`--robot`) | Activo, 1 dev, 91 deps, god-files, no usable como librería |
 | **CTK** v2.6.0 | Python/SQLite | SQLite FTS + LLM query | SQLite | Parcial | Activo, multi-provider |
 | **claude-code-log** | Python | No | Parser JSONL | No | Activo, 736 stars |
 | **claude-code-sync** | Rust | No | Git smart merge | No | Activo |
