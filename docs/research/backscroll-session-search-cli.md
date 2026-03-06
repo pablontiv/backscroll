@@ -1,3 +1,10 @@
+---
+estado: "Fase 3"
+fecha: "2026-02-18"
+metodo: hypothesize
+origen: "research original 2026-02-18, reestructurado 2026-03-03"
+fase_actual: 3
+---
 # Backscroll — Investigación Estructurada
 
 **Fecha**: 2026-02-18 (research original) / 2026-03-03 (reestructuración)
