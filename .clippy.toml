@@ -1,0 +1,9 @@
+# Configuración de Clippy para Backscroll
+# Nivel máximo de rigor (Nursery + Pedantic)
+
+disallowed-types = []
+enum-variant-name-threshold = 3
+struct-field-name-threshold = 3
+
+# Lints específicos para activar
+# (Se pueden añadir más según evolucione el proyecto)
