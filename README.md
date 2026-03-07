@@ -1,46 +1,111 @@
 # Backscroll
 
-**Tier 2 Search for Claude Code Sessions** (Rust Architecture 2026)
+[![CI](https://github.com/pablontiv/backscroll/actions/workflows/ci.yml/badge.svg)](https://github.com/pablontiv/backscroll/actions/workflows/ci.yml)
+[![Rust](https://img.shields.io/badge/Rust-1.94+-blue?logo=rust&logoColor=white)](https://www.rust-lang.org)
+[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](Cargo.toml)
 
-Backscroll es un motor de búsqueda de alto rendimiento diseñado para indexar y buscar en el historial de sesiones de Claude Code. Construido en Rust con SQLite FTS5, ofrece una alternativa rápida, segura y estática a la búsqueda tradicional.
+A **Tier 2 Search Engine** for Claude Code Sessions (Rust Architecture 2026).
 
-## 🚀 Características (Marzo 2026)
+Backscroll is a high-performance search engine designed to index and search through your Claude Code session history. Built in Rust with SQLite FTS5, it offers a fast, secure, and statically compiled alternative to traditional text search.
 
-- **Motor FTS5 + BM25:** Búsqueda por relevancia nativa en SQLite.
-- **Ingesta Defensiva:** Parseo robusto de esquemas mutantes de Claude con `serde(untagged)`.
-- **Sincronización Incremental:** Deduplicación basada en hashes SHA-256 para evitar re-indexación.
-- **Zero Deps:** Binarios estáticos generados con `cargo-zigbuild`.
-- **Calidad Extrema:** >95% de cobertura de código verificado con LLVM.
-- **Diagnósticos Modernos:** Errores visuales y amigables con `miette`.
+> **Status**: Core infrastructure and search engine complete — all CLI commands functional with >95% test coverage.
 
-## 🛠 Instalación y Uso
+---
 
-### Configuración
-Crea un archivo `backscroll.toml` o usa variables de entorno:
-```toml
-database_path = "~/.backscroll.db"
-session_dir = "~/.claude/sessions"
+## Table of Contents
+
+- [Installation](#installation)
+- [Quick Start](#quick-start)
+- [Core Features](#core-features)
+- [Configuration](#configuration)
+- [Development](#development)
+- [License](#license)
+
+---
+
+## Installation
+
+Backscroll ships as a **single static binary** with no external dependencies (Zero Deps), built using Zig as a cross-linker.
+
+You can download the latest pre-compiled binary from the [Releases](https://github.com/pablontiv/backscroll/releases) page.
+
+### From source
+
+```bash
+git clone https://github.com/pablontiv/backscroll.git
+cd backscroll
+cargo build --release
 ```
 
-### Comandos Principales
-```bash
-# Sincronizar sesiones nuevas
-backscroll sync
+---
 
-# Buscar en el historial
+## Quick Start
+
+```bash
+# 1. Sync — parse and incrementally index new sessions
+backscroll sync --path ~/.claude/sessions
+
+# 2. Search — find specific context with BM25 ranking
 backscroll search "mejoras sistema tipos"
 
-# Ver estado del índice
+# 3. Search by project — limit results to a specific project
+backscroll search "FTS5 schema" --project "backscroll"
+
+# 4. Status — view index health and database location
 backscroll status
 ```
 
-## 🏗 Desarrollo
+---
 
-Este proyecto utiliza `just` para la automatización:
-- `just check`: Ejecuta lints y clippy (rigor nursery).
-- `just test`: Ejecuta la suite de pruebas.
-- `just coverage-summary`: Genera reporte de cobertura (Objetivo: 85% min).
-- `just static-build`: Compila binario estático para Linux musl.
+## Core Features
 
-## 📈 Roadmap Administrativo
-El progreso detallado se encuentra en `docs/epics/`, gestionado mediante `rootline`.
+Backscroll is designed for **defensive ingestion** and **high-performance search**.
+
+- **FTS5 + BM25 Engine**: Native SQLite full-text search with relevance ranking.
+- **Defensive Parsing**: Robust handling of mutating Claude JSONL schemas via `serde(untagged)`.
+- **Incremental Sync**: Hash-based (SHA-256) deduplication avoids re-indexing unchanged files.
+- **Concurrent Persistence**: SQLite WAL mode with busy timeouts ensures safe concurrent access without a background daemon.
+- **Beautiful Diagnostics**: Rich, colorful error reporting powered by `miette`.
+
+---
+
+## Configuration
+
+Backscroll resolves its configuration using hierarchical discovery. By default, it uses the `~/.backscroll.db` database and searches for sessions in the current directory.
+
+You can override this by setting environment variables or creating a `backscroll.toml` file in `~/.config/backscroll/` or the current directory:
+
+```toml
+# backscroll.toml
+database_path = "/home/user/.backscroll.db"
+session_dir = "/home/user/.claude/sessions"
+```
+
+Environment variables:
+```bash
+export BACKSCROLL_DATABASE_PATH="/tmp/custom.db"
+export BACKSCROLL_SESSION_DIR="/path/to/sessions"
+```
+
+---
+
+## Development
+
+Backscroll uses `just` as its command runner to automate quality gates and builds.
+
+```bash
+just check              # Run rustfmt and clippy (nursery + warnings as errors)
+just test               # Run all unit and CLI integration tests
+just coverage-summary   # Generate LLVM coverage report (target: >85%)
+just audit              # Audit supply chain for vulnerabilities and licenses
+just static-build       # Build statically linked Linux binary using Zig
+just release-minor      # Bump minor version, tag, and push (triggers GitHub Release)
+```
+
+The project follows the **Ports and Adapters** architecture, decoupling the core domain (`src/core`) from the storage implementation (`src/storage/sqlite.rs`) to ensure future scalability (e.g., migrating to Tantivy).
+
+---
+
+## License
+
+[MIT](Cargo.toml) — free and open source.
