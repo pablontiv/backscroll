@@ -1,13 +1,13 @@
+mod errors;
 mod config;
 mod core;
-mod errors;
 mod storage;
 
-use crate::core::sync::sync_sessions;
 use clap::{Parser, Subcommand};
-use config::Config;
 use miette::Result;
+use config::Config;
 use storage::sqlite::Database;
+use crate::core::sync::sync_sessions;
 
 #[derive(Parser)]
 #[command(name = "backscroll")]
@@ -39,7 +39,7 @@ enum Commands {
 
 fn main() -> Result<()> {
     let cli = Cli::parse();
-
+    
     // Cargar configuración (no requiere DB)
     let config = Config::load().unwrap_or_else(|_| Config::default_with_paths());
 
@@ -47,7 +47,7 @@ fn main() -> Result<()> {
         Commands::Sync { path } => {
             let session_path = path.as_deref().unwrap_or(&config.session_dir);
             println!("Sincronizando sesiones desde: {}", session_path);
-
+            
             // Abrir DB solo cuando es necesario
             let db = Database::open(&config.database_path)?;
             db.setup_schema()?;
@@ -55,11 +55,11 @@ fn main() -> Result<()> {
         }
         Commands::Search { query, project } => {
             println!("Buscando: '{}'...", query);
-
+            
             // Abrir DB solo cuando es necesario
             let db = Database::open(&config.database_path)?;
             db.setup_schema()?;
-
+            
             let results = db.search(query, project.as_deref())?;
             if results.is_empty() {
                 println!("No se encontraron resultados.");
@@ -72,6 +72,7 @@ fn main() -> Result<()> {
             }
         }
         Commands::Status => {
+            println!("Backscroll v{}", env!("CARGO_PKG_VERSION"));
             println!("Base de datos: {}", config.database_path);
             println!("Directorio de sesiones: {}", config.session_dir);
             println!("Estado del índice: OK");
