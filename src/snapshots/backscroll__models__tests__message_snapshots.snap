@@ -1,0 +1,14 @@
+---
+source: src/models.rs
+expression: msg
+---
+{
+  "role": "assistant",
+  "content": [
+    {
+      "type": "text",
+      "text": "Iniciando proceso..."
+    }
+  ],
+  "is_meta": false
+}
