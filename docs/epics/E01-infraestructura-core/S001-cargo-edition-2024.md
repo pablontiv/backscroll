@@ -8,7 +8,7 @@ Inicializar el proyecto Rust con la edición más reciente y las dependencias ba
 
 ## Tasks
 
-- [ ] `T001`: Ejecutar `cargo init --bin` y configurar `Cargo.toml` con Edition 2024.
-- [ ] `T002`: Añadir dependencias base: `rusqlite` (bundled), `serde`, `serde_json`, `clap` (derive), `miette`, `thiserror`.
-- [ ] `T003`: Configurar perfiles de release para optimización de tamaño y velocidad (LTO, codegen-units).
-- [ ] `T004`: Verificar compilación inicial con un "Hello Backscroll" básico.
+- [x] `T001`: Ejecutar `cargo init --bin` y configurar `Cargo.toml` con Edition 2024.
+- [x] `T002`: Añadir dependencias base: `rusqlite` (bundled), `serde`, `serde_json`, `clap` (derive), `miette`, `thiserror`.
+- [x] `T003`: Configurar perfiles de release para optimización de tamaño y velocidad (LTO, codegen-units).
+- [x] `T004`: Verificar compilación inicial con un "Hello Backscroll" básico.

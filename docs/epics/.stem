@@ -1,0 +1,9 @@
+version: 2
+scope:
+  match: "*.md"
+schema:
+  id:
+    type: sequence
+    match:
+      "E*": {prefix: E, digits: 2}
+      "S*": {prefix: S, digits: 3}

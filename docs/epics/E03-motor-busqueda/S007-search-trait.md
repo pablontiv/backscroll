@@ -8,6 +8,6 @@ Definir la interfaz de dominio para garantizar que el motor de búsqueda pueda s
 
 ## Tasks
 
-- [ ] `T020`: Definir el Trait `SearchEngine` en `core/domain.rs`.
-- [ ] `T021`: Implementar las estructuras de datos `SearchResult` y `SearchQuery`.
-- [ ] `T022`: Instrumentar el Trait con Spans de `tracing`.
+- [x] `T020`: Definir el Trait `SearchEngine` en `core/domain.rs`.
+- [x] `T021`: Implementar las estructuras de datos `SearchResult` y `SearchQuery`.
+- [x] `T022`: Instrumentar el Trait con Spans de `tracing`.

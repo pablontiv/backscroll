@@ -8,6 +8,6 @@ Implementar la lógica de deserialización para manejar los esquemas variables d
 
 ## Tasks
 
-- [ ] `T005`: Definir el enum `MessageContent` con `#[serde(untagged)]`.
-- [ ] `T006`: Implementar el parser para leer archivos JSONL de forma segura.
-- [ ] `T007`: Manejar casos de campos omitidos o de tipo inesperado mediante `serde(default)`.
+- [x] `T005`: Definir el enum `MessageContent` con `#[serde(untagged)]`.
+- [x] `T006`: Implementar el parser para leer archivos JSONL de forma segura.
+- [x] `T007`: Manejar casos de campos omitidos o de tipo inesperado mediante `serde(default)`.

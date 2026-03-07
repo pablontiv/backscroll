@@ -8,6 +8,6 @@ Configurar el sistema de compilación para generar binarios universales con cero
 
 ## Tasks
 
-- [ ] `T030`: Configurar `cargo-zigbuild` para compilación con musl en Linux.
-- [ ] `T031`: Crear perfil de compilación estática para Windows y Mac.
-- [ ] `T032`: Integrar `cargo-zigbuild` en el flujo de CI.
+- [x] `T030`: Configurar `cargo-zigbuild` para compilación con musl en Linux.
+- [x] `T031`: Crear perfil de compilación estática para Windows y Mac.
+- [x] `T032`: Integrar `cargo-zigbuild` en el flujo de CI.
