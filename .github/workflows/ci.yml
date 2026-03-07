@@ -3,6 +3,7 @@ name: Continuous Integration
 on:
   push:
     branches: [ main, master ]
+    tags: [ 'v*' ]
   pull_request:
     branches: [ main, master ]
 
@@ -11,6 +12,7 @@ env:
 
 jobs:
   check-lint:
+    if: github.event_name != 'push' || !startsWith(github.ref, 'refs/tags/v')
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -26,6 +28,7 @@ jobs:
         run: cargo check --all
 
   test:
+    if: github.event_name != 'push' || !startsWith(github.ref, 'refs/tags/v')
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -35,6 +38,7 @@ jobs:
         run: cargo test --all-features
 
   audit:
+    if: github.event_name != 'push' || !startsWith(github.ref, 'refs/tags/v')
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -59,7 +63,6 @@ jobs:
         id: tag
         run: |
           set -e
-
           LAST_TAG=$(git describe --tags --abbrev=0 2>/dev/null || echo "")
           if [ -z "$LAST_TAG" ]; then
             COMMITS=$(git rev-list --reverse HEAD)
@@ -70,7 +73,6 @@ jobs:
 
           LATEST_TAG=""
           for COMMIT in $COMMITS; do
-            # Skip already-tagged commits
             EXISTING=$(git tag --points-at "$COMMIT" 2>/dev/null | head -1)
             if [ -n "$EXISTING" ]; then
               LAST_TAG="$EXISTING"
@@ -78,7 +80,6 @@ jobs:
             fi
 
             MSG=$(git log -1 --format=%s "$COMMIT")
-
             BUMP=""
             case "$MSG" in
               feat\!*|fix\!*|refactor\!*|perf\!*)  BUMP="breaking" ;;
@@ -105,7 +106,6 @@ jobs:
             fi
 
             NEXT="v${MAJOR}.${MINOR}.${PATCH}"
-            echo "Bump: $COMMIT (${MSG%%:*}) -> $NEXT"
             LAST_TAG="$NEXT"
             LATEST_TAG="$NEXT"
           done
@@ -115,3 +115,23 @@ jobs:
             git tag "$LATEST_TAG" HEAD
             git push origin "$LATEST_TAG"
           fi
+
+  publish-release:
+    name: Publish Release
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install stable toolchain
+        uses: dtolnay/rust-toolchain@stable
+      - name: Build Release
+        run: cargo build --release
+      - name: GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: target/release/backscroll
+          generate_release_notes: true
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
