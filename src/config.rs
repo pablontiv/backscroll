@@ -1,5 +1,8 @@
+use figment::{
+    Figment,
+    providers::{Env, Format, Toml},
+};
 use serde::{Deserialize, Serialize};
-use figment::{Figment, providers::{Format, Toml, Env}};
 use std::path::PathBuf;
 
 #[derive(Deserialize, Serialize, Debug)]
@@ -14,7 +17,7 @@ impl Config {
         // 1. backscroll.toml (directorio actual)
         // 2. ~/.config/backscroll/config.toml (estándar Unix)
         // 3. Variables de entorno BACKSCROLL_*
-        
+
         let mut home_config = PathBuf::from(std::env::var("HOME").unwrap_or_else(|_| ".".into()));
         home_config.push(".config/backscroll/config.toml");
 

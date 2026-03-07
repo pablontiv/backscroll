@@ -1,13 +1,13 @@
-mod errors;
 mod config;
 mod core;
+mod errors;
 mod storage;
 
-use clap::{Parser, Subcommand};
-use miette::Result;
-use config::Config;
-use storage::sqlite::Database;
 use crate::core::sync::sync_sessions;
+use clap::{Parser, Subcommand};
+use config::Config;
+use miette::Result;
+use storage::sqlite::Database;
 
 #[derive(Parser)]
 #[command(name = "backscroll")]
