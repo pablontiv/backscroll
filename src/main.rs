@@ -40,11 +40,8 @@ enum Commands {
 }
 
 fn main() -> Result<()> {
-    // Inicializar configuración y base de datos
-    let config = Config::load().unwrap_or(config::Config {
-        database_path: "backscroll.db".to_string(),
-        session_dir: ".".to_string(),
-    });
+    // Intentar cargar configuración, si falla usamos defaults hardcoded con rutas HOME
+    let config = Config::load().unwrap_or_else(|_| Config::default_with_paths());
 
     let db = Database::open(&config.database_path)?;
     db.setup_schema()?;

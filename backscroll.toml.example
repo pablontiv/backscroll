@@ -1,0 +1,9 @@
+# Ejemplo de configuración para Backscroll
+# Renombra este archivo a backscroll.toml o ponlo en ~/.config/backscroll/config.toml
+
+# Ruta donde se guardará el índice de búsqueda
+database_path = "backscroll.db"
+
+# Directorio donde Claude Code guarda sus sesiones
+# En Linux suele ser ~/.claude/sessions
+session_dir = "."
