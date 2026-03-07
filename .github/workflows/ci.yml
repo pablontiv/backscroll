@@ -2,9 +2,9 @@ name: Continuous Integration
 
 on:
   push:
-    branches: [ main ]
+    branches: [ main, master ]
   pull_request:
-    branches: [ main ]
+    branches: [ main, master ]
 
 env:
   CARGO_TERM_COLOR: always
@@ -41,5 +41,5 @@ jobs:
       - name: Install cargo-deny
         run: cargo install cargo-deny
       - name: Supply Chain Audit
-        # Omitimos advisories por red, pero mantenemos licenses y bans
+        # Ejecutamos licencias y bans que no requieren red para la base de datos de vulnerabilidades
         run: cargo deny check licenses bans
