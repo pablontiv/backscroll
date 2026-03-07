@@ -1,15 +1,13 @@
 mod errors;
 mod config;
-mod db;
-mod models;
-mod sync;
-mod domain;
+mod core;
+mod storage;
 
 use clap::{Parser, Subcommand};
 use miette::Result;
 use config::Config;
-use db::Database;
-use sync::sync_sessions;
+use storage::sqlite::Database;
+use crate::core::sync::sync_sessions;
 
 #[derive(Parser)]
 #[command(name = "backscroll")]
@@ -40,7 +38,6 @@ enum Commands {
 }
 
 fn main() -> Result<()> {
-    // Intentar cargar configuración, si falla usamos defaults hardcoded con rutas HOME
     let config = Config::load().unwrap_or_else(|_| Config::default_with_paths());
 
     let db = Database::open(&config.database_path)?;

@@ -5,8 +5,12 @@ use tempfile::tempdir;
 
 #[test]
 fn test_cli_help() {
+    let dir = tempdir().unwrap();
+    let db_path = dir.path().join("help.db");
+    
     let mut cmd = Command::cargo_bin("backscroll").unwrap();
     cmd.arg("--help")
+        .env("BACKSCROLL_DATABASE_PATH", db_path.to_str().unwrap())
         .assert()
         .success()
         .stdout(predicate::str::contains("Tier 2 search"));
@@ -14,8 +18,12 @@ fn test_cli_help() {
 
 #[test]
 fn test_cli_status() {
+    let dir = tempdir().unwrap();
+    let db_path = dir.path().join("status.db");
+
     let mut cmd = Command::cargo_bin("backscroll").unwrap();
     cmd.arg("status")
+        .env("BACKSCROLL_DATABASE_PATH", db_path.to_str().unwrap())
         .assert()
         .success()
         .stdout(predicate::str::contains("Estado del índice: OK"));

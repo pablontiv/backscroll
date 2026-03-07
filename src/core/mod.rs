@@ -1,3 +1,6 @@
+pub mod models;
+pub mod sync;
+
 use serde::Serialize;
 use miette::Result;
 
@@ -9,9 +12,6 @@ pub struct SearchResult {
 }
 
 pub trait SearchEngine {
-    /// Indexar un mensaje de Claude
     fn index_message(&self, path: &str, role: &str, content: &str, project: Option<&str>) -> Result<()>;
-    
-    /// Buscar en el índice
     fn search(&self, query: &str, project: Option<&str>) -> Result<Vec<SearchResult>>;
 }

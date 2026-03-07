@@ -3,8 +3,8 @@ use std::path::Path;
 use sha2::{Sha256, Digest};
 use walkdir::WalkDir;
 use miette::IntoDiagnostic;
-use crate::db::Database;
-use crate::models::{ClaudeMessage, MessageContent};
+use crate::storage::sqlite::Database;
+use crate::core::models::{ClaudeMessage, MessageContent};
 
 pub fn compute_hash(path: impl AsRef<Path>) -> miette::Result<String> {
     let data = fs::read(path).into_diagnostic()?;
@@ -61,13 +61,11 @@ mod tests {
         
         fs::write(&file_path, r#"{"role": "user", "content": "hola"}"#).into_diagnostic()?;
 
-        // Sincronizar por primera vez
         sync_sessions(&db, dir.path().to_str().unwrap())?;
         
         let results = db.search("hola", None)?;
         assert_eq!(results.len(), 1);
 
-        // Sincronizar de nuevo sin cambios (no debería fallar ni duplicar)
         sync_sessions(&db, dir.path().to_str().unwrap())?;
         let results = db.search("hola", None)?;
         assert_eq!(results.len(), 1);
