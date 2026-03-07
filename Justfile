@@ -41,3 +41,33 @@ coverage-summary:
 # Audit dependencies
 audit:
     cargo deny check licenses bans
+
+# --- Versioning & Release ---
+
+# Increment version (minor)
+bump-minor:
+    source $HOME/.cargo/env && \
+    cargo set-version --bump minor
+
+# Increment version (patch)
+bump-patch:
+    source $HOME/.cargo/env && \
+    cargo set-version --bump patch
+
+# Create a new release (minor)
+release-minor: check test
+    just bump-minor
+    git add Cargo.toml Cargo.lock
+    VERSION=$(grep "^version =" Cargo.toml | cut -d '"' -f 2); \
+    git commit -m "chore: release v$${VERSION}"; \
+    git tag -a "v$${VERSION}" -m "Release v$${VERSION}"; \
+    git push origin master --tags
+
+# Create a new release (patch)
+release-patch: check test
+    just bump-patch
+    git add Cargo.toml Cargo.lock
+    VERSION=$(grep "^version =" Cargo.toml | cut -d '"' -f 2); \
+    git commit -m "chore: release v$${VERSION}"; \
+    git tag -a "v$${VERSION}" -m "Release v$${VERSION}"; \
+    git push origin master --tags

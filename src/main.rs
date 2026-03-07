@@ -38,21 +38,28 @@ enum Commands {
 }
 
 fn main() -> Result<()> {
-    let config = Config::load().unwrap_or_else(|_| Config::default_with_paths());
-
-    let db = Database::open(&config.database_path)?;
-    db.setup_schema()?;
-
     let cli = Cli::parse();
+
+    // Cargar configuración (no requiere DB)
+    let config = Config::load().unwrap_or_else(|_| Config::default_with_paths());
 
     match &cli.command {
         Commands::Sync { path } => {
             let session_path = path.as_deref().unwrap_or(&config.session_dir);
             println!("Sincronizando sesiones desde: {}", session_path);
+
+            // Abrir DB solo cuando es necesario
+            let db = Database::open(&config.database_path)?;
+            db.setup_schema()?;
             sync_sessions(&db, session_path)?;
         }
         Commands::Search { query, project } => {
             println!("Buscando: '{}'...", query);
+
+            // Abrir DB solo cuando es necesario
+            let db = Database::open(&config.database_path)?;
+            db.setup_schema()?;
+
             let results = db.search(query, project.as_deref())?;
             if results.is_empty() {
                 println!("No se encontraron resultados.");
