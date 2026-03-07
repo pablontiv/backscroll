@@ -1,0 +1,13 @@
+# S009: Zig Build para Compilación Cruzada
+
+**Estado:** Pending
+**ID:** S009
+**Parent:** E04
+
+Configurar el sistema de compilación para generar binarios universales con cero dependencias externas.
+
+## Tasks
+
+- [ ] `T030`: Configurar `cargo-zigbuild` para compilación con musl en Linux.
+- [ ] `T031`: Crear perfil de compilación estática para Windows y Mac.
+- [ ] `T032`: Integrar `cargo-zigbuild` en el flujo de CI.
