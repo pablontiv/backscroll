@@ -41,5 +41,77 @@ jobs:
       - name: Install cargo-deny
         run: cargo install cargo-deny
       - name: Supply Chain Audit
-        # Ejecutamos licencias y bans que no requieren red para la base de datos de vulnerabilidades
         run: cargo deny check licenses bans
+
+  auto-tag:
+    name: Auto Tag
+    needs: [check-lint, test, audit]
+    if: github.event_name == 'push' && (github.ref == 'refs/heads/master' || github.ref == 'refs/heads/main')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Tag untagged commits
+        id: tag
+        run: |
+          set -e
+
+          LAST_TAG=$(git describe --tags --abbrev=0 2>/dev/null || echo "")
+          if [ -z "$LAST_TAG" ]; then
+            COMMITS=$(git rev-list --reverse HEAD)
+            LAST_TAG="v0.1.0"
+          else
+            COMMITS=$(git rev-list --reverse "${LAST_TAG}..HEAD")
+          fi
+
+          LATEST_TAG=""
+          for COMMIT in $COMMITS; do
+            # Skip already-tagged commits
+            EXISTING=$(git tag --points-at "$COMMIT" 2>/dev/null | head -1)
+            if [ -n "$EXISTING" ]; then
+              LAST_TAG="$EXISTING"
+              continue
+            fi
+
+            MSG=$(git log -1 --format=%s "$COMMIT")
+
+            BUMP=""
+            case "$MSG" in
+              feat\!*|fix\!*|refactor\!*|perf\!*)  BUMP="breaking" ;;
+              feat*)                                 BUMP="feat" ;;
+              fix*|perf*)                            BUMP="fix" ;;
+            esac
+            [ -z "$BUMP" ] && continue
+
+            MAJOR=$(echo "$LAST_TAG" | sed 's/^v//' | cut -d. -f1)
+            MINOR=$(echo "$LAST_TAG" | sed 's/^v//' | cut -d. -f2)
+            PATCH=$(echo "$LAST_TAG" | sed 's/^v//' | cut -d. -f3)
+
+            if [ "$MAJOR" -eq 0 ]; then
+              case "$BUMP" in
+                breaking)  MINOR=$((MINOR + 1)); PATCH=0 ;;
+                *)         PATCH=$((PATCH + 1)) ;;
+              esac
+            else
+              case "$BUMP" in
+                breaking)  MAJOR=$((MAJOR + 1)); MINOR=0; PATCH=0 ;;
+                feat)      MINOR=$((MINOR + 1)); PATCH=0 ;;
+                *)         PATCH=$((PATCH + 1)) ;;
+              esac
+            fi
+
+            NEXT="v${MAJOR}.${MINOR}.${PATCH}"
+            echo "Bump: $COMMIT (${MSG%%:*}) -> $NEXT"
+            LAST_TAG="$NEXT"
+            LATEST_TAG="$NEXT"
+          done
+
+          if [ -n "$LATEST_TAG" ]; then
+            echo "Tagging HEAD as $LATEST_TAG"
+            git tag "$LATEST_TAG" HEAD
+            git push origin "$LATEST_TAG"
+          fi
