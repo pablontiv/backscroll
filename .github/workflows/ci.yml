@@ -3,7 +3,6 @@ name: Continuous Integration
 on:
   push:
     branches: [ main, master ]
-    tags: [ 'v*' ]
   pull_request:
     branches: [ main, master ]
 
@@ -12,7 +11,6 @@ env:
 
 jobs:
   check-lint:
-    if: github.event_name != 'push' || !startsWith(github.ref, 'refs/tags/v')
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -28,7 +26,6 @@ jobs:
         run: cargo check --all
 
   test:
-    if: github.event_name != 'push' || !startsWith(github.ref, 'refs/tags/v')
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -38,7 +35,6 @@ jobs:
         run: cargo test --all-features
 
   audit:
-    if: github.event_name != 'push' || !startsWith(github.ref, 'refs/tags/v')
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -47,8 +43,8 @@ jobs:
       - name: Supply Chain Audit
         run: cargo deny check licenses bans
 
-  auto-tag:
-    name: Auto Tag
+  release:
+    name: Auto Release
     needs: [check-lint, test, audit]
     if: github.event_name == 'push' && (github.ref == 'refs/heads/master' || github.ref == 'refs/heads/main')
     runs-on: ubuntu-latest
@@ -59,10 +55,9 @@ jobs:
         with:
           fetch-depth: 0
 
-      - name: Tag untagged commits
-        id: tag
+      - name: Determine Next Version
+        id: version
         run: |
-          set -e
           LAST_TAG=$(git describe --tags --abbrev=0 2>/dev/null || echo "")
           if [ -z "$LAST_TAG" ]; then
             COMMITS=$(git rev-list --reverse HEAD)
@@ -71,67 +66,60 @@ jobs:
             COMMITS=$(git rev-list --reverse "${LAST_TAG}..HEAD")
           fi
 
-          LATEST_TAG=""
+          BUMP=""
           for COMMIT in $COMMITS; do
-            EXISTING=$(git tag --points-at "$COMMIT" 2>/dev/null | head -1)
-            if [ -n "$EXISTING" ]; then
-              LAST_TAG="$EXISTING"
-              continue
-            fi
-
             MSG=$(git log -1 --format=%s "$COMMIT")
-            BUMP=""
             case "$MSG" in
-              feat\!*|fix\!*|refactor\!*|perf\!*)  BUMP="breaking" ;;
-              feat*)                                 BUMP="feat" ;;
-              fix*|perf*)                            BUMP="fix" ;;
+              feat\!*|fix\!*|refactor\!*|perf\!*) BUMP="breaking"; break ;;
+              feat*) BUMP="feat" ;;
+              fix*|perf*) [ -z "$BUMP" ] && BUMP="fix" ;;
             esac
-            [ -z "$BUMP" ] && continue
-
-            MAJOR=$(echo "$LAST_TAG" | sed 's/^v//' | cut -d. -f1)
-            MINOR=$(echo "$LAST_TAG" | sed 's/^v//' | cut -d. -f2)
-            PATCH=$(echo "$LAST_TAG" | sed 's/^v//' | cut -d. -f3)
-
-            if [ "$MAJOR" -eq 0 ]; then
-              case "$BUMP" in
-                breaking)  MINOR=$((MINOR + 1)); PATCH=0 ;;
-                *)         PATCH=$((PATCH + 1)) ;;
-              esac
-            else
-              case "$BUMP" in
-                breaking)  MAJOR=$((MAJOR + 1)); MINOR=0; PATCH=0 ;;
-                feat)      MINOR=$((MINOR + 1)); PATCH=0 ;;
-                *)         PATCH=$((PATCH + 1)) ;;
-              esac
-            fi
-
-            NEXT="v${MAJOR}.${MINOR}.${PATCH}"
-            LAST_TAG="$NEXT"
-            LATEST_TAG="$NEXT"
           done
 
-          if [ -n "$LATEST_TAG" ]; then
-            echo "Tagging HEAD as $LATEST_TAG"
-            git tag "$LATEST_TAG" HEAD
-            git push origin "$LATEST_TAG"
+          if [ -z "$BUMP" ]; then
+            echo "No version bump required."
+            echo "bump=false" >> $GITHUB_OUTPUT
+            exit 0
           fi
 
-  publish-release:
-    name: Publish Release
-    if: startsWith(github.ref, 'refs/tags/v')
-    runs-on: ubuntu-latest
-    permissions:
-      contents: write
-    steps:
-      - uses: actions/checkout@v4
+          MAJOR=$(echo "$LAST_TAG" | sed 's/^v//' | cut -d. -f1)
+          MINOR=$(echo "$LAST_TAG" | sed 's/^v//' | cut -d. -f2)
+          PATCH=$(echo "$LAST_TAG" | sed 's/^v//' | cut -d. -f3)
+
+          if [ "$MAJOR" -eq 0 ]; then
+            case "$BUMP" in
+              breaking) MINOR=$((MINOR + 1)); PATCH=0 ;;
+              *)        PATCH=$((PATCH + 1)) ;;
+            esac
+          else
+            case "$BUMP" in
+              breaking) MAJOR=$((MAJOR + 1)); MINOR=0; PATCH=0 ;;
+              feat)     MINOR=$((MINOR + 1)); PATCH=0 ;;
+              *)        PATCH=$((PATCH + 1)) ;;
+            esac
+          fi
+
+          NEXT_TAG="v${MAJOR}.${MINOR}.${PATCH}"
+          echo "Next tag determined: $NEXT_TAG"
+          echo "bump=true" >> $GITHUB_OUTPUT
+          echo "tag=$NEXT_TAG" >> $GITHUB_OUTPUT
+
       - name: Install stable toolchain
+        if: steps.version.outputs.bump == 'true'
         uses: dtolnay/rust-toolchain@stable
-      - name: Build Release
+
+      - name: Build Release Binary
+        if: steps.version.outputs.bump == 'true'
         run: cargo build --release
-      - name: GitHub Release
-        uses: softprops/action-gh-release@v2
-        with:
-          files: target/release/backscroll
-          generate_release_notes: true
+
+      - name: Create GitHub Release
+        if: steps.version.outputs.bump == 'true'
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          # gh release create generará el tag de Git automáticamente de forma atómica
+          # y adjuntará el binario compilado a la release.
+          gh release create ${{ steps.version.outputs.tag }} \
+            target/release/backscroll \
+            --title "Release ${{ steps.version.outputs.tag }}" \
+            --generate-notes
