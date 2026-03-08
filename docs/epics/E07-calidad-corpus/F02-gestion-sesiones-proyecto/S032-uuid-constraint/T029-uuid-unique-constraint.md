@@ -1,5 +1,5 @@
 ---
-estado: Pending
+estado: Completed
 tipo: code
 ejecutable_en: 1 sesion
 ---

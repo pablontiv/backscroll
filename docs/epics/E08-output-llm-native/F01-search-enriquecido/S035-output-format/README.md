@@ -14,8 +14,8 @@
 
 ## Criterios de Aceptacion (semanticos)
 
-- [ ] Output muestra fecha, slug, snippet, y score
-- [ ] Snapshot test valida el formato exacto
+- [x] Output muestra fecha, slug, snippet, y score
+- [x] Snapshot test valida el formato exacto
 
 ## Invariantes
 

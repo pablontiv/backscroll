@@ -14,9 +14,9 @@
 
 ## Criterios de Aceptacion (semanticos)
 
-- [ ] sync.rs no importa Database directamente
-- [ ] main.rs usa dyn SearchEngine
-- [ ] Zero `#[allow(dead_code)]` en src/
+- [x] sync.rs no importa Database directamente
+- [x] main.rs usa dyn SearchEngine
+- [x] Zero `#[allow(dead_code)]` en src/
 
 ## Invariantes
 

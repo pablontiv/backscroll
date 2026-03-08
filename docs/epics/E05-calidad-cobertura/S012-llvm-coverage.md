@@ -1,6 +1,6 @@
 # S012: LLVM Coverage Gate (85%)
 
-**Estado:** Pending
+**Estado:** Completed
 **ID:** S012
 **Parent:** E05
 

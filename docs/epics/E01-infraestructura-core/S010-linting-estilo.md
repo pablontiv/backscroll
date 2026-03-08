@@ -1,6 +1,6 @@
 # S010: Linting & Estilo
 
-**Estado:** Pending
+**Estado:** Completed
 **ID:** S010
 **Parent:** E01
 

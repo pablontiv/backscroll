@@ -12,8 +12,8 @@
 
 ## Criterios de Aceptacion (semanticos)
 
-- [ ] `sqlite3 db ".schema search_items"` muestra UNIQUE en uuid
-- [ ] INSERT de uuid duplicado no falla (INSERT OR IGNORE)
+- [x] `sqlite3 db ".schema search_items"` muestra UNIQUE en uuid
+- [x] INSERT de uuid duplicado no falla (INSERT OR IGNORE)
 
 ## Invariantes
 

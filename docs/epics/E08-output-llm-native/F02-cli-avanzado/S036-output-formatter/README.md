@@ -12,9 +12,9 @@
 
 ## Criterios de Aceptacion (semanticos)
 
-- [ ] `backscroll search "test" --json | jq .` no falla
-- [ ] `--robot` produce output sin decoracion
-- [ ] `--max-tokens 500` trunca el output
+- [x] `backscroll search "test" --json | jq .` no falla
+- [x] `--robot` produce output sin decoracion
+- [x] `--max-tokens 500` trunca el output
 
 ## Invariantes
 

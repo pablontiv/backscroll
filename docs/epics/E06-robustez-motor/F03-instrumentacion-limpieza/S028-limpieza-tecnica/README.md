@@ -12,8 +12,8 @@
 
 ## Criterios de Aceptacion (semanticos)
 
-- [ ] rust-version esta en Cargo.toml
-- [ ] LICENSE file existe en la raiz del repo
+- [x] rust-version esta en Cargo.toml
+- [x] LICENSE file existe en la raiz del repo
 
 ## Invariantes
 

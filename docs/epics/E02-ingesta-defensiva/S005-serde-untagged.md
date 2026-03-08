@@ -1,6 +1,6 @@
 # S005: Serde Untagged (Parser Defensivo)
 
-**Estado:** Pending
+**Estado:** Completed
 **ID:** S005
 **Parent:** E02
 

@@ -1,5 +1,5 @@
 ---
-estado: Pending
+estado: Completed
 tipo: docs
 ejecutable_en: 1 sesion
 ---

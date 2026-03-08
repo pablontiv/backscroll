@@ -12,8 +12,8 @@
 
 ## Criterios de Aceptacion (semanticos)
 
-- [ ] `backscroll read session.jsonl` muestra contenido filtrado
-- [ ] Noise filtering se aplica al leer
+- [x] `backscroll read session.jsonl` muestra contenido filtrado
+- [x] Noise filtering se aplica al leer
 
 ## Invariantes
 

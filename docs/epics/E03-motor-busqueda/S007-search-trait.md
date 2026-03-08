@@ -1,6 +1,6 @@
 # S007: SearchEngine Trait
 
-**Estado:** Pending
+**Estado:** Completed
 **ID:** S007
 **Parent:** E03
 

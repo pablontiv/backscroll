@@ -12,8 +12,8 @@
 
 ## Criterios de Aceptacion (semanticos)
 
-- [ ] Parser procesa JSONL real de Claude Code sin errores
-- [ ] Metadatos del wrapper (uuid, timestamp, slug) son accesibles post-parse
+- [x] Parser procesa JSONL real de Claude Code sin errores
+- [x] Metadatos del wrapper (uuid, timestamp, slug) son accesibles post-parse
 
 ## Invariantes
 

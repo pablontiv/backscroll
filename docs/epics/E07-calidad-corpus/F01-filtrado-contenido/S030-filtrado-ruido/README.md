@@ -14,9 +14,9 @@
 
 ## Criterios de Aceptacion (semanticos)
 
-- [ ] Search por `<system-reminder>` retorna 0 resultados en corpus filtrado
-- [ ] Search por `<task-notification>` retorna 0 resultados
-- [ ] tool_use/tool_result blocks no se indexan como texto
+- [x] Search por `<system-reminder>` retorna 0 resultados en corpus filtrado
+- [x] Search por `<task-notification>` retorna 0 resultados
+- [x] tool_use/tool_result blocks no se indexan como texto
 
 ## Invariantes
 

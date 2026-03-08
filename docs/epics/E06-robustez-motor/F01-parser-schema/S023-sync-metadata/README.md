@@ -12,8 +12,8 @@
 
 ## Criterios de Aceptacion (semanticos)
 
-- [ ] Re-sync del mismo archivo no produce duplicados
-- [ ] Cada mensaje tiene timestamp y ordinal correctos
+- [x] Re-sync del mismo archivo no produce duplicados
+- [x] Cada mensaje tiene timestamp y ordinal correctos
 
 ## Invariantes
 

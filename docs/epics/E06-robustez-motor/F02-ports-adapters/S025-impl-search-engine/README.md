@@ -14,8 +14,8 @@
 
 ## Criterios de Aceptacion (semanticos)
 
-- [ ] `impl SearchEngine for Database` existe y compila
-- [ ] SearchResult incluye match_snippet field
+- [x] `impl SearchEngine for Database` existe y compila
+- [x] SearchResult incluye match_snippet field
 
 ## Invariantes
 

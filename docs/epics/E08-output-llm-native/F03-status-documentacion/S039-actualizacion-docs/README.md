@@ -12,8 +12,8 @@
 
 ## Criterios de Aceptacion (semanticos)
 
-- [ ] CLAUDE.md documenta todos los modulos actuales
-- [ ] README.md tiene usage con nuevos flags
+- [x] CLAUDE.md documenta todos los modulos actuales
+- [x] README.md tiene usage con nuevos flags
 
 ## Invariantes
 

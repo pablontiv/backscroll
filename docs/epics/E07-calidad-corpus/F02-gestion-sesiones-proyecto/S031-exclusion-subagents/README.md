@@ -12,8 +12,8 @@
 
 ## Criterios de Aceptacion (semanticos)
 
-- [ ] Sync default no indexa archivos en paths con `/subagents/`
-- [ ] `sync --include-agents` SI los indexa
+- [x] Sync default no indexa archivos en paths con `/subagents/`
+- [x] `sync --include-agents` SI los indexa
 
 ## Invariantes
 

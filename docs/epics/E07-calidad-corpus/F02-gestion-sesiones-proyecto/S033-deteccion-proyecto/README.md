@@ -12,8 +12,8 @@
 
 ## Criterios de Aceptacion (semanticos)
 
-- [ ] `SELECT count(*) FROM search_items WHERE project IS NULL` = 0
-- [ ] `--project` filter funciona en search
+- [x] `SELECT count(*) FROM search_items WHERE project IS NULL` = 0
+- [x] `--project` filter funciona en search
 
 ## Invariantes
 

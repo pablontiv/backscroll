@@ -1,6 +1,6 @@
 # S001: Cargo Edition 2024
 
-**Estado:** Pending
+**Estado:** Completed
 **ID:** S001
 **Parent:** E01
 

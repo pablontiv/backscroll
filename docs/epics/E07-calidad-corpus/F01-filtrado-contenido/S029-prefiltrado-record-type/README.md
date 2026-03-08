@@ -12,8 +12,8 @@
 
 ## Criterios de Aceptacion (semanticos)
 
-- [ ] Solo records type=user y type=assistant se indexan
-- [ ] Records con isMeta=true no se indexan
+- [x] Solo records type=user y type=assistant se indexan
+- [x] Records con isMeta=true no se indexan
 
 ## Invariantes
 

@@ -12,8 +12,8 @@
 
 ## Criterios de Aceptacion (semanticos)
 
-- [ ] `RUST_LOG=debug backscroll sync` muestra spans de tracing
-- [ ] `RUST_LOG=debug backscroll search "test"` muestra spans de tracing
+- [x] `RUST_LOG=debug backscroll sync` muestra spans de tracing
+- [x] `RUST_LOG=debug backscroll search "test"` muestra spans de tracing
 
 ## Invariantes
 

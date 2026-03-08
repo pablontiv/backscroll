@@ -12,9 +12,9 @@
 
 ## Criterios de Aceptacion (semanticos)
 
-- [ ] Schema tiene tabla search_items con todas las columnas requeridas
-- [ ] FTS5 usa external content pattern con triggers
-- [ ] Existe mecanismo de migracion de schema
+- [x] Schema tiene tabla search_items con todas las columnas requeridas
+- [x] FTS5 usa external content pattern con triggers
+- [x] Existe mecanismo de migracion de schema
 
 ## Invariantes
 

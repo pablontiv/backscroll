@@ -12,8 +12,8 @@
 
 ## Criterios de Aceptacion (semanticos)
 
-- [ ] SearchResult.match_snippet contiene texto con markers `>>>` y `<<<`
-- [ ] Snippet es un fragmento relevante, no el contenido completo
+- [x] SearchResult.match_snippet contiene texto con markers `>>>` y `<<<`
+- [x] Snippet es un fragmento relevante, no el contenido completo
 
 ## Invariantes
 

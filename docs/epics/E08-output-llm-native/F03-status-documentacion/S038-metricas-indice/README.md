@@ -12,9 +12,9 @@
 
 ## Criterios de Aceptacion (semanticos)
 
-- [ ] `backscroll status` muestra conteo de archivos indexados
-- [ ] `backscroll status` muestra conteo de mensajes
-- [ ] `backscroll status` muestra tamano de la DB
+- [x] `backscroll status` muestra conteo de archivos indexados
+- [x] `backscroll status` muestra conteo de mensajes
+- [x] `backscroll status` muestra tamano de la DB
 
 ## Invariantes
 

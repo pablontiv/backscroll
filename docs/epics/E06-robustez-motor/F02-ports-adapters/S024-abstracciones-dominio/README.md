@@ -12,8 +12,8 @@
 
 ## Criterios de Aceptacion (semanticos)
 
-- [ ] ParsedFile y ParsedMessage structs definidas y usadas
-- [ ] SearchEngine trait refleja el flujo real del sistema
+- [x] ParsedFile y ParsedMessage structs definidas y usadas
+- [x] SearchEngine trait refleja el flujo real del sistema
 
 ## Invariantes
 
