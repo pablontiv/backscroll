@@ -18,8 +18,20 @@ pub struct ContentBlock {
 pub struct ClaudeMessage {
     pub role: String,
     pub content: MessageContent,
-    #[serde(default)]
-    pub is_meta: bool,
+}
+
+#[derive(Deserialize, Debug, PartialEq, serde::Serialize)]
+pub struct SessionRecord {
+    #[serde(rename = "type")]
+    pub record_type: String,
+    pub message: Option<ClaudeMessage>,
+    pub uuid: Option<String>,
+    pub timestamp: Option<String>,
+    #[serde(rename = "sessionId")]
+    pub session_id: Option<String>,
+    pub slug: Option<String>,
+    #[serde(rename = "isMeta", default)]
+    pub is_meta: Option<bool>,
 }
 
 #[cfg(test)]

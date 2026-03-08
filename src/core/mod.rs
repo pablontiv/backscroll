@@ -1,24 +1,45 @@
 pub mod models;
+pub mod reader;
 pub mod sync;
 
-use miette::Result;
 use serde::Serialize;
+use std::collections::HashMap;
 
 #[derive(Debug, Serialize)]
 pub struct SearchResult {
-    pub path: String,
-    pub content: String,
-    pub score: f32,
+    pub source_path: String,
+    pub text: String,
+    pub match_snippet: Option<String>,
+    pub score: f64,
 }
 
-#[allow(dead_code)]
+pub struct ParsedMessage {
+    pub role: String,
+    pub text: String,
+    pub ordinal: usize,
+    pub uuid: Option<String>,
+    pub timestamp: Option<String>,
+}
+
+pub struct ParsedFile {
+    pub source_path: String,
+    pub hash: String,
+    pub project: Option<String>,
+    pub messages: Vec<ParsedMessage>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct Stats {
+    pub file_count: i64,
+    pub message_count: i64,
+    pub db_size_bytes: i64,
+    pub last_sync: Option<String>,
+    pub project_count: i64,
+}
+
 pub trait SearchEngine {
-    fn index_message(
-        &self,
-        path: &str,
-        role: &str,
-        content: &str,
-        project: Option<&str>,
-    ) -> Result<()>;
-    fn search(&self, query: &str, project: Option<&str>) -> Result<Vec<SearchResult>>;
+    fn sync_files(&self, files: Vec<ParsedFile>) -> miette::Result<()>;
+    fn search(&self, query: &str, project: &Option<String>) -> miette::Result<Vec<SearchResult>>;
+    fn get_file_hashes(&self) -> miette::Result<HashMap<String, String>>;
+    fn get_stats(&self) -> miette::Result<Stats>;
 }

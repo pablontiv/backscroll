@@ -9,6 +9,5 @@ expression: msg
       "type": "text",
       "text": "Iniciando proceso..."
     }
-  ],
-  "is_meta": false
+  ]
 }
