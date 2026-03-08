@@ -44,16 +44,24 @@ cargo build --release
 ## Quick Start
 
 ```bash
-# 1. Sync — parse and incrementally index new sessions
+# 1. Sync — parse and incrementally index new sessions (excludes subagents by default)
 backscroll sync --path ~/.claude/sessions
+backscroll sync --path ~/.claude/sessions --include-agents # Include subagent sessions
 
-# 2. Search — find specific context with BM25 ranking
+# 2. Search — find specific context with BM25 ranking and highlighted snippets
 backscroll search "mejoras sistema tipos"
 
 # 3. Search by project — limit results to a specific project
 backscroll search "FTS5 schema" --project "backscroll"
 
-# 4. Status — view index health and database location
+# 4. Read — view a specific session file directly, with noise filtering applied
+backscroll read ~/.claude/projects/abcd/sessions/session.jsonl
+
+# 5. LLM Integration — output as JSON or compact robot format
+backscroll search "arch" --json | jq .
+backscroll search "arch" --robot --max-tokens 2000
+
+# 6. Status — view index health, file counts, and database size
 backscroll status
 ```
 
