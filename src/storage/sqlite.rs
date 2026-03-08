@@ -1,6 +1,7 @@
-use crate::core::SearchResult;
+use crate::core::{ParsedFile, SearchEngine, SearchResult, Stats};
 use miette::IntoDiagnostic;
 use rusqlite::{Connection, Result, Row, params};
+use std::collections::HashMap;
 use std::path::Path;
 use std::time::Duration;
 
@@ -26,76 +27,209 @@ impl Database {
     pub fn setup_schema(&self) -> miette::Result<()> {
         self.conn
             .execute(
-                "CREATE TABLE IF NOT EXISTS indexed_files (
-                path TEXT PRIMARY KEY,
-                hash TEXT NOT NULL,
-                last_indexed DATETIME DEFAULT CURRENT_TIMESTAMP
-            )",
+                "CREATE TABLE IF NOT EXISTS schema_version (version INTEGER NOT NULL)",
                 [],
             )
             .into_diagnostic()?;
 
-        self.conn
-            .execute(
-                "CREATE VIRTUAL TABLE IF NOT EXISTS messages_fts USING fts5(
-                path,
-                role,
-                content,
-                project,
-                tokenize='unicode61'
-            )",
-                [],
-            )
+        let count: i64 = self
+            .conn
+            .query_row("SELECT COUNT(*) FROM schema_version", [], |row| row.get(0))
             .into_diagnostic()?;
 
-        Ok(())
-    }
+        if count == 0 {
+            // Initial v1 schema
+            self.conn
+                .execute(
+                    "CREATE TABLE IF NOT EXISTS indexed_files (
+                    path TEXT PRIMARY KEY,
+                    hash TEXT NOT NULL,
+                    last_indexed DATETIME DEFAULT CURRENT_TIMESTAMP
+                )",
+                    [],
+                )
+                .into_diagnostic()?;
 
-    pub fn index_message(
-        &self,
-        path: &str,
-        role: &str,
-        content: &str,
-        project: Option<&str>,
-    ) -> miette::Result<()> {
-        self.conn
-            .execute(
-                "INSERT INTO messages_fts (path, role, content, project) VALUES (?, ?, ?, ?)",
-                (path, role, content, project),
-            )
+            self.conn
+                .execute(
+                    "CREATE VIRTUAL TABLE IF NOT EXISTS messages_fts USING fts5(
+                    path,
+                    role,
+                    content,
+                    project,
+                    tokenize='unicode61'
+                )",
+                    [],
+                )
+                .into_diagnostic()?;
+
+            self.conn
+                .execute("INSERT INTO schema_version (version) VALUES (1)", [])
+                .into_diagnostic()?;
+        }
+
+        let current_version: i64 = self
+            .conn
+            .query_row("SELECT version FROM schema_version", [], |row| row.get(0))
             .into_diagnostic()?;
+
+        if current_version == 1 {
+            self.conn
+                .execute("BEGIN TRANSACTION", [])
+                .into_diagnostic()?;
+
+            self.conn
+                .execute(
+                    "CREATE TABLE IF NOT EXISTS search_items (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    source TEXT NOT NULL DEFAULT 'session',
+                    source_path TEXT NOT NULL,
+                    ordinal INTEGER NOT NULL,
+                    role TEXT NOT NULL,
+                    text TEXT NOT NULL,
+                    timestamp TEXT,
+                    uuid TEXT UNIQUE,
+                    project TEXT
+                )",
+                    [],
+                )
+                .into_diagnostic()?;
+
+            self.conn.execute("CREATE INDEX IF NOT EXISTS idx_search_items_source_path ON search_items(source_path)", []).into_diagnostic()?;
+            self.conn
+                .execute(
+                    "CREATE INDEX IF NOT EXISTS idx_search_items_project ON search_items(project)",
+                    [],
+                )
+                .into_diagnostic()?;
+
+            self.conn
+                .execute("DROP TABLE IF EXISTS messages_fts", [])
+                .into_diagnostic()?;
+
+            self.conn
+                .execute(
+                    "CREATE VIRTUAL TABLE messages_fts USING fts5(
+                    text,
+                    content=search_items,
+                    content_rowid=id,
+                    tokenize='unicode61'
+                )",
+                    [],
+                )
+                .into_diagnostic()?;
+
+            self.conn
+                .execute(
+                    "
+                CREATE TRIGGER IF NOT EXISTS search_items_ai AFTER INSERT ON search_items BEGIN
+                    INSERT INTO messages_fts(rowid, text) VALUES (new.id, new.text);
+                END;
+            ",
+                    [],
+                )
+                .into_diagnostic()?;
+
+            self.conn.execute("
+                CREATE TRIGGER IF NOT EXISTS search_items_ad AFTER DELETE ON search_items BEGIN
+                    INSERT INTO messages_fts(messages_fts, rowid, text) VALUES('delete', old.id, old.text);
+                END;
+            ", []).into_diagnostic()?;
+
+            self.conn.execute("
+                CREATE TRIGGER IF NOT EXISTS search_items_au AFTER UPDATE ON search_items BEGIN
+                    INSERT INTO messages_fts(messages_fts, rowid, text) VALUES('delete', old.id, old.text);
+                    INSERT INTO messages_fts(rowid, text) VALUES (new.id, new.text);
+                END;
+            ", []).into_diagnostic()?;
+
+            self.conn
+                .execute("UPDATE schema_version SET version = 2", [])
+                .into_diagnostic()?;
+            self.conn.execute("COMMIT", []).into_diagnostic()?;
+        }
+
         Ok(())
     }
 
     fn map_search_row(row: &Row<'_>) -> Result<SearchResult> {
         Ok(SearchResult {
-            path: row.get(0)?,
-            content: row.get(1)?,
+            source_path: row.get(0)?,
+            text: row.get(1)?,
             score: row.get(2)?,
+            match_snippet: row.get(3).ok(),
         })
     }
+}
 
-    pub fn search(
+impl SearchEngine for Database {
+    fn sync_files(&self, files: Vec<ParsedFile>) -> miette::Result<()> {
+        self.conn
+            .execute("BEGIN TRANSACTION", [])
+            .into_diagnostic()?;
+        for file in files {
+            self.conn
+                .execute(
+                    "DELETE FROM search_items WHERE source_path = ?",
+                    [&file.source_path],
+                )
+                .into_diagnostic()?;
+
+            for msg in file.messages {
+                self.conn
+                    .execute(
+                        "INSERT OR IGNORE INTO search_items (source_path, ordinal, role, text, project, uuid, timestamp) VALUES (?, ?, ?, ?, ?, ?, ?)",
+                        (
+                            &file.source_path,
+                            msg.ordinal as i64,
+                            &msg.role,
+                            &msg.text,
+                            file.project.as_deref(),
+                            msg.uuid.as_deref(),
+                            msg.timestamp.as_deref(),
+                        ),
+                    )
+                    .into_diagnostic()?;
+            }
+
+            self.conn.execute(
+                "INSERT OR REPLACE INTO indexed_files (path, hash, last_indexed) VALUES (?, ?, CURRENT_TIMESTAMP)",
+                [&file.source_path, &file.hash],
+            ).into_diagnostic()?;
+        }
+        self.conn.execute("COMMIT", []).into_diagnostic()?;
+        Ok(())
+    }
+
+    #[tracing::instrument(skip(self))]
+    fn search(
         &self,
         query_str: &str,
-        project: Option<&str>,
+        project: &Option<String>,
     ) -> miette::Result<Vec<SearchResult>> {
         let mut results = Vec::new();
+        let snippet_expr = "snippet(messages_fts, 0, '>>>', '<<<', '...', 32)";
 
         if let Some(p) = project {
-            let sql = "SELECT path, content, rank FROM messages_fts WHERE messages_fts MATCH ? AND project = ? ORDER BY rank";
-            let mut stmt = self.conn.prepare(sql).into_diagnostic()?;
+            let sql = format!(
+                "SELECT si.source_path, si.text, m.rank as score, {} as snippet FROM messages_fts m JOIN search_items si ON m.rowid = si.id WHERE messages_fts MATCH ? AND si.project = ? ORDER BY rank LIMIT 20",
+                snippet_expr
+            );
+            let mut stmt = self.conn.prepare(&sql).into_diagnostic()?;
             let rows = stmt
-                .query_map(params![query_str, p], Self::map_search_row)
+                .query_map(params![query_str, p], Database::map_search_row)
                 .into_diagnostic()?;
             for row in rows {
                 results.push(row.into_diagnostic()?);
             }
         } else {
-            let sql = "SELECT path, content, rank FROM messages_fts WHERE messages_fts MATCH ? ORDER BY rank";
-            let mut stmt = self.conn.prepare(sql).into_diagnostic()?;
+            let sql = format!(
+                "SELECT si.source_path, si.text, m.rank as score, {} as snippet FROM messages_fts m JOIN search_items si ON m.rowid = si.id WHERE messages_fts MATCH ? ORDER BY rank LIMIT 20",
+                snippet_expr
+            );
+            let mut stmt = self.conn.prepare(&sql).into_diagnostic()?;
             let rows = stmt
-                .query_map(params![query_str], Self::map_search_row)
+                .query_map(params![query_str], Database::map_search_row)
                 .into_diagnostic()?;
             for row in rows {
                 results.push(row.into_diagnostic()?);
@@ -105,32 +239,82 @@ impl Database {
         Ok(results)
     }
 
-    pub fn is_file_changed(&self, path: &str, current_hash: &str) -> miette::Result<bool> {
+    fn get_file_hashes(&self) -> miette::Result<HashMap<String, String>> {
+        let mut hashes = HashMap::new();
         let mut stmt = self
             .conn
-            .prepare("SELECT hash FROM indexed_files WHERE path = ?")
+            .prepare("SELECT path, hash FROM indexed_files")
             .into_diagnostic()?;
-        let res: Result<String> = stmt.query_row([path], |row| row.get(0));
+        let rows = stmt
+            .query_map([], |row| {
+                let path: String = row.get(0)?;
+                let hash: String = row.get(1)?;
+                Ok((path, hash))
+            })
+            .into_diagnostic()?;
 
-        match res {
-            Ok(old_hash) => Ok(old_hash != current_hash),
-            Err(rusqlite::Error::QueryReturnedNoRows) => Ok(true),
-            Err(e) => Err(e).into_diagnostic(),
+        for row in rows {
+            let (path, hash) = row.into_diagnostic()?;
+            hashes.insert(path, hash);
         }
+        Ok(hashes)
     }
 
-    pub fn mark_file_indexed(&self, path: &str, hash: &str) -> miette::Result<()> {
-        self.conn.execute(
-            "INSERT OR REPLACE INTO indexed_files (path, hash, last_indexed) VALUES (?, ?, CURRENT_TIMESTAMP)",
-            [path, hash],
-        ).into_diagnostic()?;
-        Ok(())
+    fn get_stats(&self) -> miette::Result<Stats> {
+        let file_count: i64 = self
+            .conn
+            .query_row(
+                "SELECT count(DISTINCT source_path) FROM search_items",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap_or(0);
+
+        let message_count: i64 = self
+            .conn
+            .query_row("SELECT count(*) FROM search_items", [], |row| row.get(0))
+            .unwrap_or(0);
+
+        let page_count: i64 = self
+            .conn
+            .query_row("PRAGMA page_count", [], |row| row.get(0))
+            .unwrap_or(0);
+        let page_size: i64 = self
+            .conn
+            .query_row("PRAGMA page_size", [], |row| row.get(0))
+            .unwrap_or(0);
+        let db_size_bytes = page_count * page_size;
+
+        let last_sync: Option<String> = self
+            .conn
+            .query_row("SELECT max(timestamp) FROM search_items", [], |row| {
+                row.get(0)
+            })
+            .unwrap_or(None);
+
+        let project_count: i64 = self
+            .conn
+            .query_row(
+                "SELECT count(DISTINCT project) FROM search_items",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap_or(0);
+
+        Ok(Stats {
+            file_count,
+            message_count,
+            db_size_bytes,
+            last_sync,
+            project_count,
+        })
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::core::ParsedMessage;
 
     #[test]
     fn test_db_workflow() -> miette::Result<()> {
@@ -139,16 +323,30 @@ mod tests {
 
         let path = "test.json";
         let hash = "abc";
-        assert!(db.is_file_changed(path, hash)?);
+        let hashes = db.get_file_hashes()?;
+        assert!(!hashes.contains_key(path));
 
-        db.mark_file_indexed(path, hash)?;
-        assert!(!db.is_file_changed(path, hash)?);
-        assert!(db.is_file_changed(path, "def")?);
+        let file = ParsedFile {
+            source_path: path.to_string(),
+            hash: hash.to_string(),
+            project: Some("project-x".to_string()),
+            messages: vec![ParsedMessage {
+                role: "user".to_string(),
+                text: "hola mundo rust".to_string(),
+                ordinal: 0,
+                uuid: None,
+                timestamp: None,
+            }],
+        };
 
-        db.index_message(path, "user", "hola mundo rust", Some("project-x"))?;
-        let results = db.search("hola", None)?;
+        db.sync_files(vec![file])?;
+        let hashes = db.get_file_hashes()?;
+        assert_eq!(hashes.get(path).unwrap(), hash);
+
+        let results = db.search("hola", &None)?;
         assert_eq!(results.len(), 1);
-        assert_eq!(results[0].content, "hola mundo rust");
+        assert_eq!(results[0].text, "hola mundo rust");
+        assert!(results[0].match_snippet.is_some());
 
         Ok(())
     }
