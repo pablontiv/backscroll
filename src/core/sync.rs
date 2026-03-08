@@ -1,10 +1,70 @@
-use crate::core::models::{ClaudeMessage, MessageContent};
-use crate::storage::sqlite::Database;
+use crate::core::models::{MessageContent, SessionRecord};
+use crate::core::{ParsedFile, ParsedMessage};
 use miette::IntoDiagnostic;
+use regex::Regex;
 use sha2::{Digest, Sha256};
+use std::collections::HashMap;
 use std::fs;
 use std::path::Path;
 use walkdir::WalkDir;
+
+#[derive(serde::Deserialize)]
+struct SessionIndexEntry {
+    #[serde(rename = "projectPath")]
+    project_path: Option<String>,
+}
+
+fn load_session_index(dir: &Path) -> HashMap<String, String> {
+    let mut map = HashMap::new();
+    let index_path = dir.join("sessions-index.json");
+    if let Ok(content) = fs::read_to_string(index_path) {
+        if let Ok(entries) = serde_json::from_str::<HashMap<String, SessionIndexEntry>>(&content) {
+            for (session_id, entry) in entries {
+                if let Some(p) = entry.project_path {
+                    if let Some(slug) = Path::new(&p).file_name() {
+                        map.insert(session_id, slug.to_string_lossy().to_string());
+                    }
+                }
+            }
+        }
+    }
+    map
+}
+
+pub fn filter_noise(text: &str) -> Option<String> {
+    if text.contains("Request interrupted") {
+        return None;
+    }
+
+    let mut result = text.to_string();
+
+    let tags_to_remove = [
+        r"<system-reminder>[\s\S]*?</system-reminder>",
+        r"<task-notification>[\s\S]*?</task-notification>",
+        r"<caveat>[\s\S]*?</caveat>",
+        r"<local-command-caveat>[\s\S]*?</local-command-caveat>",
+        // Command XML
+        r"<command>[\s\S]*?</command>",
+    ];
+
+    for tag in tags_to_remove {
+        if let Ok(re) = Regex::new(tag) {
+            result = re.replace_all(&result, "").to_string();
+        }
+    }
+
+    // "Base directory:" prefix lines — strip
+    if let Ok(re) = Regex::new(r"(?m)^Base directory:.*$") {
+        result = re.replace_all(&result, "").to_string();
+    }
+
+    let result = result.trim().to_string();
+    if result.is_empty() {
+        None
+    } else {
+        Some(result)
+    }
+}
 
 pub fn compute_hash(path: impl AsRef<Path>) -> miette::Result<String> {
     let data = fs::read(path).into_diagnostic()?;
@@ -13,7 +73,18 @@ pub fn compute_hash(path: impl AsRef<Path>) -> miette::Result<String> {
     Ok(hex::encode(hasher.finalize()))
 }
 
-pub fn sync_sessions(db: &Database, session_dir: &str) -> miette::Result<()> {
+#[tracing::instrument(skip(existing_hashes))]
+pub fn parse_sessions(
+    session_dir: &str,
+    existing_hashes: &HashMap<String, String>,
+    include_agents: bool,
+) -> miette::Result<Vec<ParsedFile>> {
+    let mut parsed_files = Vec::new();
+    let mut files_processed = 0;
+    let mut files_skipped = 0;
+
+    let index_map = load_session_index(Path::new(session_dir));
+
     for entry in WalkDir::new(session_dir)
         .into_iter()
         .filter_map(|e| e.ok())
@@ -25,32 +96,108 @@ pub fn sync_sessions(db: &Database, session_dir: &str) -> miette::Result<()> {
         })
     {
         let path_str = entry.path().to_string_lossy().to_string();
+
+        if !include_agents && path_str.contains("/subagents/") {
+            files_skipped += 1;
+            continue;
+        }
         let hash = compute_hash(entry.path())?;
 
-        if db.is_file_changed(&path_str, &hash)? {
+        let is_changed = existing_hashes.get(&path_str) != Some(&hash);
+
+        if is_changed {
+            files_processed += 1;
             let content = fs::read_to_string(entry.path()).into_diagnostic()?;
+            let mut messages = Vec::new();
 
-            for line in content.lines() {
-                if let Ok(msg) = serde_json::from_str::<ClaudeMessage>(line) {
-                    let text_content = match &msg.content {
-                        MessageContent::Text(t) => t.clone(),
-                        MessageContent::Blocks(blocks) => blocks
-                            .iter()
-                            .filter_map(|b| b.text.clone())
-                            .collect::<Vec<_>>()
-                            .join(" "),
-                    };
+            let mut file_uuid = None;
 
-                    if !text_content.is_empty() {
-                        db.index_message(&path_str, &msg.role, &text_content, None)?;
+            for (ordinal, line) in content.lines().enumerate() {
+                if let Ok(record) = serde_json::from_str::<SessionRecord>(line) {
+                    if file_uuid.is_none() && record.uuid.is_some() {
+                        file_uuid = record.uuid.clone();
+                    }
+
+                    if record.is_meta == Some(true) {
+                        continue;
+                    }
+
+                    if record.record_type != "user" && record.record_type != "assistant" {
+                        continue;
+                    }
+
+                    if let Some(msg) = record.message {
+                        let text_content = match &msg.content {
+                            MessageContent::Text(t) => t.clone(),
+                            MessageContent::Blocks(blocks) => blocks
+                                .iter()
+                                .filter(|b| {
+                                    b.block_type != "tool_use" && b.block_type != "tool_result"
+                                })
+                                .filter_map(|b| b.text.clone())
+                                .collect::<Vec<_>>()
+                                .join(" "),
+                        };
+
+                        let cleaned_text = filter_noise(&text_content);
+
+                        if let Some(text) = cleaned_text {
+                            if !text.is_empty() {
+                                messages.push(ParsedMessage {
+                                    role: msg.role,
+                                    text,
+                                    ordinal,
+                                    uuid: record.uuid,
+                                    timestamp: record.timestamp,
+                                });
+                            }
+                        }
+                    }
+                } else {
+                    tracing::warn!("Could not parse line {} in {}", ordinal, path_str);
+                }
+            }
+
+            let mut project = None;
+            if let Some(uuid) = file_uuid {
+                if let Some(p) = index_map.get(&uuid) {
+                    project = Some(p.clone());
+                }
+            }
+            if project.is_none() {
+                // Fallback: derive from path
+                // Look for a parent directory of the file, maybe up 2 levels if it's in `sessions`
+                if let Some(parent) = entry.path().parent() {
+                    if parent.ends_with("sessions") || parent.ends_with("subagents") {
+                        if let Some(proj_dir) = parent.parent() {
+                            if let Some(slug) = proj_dir.file_name() {
+                                project = Some(slug.to_string_lossy().to_string());
+                            }
+                        }
+                    } else if let Some(slug) = parent.file_name() {
+                        project = Some(slug.to_string_lossy().to_string());
                     }
                 }
             }
 
-            db.mark_file_indexed(&path_str, &hash)?;
+            let project_final = project.unwrap_or_else(|| "unknown".to_string());
+
+            parsed_files.push(ParsedFile {
+                source_path: path_str,
+                hash,
+                project: Some(project_final),
+                messages,
+            });
+        } else {
+            files_skipped += 1;
         }
     }
-    Ok(())
+    tracing::info!(
+        "Processed {} files, skipped {} files",
+        files_processed,
+        files_skipped
+    );
+    Ok(parsed_files)
 }
 
 #[cfg(test)]
@@ -60,22 +207,26 @@ mod tests {
 
     #[test]
     fn test_sync_workflow() -> miette::Result<()> {
-        let db = Database::open(":memory:")?;
-        db.setup_schema()?;
-
         let dir = tempdir().into_diagnostic()?;
         let file_path = dir.path().join("session.jsonl");
 
-        fs::write(&file_path, r#"{"role": "user", "content": "hola"}"#).into_diagnostic()?;
+        fs::write(
+            &file_path,
+            r#"{"type": "user", "message": {"role": "user", "content": "hola"}}"#,
+        )
+        .into_diagnostic()?;
 
-        sync_sessions(&db, dir.path().to_str().unwrap())?;
+        let mut existing_hashes = HashMap::new();
+        let files = parse_sessions(dir.path().to_str().unwrap(), &existing_hashes, false)?;
 
-        let results = db.search("hola", None)?;
-        assert_eq!(results.len(), 1);
+        assert_eq!(files.len(), 1);
+        assert_eq!(files[0].messages.len(), 1);
+        assert_eq!(files[0].messages[0].text, "hola");
 
-        sync_sessions(&db, dir.path().to_str().unwrap())?;
-        let results = db.search("hola", None)?;
-        assert_eq!(results.len(), 1);
+        // Simulate subsequent run
+        existing_hashes.insert(files[0].source_path.clone(), files[0].hash.clone());
+        let files2 = parse_sessions(dir.path().to_str().unwrap(), &existing_hashes, false)?;
+        assert_eq!(files2.len(), 0);
 
         Ok(())
     }
