@@ -30,36 +30,39 @@ Tests use `assert_cmd` + `predicates` for CLI integration and `insta` for snapsh
 
 ```
 main.rs (CLI: clap)
-├── config.rs          — Figment-based config (TOML files + env vars)
+├── config.rs          — Figment-based config (TOML files + env vars + discovery)
 ├── output.rs          — Formats output (Text, JSON, Robot) and limits tokens
 ├── core/
 │   ├── mod.rs         — SearchResult struct, SearchEngine trait (port)
 │   ├── models.rs      — SessionRecord wrapper, MessageContent untagged enum
+│   ├── plans.rs       — Markdown plan parser (split by ## headers)
 │   ├── reader.rs      — Direct reading of single filtered session files
 │   └── sync.rs        — WalkDir, hashing, parsing JSONL with noise filtering
 └── storage/
     └── sqlite.rs      — SQLite adapter (external FTS5, triggers, BM25)
 ```
 
-- `main.rs` — CLI entrypoint (clap `Parser`/`Subcommand`), command dispatch
-- `config.rs` — Figment-based config resolution (TOML files + env vars)
+- `main.rs` — CLI entrypoint (clap `Parser`/`Subcommand`), command dispatch, plan sync orchestration
+- `config.rs` — Figment-based config resolution (TOML files + env vars), multi-path session dirs, auto-discovery of `~/.claude/projects/`
 - `output.rs` — Output formatter (Text, JSON, Robot) with approximate token limiting
 - `core/mod.rs` — Domain types (`SearchResult`, `ParsedFile`, `Stats`) and `SearchEngine` trait (port)
 - `core/models.rs` — `SessionRecord` wrapper, `MessageContent` untagged enum for defensive parsing
+- `core/plans.rs` — Markdown plan parser: splits `~/.claude/plans/*.md` by `##` headers into indexable sections
 - `core/reader.rs` — Direct reading and filtering of individual session files
 - `core/sync.rs` — WalkDir traversal, SHA-256 hashing, JSONL parsing, noise filter regex (LazyLock)
-- `storage/sqlite.rs` — SQLite adapter (external FTS5, triggers, BM25 ranking, WAL mode)
+- `storage/sqlite.rs` — SQLite adapter (external FTS5, triggers, BM25 ranking, WAL mode, source-aware filtering)
 
-Four CLI commands: `sync [--path] [--include-agents]`, `search <query> [--project] [--json] [--robot] [--fields] [--max-tokens]`, `read <path>`, `status`.
+Five CLI commands: `sync [--path] [--include-agents] [--no-plans]`, `search <query> [--project] [--all-projects] [--json] [--robot] [--fields] [--max-tokens] [--source]`, `read <path>`, `resume <query> [--project] [--all-projects] [--robot] [--source]`, `status`.
 
 The `SearchEngine` trait is the port; `storage::sqlite` is the adapter. Database is opened lazily.
 
 ### Core Pipeline
 
 ```
-JSONL files → WalkDir → SHA-256 dedup → parse_sessions() → SQLite FTS5
-                                                                 │
-CLI query → SearchEngine::search() → BM25 ranking → format_results()
+JSONL files → WalkDir → SHA-256 dedup → parse_sessions() ─→ SQLite FTS5
+Markdown plans → discover_plan_files() → parse_plan() ────┘       │
+                                                                   │
+CLI query → SearchEngine::search(source?) → BM25 ranking → format_results()
 ```
 
 ### Key Design Decisions
@@ -68,6 +71,9 @@ CLI query → SearchEngine::search() → BM25 ranking → format_results()
 - **Noise filtering**: Excludes `system-reminder`, `task-notification`, and subagent sessions by default.
 - **External FTS5**: Uses `search_items` as content table with SQLite triggers and `snippet()` extraction.
 - **Incremental sync**: SHA-256 hash per file stored in `indexed_files` table; unchanged files are skipped.
+- **Plan indexing**: Markdown plans from `~/.claude/plans/` split by `##` headers, each section indexed as a separate search item with `source='plan'`.
+- **Source filtering**: `search_items.source` column distinguishes sessions from plans; `--source` flag filters at query time.
+- **Multi-path config**: `session_dirs: Vec<String>` with backward-compatible `session_dir` alias and auto-discovery of `~/.claude/projects/`.
 - **Bundled SQLite**: `rusqlite` with `bundled` feature — no system SQLite dependency.
 - **Rust edition 2024** with strict linting: clippy nursery + pedantic enabled, `-D warnings` in CI.
 
@@ -87,7 +93,7 @@ CLI query → SearchEngine::search() → BM25 ranking → format_results()
 ## Project Documentation
 
 - `docs/research/` — Structured research documents (hypothesize method): original feasibility study and Rust architecture pivot
-- `docs/epics/` — Roadmap decomposition (E01–E09): epics, features, stories, tasks with frontmatter metadata
+- `docs/epics/` — Roadmap decomposition (E01–E11): epics, features, stories, tasks with frontmatter metadata
 - Documentation is written in a mix of Spanish and English (field names like `estado`, `tipo`, `ejecutable_en` are in Spanish)
 
 ## Code Style
@@ -137,15 +143,16 @@ Version is managed via `cargo-edit` (`cargo set-version --bump`). Tags follow `v
 
 1. `./backscroll.toml` (current directory)
 2. `~/.config/backscroll/config.toml`
-3. Environment variables: `BACKSCROLL_DATABASE_PATH`, `BACKSCROLL_SESSION_DIR`
+3. Environment variables: `BACKSCROLL_DATABASE_PATH`, `BACKSCROLL_SESSION_DIRS`
 4. Defaults: `~/.backscroll.db`, current directory
 
 ## Crate Path
 
 ```
-backscroll::core       — Domain types and SearchEngine trait
-backscroll::core::sync — Session parsing and noise filtering
-backscroll::storage    — SQLite FTS5 adapter
-backscroll::config     — Figment configuration
-backscroll::output     — Output formatting
+backscroll::core        — Domain types and SearchEngine trait
+backscroll::core::sync  — Session parsing and noise filtering
+backscroll::core::plans — Markdown plan parsing
+backscroll::storage     — SQLite FTS5 adapter
+backscroll::config      — Figment configuration + auto-discovery
+backscroll::output      — Output formatting
 ```

@@ -38,6 +38,15 @@ while read local_ref local_sha remote_ref remote_sha; do
       exit 1
     fi
   fi
+
+  # Check if modules were added/removed in src/ — requires CLAUDE.md update
+  if git diff --diff-filter=AD --name-only "$range" -- 'src/**/*.rs' 2>/dev/null | grep -q .; then
+    if ! git diff --name-only "$range" -- CLAUDE.md 2>/dev/null | grep -q .; then
+      echo "Module added/removed in src/ but CLAUDE.md not updated."
+      echo "Update the Module Layout and Crate Path sections in CLAUDE.md."
+      exit 1
+    fi
+  fi
 done
 
 # Rebuild binary
