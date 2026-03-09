@@ -55,6 +55,45 @@ impl Config {
             .map_err(|e| miette::miette!("Error al cargar configuración: {}. Crea un 'backscroll.toml' o configura BACKSCROLL_DATABASE_PATH.", e))
     }
 
+    #[expect(dead_code, reason = "will be integrated in T055")]
+    pub fn discover_session_dirs() -> Vec<PathBuf> {
+        let home = std::env::var("HOME").unwrap_or_else(|_| ".".into());
+        let projects_dir = PathBuf::from(&home).join(".claude/projects");
+
+        if !projects_dir.is_dir() {
+            tracing::info!(
+                "No Claude projects directory found at {}",
+                projects_dir.display()
+            );
+            return Vec::new();
+        }
+
+        let dirs: Vec<PathBuf> = std::fs::read_dir(&projects_dir)
+            .into_iter()
+            .flatten()
+            .filter_map(|entry| entry.ok())
+            .map(|entry| entry.path())
+            .filter(|path| path.is_dir())
+            .collect();
+
+        if dirs.is_empty() {
+            tracing::info!(
+                "No session directories found under {}",
+                projects_dir.display()
+            );
+        } else {
+            tracing::info!(
+                "Discovered {} session directories: {:?}",
+                dirs.len(),
+                dirs.iter()
+                    .map(|d| d.display().to_string())
+                    .collect::<Vec<_>>()
+            );
+        }
+
+        dirs
+    }
+
     pub fn default_with_paths() -> Self {
         let mut db_path = PathBuf::from(std::env::var("HOME").unwrap_or_else(|_| ".".into()));
         db_path.push(".backscroll.db");
