@@ -45,6 +45,12 @@ pub fn filter_noise(text: &str) -> Option<String> {
         r"<local-command-caveat>[\s\S]*?</local-command-caveat>",
         // Command XML
         r"<command>[\s\S]*?</command>",
+        // Hook stdout blocks
+        r"<local-command-stdout>[\s\S]*?</local-command-stdout>",
+        // Command metadata tags
+        r"<command-name>[\s\S]*?</command-name>",
+        r"<command-message>[\s\S]*?</command-message>",
+        r"<command-args>[\s\S]*?</command-args>",
     ];
 
     for tag in tags_to_remove {
@@ -53,9 +59,13 @@ pub fn filter_noise(text: &str) -> Option<String> {
         }
     }
 
-    // "Base directory:" prefix lines — strip
-    if let Ok(re) = Regex::new(r"(?m)^Base directory:.*$") {
-        result = re.replace_all(&result, "").to_string();
+    // Line-level noise patterns
+    let lines_to_remove = [r"(?m)^Base directory:.*$", r"(?m)^Caveat:.*$"];
+
+    for pattern in lines_to_remove {
+        if let Ok(re) = Regex::new(pattern) {
+            result = re.replace_all(&result, "").to_string();
+        }
     }
 
     let result = result.trim().to_string();
