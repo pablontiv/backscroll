@@ -59,6 +59,9 @@ enum Commands {
         /// Máximo de tokens aproximados a mostrar
         #[arg(long)]
         max_tokens: Option<usize>,
+        /// Filtrar por fuente: sessions, plans, o all
+        #[arg(long, default_value = "all")]
+        source: String,
     },
     /// Leer una sesión individual filtrada
     Read {
@@ -78,6 +81,9 @@ enum Commands {
         /// Formato compacto tab-separated
         #[arg(long, default_value_t = false)]
         robot: bool,
+        /// Filtrar por fuente: sessions, plans, o all
+        #[arg(long, default_value = "all")]
+        source: String,
     },
     /// Mostrar estado del índice
     Status,
@@ -217,6 +223,7 @@ fn main() -> Result<()> {
             robot,
             fields,
             max_tokens,
+            source,
         } => {
             let engine = create_engine(&config)?;
 
@@ -251,7 +258,12 @@ fn main() -> Result<()> {
                 println!("Buscando: '{}'...", query);
             }
 
-            let results = engine.search(query, &effective_project)?;
+            let source_filter = if source == "all" {
+                None
+            } else {
+                Some(source.clone())
+            };
+            let results = engine.search(query, &effective_project, &source_filter)?;
             if results.is_empty() && !json && !robot {
                 println!("No se encontraron resultados.");
             } else {
@@ -285,6 +297,7 @@ fn main() -> Result<()> {
             project,
             all_projects,
             robot,
+            source,
         } => {
             let engine = create_engine(&config)?;
 
@@ -312,7 +325,12 @@ fn main() -> Result<()> {
                 })
             };
 
-            let results = engine.search(query, &effective_project)?;
+            let source_filter = if source == "all" {
+                None
+            } else {
+                Some(source.clone())
+            };
+            let results = engine.search(query, &effective_project, &source_filter)?;
             if let Some(result) = results.first() {
                 let session_id = engine
                     .get_session_id(&result.source_path)?

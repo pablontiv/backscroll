@@ -190,6 +190,74 @@ fn test_resume_robot_output() {
 }
 
 #[test]
+fn test_search_source_flag_cli() {
+    let session_dir = tempdir().unwrap();
+    let db_dir = tempdir().unwrap();
+    let db_path = db_dir.path().join("source_flag.db");
+    let session_file = session_dir.path().join("session.jsonl");
+
+    fs::write(
+        &session_file,
+        r#"{"type": "user", "message": {"role": "user", "content": "source filter test"}, "uuid": "sf1", "timestamp": "100"}"#,
+    )
+    .unwrap();
+
+    let fake_home = tempdir().unwrap();
+
+    // Sync (isolated HOME to prevent real plan discovery)
+    Command::cargo_bin("backscroll")
+        .unwrap()
+        .arg("sync")
+        .arg("--path")
+        .arg(session_dir.path().to_str().unwrap())
+        .arg("--no-plans")
+        .env("BACKSCROLL_DATABASE_PATH", db_path.to_str().unwrap())
+        .env(
+            "BACKSCROLL_SESSION_DIR",
+            session_dir.path().to_str().unwrap(),
+        )
+        .env("HOME", fake_home.path().to_str().unwrap())
+        .assert()
+        .success();
+
+    // Search with --source sessions should find it
+    Command::cargo_bin("backscroll")
+        .unwrap()
+        .arg("search")
+        .arg("source")
+        .arg("--source")
+        .arg("sessions")
+        .arg("--all-projects")
+        .env("BACKSCROLL_DATABASE_PATH", db_path.to_str().unwrap())
+        .env(
+            "BACKSCROLL_SESSION_DIR",
+            session_dir.path().to_str().unwrap(),
+        )
+        .env("HOME", fake_home.path().to_str().unwrap())
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("filter"));
+
+    // Search with --source plans should NOT find session data
+    Command::cargo_bin("backscroll")
+        .unwrap()
+        .arg("search")
+        .arg("source")
+        .arg("--source")
+        .arg("plans")
+        .arg("--all-projects")
+        .env("BACKSCROLL_DATABASE_PATH", db_path.to_str().unwrap())
+        .env(
+            "BACKSCROLL_SESSION_DIR",
+            session_dir.path().to_str().unwrap(),
+        )
+        .env("HOME", fake_home.path().to_str().unwrap())
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("No se encontraron resultados"));
+}
+
+#[test]
 fn test_sync_no_plans_flag() {
     let session_dir = tempdir().unwrap();
     let db_dir = tempdir().unwrap();

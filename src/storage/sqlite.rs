@@ -207,34 +207,53 @@ impl SearchEngine for Database {
         &self,
         query_str: &str,
         project: &Option<String>,
+        source: &Option<String>,
     ) -> miette::Result<Vec<SearchResult>> {
         let mut results = Vec::new();
         let snippet_expr = "snippet(messages_fts, 0, '>>>', '<<<', '...', 32)";
 
+        let source_filter = match source.as_deref() {
+            Some("sessions") => Some("session"),
+            Some("plans") => Some("plan"),
+            _ => None, // "all" or None
+        };
+
+        let base = format!(
+            "SELECT si.source_path, si.text, m.rank as score, {} as snippet FROM messages_fts m JOIN search_items si ON m.rowid = si.id WHERE messages_fts MATCH ?",
+            snippet_expr
+        );
+
+        let mut conditions = Vec::new();
+        let mut param_values: Vec<Box<dyn rusqlite::types::ToSql>> = Vec::new();
+        param_values.push(Box::new(query_str.to_string()));
+
         if let Some(p) = project {
-            let sql = format!(
-                "SELECT si.source_path, si.text, m.rank as score, {} as snippet FROM messages_fts m JOIN search_items si ON m.rowid = si.id WHERE messages_fts MATCH ? AND si.project = ? ORDER BY rank LIMIT 20",
-                snippet_expr
-            );
-            let mut stmt = self.conn.prepare(&sql).into_diagnostic()?;
-            let rows = stmt
-                .query_map(params![query_str, p], Database::map_search_row)
-                .into_diagnostic()?;
-            for row in rows {
-                results.push(row.into_diagnostic()?);
-            }
+            conditions.push("si.project = ?");
+            param_values.push(Box::new(p.clone()));
+        }
+        if let Some(s) = source_filter {
+            conditions.push("si.source = ?");
+            param_values.push(Box::new(s.to_string()));
+        }
+
+        let sql = if conditions.is_empty() {
+            format!("{} ORDER BY rank LIMIT 20", base)
         } else {
-            let sql = format!(
-                "SELECT si.source_path, si.text, m.rank as score, {} as snippet FROM messages_fts m JOIN search_items si ON m.rowid = si.id WHERE messages_fts MATCH ? ORDER BY rank LIMIT 20",
-                snippet_expr
-            );
-            let mut stmt = self.conn.prepare(&sql).into_diagnostic()?;
-            let rows = stmt
-                .query_map(params![query_str], Database::map_search_row)
-                .into_diagnostic()?;
-            for row in rows {
-                results.push(row.into_diagnostic()?);
-            }
+            format!(
+                "{} AND {} ORDER BY rank LIMIT 20",
+                base,
+                conditions.join(" AND ")
+            )
+        };
+
+        let params: Vec<&dyn rusqlite::types::ToSql> =
+            param_values.iter().map(|p| p.as_ref()).collect();
+        let mut stmt = self.conn.prepare(&sql).into_diagnostic()?;
+        let rows = stmt
+            .query_map(params.as_slice(), Database::map_search_row)
+            .into_diagnostic()?;
+        for row in rows {
+            results.push(row.into_diagnostic()?);
         }
 
         Ok(results)
@@ -365,7 +384,7 @@ mod tests {
         let hashes = db.get_file_hashes()?;
         assert_eq!(hashes.get(path).unwrap(), hash);
 
-        let results = db.search("hola", &None)?;
+        let results = db.search("hola", &None, &None)?;
         assert_eq!(results.len(), 1);
         assert_eq!(results[0].text, "hola mundo rust");
         assert!(results[0].match_snippet.is_some());
@@ -529,6 +548,125 @@ mod tests {
         let hashes = db.get_file_hashes()?;
         assert_eq!(hashes.get("/plans/inc.md").unwrap(), "phash1");
         // Second sync with same hash would be skipped by caller
+        Ok(())
+    }
+
+    #[test]
+    fn test_search_source_filter_plans_only() -> miette::Result<()> {
+        let db = Database::open(":memory:")?;
+        db.setup_schema()?;
+
+        db.sync_files(vec![
+            ParsedFile {
+                source: "session".into(),
+                source_path: "/s/s1.jsonl".into(),
+                hash: "s1".into(),
+                project: None,
+                messages: vec![ParsedMessage {
+                    role: "user".into(),
+                    text: "deploy application".into(),
+                    ordinal: 0,
+                    uuid: None,
+                    timestamp: None,
+                }],
+            },
+            ParsedFile {
+                source: "plan".into(),
+                source_path: "/p/p1.md".into(),
+                hash: "p1".into(),
+                project: None,
+                messages: vec![ParsedMessage {
+                    role: "plan".into(),
+                    text: "deploy strategy plan".into(),
+                    ordinal: 0,
+                    uuid: None,
+                    timestamp: None,
+                }],
+            },
+        ])?;
+
+        let plans = db.search("deploy", &None, &Some("plans".into()))?;
+        assert_eq!(plans.len(), 1);
+        assert_eq!(plans[0].source_path, "/p/p1.md");
+        Ok(())
+    }
+
+    #[test]
+    fn test_search_source_filter_sessions_only() -> miette::Result<()> {
+        let db = Database::open(":memory:")?;
+        db.setup_schema()?;
+
+        db.sync_files(vec![
+            ParsedFile {
+                source: "session".into(),
+                source_path: "/s/s2.jsonl".into(),
+                hash: "s2".into(),
+                project: None,
+                messages: vec![ParsedMessage {
+                    role: "user".into(),
+                    text: "configure server".into(),
+                    ordinal: 0,
+                    uuid: None,
+                    timestamp: None,
+                }],
+            },
+            ParsedFile {
+                source: "plan".into(),
+                source_path: "/p/p2.md".into(),
+                hash: "p2".into(),
+                project: None,
+                messages: vec![ParsedMessage {
+                    role: "plan".into(),
+                    text: "configure infrastructure plan".into(),
+                    ordinal: 0,
+                    uuid: None,
+                    timestamp: None,
+                }],
+            },
+        ])?;
+
+        let sessions = db.search("configure", &None, &Some("sessions".into()))?;
+        assert_eq!(sessions.len(), 1);
+        assert_eq!(sessions[0].source_path, "/s/s2.jsonl");
+        Ok(())
+    }
+
+    #[test]
+    fn test_search_source_filter_all() -> miette::Result<()> {
+        let db = Database::open(":memory:")?;
+        db.setup_schema()?;
+
+        db.sync_files(vec![
+            ParsedFile {
+                source: "session".into(),
+                source_path: "/s/s3.jsonl".into(),
+                hash: "s3".into(),
+                project: None,
+                messages: vec![ParsedMessage {
+                    role: "user".into(),
+                    text: "testing filter both".into(),
+                    ordinal: 0,
+                    uuid: None,
+                    timestamp: None,
+                }],
+            },
+            ParsedFile {
+                source: "plan".into(),
+                source_path: "/p/p3.md".into(),
+                hash: "p3".into(),
+                project: None,
+                messages: vec![ParsedMessage {
+                    role: "plan".into(),
+                    text: "testing filter both plan".into(),
+                    ordinal: 0,
+                    uuid: None,
+                    timestamp: None,
+                }],
+            },
+        ])?;
+
+        let all = db.search("testing", &None, &None)?;
+        assert_eq!(all.len(), 2);
         Ok(())
     }
 
