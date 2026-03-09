@@ -81,6 +81,17 @@ fn create_engine(config: &Config) -> Result<Box<dyn SearchEngine>> {
     Ok(Box::new(db))
 }
 
+fn extract_session_id(source_path: &str) -> String {
+    // Extract UUID-like session ID from path like:
+    // ~/.claude/projects/-opt-foo/04df2262-a48e-4549-97a9-11bcf4bb0257/session.jsonl
+    std::path::Path::new(source_path)
+        .components()
+        .filter_map(|c| c.as_os_str().to_str())
+        .find(|s| s.len() >= 32 && s.contains('-'))
+        .unwrap_or(source_path)
+        .to_string()
+}
+
 fn resolve_session_paths(cli_paths: &[String], config: &Config) -> Result<Vec<String>> {
     // 1. CLI --path overrides everything
     if !cli_paths.is_empty() {
@@ -226,17 +237,19 @@ fn main() -> Result<()> {
 
             let results = engine.search(query, &effective_project)?;
             if let Some(result) = results.first() {
+                let session_id = extract_session_id(&result.source_path);
                 if *robot {
-                    println!("{}", result.source_path);
+                    println!("{}\t{}", session_id, result.source_path);
                 } else {
                     println!("Session: {}", result.source_path);
-                    println!("Score: {:.2}", result.score);
+                    println!("ID: {}", session_id);
                     if let Some(snippet) = &result.match_snippet {
                         println!("Match: {}", snippet);
                     }
                 }
             } else {
-                println!("No matching session found.");
+                eprintln!("No matching session found.");
+                std::process::exit(1);
             }
         }
         Commands::Status => {
