@@ -1,3 +1,5 @@
+#![forbid(unsafe_code)]
+
 mod config;
 mod core;
 mod output;
@@ -23,9 +25,9 @@ struct Cli {
 enum Commands {
     /// Sincronizar sesiones de Claude Code
     Sync {
-        /// Directorio de entrada de las sesiones
+        /// Directorios de entrada de las sesiones (repetir para múltiples)
         #[arg(short, long)]
-        path: Option<String>,
+        path: Vec<String>,
         /// Incluir sesiones de subagentes (ignora la exclusión por defecto de /subagents/)
         #[arg(long, default_value_t = false)]
         include_agents: bool,
@@ -85,13 +87,18 @@ fn main() -> Result<()> {
             path,
             include_agents,
         } => {
-            let session_path = path.as_deref().unwrap_or(&config.session_dirs[0]);
-            println!("Sincronizando sesiones desde: {}", session_path);
-
+            let paths = if path.is_empty() {
+                &config.session_dirs
+            } else {
+                path
+            };
             let engine = create_engine(&config)?;
-            let hashes = engine.get_file_hashes()?;
-            let files = parse_sessions(session_path, &hashes, *include_agents)?;
-            engine.sync_files(files)?;
+            for p in paths {
+                println!("Sincronizando sesiones desde: {}", p);
+                let hashes = engine.get_file_hashes()?;
+                let files = parse_sessions(p, &hashes, *include_agents)?;
+                engine.sync_files(files)?;
+            }
         }
         Commands::Search {
             query,
@@ -105,10 +112,12 @@ fn main() -> Result<()> {
             let engine = create_engine(&config)?;
 
             // Auto-sync: indexar sesiones nuevas antes de buscar (incremental, rápido)
-            let hashes = engine.get_file_hashes()?;
-            let files = parse_sessions(&config.session_dirs[0], &hashes, false)?;
-            if !files.is_empty() {
-                engine.sync_files(files)?;
+            for p in &config.session_dirs {
+                let hashes = engine.get_file_hashes()?;
+                let files = parse_sessions(p, &hashes, false)?;
+                if !files.is_empty() {
+                    engine.sync_files(files)?;
+                }
             }
 
             // Proyecto: --all-projects → None, --project → explícito, default → CWD
@@ -163,10 +172,12 @@ fn main() -> Result<()> {
 
             if let Ok(engine) = create_engine(&config) {
                 // Auto-sync antes de mostrar stats
-                if let Ok(hashes) = engine.get_file_hashes() {
-                    if let Ok(files) = parse_sessions(&config.session_dirs[0], &hashes, false) {
-                        if !files.is_empty() {
-                            let _ = engine.sync_files(files);
+                for p in &config.session_dirs {
+                    if let Ok(hashes) = engine.get_file_hashes() {
+                        if let Ok(files) = parse_sessions(p, &hashes, false) {
+                            if !files.is_empty() {
+                                let _ = engine.sync_files(files);
+                            }
                         }
                     }
                 }
