@@ -16,11 +16,12 @@ Backscroll treats your local AI sessions as an event store: it incrementally syn
 
 - [Installation](#installation)
 - [Quick Start](#quick-start)
-- [CLI](#cli)
 - [Core Idea](#core-idea)
+- [CLI](#cli)
+- [AI-Native](#ai-native)
 - [Configuration](#configuration)
-- [Development](#development)
 - [Documentation](#documentation)
+- [Development](#development)
 - [License](#license)
 
 ---
@@ -46,82 +47,19 @@ cargo build --release
 ## Quick Start
 
 ```bash
-# 1. Sync — parse and incrementally index new sessions (excludes subagents by default)
+# 1. Sync — index your Claude Code sessions
 backscroll sync --path ~/.claude/sessions
-backscroll sync --path ~/.claude/sessions --include-agents # Include subagent sessions
 
-# 2. Search — find specific context with BM25 ranking and highlighted snippets
+# 2. Search — full-text search with BM25 ranking
 backscroll search "mejoras sistema tipos"
 
-# 3. Search by project — limit results to a specific project
+# 3. Search by project — filter to a specific project
 backscroll search "FTS5 schema" --project "backscroll"
 
-# 4. Read — view a specific session file directly, with noise filtering applied
+# 4. Read — view a single session with noise stripped
 backscroll read ~/.claude/projects/abcd/sessions/session.jsonl
 
-# 5. LLM Integration — output as JSON or compact robot format
-backscroll search "arch" --json | jq .
-backscroll search "arch" --robot --max-tokens 2000
-
-# 6. Status — view index health, file counts, and database size
-backscroll status
-```
-
----
-
-## CLI
-
-Backscroll ships as a **single static Rust binary** with no dependencies.
-
-```bash
-backscroll sync [--path <DIR>] [--include-agents]     # Index JSONL session files
-backscroll search <QUERY> [OPTIONS]                    # Full-text search with BM25 ranking
-backscroll read <PATH>                                 # Read a single session with noise filtering
-backscroll status                                      # Show index health and database metrics
-```
-
-### sync
-
-Incrementally indexes JSONL session files. Computes SHA-256 hashes to skip already indexed files. Subagent sessions are excluded by default.
-
-```bash
-backscroll sync --path ~/.claude/sessions
-backscroll sync --path ~/.claude/sessions --include-agents
-```
-
-### search
-
-Full-text search with BM25 ranking and FTS5 snippet extraction.
-
-```bash
-backscroll search "query terms"
-backscroll search "FTS5 schema" --project "backscroll"   # Filter by project
-backscroll search "arch" --json                          # JSON lines output
-backscroll search "arch" --robot --max-tokens 2000       # Compact format with token limit
-backscroll search "arch" --fields full                   # All fields (default: minimal)
-```
-
-| Flag | Description |
-|------|-------------|
-| `--project <NAME>` | Filter results to a specific project |
-| `--json` | Output as JSON lines |
-| `--robot` | Output as compact tab-separated format |
-| `--fields minimal\|full` | Field set to include (default: `minimal`) |
-| `--max-tokens <N>` | Approximate token limit for output |
-
-### read
-
-Reads a single session JSONL file directly, with noise filtering applied (strips system-reminders and task-notifications).
-
-```bash
-backscroll read ~/.claude/projects/abcd/sessions/session.jsonl
-```
-
-### status
-
-Shows index health: files indexed, message count, projects, database size, and last sync time.
-
-```bash
+# 5. Status — check index health
 backscroll status
 ```
 
@@ -137,6 +75,84 @@ Claude Code produces valuable reasoning logs, but they are scattered across JSON
 - **Concurrent Persistence**: Uses SQLite WAL mode to allow multiple readers and writers without daemon overhead.
 
 Backscroll does not modify your logs. It **indexes** them.
+
+---
+
+## CLI
+
+```bash
+# Indexing
+backscroll sync [--path <DIR>] [--include-agents]     # Index session files into SQLite
+backscroll status                                      # Show index health and metrics
+
+# Retrieval
+backscroll search <QUERY> [--project] [--json|--robot] [--fields] [--max-tokens]
+backscroll read <PATH>                                 # Read a single session file
+```
+
+### Noise Filtering
+
+Raw Claude Code sessions contain system-reminders, task-notifications, local command output, and other machine-generated noise that buries the actual conversation. Backscroll strips all of this automatically — both during `sync` (indexing) and `read` (direct viewing).
+
+Filtered patterns include:
+
+- `<system-reminder>` blocks — context injected by the system, not user conversation
+- `<task-notification>` blocks — background task status updates
+- `<caveat>`, `<local-command-stdout>`, `<command-name>` blocks — local command metadata
+- `Request interrupted` messages — partial responses with no value
+- Subagent sessions (`/subagents/` paths) — excluded by default, include with `--include-agents`
+
+The result is a clean corpus of human ↔ assistant dialogue, ready for search and analysis.
+
+### Incremental Sync
+
+Backscroll computes a SHA-256 hash for each session file and stores it alongside the index. On subsequent syncs, only files whose hash has changed are re-processed. This makes repeated syncs fast — even over thousands of session files.
+
+```bash
+backscroll sync --path ~/.claude/sessions              # First run: indexes everything
+backscroll sync --path ~/.claude/sessions              # Second run: skips unchanged files
+backscroll sync --path ~/.claude/sessions --include-agents  # Include subagent sessions
+```
+
+Project assignment is resolved automatically: first from Claude's `sessions-index.json`, then from the directory structure as fallback.
+
+### Output Formats
+
+Search results can be consumed in three formats, depending on whether the reader is a human, a script, or an LLM:
+
+```bash
+# Human-readable (default) — terminal bold for match highlights
+backscroll search "query terms"
+
+# JSON lines — one JSON object per result, for pipelines and scripting
+backscroll search "query terms" --json
+
+# Robot — compact tab-separated format, designed for LLM consumption
+backscroll search "query terms" --robot --max-tokens 2000
+```
+
+The `--fields` flag controls field density (`minimal` or `full`), and `--max-tokens` caps output by approximate token count — useful when piping into context-limited tools.
+
+---
+
+## AI-Native
+
+Backscroll is designed as a **retrieval layer for AI assistants**. The `--robot` and `--json` output formats produce stable, compact results suitable for tool use and automation.
+
+Use `--max-tokens` to fit results within a context window:
+
+```bash
+# Feed search results into an LLM pipeline
+backscroll search "architecture decisions" --robot --max-tokens 4000
+
+# Structured output for programmatic consumption
+backscroll search "migration plan" --json --fields full | jq '.snippet'
+
+# Project-scoped retrieval
+backscroll search "error handling" --project "backscroll" --robot
+```
+
+All output is deterministic and machine-parseable. No ANSI escape codes in `--json` or `--robot` modes.
 
 ---
 
@@ -159,9 +175,16 @@ export BACKSCROLL_SESSION_DIR="/path/to/sessions"
 
 ---
 
-## Development
+## Documentation
 
-Backscroll uses `just` as its command runner to automate quality gates and builds.
+| Topic | Description |
+|-------|-------------|
+| [Session Search Research](docs/research/backscroll-session-search-cli.md) | Feasibility study: axioms, evidence tables, capabilities matrix |
+| [Rust Architecture](docs/research/backscroll-rust-architecture-2026.md) | Stack decision: why Rust over Go, risk resolution, design patterns |
+
+---
+
+## Development
 
 ```bash
 just check              # Run rustfmt and clippy
@@ -172,19 +195,6 @@ just static-build       # Build statically linked Linux binary using Zig
 ```
 
 Commits follow [Conventional Commits](https://www.conventionalcommits.org/) (`type(scope): description`).
-
----
-
-## Documentation
-
-| Topic | Description |
-|-------|-------------|
-| [Session Search CLI Research](docs/research/backscroll-session-search-cli.md) | Original feasibility study and structured investigation |
-| [Rust Architecture 2026](docs/research/backscroll-rust-architecture-2026.md) | Architecture pivot from Go to Rust with risk analysis |
-| [E06: Robustez Motor](docs/epics/E06-robustez-motor/) | Parser hardening, ports & adapters refactor |
-| [E07: Calidad Corpus](docs/epics/E07-calidad-corpus/) | Noise filtering, subagent exclusion, project detection |
-| [E08: Output LLM-Native](docs/epics/E08-output-llm-native/) | Search enrichment, output formatting, read command |
-| [E09: Hardening Post-Validacion](docs/epics/E09-hardening-post-validacion/) | Regex optimization, error handling cleanup |
 
 ---
 
