@@ -6,7 +6,32 @@ use sha2::{Digest, Sha256};
 use std::collections::HashMap;
 use std::fs;
 use std::path::Path;
+use std::sync::LazyLock;
 use walkdir::WalkDir;
+
+static NOISE_TAG_PATTERNS: LazyLock<Vec<Regex>> = LazyLock::new(|| {
+    [
+        r"<system-reminder>[\s\S]*?</system-reminder>",
+        r"<task-notification>[\s\S]*?</task-notification>",
+        r"<caveat>[\s\S]*?</caveat>",
+        r"<local-command-caveat>[\s\S]*?</local-command-caveat>",
+        r"<command>[\s\S]*?</command>",
+        r"<local-command-stdout>[\s\S]*?</local-command-stdout>",
+        r"<command-name>[\s\S]*?</command-name>",
+        r"<command-message>[\s\S]*?</command-message>",
+        r"<command-args>[\s\S]*?</command-args>",
+    ]
+    .iter()
+    .map(|p| Regex::new(p).expect("invalid noise tag pattern"))
+    .collect()
+});
+
+static NOISE_LINE_PATTERNS: LazyLock<Vec<Regex>> = LazyLock::new(|| {
+    [r"(?m)^Base directory:.*$", r"(?m)^Caveat:.*$"]
+        .iter()
+        .map(|p| Regex::new(p).expect("invalid noise line pattern"))
+        .collect()
+});
 
 #[derive(serde::Deserialize)]
 struct SessionIndexEntry {
@@ -38,34 +63,12 @@ pub fn filter_noise(text: &str) -> Option<String> {
 
     let mut result = text.to_string();
 
-    let tags_to_remove = [
-        r"<system-reminder>[\s\S]*?</system-reminder>",
-        r"<task-notification>[\s\S]*?</task-notification>",
-        r"<caveat>[\s\S]*?</caveat>",
-        r"<local-command-caveat>[\s\S]*?</local-command-caveat>",
-        // Command XML
-        r"<command>[\s\S]*?</command>",
-        // Hook stdout blocks
-        r"<local-command-stdout>[\s\S]*?</local-command-stdout>",
-        // Command metadata tags
-        r"<command-name>[\s\S]*?</command-name>",
-        r"<command-message>[\s\S]*?</command-message>",
-        r"<command-args>[\s\S]*?</command-args>",
-    ];
-
-    for tag in tags_to_remove {
-        if let Ok(re) = Regex::new(tag) {
-            result = re.replace_all(&result, "").to_string();
-        }
+    for re in &*NOISE_TAG_PATTERNS {
+        result = re.replace_all(&result, "").to_string();
     }
 
-    // Line-level noise patterns
-    let lines_to_remove = [r"(?m)^Base directory:.*$", r"(?m)^Caveat:.*$"];
-
-    for pattern in lines_to_remove {
-        if let Ok(re) = Regex::new(pattern) {
-            result = re.replace_all(&result, "").to_string();
-        }
+    for re in &*NOISE_LINE_PATTERNS {
+        result = re.replace_all(&result, "").to_string();
     }
 
     let result = result.trim().to_string();
