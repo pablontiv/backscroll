@@ -370,4 +370,62 @@ mod tests {
 
         Ok(())
     }
+
+    #[test]
+    fn test_get_session_id_with_uuid() -> miette::Result<()> {
+        let db = Database::open(":memory:")?;
+        db.setup_schema()?;
+
+        let file = ParsedFile {
+            source_path: "/sessions/session.jsonl".to_string(),
+            hash: "h1".to_string(),
+            project: None,
+            messages: vec![ParsedMessage {
+                role: "user".to_string(),
+                text: "hello".to_string(),
+                ordinal: 0,
+                uuid: Some("04df2262-a48e-4549-97a9-11bcf4bb0257".to_string()),
+                timestamp: None,
+            }],
+        };
+        db.sync_files(vec![file])?;
+
+        let id = db.get_session_id("/sessions/session.jsonl")?;
+        assert_eq!(id, Some("04df2262-a48e-4549-97a9-11bcf4bb0257".to_string()));
+        Ok(())
+    }
+
+    #[test]
+    fn test_get_session_id_fallback_to_stem() -> miette::Result<()> {
+        let db = Database::open(":memory:")?;
+        db.setup_schema()?;
+
+        let file = ParsedFile {
+            source_path: "/sessions/my-session.jsonl".to_string(),
+            hash: "h2".to_string(),
+            project: None,
+            messages: vec![ParsedMessage {
+                role: "user".to_string(),
+                text: "no uuid here".to_string(),
+                ordinal: 0,
+                uuid: None,
+                timestamp: None,
+            }],
+        };
+        db.sync_files(vec![file])?;
+
+        let id = db.get_session_id("/sessions/my-session.jsonl")?;
+        assert_eq!(id, Some("my-session".to_string()));
+        Ok(())
+    }
+
+    #[test]
+    fn test_get_session_id_nonexistent_path() -> miette::Result<()> {
+        let db = Database::open(":memory:")?;
+        db.setup_schema()?;
+
+        let id = db.get_session_id("/does/not/exist.jsonl")?;
+        assert_eq!(id, Some("exist".to_string()));
+        Ok(())
+    }
 }
