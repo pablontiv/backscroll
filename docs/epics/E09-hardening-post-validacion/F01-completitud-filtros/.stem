@@ -1,0 +1,6 @@
+version: 2
+schema:
+  id:
+    type: sequence
+    match:
+      "S*": {prefix: S, digits: 3}
