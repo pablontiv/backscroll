@@ -85,28 +85,18 @@ Claude Code stores each conversation as a JSONL file — one JSON record per lin
 
 Backscroll reads these files and extracts the **conversation**: user and assistant messages only. Everything else — tool calls, system-reminders, task-notifications, local command output — is stripped as noise.
 
-### What gets indexed
+### Incremental sync
 
-Each message is stored with its session path, role (user/assistant), timestamp, ordinal position, and project name. The project is resolved automatically from Claude's `sessions-index.json` or inferred from the directory structure.
-
-### How sync works
-
-Backscroll computes a SHA-256 hash for each session file. On the first sync, all files are indexed. On subsequent syncs, only files whose content has changed are re-processed. This means syncing thousands of sessions takes seconds after the initial run.
+Backscroll computes a SHA-256 hash for each session file. On subsequent syncs, only files whose content has changed are re-processed — syncing thousands of sessions takes seconds after the initial run.
 
 ```bash
 backscroll sync --path ~/.claude/sessions              # Index all sessions
 backscroll sync --path ~/.claude/sessions --include-agents  # Include subagent sessions
 ```
 
-Subagent sessions (nested conversations spawned by Claude) are excluded by default to keep the index focused on primary conversations. Use `--include-agents` to include them.
+Subagent sessions are excluded by default. Project assignment is resolved automatically from Claude's `sessions-index.json` or inferred from the directory structure.
 
-### How search works
-
-Search queries are matched against the full text of indexed messages using BM25 relevance ranking. Results include highlighted snippets showing where the query matched, the session file path, and a relevance score.
-
-```bash
-backscroll search "architecture decisions" --project "myproject"
-```
+See [Sync & Indexing docs](docs/sync.md) for the full list of noise patterns, project detection logic, and subagent handling.
 
 ---
 
@@ -137,15 +127,11 @@ backscroll search "query terms" --json
 backscroll search "query terms" --robot --max-tokens 2000
 ```
 
-The `--fields` flag controls field density (`minimal` or `full`), and `--max-tokens` caps output by approximate token count — useful when piping into context-limited tools.
+The `--fields` flag controls field density (`minimal` or `full`), and `--max-tokens` caps output by approximate token count. See [Search docs](docs/search.md) for output shapes and flag reference.
 
 ### Read
 
-`backscroll read` displays a single session file with all noise stripped, showing only the human ↔ assistant dialogue:
-
-```bash
-backscroll read ~/.claude/projects/abcd/sessions/session.jsonl
-```
+`backscroll read` displays a single session file with all noise stripped, showing only the human ↔ assistant dialogue. See [Read docs](docs/read.md).
 
 ### Status
 
@@ -192,12 +178,18 @@ export BACKSCROLL_DATABASE_PATH="/tmp/custom.db"
 export BACKSCROLL_SESSION_DIR="/path/to/sessions"
 ```
 
+See [Configuration docs](docs/configuration.md) for the full resolution order and all options.
+
 ---
 
 ## Documentation
 
 | Topic | Description |
 |-------|-------------|
+| [Sync & Indexing](docs/sync.md) | Incremental sync, noise filtering, project detection |
+| [Search Engine](docs/search.md) | BM25 ranking, output formats, token limiting |
+| [Read](docs/read.md) | Direct session reading with noise filtering |
+| [Configuration](docs/configuration.md) | Config resolution, TOML format, environment variables |
 | [Session Search Research](docs/research/backscroll-session-search-cli.md) | Feasibility study: axioms, evidence tables, capabilities matrix |
 | [Rust Architecture](docs/research/backscroll-rust-architecture-2026.md) | Stack decision: why Rust over Go, risk resolution, design patterns |
 
