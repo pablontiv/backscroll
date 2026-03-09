@@ -1,6 +1,10 @@
 /target
 /zig-linux-x86_64-0.13.0
-backscroll.db
 lcov.info
 session_test.json
 **/*.snap.new
+
+# Runtime databases
+*.db
+*.db-shm
+*.db-wal
