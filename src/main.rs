@@ -60,6 +60,17 @@ enum Commands {
         /// Ruta al archivo JSONL de la sesión
         path: std::path::PathBuf,
     },
+    /// Buscar y retornar la sesión más reciente para --resume
+    Resume {
+        /// Consulta de búsqueda
+        query: String,
+        /// Filtrar por proyecto
+        #[arg(short, long)]
+        project: Option<String>,
+        /// Formato compacto tab-separated
+        #[arg(long, default_value_t = false)]
+        robot: bool,
+    },
     /// Mostrar estado del índice
     Status,
 }
@@ -187,6 +198,45 @@ fn main() -> Result<()> {
                 println!("[{}]", msg.role);
                 println!("{}", msg.text);
                 println!();
+            }
+        }
+        Commands::Resume {
+            query,
+            project,
+            robot,
+        } => {
+            let engine = create_engine(&config)?;
+
+            // Auto-sync before resume search
+            if let Ok(paths) = resolve_session_paths(&[], &config) {
+                for p in &paths {
+                    let hashes = engine.get_file_hashes()?;
+                    let files = parse_sessions(p, &hashes, false)?;
+                    if !files.is_empty() {
+                        engine.sync_files(files)?;
+                    }
+                }
+            }
+
+            let effective_project = project.clone().or_else(|| {
+                std::env::current_dir()
+                    .ok()
+                    .map(|p| p.to_string_lossy().replace('/', "-"))
+            });
+
+            let results = engine.search(query, &effective_project)?;
+            if let Some(result) = results.first() {
+                if *robot {
+                    println!("{}", result.source_path);
+                } else {
+                    println!("Session: {}", result.source_path);
+                    println!("Score: {:.2}", result.score);
+                    if let Some(snippet) = &result.match_snippet {
+                        println!("Match: {}", snippet);
+                    }
+                }
+            } else {
+                println!("No matching session found.");
             }
         }
         Commands::Status => {
