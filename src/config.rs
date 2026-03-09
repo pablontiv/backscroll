@@ -55,7 +55,6 @@ impl Config {
             .map_err(|e| miette::miette!("Error al cargar configuración: {}. Crea un 'backscroll.toml' o configura BACKSCROLL_DATABASE_PATH.", e))
     }
 
-    #[expect(dead_code, reason = "will be integrated in T055")]
     pub fn discover_session_dirs() -> Vec<PathBuf> {
         let home = std::env::var("HOME").unwrap_or_else(|_| ".".into());
         let projects_dir = PathBuf::from(&home).join(".claude/projects");
