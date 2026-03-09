@@ -44,6 +44,15 @@ audit:
 
 # --- Versioning & Release ---
 
+# Sync Cargo.toml version with latest git tag
+sync-version:
+    #!/usr/bin/env bash
+    LATEST=$(git describe --tags --abbrev=0 2>/dev/null | sed 's/^v//')
+    if [ -n "$LATEST" ]; then
+      source $HOME/.cargo/env && cargo set-version "$LATEST"
+      echo "Synced Cargo.toml to $LATEST"
+    fi
+
 # Increment version (minor)
 bump-minor:
     source $HOME/.cargo/env && \
@@ -56,6 +65,7 @@ bump-patch:
 
 # Create a new release (minor)
 release-minor: check test
+    just sync-version
     just bump-minor
     git add Cargo.toml Cargo.lock
     VERSION=$(grep "^version =" Cargo.toml | cut -d '"' -f 2); \
@@ -65,6 +75,7 @@ release-minor: check test
 
 # Create a new release (patch)
 release-patch: check test
+    just sync-version
     just bump-patch
     git add Cargo.toml Cargo.lock
     VERSION=$(grep "^version =" Cargo.toml | cut -d '"' -f 2); \
