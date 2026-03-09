@@ -92,4 +92,49 @@ mod tests {
         fs::remove_file("backscroll.toml").unwrap();
         Ok(())
     }
+
+    #[test]
+    fn test_config_session_dirs_array() {
+        let toml_content = r#"
+            database_path = "test.db"
+            session_dirs = ["/a", "/b"]
+        "#;
+        let config: Config = Figment::new()
+            .merge(Toml::string(toml_content))
+            .extract()
+            .unwrap();
+        assert_eq!(config.session_dirs, vec!["/a", "/b"]);
+    }
+
+    #[test]
+    fn test_config_session_dir_legacy_string() {
+        let toml_content = r#"
+            database_path = "test.db"
+            session_dir = "/legacy"
+        "#;
+        let config: Config = Figment::new()
+            .merge(Toml::string(toml_content))
+            .extract()
+            .unwrap();
+        assert_eq!(config.session_dirs, vec!["/legacy"]);
+    }
+
+    #[test]
+    fn test_config_default_with_paths() {
+        let config = Config::default_with_paths();
+        assert_eq!(config.session_dirs, vec!["."]);
+        assert!(config.database_path.ends_with(".backscroll.db"));
+    }
+
+    #[test]
+    fn test_config_session_dirs_default_when_omitted() {
+        let toml_content = r#"
+            database_path = "test.db"
+        "#;
+        let config: Config = Figment::new()
+            .merge(Toml::string(toml_content))
+            .extract()
+            .unwrap();
+        assert_eq!(config.session_dirs, vec!["."]);
+    }
 }
