@@ -27,7 +27,6 @@ Ports & adapters pattern with two layers:
 ```
 main.rs (CLI: clap)
 ├── config.rs          — Figment-based config (TOML files + env vars)
-├── errors.rs          — thiserror + miette diagnostics
 ├── output.rs          — Formats output (Text, JSON, Robot) and limits tokens
 ├── core/
 │   ├── mod.rs         — SearchResult struct, SearchEngine trait (port)
