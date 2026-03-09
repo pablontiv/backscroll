@@ -260,6 +260,26 @@ impl SearchEngine for Database {
         Ok(hashes)
     }
 
+    fn get_session_id(&self, source_path: &str) -> miette::Result<Option<String>> {
+        let result: Option<String> = self
+            .conn
+            .query_row(
+                "SELECT uuid FROM search_items WHERE source_path = ? AND uuid IS NOT NULL ORDER BY ordinal LIMIT 1",
+                params![source_path],
+                |row| row.get(0),
+            )
+            .ok();
+
+        // Fallback: extract file stem from path
+        Ok(Some(result.unwrap_or_else(|| {
+            std::path::Path::new(source_path)
+                .file_stem()
+                .and_then(|s| s.to_str())
+                .unwrap_or(source_path)
+                .to_string()
+        })))
+    }
+
     fn get_stats(&self) -> miette::Result<Stats> {
         let file_count: i64 = self
             .conn
