@@ -85,7 +85,7 @@ fn main() -> Result<()> {
             path,
             include_agents,
         } => {
-            let session_path = path.as_deref().unwrap_or(&config.session_dir);
+            let session_path = path.as_deref().unwrap_or(&config.session_dirs[0]);
             println!("Sincronizando sesiones desde: {}", session_path);
 
             let engine = create_engine(&config)?;
@@ -106,7 +106,7 @@ fn main() -> Result<()> {
 
             // Auto-sync: indexar sesiones nuevas antes de buscar (incremental, rápido)
             let hashes = engine.get_file_hashes()?;
-            let files = parse_sessions(&config.session_dir, &hashes, false)?;
+            let files = parse_sessions(&config.session_dirs[0], &hashes, false)?;
             if !files.is_empty() {
                 engine.sync_files(files)?;
             }
@@ -159,12 +159,12 @@ fn main() -> Result<()> {
         Commands::Status => {
             println!("Backscroll v{}", env!("CARGO_PKG_VERSION"));
             println!("Base de datos: {}", config.database_path);
-            println!("Directorio de sesiones: {}", config.session_dir);
+            println!("Directorio de sesiones: {}", config.session_dirs.join(", "));
 
             if let Ok(engine) = create_engine(&config) {
                 // Auto-sync antes de mostrar stats
                 if let Ok(hashes) = engine.get_file_hashes() {
-                    if let Ok(files) = parse_sessions(&config.session_dir, &hashes, false) {
+                    if let Ok(files) = parse_sessions(&config.session_dirs[0], &hashes, false) {
                         if !files.is_empty() {
                             let _ = engine.sync_files(files);
                         }

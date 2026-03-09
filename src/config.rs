@@ -2,13 +2,39 @@ use figment::{
     Figment,
     providers::{Env, Format, Toml},
 };
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Deserializer, Serialize};
 use std::path::PathBuf;
+
+fn string_or_vec<'de, D>(deserializer: D) -> std::result::Result<Vec<String>, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    #[derive(Deserialize)]
+    #[serde(untagged)]
+    enum StringOrVec {
+        String(String),
+        Vec(Vec<String>),
+    }
+
+    match StringOrVec::deserialize(deserializer)? {
+        StringOrVec::String(s) => Ok(vec![s]),
+        StringOrVec::Vec(v) => Ok(v),
+    }
+}
 
 #[derive(Deserialize, Serialize, Debug)]
 pub struct Config {
     pub database_path: String,
-    pub session_dir: String,
+    #[serde(
+        alias = "session_dir",
+        deserialize_with = "string_or_vec",
+        default = "default_session_dirs"
+    )]
+    pub session_dirs: Vec<String>,
+}
+
+fn default_session_dirs() -> Vec<String> {
+    vec![".".into()]
 }
 
 impl Config {
@@ -35,7 +61,7 @@ impl Config {
 
         Self {
             database_path: db_path.to_string_lossy().into(),
-            session_dir: ".".into(),
+            session_dirs: vec![".".into()],
         }
     }
 }
@@ -61,7 +87,7 @@ mod tests {
 
         let config = Config::load()?;
         assert_eq!(config.database_path, "test.db");
-        assert_eq!(config.session_dir, "/tmp");
+        assert_eq!(config.session_dirs, vec!["/tmp"]);
 
         fs::remove_file("backscroll.toml").unwrap();
         Ok(())
