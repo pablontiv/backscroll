@@ -1,6 +1,5 @@
 mod config;
 mod core;
-mod errors;
 mod output;
 mod storage;
 
