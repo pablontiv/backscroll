@@ -4,6 +4,10 @@ version = "0.1.0"
 edition = "2024"
 rust-version = "1.85"
 license = "MIT"
+description = "CLI tool that indexes Claude Code session logs into SQLite FTS5 for full-text search"
+repository = "https://github.com/pablontiv/backscroll"
+keywords = ["claude", "search", "fts5", "sqlite", "cli"]
+categories = ["command-line-utilities", "database"]
 
 [dependencies]
 clap = { version = "4.5.60", features = ["derive"] }

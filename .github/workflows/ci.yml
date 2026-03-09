@@ -6,6 +6,9 @@ on:
   pull_request:
     branches: [ main, master ]
 
+permissions:
+  contents: read
+
 env:
   CARGO_TERM_COLOR: always
 
@@ -13,9 +16,9 @@ jobs:
   check-lint:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
       - name: Install stable toolchain
-        uses: dtolnay/rust-toolchain@stable
+        uses: dtolnay/rust-toolchain@efa25f7f19611383d5b0ccf2d1c8914531636bf9 # stable
         with:
           components: rustfmt, clippy
       - name: Rustfmt Check
@@ -28,30 +31,42 @@ jobs:
   test:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
       - name: Install stable toolchain
-        uses: dtolnay/rust-toolchain@stable
+        uses: dtolnay/rust-toolchain@efa25f7f19611383d5b0ccf2d1c8914531636bf9 # stable
       - name: Run Tests
         run: cargo test --all-features
 
   audit:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
       - name: Install cargo-deny
         run: cargo install cargo-deny
       - name: Supply Chain Audit
-        run: cargo deny check licenses bans
+        run: cargo deny check licenses bans advisories
+
+  gitleaks:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        with:
+          fetch-depth: 0
+      - uses: gitleaks/gitleaks-action@ff98106e4c7b2bc287b24eaf42907196329070c7 # v2.3.9
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
   release:
     name: Auto Release
-    needs: [check-lint, test, audit]
+    needs: [check-lint, test, audit, gitleaks]
     if: github.event_name == 'push' && (github.ref == 'refs/heads/master' || github.ref == 'refs/heads/main')
     runs-on: ubuntu-latest
     permissions:
       contents: write
+      id-token: write
+      attestations: write
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
         with:
           fetch-depth: 0
 
@@ -106,19 +121,27 @@ jobs:
 
       - name: Install stable toolchain
         if: steps.version.outputs.bump == 'true'
-        uses: dtolnay/rust-toolchain@stable
+        uses: dtolnay/rust-toolchain@efa25f7f19611383d5b0ccf2d1c8914531636bf9 # stable
+
+      - name: Install cargo-auditable
+        if: steps.version.outputs.bump == 'true'
+        run: cargo install cargo-auditable
 
       - name: Build Release Binary
         if: steps.version.outputs.bump == 'true'
-        run: cargo build --release
+        run: cargo auditable build --release
+
+      - name: Attest Build Provenance
+        if: steps.version.outputs.bump == 'true'
+        uses: actions/attest-build-provenance@e8998f949152b193b063cb0ec769d69d929409be # v2.4.0
+        with:
+          subject-path: target/release/backscroll
 
       - name: Create GitHub Release
         if: steps.version.outputs.bump == 'true'
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          # gh release create generará el tag de Git automáticamente de forma atómica
-          # y adjuntará el binario compilado a la release.
           gh release create ${{ steps.version.outputs.tag }} \
             target/release/backscroll \
             --title "Release ${{ steps.version.outputs.tag }}" \
