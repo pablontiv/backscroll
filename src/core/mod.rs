@@ -42,4 +42,5 @@ pub trait SearchEngine {
     fn search(&self, query: &str, project: &Option<String>) -> miette::Result<Vec<SearchResult>>;
     fn get_file_hashes(&self) -> miette::Result<HashMap<String, String>>;
     fn get_stats(&self) -> miette::Result<Stats>;
+    fn get_session_id(&self, source_path: &str) -> miette::Result<Option<String>>;
 }

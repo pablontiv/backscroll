@@ -55,6 +55,47 @@ impl Config {
             .map_err(|e| miette::miette!("Error al cargar configuración: {}. Crea un 'backscroll.toml' o configura BACKSCROLL_DATABASE_PATH.", e))
     }
 
+    pub fn discover_session_dirs() -> Vec<PathBuf> {
+        let home = std::env::var("HOME").unwrap_or_else(|_| ".".into());
+        let projects_dir = PathBuf::from(&home).join(".claude/projects");
+        Self::discover_session_dirs_from(&projects_dir)
+    }
+
+    pub fn discover_session_dirs_from(projects_dir: &std::path::Path) -> Vec<PathBuf> {
+        if !projects_dir.is_dir() {
+            tracing::info!(
+                "No Claude projects directory found at {}",
+                projects_dir.display()
+            );
+            return Vec::new();
+        }
+
+        let dirs: Vec<PathBuf> = std::fs::read_dir(projects_dir)
+            .into_iter()
+            .flatten()
+            .filter_map(|entry| entry.ok())
+            .map(|entry| entry.path())
+            .filter(|path| path.is_dir())
+            .collect();
+
+        if dirs.is_empty() {
+            tracing::info!(
+                "No session directories found under {}",
+                projects_dir.display()
+            );
+        } else {
+            tracing::info!(
+                "Discovered {} session directories: {:?}",
+                dirs.len(),
+                dirs.iter()
+                    .map(|d| d.display().to_string())
+                    .collect::<Vec<_>>()
+            );
+        }
+
+        dirs
+    }
+
     pub fn default_with_paths() -> Self {
         let mut db_path = PathBuf::from(std::env::var("HOME").unwrap_or_else(|_| ".".into()));
         db_path.push(".backscroll.db");
@@ -70,6 +111,7 @@ impl Config {
 mod tests {
     use super::*;
     use std::fs;
+    use tempfile::tempdir;
 
     #[test]
     fn test_config_load_error_if_missing() {
@@ -136,5 +178,39 @@ mod tests {
             .extract()
             .unwrap();
         assert_eq!(config.session_dirs, vec!["."]);
+    }
+
+    #[test]
+    fn test_discover_finds_project_dirs() {
+        let root = tempdir().unwrap();
+        let projects = root.path().join(".claude/projects");
+        fs::create_dir_all(projects.join("project-a")).unwrap();
+        fs::create_dir_all(projects.join("project-b")).unwrap();
+        // Create a file (should be ignored, only dirs)
+        fs::write(projects.join("not-a-dir.txt"), "").unwrap();
+
+        let dirs = Config::discover_session_dirs_from(&projects);
+        assert_eq!(dirs.len(), 2);
+        assert!(dirs.iter().any(|d| d.ends_with("project-a")));
+        assert!(dirs.iter().any(|d| d.ends_with("project-b")));
+    }
+
+    #[test]
+    fn test_discover_empty_when_no_projects() {
+        let root = tempdir().unwrap();
+        let projects = root.path().join(".claude/projects");
+        fs::create_dir_all(&projects).unwrap();
+
+        let dirs = Config::discover_session_dirs_from(&projects);
+        assert!(dirs.is_empty());
+    }
+
+    #[test]
+    fn test_discover_empty_when_dir_missing() {
+        let root = tempdir().unwrap();
+        let nonexistent = root.path().join("nope");
+
+        let dirs = Config::discover_session_dirs_from(&nonexistent);
+        assert!(dirs.is_empty());
     }
 }

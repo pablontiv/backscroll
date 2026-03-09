@@ -60,6 +60,20 @@ enum Commands {
         /// Ruta al archivo JSONL de la sesión
         path: std::path::PathBuf,
     },
+    /// Buscar y retornar la sesión más reciente para --resume
+    Resume {
+        /// Consulta de búsqueda
+        query: String,
+        /// Filtrar por proyecto
+        #[arg(short, long)]
+        project: Option<String>,
+        /// Buscar en todos los proyectos
+        #[arg(long, default_value_t = false)]
+        all_projects: bool,
+        /// Formato compacto tab-separated
+        #[arg(long, default_value_t = false)]
+        robot: bool,
+    },
     /// Mostrar estado del índice
     Status,
 }
@@ -68,6 +82,32 @@ fn create_engine(config: &Config) -> Result<Box<dyn SearchEngine>> {
     let db = Database::open(&config.database_path)?;
     db.setup_schema()?;
     Ok(Box::new(db))
+}
+
+fn resolve_session_paths(cli_paths: &[String], config: &Config) -> Result<Vec<String>> {
+    // 1. CLI --path overrides everything
+    if !cli_paths.is_empty() {
+        return Ok(cli_paths.to_vec());
+    }
+
+    // 2. Non-default config takes precedence
+    if config.session_dirs != vec!["."] {
+        return Ok(config.session_dirs.clone());
+    }
+
+    // 3. Auto-discovery fallback
+    let discovered = Config::discover_session_dirs();
+    if !discovered.is_empty() {
+        return Ok(discovered
+            .into_iter()
+            .map(|p| p.to_string_lossy().into_owned())
+            .collect());
+    }
+
+    // 4. No paths found
+    Err(miette::miette!(
+        "No session directories found. Use --path, configure session_dirs in backscroll.toml, or ensure ~/.claude/projects/ exists."
+    ))
 }
 
 use tracing_subscriber::EnvFilter;
@@ -87,13 +127,9 @@ fn main() -> Result<()> {
             path,
             include_agents,
         } => {
-            let paths = if path.is_empty() {
-                &config.session_dirs
-            } else {
-                path
-            };
+            let paths = resolve_session_paths(path, &config)?;
             let engine = create_engine(&config)?;
-            for p in paths {
+            for p in &paths {
                 println!("Sincronizando sesiones desde: {}", p);
                 let hashes = engine.get_file_hashes()?;
                 let files = parse_sessions(p, &hashes, *include_agents)?;
@@ -112,11 +148,13 @@ fn main() -> Result<()> {
             let engine = create_engine(&config)?;
 
             // Auto-sync: indexar sesiones nuevas antes de buscar (incremental, rápido)
-            for p in &config.session_dirs {
-                let hashes = engine.get_file_hashes()?;
-                let files = parse_sessions(p, &hashes, false)?;
-                if !files.is_empty() {
-                    engine.sync_files(files)?;
+            if let Ok(paths) = resolve_session_paths(&[], &config) {
+                for p in &paths {
+                    let hashes = engine.get_file_hashes()?;
+                    let files = parse_sessions(p, &hashes, false)?;
+                    if !files.is_empty() {
+                        engine.sync_files(files)?;
+                    }
                 }
             }
 
@@ -165,6 +203,54 @@ fn main() -> Result<()> {
                 println!();
             }
         }
+        Commands::Resume {
+            query,
+            project,
+            all_projects,
+            robot,
+        } => {
+            let engine = create_engine(&config)?;
+
+            // Auto-sync before resume search
+            if let Ok(paths) = resolve_session_paths(&[], &config) {
+                for p in &paths {
+                    let hashes = engine.get_file_hashes()?;
+                    let files = parse_sessions(p, &hashes, false)?;
+                    if !files.is_empty() {
+                        engine.sync_files(files)?;
+                    }
+                }
+            }
+
+            let effective_project = if *all_projects {
+                None
+            } else {
+                project.clone().or_else(|| {
+                    std::env::current_dir()
+                        .ok()
+                        .map(|p| p.to_string_lossy().replace('/', "-"))
+                })
+            };
+
+            let results = engine.search(query, &effective_project)?;
+            if let Some(result) = results.first() {
+                let session_id = engine
+                    .get_session_id(&result.source_path)?
+                    .unwrap_or_else(|| result.source_path.clone());
+                if *robot {
+                    println!("{}\t{}", session_id, result.source_path);
+                } else {
+                    println!("Session: {}", result.source_path);
+                    println!("ID: {}", session_id);
+                    if let Some(snippet) = &result.match_snippet {
+                        println!("Match: {}", snippet);
+                    }
+                }
+            } else {
+                eprintln!("No matching session found.");
+                std::process::exit(1);
+            }
+        }
         Commands::Status => {
             println!("Backscroll v{}", env!("CARGO_PKG_VERSION"));
             println!("Base de datos: {}", config.database_path);
@@ -172,11 +258,13 @@ fn main() -> Result<()> {
 
             if let Ok(engine) = create_engine(&config) {
                 // Auto-sync antes de mostrar stats
-                for p in &config.session_dirs {
-                    if let Ok(hashes) = engine.get_file_hashes() {
-                        if let Ok(files) = parse_sessions(p, &hashes, false) {
-                            if !files.is_empty() {
-                                let _ = engine.sync_files(files);
+                if let Ok(paths) = resolve_session_paths(&[], &config) {
+                    for p in &paths {
+                        if let Ok(hashes) = engine.get_file_hashes() {
+                            if let Ok(files) = parse_sessions(p, &hashes, false) {
+                                if !files.is_empty() {
+                                    let _ = engine.sync_files(files);
+                                }
                             }
                         }
                     }
