@@ -2,11 +2,13 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
-## Project
+## Project Overview
 
 Backscroll is a Rust CLI tool that indexes Claude Code session JSONL logs into SQLite FTS5 for full-text search with BM25 ranking. It treats sessions as an event store with incremental sync via SHA-256 deduplication.
 
-## Commands
+**Status**: Pre-1.0 — Core engine complete (sync, search, read, status). >95% test coverage. Requires Rust 1.85+.
+
+## Build & Test Commands
 
 ```bash
 just check              # rustfmt --check + clippy -D warnings + cargo check
@@ -20,9 +22,11 @@ just audit              # cargo deny check licenses bans
 
 Run a single test: `cargo test test_name`
 
+Tests use `assert_cmd` + `predicates` for CLI integration and `insta` for snapshot tests. Unit tests are co-located in each module. Integration tests in `tests/cli.rs`. Update snapshots with `cargo insta review`.
+
 ## Architecture
 
-Ports & adapters pattern with two layers:
+### Module Layout
 
 ```
 main.rs (CLI: clap)
@@ -37,11 +41,28 @@ main.rs (CLI: clap)
     └── sqlite.rs      — SQLite adapter (external FTS5, triggers, BM25)
 ```
 
+- `main.rs` — CLI entrypoint (clap `Parser`/`Subcommand`), command dispatch
+- `config.rs` — Figment-based config resolution (TOML files + env vars)
+- `output.rs` — Output formatter (Text, JSON, Robot) with approximate token limiting
+- `core/mod.rs` — Domain types (`SearchResult`, `ParsedFile`, `Stats`) and `SearchEngine` trait (port)
+- `core/models.rs` — `SessionRecord` wrapper, `MessageContent` untagged enum for defensive parsing
+- `core/reader.rs` — Direct reading and filtering of individual session files
+- `core/sync.rs` — WalkDir traversal, SHA-256 hashing, JSONL parsing, noise filter regex (LazyLock)
+- `storage/sqlite.rs` — SQLite adapter (external FTS5, triggers, BM25 ranking, WAL mode)
+
 Four CLI commands: `sync [--path] [--include-agents]`, `search <query> [--project] [--json] [--robot] [--fields] [--max-tokens]`, `read <path>`, `status`.
 
 The `SearchEngine` trait is the port; `storage::sqlite` is the adapter. Database is opened lazily.
 
-## Key Design Decisions
+### Core Pipeline
+
+```
+JSONL files → WalkDir → SHA-256 dedup → parse_sessions() → SQLite FTS5
+                                                                 │
+CLI query → SearchEngine::search() → BM25 ranking → format_results()
+```
+
+### Key Design Decisions
 
 - **Defensive parsing**: `SessionRecord` wrapper format extraction handles legacy schemas and noise.
 - **Noise filtering**: Excludes `system-reminder`, `task-notification`, and subagent sessions by default.
@@ -50,16 +71,67 @@ The `SearchEngine` trait is the port; `storage::sqlite` is the adapter. Database
 - **Bundled SQLite**: `rusqlite` with `bundled` feature — no system SQLite dependency.
 - **Rust edition 2024** with strict linting: clippy nursery + pedantic enabled, `-D warnings` in CI.
 
+## Dependencies
+
+- `clap 4.5` — CLI argument parsing with derive macros
+- `rusqlite 0.38` (bundled) — SQLite with FTS5, WAL mode, no system dependency
+- `figment 0.10` — Layered config resolution (TOML + env vars)
+- `serde` / `serde_json` — Defensive JSONL deserialization with `untagged` enums
+- `sha2` / `hex` — SHA-256 hashing for incremental sync deduplication
+- `walkdir 2.5` — Recursive directory traversal for session discovery
+- `regex 1.12` — Noise filter patterns (LazyLock compiled)
+- `miette 7.6` — User-facing diagnostic error reporting
+- `tracing` / `tracing-subscriber` — Structured logging with `RUST_LOG` env filter
+- `insta` (dev) — Snapshot testing for output stability
+
+## Project Documentation
+
+- `docs/research/` — Structured research documents (hypothesize method): original feasibility study and Rust architecture pivot
+- `docs/epics/` — Roadmap decomposition (E01–E09): epics, features, stories, tasks with frontmatter metadata
+- Documentation is written in a mix of Spanish and English (field names like `estado`, `tipo`, `ejecutable_en` are in Spanish)
+
 ## Code Style
 
 - `rustfmt.toml`: edition 2024, Unix newlines, `use_field_init_shorthand`, `use_try_shorthand`
 - Clippy nursery + pedantic lints active (`.clippy.toml`)
-- Commits follow conventional commits (`feat:`, `fix:`, `refactor:`, `perf:`, `chore:`)
-- Breaking changes use `!` suffix (e.g., `feat!:`) for major version bumps
 
-## Testing
+## Commit Convention
 
-Unit tests are co-located in each module. Integration tests in `tests/cli.rs`. Snapshot tests use `insta`. Update snapshots with `cargo insta review`.
+Commits follow [Conventional Commits](https://www.conventionalcommits.org/) (`type(scope): description`).
+
+| Type | Semver Impact | When to use |
+|------|--------------|-------------|
+| `feat` | minor | New user-facing functionality |
+| `fix` | patch | Bug fix |
+| `refactor` | none | Internal restructuring, no behavior change |
+| `perf` | patch | Performance improvement |
+| `test` | none | Adding or updating tests |
+| `docs` | none | Documentation only |
+| `chore` | none | Build, CI, dependency updates |
+
+Breaking changes use `!` suffix (e.g., `feat!:`) for major version bumps.
+
+### Pre-1.0 Version Strategy
+
+While in v0.x, semver bumps follow pre-1.0 convention:
+
+| Commit type | Bump | Example |
+|---|---|---|
+| `fix`, `perf`, `feat` | patch | v0.1.0 → v0.1.1 |
+| `feat!`, `fix!` (breaking) | minor | v0.1.0 → v0.2.0 |
+
+After v1.0: `feat` bumps minor, breaking bumps major (standard semver).
+
+## Release Flow
+
+Releases use `just` recipes that run quality gates before tagging:
+
+```bash
+just release-patch   # check + test → bump patch → commit → tag → push
+just release-minor   # check + test → bump minor → commit → tag → push
+```
+
+Version is managed via `cargo-edit` (`cargo set-version --bump`). Tags follow `v{VERSION}` format.
 
 ## Config Resolution Order
 
@@ -67,3 +139,13 @@ Unit tests are co-located in each module. Integration tests in `tests/cli.rs`. S
 2. `~/.config/backscroll/config.toml`
 3. Environment variables: `BACKSCROLL_DATABASE_PATH`, `BACKSCROLL_SESSION_DIR`
 4. Defaults: `~/.backscroll.db`, current directory
+
+## Crate Path
+
+```
+backscroll::core       — Domain types and SearchEngine trait
+backscroll::core::sync — Session parsing and noise filtering
+backscroll::storage    — SQLite FTS5 adapter
+backscroll::config     — Figment configuration
+backscroll::output     — Output formatting
+```
