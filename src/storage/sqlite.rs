@@ -178,8 +178,9 @@ impl SearchEngine for Database {
             for msg in file.messages {
                 self.conn
                     .execute(
-                        "INSERT OR IGNORE INTO search_items (source_path, ordinal, role, text, project, uuid, timestamp) VALUES (?, ?, ?, ?, ?, ?, ?)",
+                        "INSERT OR IGNORE INTO search_items (source, source_path, ordinal, role, text, project, uuid, timestamp) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
                         (
+                            &file.source,
                             &file.source_path,
                             msg.ordinal as i64,
                             &msg.role,
@@ -347,6 +348,7 @@ mod tests {
         assert!(!hashes.contains_key(path));
 
         let file = ParsedFile {
+            source: "session".into(),
             source_path: path.to_string(),
             hash: hash.to_string(),
             project: Some("project-x".to_string()),
@@ -377,6 +379,7 @@ mod tests {
         db.setup_schema()?;
 
         let file = ParsedFile {
+            source: "session".into(),
             source_path: "/sessions/session.jsonl".to_string(),
             hash: "h1".to_string(),
             project: None,
@@ -401,6 +404,7 @@ mod tests {
         db.setup_schema()?;
 
         let file = ParsedFile {
+            source: "session".into(),
             source_path: "/sessions/my-session.jsonl".to_string(),
             hash: "h2".to_string(),
             project: None,
@@ -426,6 +430,160 @@ mod tests {
 
         let id = db.get_session_id("/does/not/exist.jsonl")?;
         assert_eq!(id, Some("exist".to_string()));
+        Ok(())
+    }
+
+    #[test]
+    fn test_plan_source_stored() -> miette::Result<()> {
+        let db = Database::open(":memory:")?;
+        db.setup_schema()?;
+
+        let file = ParsedFile {
+            source: "plan".into(),
+            source_path: "/plans/arch.md".to_string(),
+            hash: "p1".to_string(),
+            project: None,
+            messages: vec![ParsedMessage {
+                role: "plan".to_string(),
+                text: "## Database\n\nUse SQLite".to_string(),
+                ordinal: 0,
+                uuid: None,
+                timestamp: None,
+            }],
+        };
+        db.sync_files(vec![file])?;
+
+        let source: String = db
+            .conn
+            .query_row(
+                "SELECT source FROM search_items WHERE source_path = ?",
+                params!["/plans/arch.md"],
+                |row| row.get(0),
+            )
+            .into_diagnostic()?;
+        assert_eq!(source, "plan");
+        Ok(())
+    }
+
+    #[test]
+    fn test_plan_sections_produce_multiple_rows() -> miette::Result<()> {
+        let db = Database::open(":memory:")?;
+        db.setup_schema()?;
+
+        let file = ParsedFile {
+            source: "plan".into(),
+            source_path: "/plans/multi.md".to_string(),
+            hash: "p2".to_string(),
+            project: None,
+            messages: vec![
+                ParsedMessage {
+                    role: "plan".to_string(),
+                    text: "# Title\n\nIntro".to_string(),
+                    ordinal: 0,
+                    uuid: None,
+                    timestamp: None,
+                },
+                ParsedMessage {
+                    role: "plan".to_string(),
+                    text: "## Section A\n\nContent A".to_string(),
+                    ordinal: 1,
+                    uuid: None,
+                    timestamp: None,
+                },
+            ],
+        };
+        db.sync_files(vec![file])?;
+
+        let count: i64 = db
+            .conn
+            .query_row(
+                "SELECT COUNT(*) FROM search_items WHERE source_path = ?",
+                params!["/plans/multi.md"],
+                |row| row.get(0),
+            )
+            .into_diagnostic()?;
+        assert_eq!(count, 2);
+        Ok(())
+    }
+
+    #[test]
+    fn test_plan_incremental_sync_skips_unchanged() -> miette::Result<()> {
+        let db = Database::open(":memory:")?;
+        db.setup_schema()?;
+
+        let file = ParsedFile {
+            source: "plan".into(),
+            source_path: "/plans/inc.md".to_string(),
+            hash: "phash1".to_string(),
+            project: None,
+            messages: vec![ParsedMessage {
+                role: "plan".to_string(),
+                text: "content".to_string(),
+                ordinal: 0,
+                uuid: None,
+                timestamp: None,
+            }],
+        };
+        db.sync_files(vec![file])?;
+
+        let hashes = db.get_file_hashes()?;
+        assert_eq!(hashes.get("/plans/inc.md").unwrap(), "phash1");
+        // Second sync with same hash would be skipped by caller
+        Ok(())
+    }
+
+    #[test]
+    fn test_session_entries_not_affected_by_plan_sync() -> miette::Result<()> {
+        let db = Database::open(":memory:")?;
+        db.setup_schema()?;
+
+        let session = ParsedFile {
+            source: "session".into(),
+            source_path: "/sessions/s1.jsonl".to_string(),
+            hash: "sh1".to_string(),
+            project: Some("proj".into()),
+            messages: vec![ParsedMessage {
+                role: "user".to_string(),
+                text: "session content".to_string(),
+                ordinal: 0,
+                uuid: None,
+                timestamp: None,
+            }],
+        };
+        let plan = ParsedFile {
+            source: "plan".into(),
+            source_path: "/plans/p1.md".to_string(),
+            hash: "ph1".to_string(),
+            project: None,
+            messages: vec![ParsedMessage {
+                role: "plan".to_string(),
+                text: "plan content".to_string(),
+                ordinal: 0,
+                uuid: None,
+                timestamp: None,
+            }],
+        };
+        db.sync_files(vec![session])?;
+        db.sync_files(vec![plan])?;
+
+        let session_count: i64 = db
+            .conn
+            .query_row(
+                "SELECT COUNT(*) FROM search_items WHERE source = 'session'",
+                [],
+                |row| row.get(0),
+            )
+            .into_diagnostic()?;
+        let plan_count: i64 = db
+            .conn
+            .query_row(
+                "SELECT COUNT(*) FROM search_items WHERE source = 'plan'",
+                [],
+                |row| row.get(0),
+            )
+            .into_diagnostic()?;
+        assert_eq!(session_count, 1);
+        assert_eq!(plan_count, 1);
         Ok(())
     }
 }

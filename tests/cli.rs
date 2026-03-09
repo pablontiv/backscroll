@@ -190,6 +190,34 @@ fn test_resume_robot_output() {
 }
 
 #[test]
+fn test_sync_no_plans_flag() {
+    let session_dir = tempdir().unwrap();
+    let db_dir = tempdir().unwrap();
+    let db_path = db_dir.path().join("no_plans.db");
+    let session_file = session_dir.path().join("session.jsonl");
+
+    fs::write(
+        &session_file,
+        r#"{"type": "user", "message": {"role": "user", "content": "test no plans"}, "uuid": "np1", "timestamp": "100"}"#,
+    )
+    .unwrap();
+
+    Command::cargo_bin("backscroll")
+        .unwrap()
+        .arg("sync")
+        .arg("--path")
+        .arg(session_dir.path().to_str().unwrap())
+        .arg("--no-plans")
+        .env("BACKSCROLL_DATABASE_PATH", db_path.to_str().unwrap())
+        .env(
+            "BACKSCROLL_SESSION_DIR",
+            session_dir.path().to_str().unwrap(),
+        )
+        .assert()
+        .success();
+}
+
+#[test]
 fn test_resume_no_results_exit_code() {
     let session_dir = tempdir().unwrap();
     let db_dir = tempdir().unwrap();

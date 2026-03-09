@@ -1,0 +1,18 @@
+---
+source: src/core/plans.rs
+expression: sections
+---
+[
+    (
+        "plan",
+        "# Architecture Plan\n\nOverview of the system.\n",
+    ),
+    (
+        "plan",
+        "## Database Layer\n\nUse SQLite with FTS5.\n",
+    ),
+    (
+        "plan",
+        "## API Layer\n\nREST endpoints with auth.",
+    ),
+]

@@ -6,11 +6,13 @@ mod output;
 mod storage;
 
 use crate::core::SearchEngine;
+use crate::core::plans::parse_plan;
 use crate::core::sync::parse_sessions;
 use crate::output::{OutputFormat, OutputOptions, format_results};
 use clap::{Parser, Subcommand};
 use config::Config;
 use miette::Result;
+use std::path::PathBuf;
 use storage::sqlite::Database;
 
 #[derive(Parser)]
@@ -31,6 +33,9 @@ enum Commands {
         /// Incluir sesiones de subagentes (ignora la exclusión por defecto de /subagents/)
         #[arg(long, default_value_t = false)]
         include_agents: bool,
+        /// No indexar archivos de plan (~/.claude/plans/)
+        #[arg(long, default_value_t = false)]
+        no_plans: bool,
     },
     /// Buscar en el historial de sesiones
     Search {
@@ -76,6 +81,69 @@ enum Commands {
     },
     /// Mostrar estado del índice
     Status,
+}
+
+fn discover_plan_files() -> Vec<PathBuf> {
+    let home = std::env::var("HOME").unwrap_or_else(|_| ".".into());
+    let plans_dir = PathBuf::from(&home).join(".claude/plans");
+    discover_plan_files_from(&plans_dir)
+}
+
+fn discover_plan_files_from(plans_dir: &std::path::Path) -> Vec<PathBuf> {
+    if !plans_dir.is_dir() {
+        return Vec::new();
+    }
+    walkdir::WalkDir::new(plans_dir)
+        .into_iter()
+        .filter_map(|e| e.ok())
+        .filter(|e| {
+            e.file_type().is_file()
+                && e.path()
+                    .extension()
+                    .is_some_and(|ext| ext == "md" || ext == "markdown")
+        })
+        .map(|e| e.into_path())
+        .collect()
+}
+
+fn sync_plans(
+    engine: &dyn SearchEngine,
+    hashes: &std::collections::HashMap<String, String>,
+) -> Result<()> {
+    let plan_files = discover_plan_files();
+    if plan_files.is_empty() {
+        return Ok(());
+    }
+
+    let mut parsed = Vec::new();
+    for path in &plan_files {
+        let path_str = path.to_string_lossy();
+        let existing_hash = hashes.get(path_str.as_ref());
+
+        // Compute hash to check if changed
+        let content =
+            std::fs::read(path).map_err(|e| miette::miette!("Failed to read plan: {}", e))?;
+        let hash = format!("{:x}", <sha2::Sha256 as sha2::Digest>::digest(&content));
+
+        if existing_hash.is_some_and(|h| h == &hash) {
+            continue;
+        }
+
+        match parse_plan(path) {
+            Ok(file) => parsed.push(file),
+            Err(e) => tracing::warn!("Failed to parse plan {}: {}", path_str, e),
+        }
+    }
+
+    if !parsed.is_empty() {
+        println!(
+            "Sincronizando {} plans desde ~/.claude/plans/",
+            parsed.len()
+        );
+        engine.sync_files(parsed)?;
+    }
+
+    Ok(())
 }
 
 fn create_engine(config: &Config) -> Result<Box<dyn SearchEngine>> {
@@ -126,6 +194,7 @@ fn main() -> Result<()> {
         Commands::Sync {
             path,
             include_agents,
+            no_plans,
         } => {
             let paths = resolve_session_paths(path, &config)?;
             let engine = create_engine(&config)?;
@@ -134,6 +203,10 @@ fn main() -> Result<()> {
                 let hashes = engine.get_file_hashes()?;
                 let files = parse_sessions(p, &hashes, *include_agents)?;
                 engine.sync_files(files)?;
+            }
+            if !no_plans {
+                let hashes = engine.get_file_hashes()?;
+                sync_plans(engine.as_ref(), &hashes)?;
             }
         }
         Commands::Search {
@@ -156,6 +229,10 @@ fn main() -> Result<()> {
                         engine.sync_files(files)?;
                     }
                 }
+            }
+            // Auto-sync plans
+            if let Ok(hashes) = engine.get_file_hashes() {
+                let _ = sync_plans(engine.as_ref(), &hashes);
             }
 
             // Proyecto: --all-projects → None, --project → explícito, default → CWD
@@ -220,6 +297,9 @@ fn main() -> Result<()> {
                         engine.sync_files(files)?;
                     }
                 }
+            }
+            if let Ok(hashes) = engine.get_file_hashes() {
+                let _ = sync_plans(engine.as_ref(), &hashes);
             }
 
             let effective_project = if *all_projects {

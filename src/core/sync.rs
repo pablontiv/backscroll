@@ -196,6 +196,7 @@ pub fn parse_sessions(
             let project_final = project.unwrap_or_else(|| "unknown".to_string());
 
             parsed_files.push(ParsedFile {
+                source: "session".into(),
                 source_path: path_str,
                 hash,
                 project: Some(project_final),

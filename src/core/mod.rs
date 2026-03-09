@@ -1,4 +1,5 @@
 pub mod models;
+pub mod plans;
 pub mod reader;
 pub mod sync;
 
@@ -22,6 +23,7 @@ pub struct ParsedMessage {
 }
 
 pub struct ParsedFile {
+    pub source: String,
     pub source_path: String,
     pub hash: String,
     pub project: Option<String>,
