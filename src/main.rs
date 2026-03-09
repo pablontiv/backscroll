@@ -67,6 +67,9 @@ enum Commands {
         /// Filtrar por proyecto
         #[arg(short, long)]
         project: Option<String>,
+        /// Buscar en todos los proyectos
+        #[arg(long, default_value_t = false)]
+        all_projects: bool,
         /// Formato compacto tab-separated
         #[arg(long, default_value_t = false)]
         robot: bool,
@@ -214,6 +217,7 @@ fn main() -> Result<()> {
         Commands::Resume {
             query,
             project,
+            all_projects,
             robot,
         } => {
             let engine = create_engine(&config)?;
@@ -229,11 +233,15 @@ fn main() -> Result<()> {
                 }
             }
 
-            let effective_project = project.clone().or_else(|| {
-                std::env::current_dir()
-                    .ok()
-                    .map(|p| p.to_string_lossy().replace('/', "-"))
-            });
+            let effective_project = if *all_projects {
+                None
+            } else {
+                project.clone().or_else(|| {
+                    std::env::current_dir()
+                        .ok()
+                        .map(|p| p.to_string_lossy().replace('/', "-"))
+                })
+            };
 
             let results = engine.search(query, &effective_project)?;
             if let Some(result) = results.first() {

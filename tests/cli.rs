@@ -116,3 +116,97 @@ fn test_parse_real_jsonl() {
         .success()
         .stdout(predicate::str::contains("mundo"));
 }
+
+fn sync_fixture(session_dir: &std::path::Path, db_path: &std::path::Path) {
+    let session_file = session_dir.join("session.jsonl");
+    fs::write(
+        &session_file,
+        r#"{"type": "user", "message": {"role": "user", "content": "deploy kubernetes cluster"}, "uuid": "r1", "timestamp": "100"}"#,
+    )
+    .unwrap();
+
+    Command::cargo_bin("backscroll")
+        .unwrap()
+        .arg("sync")
+        .arg("--path")
+        .arg(session_dir.to_str().unwrap())
+        .env("BACKSCROLL_DATABASE_PATH", db_path.to_str().unwrap())
+        .env("BACKSCROLL_SESSION_DIR", session_dir.to_str().unwrap())
+        .assert()
+        .success();
+}
+
+#[test]
+fn test_resume_text_output() {
+    let session_dir = tempdir().unwrap();
+    let db_dir = tempdir().unwrap();
+    let db_path = db_dir.path().join("resume_text.db");
+    sync_fixture(session_dir.path(), &db_path);
+
+    Command::cargo_bin("backscroll")
+        .unwrap()
+        .arg("resume")
+        .arg("kubernetes")
+        .arg("--all-projects")
+        .env("BACKSCROLL_DATABASE_PATH", db_path.to_str().unwrap())
+        .env(
+            "BACKSCROLL_SESSION_DIR",
+            session_dir.path().to_str().unwrap(),
+        )
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("Session:"))
+        .stdout(predicate::str::contains("ID:"));
+}
+
+#[test]
+fn test_resume_robot_output() {
+    let session_dir = tempdir().unwrap();
+    let db_dir = tempdir().unwrap();
+    let db_path = db_dir.path().join("resume_robot.db");
+    sync_fixture(session_dir.path(), &db_path);
+
+    let output = Command::cargo_bin("backscroll")
+        .unwrap()
+        .arg("resume")
+        .arg("kubernetes")
+        .arg("--robot")
+        .arg("--all-projects")
+        .env("BACKSCROLL_DATABASE_PATH", db_path.to_str().unwrap())
+        .env(
+            "BACKSCROLL_SESSION_DIR",
+            session_dir.path().to_str().unwrap(),
+        )
+        .output()
+        .unwrap();
+
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    let lines: Vec<&str> = stdout.trim().lines().collect();
+    assert_eq!(lines.len(), 1, "Robot mode should be single line");
+    assert!(
+        lines[0].contains('\t'),
+        "Robot mode should be tab-separated"
+    );
+}
+
+#[test]
+fn test_resume_no_results_exit_code() {
+    let session_dir = tempdir().unwrap();
+    let db_dir = tempdir().unwrap();
+    let db_path = db_dir.path().join("resume_noresult.db");
+    sync_fixture(session_dir.path(), &db_path);
+
+    Command::cargo_bin("backscroll")
+        .unwrap()
+        .arg("resume")
+        .arg("xyznonexistent999")
+        .arg("--all-projects")
+        .env("BACKSCROLL_DATABASE_PATH", db_path.to_str().unwrap())
+        .env(
+            "BACKSCROLL_SESSION_DIR",
+            session_dir.path().to_str().unwrap(),
+        )
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("No matching session"));
+}
