@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Post-merge: rebuild backscroll so installed version matches pulled code
+# Post-merge: rebuild backscroll, propagate doc aggregates
 
 REPO_ROOT="$(git rev-parse --show-toplevel)"
 
@@ -7,6 +7,9 @@ echo "Rebuilding backscroll..."
 if cargo build --release --manifest-path "$REPO_ROOT/Cargo.toml" 2>&1; then
   cp "$REPO_ROOT/target/release/backscroll" /usr/local/bin/backscroll
   echo "backscroll rebuilt: $(backscroll --version 2>/dev/null || echo 'installed')"
+
+  # Propagate aggregate values after merge (fix stale parent READMEs)
+  rootline fix --all "$REPO_ROOT/docs/epics/" 2>/dev/null || true
 else
   echo "Warning: backscroll rebuild failed"
 fi

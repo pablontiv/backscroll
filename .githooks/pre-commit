@@ -1,7 +1,20 @@
 #!/usr/bin/env bash
-# Scan staged changes for secrets before commit
-# Requires gitleaks: https://github.com/gitleaks/gitleaks
+# Pre-commit: lint, format check, and secret scan
 
+# Rust quality checks (equivalent to rootline's golangci-lint + gofmt)
+echo "Running cargo fmt --check..."
+if ! cargo fmt --all -- --check 2>&1; then
+  echo "ERROR: Code not formatted. Run: cargo fmt --all"
+  exit 1
+fi
+
+echo "Running cargo clippy..."
+if ! cargo clippy --all-targets --all-features -- -D warnings 2>&1; then
+  echo "ERROR: Clippy warnings found. Fix before committing."
+  exit 1
+fi
+
+# Scan staged changes for secrets
 if command -v gitleaks &>/dev/null; then
   gitleaks git --pre-commit --staged
 else
