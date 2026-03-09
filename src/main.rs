@@ -34,9 +34,12 @@ enum Commands {
     Search {
         /// Consulta de búsqueda
         query: String,
-        /// Filtrar por proyecto
+        /// Filtrar por proyecto (por defecto: derivado del directorio actual)
         #[arg(short, long)]
         project: Option<String>,
+        /// Buscar en todos los proyectos (ignorar filtro por proyecto)
+        #[arg(long, default_value_t = false)]
+        all_projects: bool,
         /// Formato de salida JSON lines
         #[arg(long, default_value_t = false)]
         json: bool,
@@ -93,17 +96,38 @@ fn main() -> Result<()> {
         Commands::Search {
             query,
             project,
+            all_projects,
             json,
             robot,
             fields,
             max_tokens,
         } => {
+            let engine = create_engine(&config)?;
+
+            // Auto-sync: indexar sesiones nuevas antes de buscar (incremental, rápido)
+            let hashes = engine.get_file_hashes()?;
+            let files = parse_sessions(&config.session_dir, &hashes, false)?;
+            if !files.is_empty() {
+                engine.sync_files(files)?;
+            }
+
+            // Proyecto: --all-projects → None, --project → explícito, default → CWD
+            let effective_project = if *all_projects {
+                None
+            } else {
+                match project {
+                    Some(p) => Some(p.clone()),
+                    None => std::env::current_dir()
+                        .ok()
+                        .map(|p| p.to_string_lossy().replace('/', "-")),
+                }
+            };
+
             if !json && !robot {
                 println!("Buscando: '{}'...", query);
             }
 
-            let engine = create_engine(&config)?;
-            let results = engine.search(query, project)?;
+            let results = engine.search(query, &effective_project)?;
             if results.is_empty() && !json && !robot {
                 println!("No se encontraron resultados.");
             } else {
@@ -138,6 +162,15 @@ fn main() -> Result<()> {
             println!("Directorio de sesiones: {}", config.session_dir);
 
             if let Ok(engine) = create_engine(&config) {
+                // Auto-sync antes de mostrar stats
+                if let Ok(hashes) = engine.get_file_hashes() {
+                    if let Ok(files) = parse_sessions(&config.session_dir, &hashes, false) {
+                        if !files.is_empty() {
+                            let _ = engine.sync_files(files);
+                        }
+                    }
+                }
+
                 if let Ok(stats) = engine.get_stats() {
                     println!("\nBackscroll Index Status");
                     println!("  Files indexed:  {}", stats.file_count);

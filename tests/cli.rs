@@ -59,11 +59,12 @@ fn test_cli_sync_and_search() {
         .assert()
         .success();
 
-    // Buscar
+    // Buscar (--all-projects porque CWD no coincide con el tempdir del test)
     let mut search_cmd = Command::cargo_bin("backscroll").unwrap();
     search_cmd
         .arg("search")
         .arg("buscame")
+        .arg("--all-projects")
         .env("BACKSCROLL_DATABASE_PATH", db_path.to_str().unwrap())
         .env(
             "BACKSCROLL_SESSION_DIR",
@@ -105,6 +106,7 @@ fn test_parse_real_jsonl() {
     search_cmd
         .arg("search")
         .arg("mundo")
+        .arg("--all-projects")
         .env("BACKSCROLL_DATABASE_PATH", db_path.to_str().unwrap())
         .env(
             "BACKSCROLL_SESSION_DIR",
