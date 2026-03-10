@@ -258,11 +258,11 @@ impl SearchEngine for Database {
             param_values.push(Box::new(s.to_string()));
         }
         if let Some(a) = after {
-            conditions.push("si.timestamp >= ?");
+            conditions.push("si.timestamp IS NOT NULL AND si.timestamp >= ?");
             param_values.push(Box::new(a.clone()));
         }
         if let Some(b) = before {
-            conditions.push("si.timestamp <= ?");
+            conditions.push("si.timestamp IS NOT NULL AND si.timestamp < ?");
             param_values.push(Box::new(b.clone()));
         }
 

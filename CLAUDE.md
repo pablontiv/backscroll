@@ -73,6 +73,7 @@ CLI query → SearchEngine::search(source?) → BM25 ranking → format_results(
 - **Incremental sync**: SHA-256 hash per file stored in `indexed_files` table; unchanged files are skipped.
 - **Plan indexing**: Markdown plans from `~/.claude/plans/` split by `##` headers, each section indexed as a separate search item with `source='plan'`.
 - **Source filtering**: `search_items.source` column distinguishes sessions from plans; `--source` flag filters at query time.
+- **Date filtering**: `--after`/`--before` flags filter by `search_items.timestamp` with NULL-safe guards; `--before` uses exclusive `<` comparison.
 - **Multi-path config**: `session_dirs: Vec<String>` with backward-compatible `session_dir` alias and auto-discovery of `~/.claude/projects/`.
 - **Bundled SQLite**: `rusqlite` with `bundled` feature — no system SQLite dependency.
 - **Rust edition 2024** with strict linting: clippy nursery + pedantic enabled, `-D warnings` in CI.
