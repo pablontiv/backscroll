@@ -31,16 +31,32 @@ Backscroll treats your local AI sessions as a searchable archive: it indexes con
 
 Backscroll ships as a **single static binary** with no external dependencies.
 
-### From Releases
+### Install Script (Recommended)
 
-Download the latest pre-compiled binary from the [Releases](https://github.com/pablontiv/backscroll/releases) page.
+```bash
+curl -fsSL https://raw.githubusercontent.com/pablontiv/backscroll/master/install.sh | bash
+```
+
+Detects your platform (Linux x86_64 / macOS aarch64) and installs to `~/.local/bin/`.
+
+### Download Binary
+
+Download the latest pre-compiled binary from the [Releases](https://github.com/pablontiv/backscroll/releases) page:
+
+```bash
+# Linux x86_64
+curl -fsSL https://github.com/pablontiv/backscroll/releases/latest/download/backscroll-linux-x86_64 -o backscroll
+chmod +x backscroll && mv backscroll ~/.local/bin/
+
+# macOS aarch64 (Apple Silicon)
+curl -fsSL https://github.com/pablontiv/backscroll/releases/latest/download/backscroll-macos-aarch64 -o backscroll
+chmod +x backscroll && mv backscroll ~/.local/bin/
+```
 
 ### From Source
 
 ```bash
-git clone https://github.com/pablontiv/backscroll.git
-cd backscroll
-cargo build --release
+cargo install --git https://github.com/pablontiv/backscroll.git
 ```
 
 ---
