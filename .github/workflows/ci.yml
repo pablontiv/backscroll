@@ -20,6 +20,7 @@ jobs:
       - name: Install stable toolchain
         uses: dtolnay/rust-toolchain@efa25f7f19611383d5b0ccf2d1c8914531636bf9 # stable
         with:
+          toolchain: stable
           components: rustfmt, clippy
       - name: Rustfmt Check
         run: cargo fmt --all -- --check
@@ -34,6 +35,8 @@ jobs:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
       - name: Install stable toolchain
         uses: dtolnay/rust-toolchain@efa25f7f19611383d5b0ccf2d1c8914531636bf9 # stable
+        with:
+          toolchain: stable
       - name: Run Tests
         run: cargo test --all-features
 
@@ -126,6 +129,7 @@ jobs:
         if: steps.version.outputs.bump == 'true'
         uses: dtolnay/rust-toolchain@efa25f7f19611383d5b0ccf2d1c8914531636bf9 # stable
         with:
+          toolchain: stable
           targets: x86_64-unknown-linux-musl
 
       - name: Install build tools
@@ -187,6 +191,8 @@ jobs:
 
       - name: Install stable toolchain
         uses: dtolnay/rust-toolchain@efa25f7f19611383d5b0ccf2d1c8914531636bf9 # stable
+        with:
+          toolchain: stable
 
       - name: Build macOS aarch64 Binary
         run: |
