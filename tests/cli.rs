@@ -894,3 +894,73 @@ fn test_reindex() {
         .success()
         .stdout(predicate::str::contains("kubernetes"));
 }
+
+#[test]
+fn test_purge() {
+    let session_dir = tempdir().unwrap();
+    let db_dir = tempdir().unwrap();
+    let db_path = db_dir.path().join("purge.db");
+    let fake_home = tempdir().unwrap();
+    sync_date_fixture(session_dir.path(), &db_path);
+
+    // Verify all 3 messages exist before purge
+    let output = Command::cargo_bin("backscroll")
+        .unwrap()
+        .arg("search")
+        .arg("message")
+        .arg("--all-projects")
+        .arg("--json")
+        .arg("--limit")
+        .arg("0")
+        .env("BACKSCROLL_DATABASE_PATH", db_path.to_str().unwrap())
+        .env(
+            "BACKSCROLL_SESSION_DIR",
+            session_dir.path().to_str().unwrap(),
+        )
+        .env("HOME", fake_home.path().to_str().unwrap())
+        .output()
+        .unwrap();
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    let before_count = stdout.trim().lines().filter(|l| l.starts_with('{')).count();
+    assert_eq!(before_count, 3, "Should have 3 messages before purge");
+
+    // Purge data before March (should remove alpha/Jan only)
+    Command::cargo_bin("backscroll")
+        .unwrap()
+        .arg("purge")
+        .arg("--before")
+        .arg("2026-03-01")
+        .env("BACKSCROLL_DATABASE_PATH", db_path.to_str().unwrap())
+        .env(
+            "BACKSCROLL_SESSION_DIR",
+            session_dir.path().to_str().unwrap(),
+        )
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("Purged"))
+        .stdout(predicate::str::contains("1 items"));
+
+    // Search should only find beta and gamma now
+    let output = Command::cargo_bin("backscroll")
+        .unwrap()
+        .arg("search")
+        .arg("message")
+        .arg("--all-projects")
+        .arg("--json")
+        .arg("--limit")
+        .arg("0")
+        .env("BACKSCROLL_DATABASE_PATH", db_path.to_str().unwrap())
+        .env(
+            "BACKSCROLL_SESSION_DIR",
+            session_dir.path().to_str().unwrap(),
+        )
+        .env("HOME", fake_home.path().to_str().unwrap())
+        .output()
+        .unwrap();
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    let after_count = stdout.trim().lines().filter(|l| l.starts_with('{')).count();
+    assert_eq!(after_count, 2, "Should have 2 messages after purge");
+    assert!(!stdout.contains("alpha"), "alpha (Jan) should be purged");
+    assert!(stdout.contains("beta"), "beta (Mar) should survive purge");
+    assert!(stdout.contains("gamma"), "gamma (Jun) should survive purge");
+}
