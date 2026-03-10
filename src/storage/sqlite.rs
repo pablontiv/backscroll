@@ -331,6 +331,37 @@ impl SearchEngine for Database {
         Ok(())
     }
 
+    fn purge(&self, before: &str) -> miette::Result<crate::core::PurgeStats> {
+        self.conn
+            .execute("BEGIN TRANSACTION", [])
+            .into_diagnostic()?;
+
+        // Delete search items with timestamp before the given date
+        let deleted_items = self
+            .conn
+            .execute(
+                "DELETE FROM search_items WHERE timestamp IS NOT NULL AND timestamp < ?",
+                [before],
+            )
+            .into_diagnostic()? as i64;
+
+        // Clean up indexed_files entries that have no remaining search_items
+        let deleted_files = self
+            .conn
+            .execute(
+                "DELETE FROM indexed_files WHERE path NOT IN (SELECT DISTINCT source_path FROM search_items)",
+                [],
+            )
+            .into_diagnostic()? as i64;
+
+        self.conn.execute("COMMIT", []).into_diagnostic()?;
+
+        Ok(crate::core::PurgeStats {
+            deleted_items,
+            deleted_files,
+        })
+    }
+
     fn get_session_id(&self, source_path: &str) -> miette::Result<Option<String>> {
         let result: Option<String> = self
             .conn

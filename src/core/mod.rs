@@ -64,6 +64,12 @@ pub struct ProjectBreakdown {
     pub messages: i64,
 }
 
+#[derive(Debug)]
+pub struct PurgeStats {
+    pub deleted_items: i64,
+    pub deleted_files: i64,
+}
+
 #[derive(Debug, Default)]
 pub struct SearchParams {
     pub project: Option<String>,
@@ -80,6 +86,7 @@ pub trait SearchEngine {
     fn search(&self, query: &str, params: &SearchParams) -> miette::Result<Vec<SearchResult>>;
     fn get_file_hashes(&self) -> miette::Result<HashMap<String, String>>;
     fn clear_hashes(&self) -> miette::Result<()>;
+    fn purge(&self, before: &str) -> miette::Result<PurgeStats>;
     fn get_stats(&self) -> miette::Result<Stats>;
     fn get_session_id(&self, source_path: &str) -> miette::Result<Option<String>>;
     fn get_topics(&self, project: Option<&str>, limit: usize) -> miette::Result<Vec<TopicEntry>>;

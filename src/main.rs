@@ -148,6 +148,12 @@ enum Commands {
         #[arg(long, default_value_t = false)]
         no_plans: bool,
     },
+    /// Eliminar datos antiguos del índice
+    Purge {
+        /// Eliminar datos anteriores a esta fecha (ISO 8601, ej: 2025-01-01)
+        #[arg(long)]
+        before: String,
+    },
     /// Mostrar estado del índice
     Status,
 }
@@ -580,6 +586,15 @@ fn main() -> Result<()> {
                     );
                 }
             }
+        }
+        Commands::Purge { before } => {
+            let engine = create_engine(&config)?;
+            println!("Purging data before {}...", before);
+            let stats = engine.purge(before)?;
+            println!(
+                "Purge complete: {} items deleted, {} orphaned files cleaned.",
+                stats.deleted_items, stats.deleted_files
+            );
         }
         Commands::Reindex {
             path,
