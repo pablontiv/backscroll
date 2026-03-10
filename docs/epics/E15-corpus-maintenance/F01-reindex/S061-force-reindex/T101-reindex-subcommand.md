@@ -1,6 +1,6 @@
 ---
 ejecutable_en: 1 sesion
-estado: Pending # [Pending, Specified, In Progress, Completed, Blocked, On Hold, Obsolete]
+estado: Completed # [Pending, Specified, In Progress, Completed, Blocked, On Hold, Obsolete]
 tipo: code # [code, test, refactor, chore, docs]
 ---
 # T101: Add reindex subcommand with clear hashes and force re-sync

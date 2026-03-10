@@ -136,6 +136,18 @@ enum Commands {
         #[arg(long, default_value_t = false)]
         robot: bool,
     },
+    /// Re-indexar todos los archivos (fuerza re-procesamiento)
+    Reindex {
+        /// Directorios de entrada de las sesiones (repetir para múltiples)
+        #[arg(short, long)]
+        path: Vec<String>,
+        /// Incluir sesiones de subagentes
+        #[arg(long, default_value_t = false)]
+        include_agents: bool,
+        /// No indexar archivos de plan
+        #[arg(long, default_value_t = false)]
+        no_plans: bool,
+    },
     /// Mostrar estado del índice
     Status,
 }
@@ -568,6 +580,27 @@ fn main() -> Result<()> {
                     );
                 }
             }
+        }
+        Commands::Reindex {
+            path,
+            include_agents,
+            no_plans,
+        } => {
+            let paths = resolve_session_paths(path, &config)?;
+            let engine = create_engine(&config)?;
+            println!("Clearing index hashes for full re-sync...");
+            engine.clear_hashes()?;
+            for p in &paths {
+                println!("Re-indexing sessions from: {}", p);
+                let hashes = engine.get_file_hashes()?;
+                let files = parse_sessions(p, &hashes, *include_agents)?;
+                engine.sync_files(files)?;
+            }
+            if !no_plans {
+                let hashes = engine.get_file_hashes()?;
+                sync_plans(engine.as_ref(), &hashes)?;
+            }
+            println!("Reindex complete.");
         }
         Commands::Status => {
             println!("Backscroll v{}", env!("CARGO_PKG_VERSION"));

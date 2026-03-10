@@ -324,6 +324,13 @@ impl SearchEngine for Database {
         Ok(hashes)
     }
 
+    fn clear_hashes(&self) -> miette::Result<()> {
+        self.conn
+            .execute("DELETE FROM indexed_files", [])
+            .into_diagnostic()?;
+        Ok(())
+    }
+
     fn get_session_id(&self, source_path: &str) -> miette::Result<Option<String>> {
         let result: Option<String> = self
             .conn

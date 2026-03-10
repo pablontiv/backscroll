@@ -79,6 +79,7 @@ pub trait SearchEngine {
     fn sync_files(&self, files: Vec<ParsedFile>) -> miette::Result<()>;
     fn search(&self, query: &str, params: &SearchParams) -> miette::Result<Vec<SearchResult>>;
     fn get_file_hashes(&self) -> miette::Result<HashMap<String, String>>;
+    fn clear_hashes(&self) -> miette::Result<()>;
     fn get_stats(&self) -> miette::Result<Stats>;
     fn get_session_id(&self, source_path: &str) -> miette::Result<Option<String>>;
     fn get_topics(&self, project: Option<&str>, limit: usize) -> miette::Result<Vec<TopicEntry>>;
