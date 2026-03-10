@@ -39,6 +39,14 @@ curl -fsSL https://raw.githubusercontent.com/pablontiv/backscroll/master/install
 
 Detects your platform (Linux x86_64 / macOS aarch64) and installs to `~/.local/bin/`.
 
+**Windows (PowerShell):**
+
+```powershell
+irm https://raw.githubusercontent.com/pablontiv/backscroll/master/install.ps1 | iex
+```
+
+Installs to `%LOCALAPPDATA%\backscroll\bin\` and adds it to your PATH.
+
 ### Download Binary
 
 Download the latest pre-compiled binary from the [Releases](https://github.com/pablontiv/backscroll/releases) page:
@@ -51,6 +59,12 @@ chmod +x backscroll && mv backscroll ~/.local/bin/
 # macOS aarch64 (Apple Silicon)
 curl -fsSL https://github.com/pablontiv/backscroll/releases/latest/download/backscroll-macos-aarch64 -o backscroll
 chmod +x backscroll && mv backscroll ~/.local/bin/
+```
+
+```powershell
+# Windows x86_64
+Invoke-WebRequest https://github.com/pablontiv/backscroll/releases/latest/download/backscroll-windows-x86_64.exe -OutFile backscroll.exe
+Move-Item backscroll.exe "$env:LOCALAPPDATA\backscroll\bin\"
 ```
 
 ### From Source
