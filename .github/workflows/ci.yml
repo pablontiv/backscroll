@@ -137,6 +137,12 @@ jobs:
         with:
           subject-path: target/release/backscroll
 
+      - name: Generate Changelog
+        if: steps.version.outputs.bump == 'true'
+        run: |
+          cargo install git-cliff
+          git-cliff --latest --strip header --output RELEASE_NOTES.md
+
       - name: Create GitHub Release
         if: steps.version.outputs.bump == 'true'
         env:
@@ -145,4 +151,4 @@ jobs:
           gh release create ${{ steps.version.outputs.tag }} \
             target/release/backscroll \
             --title "Release ${{ steps.version.outputs.tag }}" \
-            --generate-notes
+            --notes-file RELEASE_NOTES.md

@@ -71,7 +71,8 @@ bump-patch:
 release-minor: check test
     just sync-version
     just bump-minor
-    git add Cargo.toml Cargo.lock
+    just changelog
+    git add Cargo.toml Cargo.lock CHANGELOG.md
     VERSION=$(grep "^version =" Cargo.toml | cut -d '"' -f 2); \
     git commit -m "chore: release v$${VERSION}"; \
     git tag -a "v$${VERSION}" -m "Release v$${VERSION}"; \
@@ -81,7 +82,8 @@ release-minor: check test
 release-patch: check test
     just sync-version
     just bump-patch
-    git add Cargo.toml Cargo.lock
+    just changelog
+    git add Cargo.toml Cargo.lock CHANGELOG.md
     VERSION=$(grep "^version =" Cargo.toml | cut -d '"' -f 2); \
     git commit -m "chore: release v$${VERSION}"; \
     git tag -a "v$${VERSION}" -m "Release v$${VERSION}"; \
