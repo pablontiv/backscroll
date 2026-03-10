@@ -42,6 +42,10 @@ coverage-summary:
 audit:
     cargo deny check licenses bans
 
+# Generate CHANGELOG.md from conventional commits
+changelog:
+    git-cliff --output CHANGELOG.md
+
 # --- Versioning & Release ---
 
 # Sync Cargo.toml version with latest git tag
