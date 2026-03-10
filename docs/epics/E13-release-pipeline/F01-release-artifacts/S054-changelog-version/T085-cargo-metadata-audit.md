@@ -1,6 +1,6 @@
 ---
 ejecutable_en: 1 sesion
-estado: Pending # [Pending, Specified, In Progress, Completed, Blocked, On Hold, Obsolete]
+estado: Completed # [Pending, Specified, In Progress, Completed, Blocked, On Hold, Obsolete]
 tipo: code # [code, test, refactor, chore, docs]
 ---
 # T085: Audit Cargo.toml metadata for v1.0
