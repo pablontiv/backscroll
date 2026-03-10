@@ -39,6 +39,13 @@ pub struct Stats {
     pub project_count: i64,
 }
 
+#[derive(Debug, Serialize)]
+pub struct TopicEntry {
+    pub term: String,
+    pub sessions: i64,
+    pub mentions: i64,
+}
+
 pub trait SearchEngine {
     fn sync_files(&self, files: Vec<ParsedFile>) -> miette::Result<()>;
     fn search(
@@ -50,4 +57,5 @@ pub trait SearchEngine {
     fn get_file_hashes(&self) -> miette::Result<HashMap<String, String>>;
     fn get_stats(&self) -> miette::Result<Stats>;
     fn get_session_id(&self, source_path: &str) -> miette::Result<Option<String>>;
+    fn get_topics(&self, project: Option<&str>, limit: usize) -> miette::Result<Vec<TopicEntry>>;
 }

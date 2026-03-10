@@ -85,6 +85,24 @@ enum Commands {
         #[arg(long, default_value = "all")]
         source: String,
     },
+    /// Mostrar temas frecuentes del corpus indexado
+    Topics {
+        /// Filtrar por proyecto
+        #[arg(short, long)]
+        project: Option<String>,
+        /// Mostrar temas de todos los proyectos (ignorar filtro)
+        #[arg(long, default_value_t = false)]
+        all_projects: bool,
+        /// Número máximo de temas a mostrar
+        #[arg(short, long, default_value_t = 30)]
+        limit: usize,
+        /// Formato JSON lines
+        #[arg(long, default_value_t = false)]
+        json: bool,
+        /// Formato compacto tab-separated
+        #[arg(long, default_value_t = false)]
+        robot: bool,
+    },
     /// Mostrar estado del índice
     Status,
 }
@@ -347,6 +365,62 @@ fn main() -> Result<()> {
             } else {
                 eprintln!("No matching session found.");
                 std::process::exit(1);
+            }
+        }
+        Commands::Topics {
+            project,
+            all_projects,
+            limit,
+            json,
+            robot,
+        } => {
+            let engine = create_engine(&config)?;
+
+            // Auto-sync before topics
+            if let Ok(paths) = resolve_session_paths(&[], &config) {
+                for p in &paths {
+                    let hashes = engine.get_file_hashes()?;
+                    let files = parse_sessions(p, &hashes, false)?;
+                    if !files.is_empty() {
+                        engine.sync_files(files)?;
+                    }
+                }
+            }
+
+            let effective_project = if *all_projects {
+                None
+            } else {
+                match project {
+                    Some(p) => Some(p.clone()),
+                    None => std::env::current_dir()
+                        .ok()
+                        .map(|p| p.to_string_lossy().replace('/', "-")),
+                }
+            };
+
+            let topics = engine.get_topics(effective_project.as_deref(), *limit)?;
+
+            if topics.is_empty() {
+                if !json && !robot {
+                    println!("No se encontraron temas.");
+                }
+            } else if *json {
+                for topic in &topics {
+                    println!("{}", serde_json::to_string(topic).unwrap_or_default());
+                }
+            } else if *robot {
+                for topic in &topics {
+                    println!("{}\t{}\t{}", topic.term, topic.sessions, topic.mentions);
+                }
+            } else {
+                println!("{:<30} {:>10} {:>10}", "TERM", "SESSIONS", "MENTIONS");
+                println!("{}", "-".repeat(52));
+                for topic in &topics {
+                    println!(
+                        "{:<30} {:>10} {:>10}",
+                        topic.term, topic.sessions, topic.mentions
+                    );
+                }
             }
         }
         Commands::Status => {

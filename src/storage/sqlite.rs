@@ -1,4 +1,4 @@
-use crate::core::{ParsedFile, SearchEngine, SearchResult, Stats};
+use crate::core::{ParsedFile, SearchEngine, SearchResult, Stats, TopicEntry};
 use miette::IntoDiagnostic;
 use rusqlite::{Connection, Result, Row, params};
 use std::collections::HashMap;
@@ -366,6 +366,128 @@ impl SearchEngine for Database {
             last_sync,
             project_count,
         })
+    }
+
+    fn get_topics(&self, project: Option<&str>, limit: usize) -> miette::Result<Vec<TopicEntry>> {
+        const STOPWORDS: &[&str] = &[
+            // Spanish
+            "como", "cual", "debe", "desde", "donde", "ella", "ellos", "esta", "este", "esto",
+            "esta", "estan", "hacer", "hacia", "hasta", "ninguno", "nosotros", "nuestro", "otra",
+            "otras", "otro", "otros", "para", "pero", "puede", "quien", "sera", "sido", "sino",
+            "sobre", "solo", "somos", "tambien", "tiene", "tienen", "toda", "todas", "todo",
+            "todos", "usted", "vamos", // English
+            "about", "after", "also", "been", "before", "being", "between", "both", "could",
+            "does", "doing", "done", "down", "each", "even", "every", "file", "from", "have",
+            "here", "http", "https", "into", "just", "know", "like", "line", "make", "many",
+            "more", "most", "much", "must", "need", "only", "other", "over", "path", "said",
+            "same", "self", "should", "some", "such", "text", "than", "that", "them", "then",
+            "there", "these", "they", "this", "those", "through", "used", "using", "very", "want",
+            "were", "what", "when", "where", "which", "while", "will", "with", "would", "your",
+            // Code noise
+            "args", "assert", "break", "case", "catch", "class", "const", "continue", "default",
+            "else", "enum", "error", "false", "func", "function", "impl", "import", "index",
+            "item", "items", "length", "match", "module", "name", "none", "null", "option",
+            "param", "print", "println", "private", "public", "query", "result", "return", "some",
+            "string", "struct", "super", "switch", "test", "tests", "throw", "true", "type",
+            "value", "void",
+        ];
+
+        let stopword_placeholders: String =
+            STOPWORDS.iter().map(|_| "?").collect::<Vec<_>>().join(",");
+
+        match project {
+            None => {
+                let sql = format!(
+                    "SELECT term, doc, cnt FROM messages_vocab \
+                     WHERE length(term) > 3 AND term NOT IN ({}) \
+                     ORDER BY doc DESC LIMIT ?",
+                    stopword_placeholders
+                );
+                let mut stmt = self.conn.prepare(&sql).into_diagnostic()?;
+                let mut params: Vec<Box<dyn rusqlite::types::ToSql>> = STOPWORDS
+                    .iter()
+                    .map(|s| Box::new(s.to_string()) as Box<dyn rusqlite::types::ToSql>)
+                    .collect();
+                params.push(Box::new(limit as i64));
+
+                let param_refs: Vec<&dyn rusqlite::types::ToSql> =
+                    params.iter().map(|p| p.as_ref()).collect();
+
+                let rows = stmt
+                    .query_map(param_refs.as_slice(), |row| {
+                        Ok(TopicEntry {
+                            term: row.get(0)?,
+                            sessions: row.get(1)?,
+                            mentions: row.get(2)?,
+                        })
+                    })
+                    .into_diagnostic()?;
+
+                let mut results = Vec::new();
+                for row in rows {
+                    results.push(row.into_diagnostic()?);
+                }
+                Ok(results)
+            }
+            Some(proj) => {
+                // Get candidate terms from global vocab
+                let candidate_limit = limit * 5;
+                let candidates_sql = format!(
+                    "SELECT term FROM messages_vocab \
+                     WHERE length(term) > 3 AND term NOT IN ({}) \
+                     ORDER BY doc DESC LIMIT ?",
+                    stopword_placeholders
+                );
+                let mut stmt = self.conn.prepare(&candidates_sql).into_diagnostic()?;
+                let mut params: Vec<Box<dyn rusqlite::types::ToSql>> = STOPWORDS
+                    .iter()
+                    .map(|s| Box::new(s.to_string()) as Box<dyn rusqlite::types::ToSql>)
+                    .collect();
+                params.push(Box::new(candidate_limit as i64));
+
+                let param_refs: Vec<&dyn rusqlite::types::ToSql> =
+                    params.iter().map(|p| p.as_ref()).collect();
+
+                let candidate_rows = stmt
+                    .query_map(param_refs.as_slice(), |row| {
+                        let term: String = row.get(0)?;
+                        Ok(term)
+                    })
+                    .into_diagnostic()?;
+
+                let mut candidates: Vec<String> = Vec::new();
+                for row in candidate_rows {
+                    candidates.push(row.into_diagnostic()?);
+                }
+
+                // For each candidate, get project-specific counts via FTS MATCH
+                let count_sql = "SELECT COUNT(DISTINCT si.source_path), COUNT(*) \
+                                 FROM messages_fts mf \
+                                 JOIN search_items si ON mf.rowid = si.id \
+                                 WHERE messages_fts MATCH ? AND si.project = ?";
+
+                let mut results: Vec<TopicEntry> = Vec::new();
+                for term in candidates {
+                    let row: std::result::Result<(i64, i64), _> =
+                        self.conn.query_row(count_sql, params![term, proj], |row| {
+                            Ok((row.get(0)?, row.get(1)?))
+                        });
+                    if let Ok((sessions, mentions)) = row {
+                        if sessions > 0 {
+                            results.push(TopicEntry {
+                                term,
+                                sessions,
+                                mentions,
+                            });
+                        }
+                    }
+                }
+
+                results.sort_by(|a, b| b.sessions.cmp(&a.sessions));
+                results.truncate(limit);
+                Ok(results)
+            }
+        }
     }
 }
 
@@ -740,6 +862,131 @@ mod tests {
             .into_diagnostic()?;
         assert_eq!(session_count, 1);
         assert_eq!(plan_count, 1);
+        Ok(())
+    }
+
+    #[test]
+    fn test_get_topics_global() -> miette::Result<()> {
+        let db = Database::open(":memory:")?;
+        db.setup_schema()?;
+
+        db.sync_files(vec![
+            ParsedFile {
+                source: "session".into(),
+                source_path: "/s/s1.jsonl".into(),
+                hash: "t1".into(),
+                project: Some("alpha".into()),
+                messages: vec![ParsedMessage {
+                    role: "user".into(),
+                    text: "kubernetes deployment configuration yaml".into(),
+                    ordinal: 0,
+                    uuid: None,
+                    timestamp: None,
+                }],
+            },
+            ParsedFile {
+                source: "session".into(),
+                source_path: "/s/s2.jsonl".into(),
+                hash: "t2".into(),
+                project: Some("alpha".into()),
+                messages: vec![ParsedMessage {
+                    role: "user".into(),
+                    text: "kubernetes cluster monitoring setup".into(),
+                    ordinal: 0,
+                    uuid: None,
+                    timestamp: None,
+                }],
+            },
+            ParsedFile {
+                source: "session".into(),
+                source_path: "/s/s3.jsonl".into(),
+                hash: "t3".into(),
+                project: Some("beta".into()),
+                messages: vec![ParsedMessage {
+                    role: "user".into(),
+                    text: "database migration postgresql".into(),
+                    ordinal: 0,
+                    uuid: None,
+                    timestamp: None,
+                }],
+            },
+        ])?;
+
+        let topics = db.get_topics(None, 10)?;
+        assert!(!topics.is_empty());
+        // "kubernetes" appears in 2 sessions, should be top
+        assert_eq!(topics[0].term, "kubernetes");
+        assert_eq!(topics[0].sessions, 2);
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_get_topics_project_filter() -> miette::Result<()> {
+        let db = Database::open(":memory:")?;
+        db.setup_schema()?;
+
+        db.sync_files(vec![
+            ParsedFile {
+                source: "session".into(),
+                source_path: "/s/s1.jsonl".into(),
+                hash: "f1".into(),
+                project: Some("alpha".into()),
+                messages: vec![ParsedMessage {
+                    role: "user".into(),
+                    text: "kubernetes deployment configuration".into(),
+                    ordinal: 0,
+                    uuid: None,
+                    timestamp: None,
+                }],
+            },
+            ParsedFile {
+                source: "session".into(),
+                source_path: "/s/s2.jsonl".into(),
+                hash: "f2".into(),
+                project: Some("beta".into()),
+                messages: vec![ParsedMessage {
+                    role: "user".into(),
+                    text: "database migration postgresql".into(),
+                    ordinal: 0,
+                    uuid: None,
+                    timestamp: None,
+                }],
+            },
+        ])?;
+
+        let alpha_topics = db.get_topics(Some("alpha"), 10)?;
+        let terms: Vec<&str> = alpha_topics.iter().map(|t| t.term.as_str()).collect();
+        assert!(terms.contains(&"kubernetes"));
+        assert!(!terms.contains(&"postgresql"));
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_get_topics_stopwords_excluded() -> miette::Result<()> {
+        let db = Database::open(":memory:")?;
+        db.setup_schema()?;
+
+        db.sync_files(vec![ParsedFile {
+            source: "session".into(),
+            source_path: "/s/sw.jsonl".into(),
+            hash: "sw1".into(),
+            project: None,
+            messages: vec![ParsedMessage {
+                role: "user".into(),
+                text: "about this function that should return the value from there".into(),
+                ordinal: 0,
+                uuid: None,
+                timestamp: None,
+            }],
+        }])?;
+
+        let topics = db.get_topics(None, 50)?;
+        let terms: Vec<&str> = topics.iter().map(|t| t.term.as_str()).collect();
+        // All words in the message are stopwords or <=3 chars — should be empty
+        assert!(topics.is_empty(), "Expected no topics but got: {:?}", terms);
+
         Ok(())
     }
 }
