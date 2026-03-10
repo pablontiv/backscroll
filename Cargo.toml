@@ -6,8 +6,19 @@ rust-version = "1.85"
 license = "MIT"
 description = "CLI tool that indexes Claude Code session logs into SQLite FTS5 for full-text search"
 repository = "https://github.com/pablontiv/backscroll"
+homepage = "https://github.com/pablontiv/backscroll"
+documentation = "https://github.com/pablontiv/backscroll#readme"
+readme = "README.md"
 keywords = ["claude", "search", "fts5", "sqlite", "cli"]
 categories = ["command-line-utilities", "database"]
+exclude = [
+    "docs/epics/",
+    "docs/research/",
+    "tests/",
+    ".claude/",
+    ".github/",
+    ".githooks/",
+]
 
 [dependencies]
 clap = { version = "4.5.60", features = ["derive"] }
