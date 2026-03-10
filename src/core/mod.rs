@@ -55,6 +55,13 @@ pub struct SessionEntry {
     pub ended: Option<String>,
 }
 
+#[derive(Debug, Serialize)]
+pub struct ProjectBreakdown {
+    pub project: Option<String>,
+    pub sessions: i64,
+    pub messages: i64,
+}
+
 pub trait SearchEngine {
     fn sync_files(&self, files: Vec<ParsedFile>) -> miette::Result<()>;
     fn search(
@@ -72,4 +79,5 @@ pub trait SearchEngine {
         project: Option<&str>,
         limit: usize,
     ) -> miette::Result<Vec<SessionEntry>>;
+    fn get_project_breakdown(&self) -> miette::Result<Vec<ProjectBreakdown>>;
 }

@@ -1,4 +1,6 @@
-use crate::core::{ParsedFile, SearchEngine, SearchResult, SessionEntry, Stats, TopicEntry};
+use crate::core::{
+    ParsedFile, ProjectBreakdown, SearchEngine, SearchResult, SessionEntry, Stats, TopicEntry,
+};
 use miette::IntoDiagnostic;
 use rusqlite::{Connection, Result, Row, params};
 use std::collections::HashMap;
@@ -528,6 +530,27 @@ impl SearchEngine for Database {
                     messages: row.get(2)?,
                     started: row.get(3)?,
                     ended: row.get(4)?,
+                })
+            })
+            .into_diagnostic()?;
+
+        let mut results = Vec::new();
+        for row in rows {
+            results.push(row.into_diagnostic()?);
+        }
+        Ok(results)
+    }
+
+    fn get_project_breakdown(&self) -> miette::Result<Vec<ProjectBreakdown>> {
+        let sql = "SELECT project, COUNT(DISTINCT source_path) as sessions, COUNT(*) as messages \
+                   FROM search_items GROUP BY project ORDER BY sessions DESC";
+        let mut stmt = self.conn.prepare(sql).into_diagnostic()?;
+        let rows = stmt
+            .query_map([], |row| {
+                Ok(ProjectBreakdown {
+                    project: row.get(0)?,
+                    sessions: row.get(1)?,
+                    messages: row.get(2)?,
                 })
             })
             .into_diagnostic()?;
@@ -1130,6 +1153,75 @@ mod tests {
         let sessions = db.list_sessions(Some("alpha"), 10)?;
         assert_eq!(sessions.len(), 1);
         assert_eq!(sessions[0].project.as_deref(), Some("alpha"));
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_get_project_breakdown() -> miette::Result<()> {
+        let db = Database::open(":memory:")?;
+        db.setup_schema()?;
+
+        db.sync_files(vec![
+            ParsedFile {
+                source: "session".into(),
+                source_path: "/s/p1.jsonl".into(),
+                hash: "pb1".into(),
+                project: Some("alpha".into()),
+                messages: vec![
+                    ParsedMessage {
+                        role: "user".into(),
+                        text: "msg1".into(),
+                        ordinal: 0,
+                        uuid: None,
+                        timestamp: None,
+                    },
+                    ParsedMessage {
+                        role: "assistant".into(),
+                        text: "msg2".into(),
+                        ordinal: 1,
+                        uuid: None,
+                        timestamp: None,
+                    },
+                ],
+            },
+            ParsedFile {
+                source: "session".into(),
+                source_path: "/s/p2.jsonl".into(),
+                hash: "pb2".into(),
+                project: Some("alpha".into()),
+                messages: vec![ParsedMessage {
+                    role: "user".into(),
+                    text: "msg3".into(),
+                    ordinal: 0,
+                    uuid: None,
+                    timestamp: None,
+                }],
+            },
+            ParsedFile {
+                source: "session".into(),
+                source_path: "/s/p3.jsonl".into(),
+                hash: "pb3".into(),
+                project: Some("beta".into()),
+                messages: vec![ParsedMessage {
+                    role: "user".into(),
+                    text: "msg4".into(),
+                    ordinal: 0,
+                    uuid: None,
+                    timestamp: None,
+                }],
+            },
+        ])?;
+
+        let breakdown = db.get_project_breakdown()?;
+        assert_eq!(breakdown.len(), 2);
+        // alpha has 2 sessions, 3 messages — should be first
+        assert_eq!(breakdown[0].project.as_deref(), Some("alpha"));
+        assert_eq!(breakdown[0].sessions, 2);
+        assert_eq!(breakdown[0].messages, 3);
+        assert_eq!(breakdown[1].project.as_deref(), Some("beta"));
+        assert_eq!(breakdown[1].sessions, 1);
+        assert_eq!(breakdown[1].messages, 1);
 
         Ok(())
     }

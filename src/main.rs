@@ -554,6 +554,26 @@ fn main() -> Result<()> {
                         stats.last_sync.unwrap_or_else(|| "N/A".to_string())
                     );
                 }
+
+                if let Ok(breakdown) = engine.get_project_breakdown() {
+                    if !breakdown.is_empty() {
+                        println!("\nBy Project:");
+                        println!("  {:<40} {:>10} {:>10}", "PROJECT", "SESSIONS", "MESSAGES");
+                        println!("  {}", "-".repeat(62));
+                        for entry in &breakdown {
+                            let proj = entry.project.as_deref().unwrap_or("(none)");
+                            let proj_short = if proj.len() > 38 {
+                                &proj[proj.len() - 38..]
+                            } else {
+                                proj
+                            };
+                            println!(
+                                "  {:<40} {:>10} {:>10}",
+                                proj_short, entry.sessions, entry.messages
+                            );
+                        }
+                    }
+                }
             } else {
                 println!("Estado del índice: OK (no se pudo acceder a las métricas)");
             }

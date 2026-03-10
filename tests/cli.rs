@@ -446,3 +446,24 @@ fn test_list_json_output() {
         );
     }
 }
+
+#[test]
+fn test_status_shows_project_breakdown() {
+    let session_dir = tempdir().unwrap();
+    let db_dir = tempdir().unwrap();
+    let db_path = db_dir.path().join("status_breakdown.db");
+    sync_fixture(session_dir.path(), &db_path);
+
+    Command::cargo_bin("backscroll")
+        .unwrap()
+        .arg("status")
+        .env("BACKSCROLL_DATABASE_PATH", db_path.to_str().unwrap())
+        .env(
+            "BACKSCROLL_SESSION_DIR",
+            session_dir.path().to_str().unwrap(),
+        )
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("By Project:"))
+        .stdout(predicate::str::contains("PROJECT"));
+}
