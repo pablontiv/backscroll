@@ -1,17 +1,16 @@
 ---
 name: backscroll
 description: |
-  Buscar y analizar el historial de conversaciones de sesiones anteriores de
-  Claude Code usando backscroll (búsqueda full-text con FTS5 y ranking BM25).
-  Recupera contexto perdido, filtra por keyword con relevancia, muestra
-  distribución de temas, y extrae fragmentos relevantes con snippets rankeados.
-  Usar este skill siempre que el usuario mencione sesiones anteriores, pregunte
-  "de que hablamos sobre X?", quiera encontrar algo de una sesión pasada, diga
-  "lo discutimos antes", "we talked about this before", "find that conversation",
-  o necesite recuperar contexto — incluso si no dice "backscroll" e incluso si
-  solo dice "no me acuerdo que habíamos decidido" o "I forgot what we discussed."
-  Para snapshots de estado estructurado (guardar/restaurar progreso), usar
-  context-save en su lugar.
+  Buscar en el historial de sesiones anteriores de Claude Code usando backscroll
+  (búsqueda full-text FTS5 con ranking BM25). Recupera contexto perdido, filtra
+  por keyword con relevancia, muestra distribución de temas, y extrae snippets
+  rankeados. Usar este skill cuando el usuario mencione sesiones anteriores,
+  pregunte "de que hablamos sobre X?", "what did we decide about", "lo discutimos
+  antes", "we talked about this", "find that conversation", "search sessions",
+  "no me acuerdo", "I forgot what we discussed", quiera encontrar algo de una
+  sesión pasada, o necesite recuperar contexto de trabajo previo — incluso si no
+  dice "backscroll". Para snapshots de estado estructurado (guardar/restaurar
+  progreso), usar context-save en su lugar.
 user-invocable: true
 disable-model-invocation: false
 argument-hint: "[query] | --topics | --recent N | --context"
@@ -48,7 +47,7 @@ Backscroll auto-sincroniza el índice y filtra por proyecto (derivado del CWD) a
 | `[query]` | Búsqueda full-text rankeada por relevancia |
 | `--topics` | Análisis de temas frecuentes |
 | `--recent N` | Últimas N sesiones con resumen |
-| `--context` | Query rootline session-state (requiere rootline + /context-save) |
+| `--context` | Query structured session-state (requiere rootline + context-save) |
 
 #### 2a. Búsqueda por keyword (camino principal)
 
@@ -70,44 +69,36 @@ backscroll search "QUERY" --all-projects --robot --max-tokens 4000
 Mostrar status del índice y sesiones recientes:
 ```bash
 backscroll status
-```
-
-Complementar con listado de archivos recientes:
-```bash
-SESSION_DIR="$HOME/.claude/projects/$(pwd | tr '/' '-')/"
-ls -lt "$SESSION_DIR"*.jsonl 2>/dev/null | grep -v agent- | head -10
+backscroll list --recent 5 --robot
 ```
 
 #### 2c. Sesiones recientes (`--recent N`)
 
-Listar archivos y usar `backscroll read` para obtener contenido limpio de cada sesión:
 ```bash
-SESSION_DIR="$HOME/.claude/projects/$(pwd | tr '/' '-')/"
-ls -lt "$SESSION_DIR"*.jsonl 2>/dev/null | grep -v agent- | head -N
+backscroll list --recent N --robot
 ```
 
-Para cada sesión relevante:
+Para contenido de una sesión específica:
 ```bash
 backscroll read PATH_TO_SESSION
 ```
 
-Esto produce output limpio `[role] message` con ruido filtrado automáticamente (system-reminders, tool calls, XML tags).
-
 #### 2d. Temas (`--topics`)
 
-Para un análisis de temas, buscar en TODAS las sesiones del usuario con `--all-projects` para obtener una vista completa:
-
 ```bash
-backscroll search "deploy" --all-projects --robot --max-tokens 8000
+backscroll topics --all-projects --robot
 ```
 
-FTS5 no soporta wildcards, así que ejecutar múltiples búsquedas temáticas amplias (ej: "deploy", "migración", "architecture", "error", "roadmap", "testing", "database") y combinar resultados.
+Para profundizar en un tema específico:
+```bash
+backscroll search "TOPIC" --all-projects --robot --max-tokens 4000
+```
 
-Analizar los snippets devueltos y sintetizar una distribución de temas discutidos. Agrupar por proyecto y tema frecuente, reportando cuántas sesiones lo mencionan. Incluir desglose por proyecto para que el usuario vea la distribución de su actividad.
+Analizar los resultados y sintetizar una distribución de temas discutidos. Agrupar por proyecto y tema frecuente.
 
 #### 2e. Contexto (`--context`)
 
-Requiere rootline y `/context-save`. Verificar disponibilidad:
+Requiere rootline y context-save. Verificar disponibilidad:
 ```bash
 command -v rootline 2>/dev/null
 ```
