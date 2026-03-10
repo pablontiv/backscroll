@@ -8,3 +8,6 @@ session_test.json
 *.db
 *.db-shm
 *.db-wal
+
+# Skill eval workspace (local artifacts)
+.claude/skills/backscroll-workspace/iteration-*/

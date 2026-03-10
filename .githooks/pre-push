@@ -57,3 +57,10 @@ if cargo build --release --manifest-path "$REPO_ROOT/Cargo.toml" 2>&1; then
 else
   echo "Warning: backscroll rebuild failed (push continues)"
 fi
+
+# Distribute skill to global ~/.claude/skills/
+if [ -d "$REPO_ROOT/.claude/skills/backscroll" ]; then
+  mkdir -p "$HOME/.claude/skills/backscroll"
+  cp "$REPO_ROOT/.claude/skills/backscroll/SKILL.md" "$HOME/.claude/skills/backscroll/SKILL.md"
+  echo "backscroll skill distributed to ~/.claude/skills/"
+fi

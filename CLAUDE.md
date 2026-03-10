@@ -52,7 +52,7 @@ main.rs (CLI: clap)
 - `core/sync.rs` — WalkDir traversal, SHA-256 hashing, JSONL parsing, noise filter regex (LazyLock)
 - `storage/sqlite.rs` — SQLite adapter (external FTS5, triggers, BM25 ranking, WAL mode, source-aware filtering)
 
-Five CLI commands: `sync [--path] [--include-agents] [--no-plans]`, `search <query> [--project] [--all-projects] [--json] [--robot] [--fields] [--max-tokens] [--source]`, `read <path>`, `resume <query> [--project] [--all-projects] [--robot] [--source]`, `status`.
+Seven CLI commands: `sync [--path] [--include-agents] [--no-plans]`, `search <query> [--project] [--all-projects] [--json] [--robot] [--fields] [--max-tokens] [--source]`, `read <path>`, `resume <query> [--project] [--all-projects] [--robot] [--source]`, `topics [--project] [--all-projects] [--limit] [--json] [--robot]`, `list [--project] [--all-projects] [--recent] [--json] [--robot]`, `status`.
 
 The `SearchEngine` trait is the port; `storage::sqlite` is the adapter. Database is opened lazily.
 
@@ -93,7 +93,8 @@ CLI query → SearchEngine::search(source?) → BM25 ranking → format_results(
 ## Project Documentation
 
 - `docs/research/` — Structured research documents (hypothesize method): original feasibility study and Rust architecture pivot
-- `docs/epics/` — Roadmap decomposition (E01–E11): epics, features, stories, tasks with frontmatter metadata
+- `docs/epics/` — Roadmap decomposition (E01–E12): epics, features, stories, tasks with frontmatter metadata
+- `.claude/skills/backscroll/` — Claude Code skill for `/backscroll` (distributed to `~/.claude/skills/` via pre-push hook)
 - Documentation is written in a mix of Spanish and English (field names like `estado`, `tipo`, `ejecutable_en` are in Spanish)
 
 ## Code Style
