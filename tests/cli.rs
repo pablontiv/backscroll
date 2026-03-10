@@ -739,3 +739,104 @@ fn test_search_role_none_returns_both() {
         "Without --role, both roles should be searchable"
     );
 }
+
+/// Helper: sync a fixture with 30 messages for pagination tests.
+fn sync_pagination_fixture(session_dir: &std::path::Path, db_path: &std::path::Path) {
+    let session_file = session_dir.join("pagination.jsonl");
+    let mut lines = Vec::new();
+    for i in 1..=30 {
+        lines.push(format!(
+            r#"{{"type": "user", "message": {{"role": "user", "content": "pagtest item number {i}"}}, "uuid": "pg{i}", "timestamp": "{ts}"}}"#,
+            ts = 1000 + i
+        ));
+    }
+    fs::write(&session_file, lines.join("\n")).unwrap();
+
+    Command::cargo_bin("backscroll")
+        .unwrap()
+        .arg("sync")
+        .arg("--path")
+        .arg(session_dir.to_str().unwrap())
+        .arg("--no-plans")
+        .env("BACKSCROLL_DATABASE_PATH", db_path.to_str().unwrap())
+        .env("BACKSCROLL_SESSION_DIR", session_dir.to_str().unwrap())
+        .assert()
+        .success();
+}
+
+fn search_json_count(
+    db_path: &std::path::Path,
+    session_dir: &std::path::Path,
+    extra_args: &[&str],
+) -> usize {
+    let output = Command::cargo_bin("backscroll")
+        .unwrap()
+        .arg("search")
+        .arg("pagtest")
+        .arg("--all-projects")
+        .arg("--json")
+        .args(extra_args)
+        .env("BACKSCROLL_DATABASE_PATH", db_path.to_str().unwrap())
+        .env("BACKSCROLL_SESSION_DIR", session_dir.to_str().unwrap())
+        .output()
+        .unwrap();
+
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    stdout.trim().lines().filter(|l| l.starts_with('{')).count()
+}
+
+#[test]
+fn test_search_pagination_limit_5() {
+    let session_dir = tempdir().unwrap();
+    let db_dir = tempdir().unwrap();
+    let db_path = db_dir.path().join("pag_limit5.db");
+    sync_pagination_fixture(session_dir.path(), &db_path);
+
+    let count = search_json_count(&db_path, session_dir.path(), &["--limit", "5"]);
+    assert_eq!(count, 5, "Should return exactly 5 results with --limit 5");
+}
+
+#[test]
+fn test_search_pagination_limit_0_returns_all() {
+    let session_dir = tempdir().unwrap();
+    let db_dir = tempdir().unwrap();
+    let db_path = db_dir.path().join("pag_limit0.db");
+    sync_pagination_fixture(session_dir.path(), &db_path);
+
+    let count = search_json_count(&db_path, session_dir.path(), &["--limit", "0"]);
+    assert_eq!(count, 30, "Should return all 30 results with --limit 0");
+}
+
+#[test]
+fn test_search_pagination_offset() {
+    let session_dir = tempdir().unwrap();
+    let db_dir = tempdir().unwrap();
+    let db_path = db_dir.path().join("pag_offset.db");
+    sync_pagination_fixture(session_dir.path(), &db_path);
+
+    // --limit 10 --offset 25 should skip first 25, return remaining 5 (only 30 total)
+    let count = search_json_count(
+        &db_path,
+        session_dir.path(),
+        &["--limit", "10", "--offset", "25"],
+    );
+    assert_eq!(
+        count, 5,
+        "Should return 5 results with --limit 10 --offset 25 (30 total - 25 skipped)"
+    );
+}
+
+#[test]
+fn test_search_pagination_default_limit_20() {
+    let session_dir = tempdir().unwrap();
+    let db_dir = tempdir().unwrap();
+    let db_path = db_dir.path().join("pag_default.db");
+    sync_pagination_fixture(session_dir.path(), &db_path);
+
+    // Default limit is 20
+    let count = search_json_count(&db_path, session_dir.path(), &[]);
+    assert_eq!(
+        count, 20,
+        "Should return 20 results by default (30 available)"
+    );
+}
