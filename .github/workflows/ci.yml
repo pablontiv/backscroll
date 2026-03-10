@@ -121,6 +121,14 @@ jobs:
           fi
 
           NEXT_TAG="v${MAJOR}.${MINOR}.${PATCH}"
+
+          # Guard: skip if tag was already created by a concurrent run
+          if git ls-remote --tags origin "refs/tags/$NEXT_TAG" | grep -q .; then
+            echo "Tag $NEXT_TAG already exists (concurrent release). Skipping."
+            echo "bump=false" >> $GITHUB_OUTPUT
+            exit 0
+          fi
+
           echo "Next tag determined: $NEXT_TAG"
           echo "bump=true" >> $GITHUB_OUTPUT
           echo "tag=$NEXT_TAG" >> $GITHUB_OUTPUT
