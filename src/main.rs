@@ -154,6 +154,8 @@ enum Commands {
         #[arg(long)]
         before: String,
     },
+    /// Verificar integridad del índice
+    Validate,
     /// Mostrar estado del índice
     Status,
 }
@@ -618,6 +620,34 @@ fn main() -> Result<()> {
                 sync_plans(engine.as_ref(), &hashes)?;
             }
             println!("Reindex complete.");
+        }
+        Commands::Validate => {
+            let engine = create_engine(&config)?;
+            let report = engine.validate()?;
+            let total = report.total_issues();
+            if total == 0 {
+                println!("Index is healthy. 0 issues found.");
+            } else {
+                println!("Validation found {} issue(s):", total);
+                if report.orphaned_items > 0 {
+                    println!(
+                        "  Orphaned source paths (file missing on disk): {}",
+                        report.orphaned_items
+                    );
+                }
+                if report.stale_files > 0 {
+                    println!(
+                        "  Stale indexed_files (no search_items):        {}",
+                        report.stale_files
+                    );
+                }
+                if report.fts_inconsistencies > 0 {
+                    println!(
+                        "  FTS inconsistencies (orphaned FTS rows):      {}",
+                        report.fts_inconsistencies
+                    );
+                }
+            }
         }
         Commands::Status => {
             println!("Backscroll v{}", env!("CARGO_PKG_VERSION"));

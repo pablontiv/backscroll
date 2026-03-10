@@ -646,6 +646,49 @@ impl SearchEngine for Database {
         }
         Ok(results)
     }
+
+    fn validate(&self) -> miette::Result<crate::core::ValidationReport> {
+        // 1. Orphaned search_items: source_path points to file that no longer exists on disk
+        let mut stmt = self
+            .conn
+            .prepare("SELECT DISTINCT source_path FROM search_items WHERE source = 'session'")
+            .into_diagnostic()?;
+        let paths: Vec<String> = stmt
+            .query_map([], |row| row.get(0))
+            .into_diagnostic()?
+            .filter_map(|r| r.ok())
+            .collect();
+        let orphaned_items = paths
+            .iter()
+            .filter(|p| !std::path::Path::new(p.as_str()).exists())
+            .count() as i64;
+
+        // 2. Stale indexed_files: path in indexed_files with no corresponding search_items
+        let stale_files: i64 = self
+            .conn
+            .query_row(
+                "SELECT COUNT(*) FROM indexed_files WHERE path NOT IN (SELECT DISTINCT source_path FROM search_items)",
+                [],
+                |row| row.get(0),
+            )
+            .into_diagnostic()?;
+
+        // 3. FTS inconsistencies: rowids in FTS that don't exist in search_items
+        let fts_inconsistencies: i64 = self
+            .conn
+            .query_row(
+                "SELECT COUNT(*) FROM messages_fts WHERE rowid NOT IN (SELECT rowid FROM search_items)",
+                [],
+                |row| row.get(0),
+            )
+            .into_diagnostic()?;
+
+        Ok(crate::core::ValidationReport {
+            orphaned_items,
+            stale_files,
+            fts_inconsistencies,
+        })
+    }
 }
 
 #[cfg(test)]

@@ -72,6 +72,19 @@ pub struct PurgeStats {
     pub size_after: i64,
 }
 
+#[derive(Debug)]
+pub struct ValidationReport {
+    pub orphaned_items: i64,
+    pub stale_files: i64,
+    pub fts_inconsistencies: i64,
+}
+
+impl ValidationReport {
+    pub fn total_issues(&self) -> i64 {
+        self.orphaned_items + self.stale_files + self.fts_inconsistencies
+    }
+}
+
 #[derive(Debug, Default)]
 pub struct SearchParams {
     pub project: Option<String>,
@@ -98,4 +111,5 @@ pub trait SearchEngine {
         limit: usize,
     ) -> miette::Result<Vec<SessionEntry>>;
     fn get_project_breakdown(&self) -> miette::Result<Vec<ProjectBreakdown>>;
+    fn validate(&self) -> miette::Result<ValidationReport>;
 }
