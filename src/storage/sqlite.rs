@@ -149,6 +149,24 @@ impl Database {
             self.conn.execute("COMMIT", []).into_diagnostic()?;
         }
 
+        let current_version: i64 = self
+            .conn
+            .query_row("SELECT version FROM schema_version", [], |row| row.get(0))
+            .into_diagnostic()?;
+
+        if current_version == 2 {
+            self.conn
+                .execute(
+                    "CREATE VIRTUAL TABLE IF NOT EXISTS messages_vocab USING fts5vocab(messages_fts, row)",
+                    [],
+                )
+                .into_diagnostic()?;
+
+            self.conn
+                .execute("UPDATE schema_version SET version = 3", [])
+                .into_diagnostic()?;
+        }
+
         Ok(())
     }
 
