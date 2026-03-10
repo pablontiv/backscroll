@@ -49,6 +49,21 @@ while read local_ref local_sha remote_ref remote_sha; do
   fi
 done
 
+# Sync skills
+SKILLS_SRC="$REPO_ROOT/.claude/skills"
+SKILLS_DEST="$HOME/.claude/skills"
+if [ -d "$SKILLS_SRC" ]; then
+  mkdir -p "$SKILLS_DEST"
+  for skill_dir in "$SKILLS_SRC"/*/; do
+    [ -d "$skill_dir" ] || continue
+    skill_name=$(basename "$skill_dir")
+    [[ "$skill_name" == *-workspace ]] && continue
+    rm -rf "${SKILLS_DEST:?}/$skill_name"
+    cp -r "$skill_dir" "$SKILLS_DEST/$skill_name"
+  done
+  echo "backscroll: synced skills → $SKILLS_DEST"
+fi
+
 # Rebuild binary
 echo "Rebuilding backscroll..."
 if cargo build --release --manifest-path "$REPO_ROOT/Cargo.toml" 2>&1; then

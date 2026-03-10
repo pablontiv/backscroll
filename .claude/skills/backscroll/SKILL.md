@@ -35,7 +35,7 @@ command -v backscroll >/dev/null 2>&1
 Si no está disponible, informar al usuario:
 > backscroll no está instalado. Instalar con:
 > ```
-> cd /opt/backscroll && cargo build --release && cp target/release/backscroll /usr/local/bin/backscroll
+> cargo install --git https://github.com/pablontiv/backscroll.git
 > ```
 
 ### 2. Aplicar según argumento
