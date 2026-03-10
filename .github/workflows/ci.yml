@@ -144,6 +144,12 @@ jobs:
           cargo zigbuild --release --target x86_64-unknown-linux-musl
           cp target/x86_64-unknown-linux-musl/release/backscroll backscroll-linux-x86_64
 
+      - name: Smoke Test Linux Binary
+        if: steps.version.outputs.bump == 'true'
+        run: |
+          ./backscroll-linux-x86_64 --version
+          ./backscroll-linux-x86_64 sync --help
+
       - name: Attest Build Provenance
         if: steps.version.outputs.bump == 'true'
         uses: actions/attest-build-provenance@e8998f949152b193b063cb0ec769d69d929409be # v2.4.0
@@ -186,6 +192,11 @@ jobs:
         run: |
           cargo build --release
           cp target/release/backscroll backscroll-macos-aarch64
+
+      - name: Smoke Test macOS Binary
+        run: |
+          ./backscroll-macos-aarch64 --version
+          ./backscroll-macos-aarch64 sync --help
 
       - name: Attest Build Provenance
         uses: actions/attest-build-provenance@e8998f949152b193b063cb0ec769d69d929409be # v2.4.0
