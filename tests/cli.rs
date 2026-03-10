@@ -306,3 +306,75 @@ fn test_resume_no_results_exit_code() {
         .failure()
         .stderr(predicate::str::contains("No matching session"));
 }
+
+#[test]
+fn test_topics_robot_output() {
+    let session_dir = tempdir().unwrap();
+    let db_dir = tempdir().unwrap();
+    let db_path = db_dir.path().join("topics_robot.db");
+    sync_fixture(session_dir.path(), &db_path);
+
+    let output = Command::cargo_bin("backscroll")
+        .unwrap()
+        .arg("topics")
+        .arg("--all-projects")
+        .arg("--robot")
+        .env("BACKSCROLL_DATABASE_PATH", db_path.to_str().unwrap())
+        .env(
+            "BACKSCROLL_SESSION_DIR",
+            session_dir.path().to_str().unwrap(),
+        )
+        .output()
+        .unwrap();
+
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    assert!(!stdout.is_empty(), "Topics should return results");
+    for line in stdout.trim().lines() {
+        let fields: Vec<&str> = line.split('\t').collect();
+        assert_eq!(
+            fields.len(),
+            3,
+            "Robot format should have 3 tab-separated fields: {}",
+            line
+        );
+    }
+}
+
+#[test]
+fn test_topics_json_output() {
+    let session_dir = tempdir().unwrap();
+    let db_dir = tempdir().unwrap();
+    let db_path = db_dir.path().join("topics_json.db");
+    sync_fixture(session_dir.path(), &db_path);
+
+    let output = Command::cargo_bin("backscroll")
+        .unwrap()
+        .arg("topics")
+        .arg("--all-projects")
+        .arg("--json")
+        .env("BACKSCROLL_DATABASE_PATH", db_path.to_str().unwrap())
+        .env(
+            "BACKSCROLL_SESSION_DIR",
+            session_dir.path().to_str().unwrap(),
+        )
+        .output()
+        .unwrap();
+
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    for line in stdout.trim().lines() {
+        let parsed: serde_json::Value = serde_json::from_str(line)
+            .unwrap_or_else(|e| panic!("Invalid JSON line '{}': {}", line, e));
+        assert!(
+            parsed.get("term").is_some(),
+            "JSON should have 'term' field"
+        );
+        assert!(
+            parsed.get("sessions").is_some(),
+            "JSON should have 'sessions' field"
+        );
+        assert!(
+            parsed.get("mentions").is_some(),
+            "JSON should have 'mentions' field"
+        );
+    }
+}
