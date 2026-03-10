@@ -62,6 +62,12 @@ enum Commands {
         /// Filtrar por fuente: sessions, plans, o all
         #[arg(long, default_value = "all")]
         source: String,
+        /// Solo resultados después de esta fecha (ISO 8601, ej: 2026-03-01)
+        #[arg(long)]
+        after: Option<String>,
+        /// Solo resultados antes de esta fecha (ISO 8601, ej: 2026-03-09)
+        #[arg(long)]
+        before: Option<String>,
     },
     /// Leer una sesión individual filtrada
     Read {
@@ -260,6 +266,8 @@ fn main() -> Result<()> {
             fields,
             max_tokens,
             source,
+            after,
+            before,
         } => {
             let engine = create_engine(&config)?;
 
@@ -299,7 +307,8 @@ fn main() -> Result<()> {
             } else {
                 Some(source.clone())
             };
-            let results = engine.search(query, &effective_project, &source_filter)?;
+            let results =
+                engine.search(query, &effective_project, &source_filter, after, before)?;
             if results.is_empty() && !json && !robot {
                 println!("No se encontraron resultados.");
             } else {
@@ -366,7 +375,7 @@ fn main() -> Result<()> {
             } else {
                 Some(source.clone())
             };
-            let results = engine.search(query, &effective_project, &source_filter)?;
+            let results = engine.search(query, &effective_project, &source_filter, &None, &None)?;
             if let Some(result) = results.first() {
                 let session_id = engine
                     .get_session_id(&result.source_path)?

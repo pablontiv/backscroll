@@ -52,7 +52,7 @@ main.rs (CLI: clap)
 - `core/sync.rs` — WalkDir traversal, SHA-256 hashing, JSONL parsing, noise filter regex (LazyLock)
 - `storage/sqlite.rs` — SQLite adapter (external FTS5, triggers, BM25 ranking, WAL mode, source-aware filtering)
 
-Seven CLI commands: `sync [--path] [--include-agents] [--no-plans]`, `search <query> [--project] [--all-projects] [--json] [--robot] [--fields] [--max-tokens] [--source]`, `read <path>`, `resume <query> [--project] [--all-projects] [--robot] [--source]`, `topics [--project] [--all-projects] [--limit] [--json] [--robot]`, `list [--project] [--all-projects] [--recent] [--json] [--robot]`, `status`.
+Seven CLI commands: `sync [--path] [--include-agents] [--no-plans]`, `search <query> [--project] [--all-projects] [--json] [--robot] [--fields] [--max-tokens] [--source] [--after] [--before]`, `read <path>`, `resume <query> [--project] [--all-projects] [--robot] [--source]`, `topics [--project] [--all-projects] [--limit] [--json] [--robot]`, `list [--project] [--all-projects] [--recent] [--json] [--robot]`, `status`.
 
 The `SearchEngine` trait is the port; `storage::sqlite` is the adapter. Database is opened lazily.
 
