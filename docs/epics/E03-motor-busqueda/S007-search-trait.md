@@ -1,3 +1,6 @@
+---
+estado: Completed
+---
 # S007: SearchEngine Trait
 
 **Estado:** Completed

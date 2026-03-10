@@ -1,3 +1,6 @@
+---
+estado: Completed
+---
 # S003: CLI Base (Clap v4)
 
 **Estado:** Completed

@@ -1,3 +1,6 @@
+---
+estado: Completed
+---
 # S020: Tracing Spans (Telemetría)
 
 **Estado:** Completed

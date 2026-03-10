@@ -1,3 +1,6 @@
+---
+estado: Completed
+---
 # S004: SQLite WAL (Persistencia Robusta)
 
 **Estado:** Completed

@@ -1,3 +1,6 @@
+---
+estado: Completed
+---
 # S019: Config (Figment)
 
 **Estado:** Completed

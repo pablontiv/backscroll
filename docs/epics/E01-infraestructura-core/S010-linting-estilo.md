@@ -1,3 +1,6 @@
+---
+estado: Completed
+---
 # S010: Linting & Estilo
 
 **Estado:** Completed

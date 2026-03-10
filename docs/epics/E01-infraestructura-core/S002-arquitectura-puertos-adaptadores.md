@@ -1,3 +1,6 @@
+---
+estado: Completed
+---
 # S002: Arquitectura de Puertos y Adaptadores
 
 **Estado:** Completed

@@ -1,3 +1,6 @@
+---
+estado: Completed
+---
 # E03: Motor de Búsqueda
 
 **Estado:** Completed

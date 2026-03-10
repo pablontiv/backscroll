@@ -1,3 +1,6 @@
+---
+estado: Completed
+---
 # S012: LLVM Coverage Gate (85%)
 
 **Estado:** Completed

@@ -1,3 +1,6 @@
+---
+estado: Completed
+---
 # E01: Infraestructura Core (Rust & SQLite)
 
 **Estado:** Completed

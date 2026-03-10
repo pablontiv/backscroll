@@ -1,3 +1,6 @@
+---
+estado: Completed
+---
 # S006: Sincronización Incremental (Hashes)
 
 **Estado:** Completed

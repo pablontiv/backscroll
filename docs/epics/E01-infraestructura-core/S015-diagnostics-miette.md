@@ -1,3 +1,6 @@
+---
+estado: Completed
+---
 # S015: Diagnostics (Miette)
 
 **Estado:** Completed

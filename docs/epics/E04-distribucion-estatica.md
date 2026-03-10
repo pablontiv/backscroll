@@ -1,3 +1,6 @@
+---
+estado: Completed
+---
 # E04: Distribución Estática
 
 **Estado:** Completed

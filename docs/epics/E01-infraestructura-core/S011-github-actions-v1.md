@@ -1,3 +1,6 @@
+---
+estado: Completed
+---
 # S011: GitHub Actions V1 (CI)
 
 **Estado:** Completed

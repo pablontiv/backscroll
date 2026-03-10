@@ -1,3 +1,6 @@
+---
+estado: Completed
+---
 # S018: Supply Chain Audit (cargo-deny)
 
 **Estado:** Completed

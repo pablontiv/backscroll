@@ -1,3 +1,6 @@
+---
+estado: Completed
+---
 # S008: FTS5 Optimizer (BM25)
 
 **Estado:** Completed

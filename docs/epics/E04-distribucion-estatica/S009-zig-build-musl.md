@@ -1,3 +1,6 @@
+---
+estado: Completed
+---
 # S009: Zig Build para Compilación Cruzada
 
 **Estado:** Completed

@@ -1,3 +1,6 @@
+---
+estado: Completed
+---
 # E02: Ingesta Defensiva
 
 **Estado:** Completed

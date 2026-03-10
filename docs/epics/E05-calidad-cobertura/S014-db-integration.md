@@ -1,3 +1,6 @@
+---
+estado: Completed
+---
 # S014: DB Integration (Pruebas de Persistencia)
 
 **Estado:** Completed

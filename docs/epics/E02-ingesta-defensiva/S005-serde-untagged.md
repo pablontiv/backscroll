@@ -1,3 +1,6 @@
+---
+estado: Completed
+---
 # S005: Serde Untagged (Parser Defensivo)
 
 **Estado:** Completed

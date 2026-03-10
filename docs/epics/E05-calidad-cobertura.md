@@ -1,3 +1,6 @@
+---
+estado: Completed
+---
 # E05: Calidad y Cobertura (Min. 85%)
 
 **Estado:** Completed

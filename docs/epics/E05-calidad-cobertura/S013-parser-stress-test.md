@@ -1,3 +1,6 @@
+---
+estado: Completed
+---
 # S013: Parser Stress Test (Sesiones Reales)
 
 **Estado:** Completed

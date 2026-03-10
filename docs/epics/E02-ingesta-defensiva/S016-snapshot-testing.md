@@ -1,3 +1,6 @@
+---
+estado: Completed
+---
 # S016: Snapshot Testing (Insta)
 
 **Estado:** Completed

@@ -1,3 +1,6 @@
+---
+estado: Completed
+---
 # S017: Automation (Just)
 
 **Estado:** Completed

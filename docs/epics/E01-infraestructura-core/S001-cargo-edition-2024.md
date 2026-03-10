@@ -1,3 +1,6 @@
+---
+estado: Completed
+---
 # S001: Cargo Edition 2024
 
 **Estado:** Completed
