@@ -33,7 +33,9 @@ pub fn format_results(results: &[SearchResult], options: &OutputOptions) {
                     let min_res = serde_json::json!({
                         "source_path": res.source_path,
                         "snippet": res.match_snippet.as_deref().unwrap_or(&res.text),
-                        "score": res.score
+                        "score": res.score,
+                        "role": res.role,
+                        "timestamp": res.timestamp
                     });
                     writeln!(out, "{}", min_res).unwrap();
                 } else {
@@ -44,11 +46,28 @@ pub fn format_results(results: &[SearchResult], options: &OutputOptions) {
             }
             OutputFormat::Robot => {
                 let snippet = res.match_snippet.as_deref().unwrap_or(&res.text);
-                writeln!(out, "{}\t{}\t{}", res.source_path, res.score, snippet).unwrap();
+                let ts = res.timestamp.as_deref().unwrap_or("-");
+                writeln!(
+                    out,
+                    "{}\t{}\t{}\t{}\t{}",
+                    res.source_path, res.score, res.role, ts, snippet
+                )
+                .unwrap();
             }
             OutputFormat::Text => {
                 println!("---");
-                println!("[SESSION] {} (Score: {:.2})", res.source_path, res.score);
+                let ts = res.timestamp.as_deref().unwrap_or("");
+                if ts.is_empty() {
+                    println!(
+                        "[{}] {} (Score: {:.2})",
+                        res.role, res.source_path, res.score
+                    );
+                } else {
+                    println!(
+                        "[{}] {} (Score: {:.2}) @ {}",
+                        res.role, res.source_path, res.score, ts
+                    );
+                }
                 if let Some(snippet) = &res.match_snippet {
                     // Could add terminal bold for >>> and <<< here
                     let formatted = snippet.replace(">>>", "\x1b[1m").replace("<<<", "\x1b[0m");

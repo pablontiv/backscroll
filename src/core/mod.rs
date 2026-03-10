@@ -12,6 +12,8 @@ pub struct SearchResult {
     pub text: String,
     pub match_snippet: Option<String>,
     pub score: f64,
+    pub role: String,
+    pub timestamp: Option<String>,
 }
 
 pub struct ParsedMessage {

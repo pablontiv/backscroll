@@ -178,6 +178,8 @@ impl Database {
             text: row.get(1)?,
             score: row.get(2)?,
             match_snippet: row.get(3).ok(),
+            role: row.get(4)?,
+            timestamp: row.get(5)?,
         })
     }
 }
@@ -238,7 +240,7 @@ impl SearchEngine for Database {
         };
 
         let base = format!(
-            "SELECT si.source_path, si.text, m.rank as score, {} as snippet FROM messages_fts m JOIN search_items si ON m.rowid = si.id WHERE messages_fts MATCH ?",
+            "SELECT si.source_path, si.text, m.rank as score, {} as snippet, si.role, si.timestamp FROM messages_fts m JOIN search_items si ON m.rowid = si.id WHERE messages_fts MATCH ?",
             snippet_expr
         );
 
