@@ -591,9 +591,11 @@ fn main() -> Result<()> {
             let engine = create_engine(&config)?;
             println!("Purging data before {}...", before);
             let stats = engine.purge(before)?;
+            let before_mb = stats.size_before as f64 / 1_048_576.0;
+            let after_mb = stats.size_after as f64 / 1_048_576.0;
             println!(
-                "Purge complete: {} items deleted, {} orphaned files cleaned.",
-                stats.deleted_items, stats.deleted_files
+                "Purged {} items, {} orphaned files. DB size: {:.2} MB → {:.2} MB",
+                stats.deleted_items, stats.deleted_files, before_mb, after_mb
             );
         }
         Commands::Reindex {

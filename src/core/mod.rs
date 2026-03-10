@@ -68,6 +68,8 @@ pub struct ProjectBreakdown {
 pub struct PurgeStats {
     pub deleted_items: i64,
     pub deleted_files: i64,
+    pub size_before: i64,
+    pub size_after: i64,
 }
 
 #[derive(Debug, Default)]

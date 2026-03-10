@@ -332,20 +332,29 @@ impl SearchEngine for Database {
     }
 
     fn purge(&self, before: &str) -> miette::Result<crate::core::PurgeStats> {
+        let size_before: i64 = self
+            .conn
+            .query_row(
+                "SELECT page_count * page_size FROM pragma_page_count, pragma_page_size",
+                [],
+                |r| r.get(0),
+            )
+            .into_diagnostic()?;
+
         self.conn
             .execute("BEGIN TRANSACTION", [])
             .into_diagnostic()?;
 
-        // Delete search items with timestamp before the given date
+        // Delete session items before date (preserve plans)
         let deleted_items = self
             .conn
             .execute(
-                "DELETE FROM search_items WHERE timestamp IS NOT NULL AND timestamp < ?",
+                "DELETE FROM search_items WHERE source = 'session' AND timestamp IS NOT NULL AND timestamp < ?",
                 [before],
             )
             .into_diagnostic()? as i64;
 
-        // Clean up indexed_files entries that have no remaining search_items
+        // Clean up orphaned indexed_files
         let deleted_files = self
             .conn
             .execute(
@@ -356,9 +365,23 @@ impl SearchEngine for Database {
 
         self.conn.execute("COMMIT", []).into_diagnostic()?;
 
+        // VACUUM to reclaim disk space (must run outside transaction)
+        self.conn.execute("VACUUM", []).into_diagnostic()?;
+
+        let size_after: i64 = self
+            .conn
+            .query_row(
+                "SELECT page_count * page_size FROM pragma_page_count, pragma_page_size",
+                [],
+                |r| r.get(0),
+            )
+            .into_diagnostic()?;
+
         Ok(crate::core::PurgeStats {
             deleted_items,
             deleted_files,
+            size_before,
+            size_after,
         })
     }
 
