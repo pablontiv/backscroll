@@ -122,26 +122,36 @@ jobs:
       - name: Install stable toolchain
         if: steps.version.outputs.bump == 'true'
         uses: dtolnay/rust-toolchain@efa25f7f19611383d5b0ccf2d1c8914531636bf9 # stable
+        with:
+          targets: x86_64-unknown-linux-musl
 
-      - name: Install cargo-auditable
+      - name: Install build tools
         if: steps.version.outputs.bump == 'true'
-        run: cargo install cargo-auditable
+        run: |
+          cargo install cargo-auditable cargo-zigbuild git-cliff
+          pip3 install ziglang
 
-      - name: Build Release Binary
+      - name: Build Release Binary (native)
         if: steps.version.outputs.bump == 'true'
         run: cargo auditable build --release
+
+      - name: Build Linux musl Static Binary
+        if: steps.version.outputs.bump == 'true'
+        run: |
+          cargo zigbuild --release --target x86_64-unknown-linux-musl
+          cp target/x86_64-unknown-linux-musl/release/backscroll backscroll-linux-x86_64
 
       - name: Attest Build Provenance
         if: steps.version.outputs.bump == 'true'
         uses: actions/attest-build-provenance@e8998f949152b193b063cb0ec769d69d929409be # v2.4.0
         with:
-          subject-path: target/release/backscroll
+          subject-path: |
+            target/release/backscroll
+            backscroll-linux-x86_64
 
       - name: Generate Changelog
         if: steps.version.outputs.bump == 'true'
-        run: |
-          cargo install git-cliff
-          git-cliff --latest --strip header --output RELEASE_NOTES.md
+        run: git-cliff --latest --strip header --output RELEASE_NOTES.md
 
       - name: Create GitHub Release
         if: steps.version.outputs.bump == 'true'
@@ -150,5 +160,6 @@ jobs:
         run: |
           gh release create ${{ steps.version.outputs.tag }} \
             target/release/backscroll \
+            backscroll-linux-x86_64 \
             --title "Release ${{ steps.version.outputs.tag }}" \
             --notes-file RELEASE_NOTES.md
