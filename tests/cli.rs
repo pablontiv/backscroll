@@ -840,3 +840,57 @@ fn test_search_pagination_default_limit_20() {
         "Should return 20 results by default (30 available)"
     );
 }
+
+#[test]
+fn test_reindex() {
+    let session_dir = tempdir().unwrap();
+    let db_dir = tempdir().unwrap();
+    let db_path = db_dir.path().join("reindex.db");
+    sync_fixture(session_dir.path(), &db_path);
+
+    // Search should find data
+    Command::cargo_bin("backscroll")
+        .unwrap()
+        .arg("search")
+        .arg("kubernetes")
+        .arg("--all-projects")
+        .env("BACKSCROLL_DATABASE_PATH", db_path.to_str().unwrap())
+        .env(
+            "BACKSCROLL_SESSION_DIR",
+            session_dir.path().to_str().unwrap(),
+        )
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("kubernetes"));
+
+    // Reindex should complete successfully
+    Command::cargo_bin("backscroll")
+        .unwrap()
+        .arg("reindex")
+        .arg("--path")
+        .arg(session_dir.path().to_str().unwrap())
+        .arg("--no-plans")
+        .env("BACKSCROLL_DATABASE_PATH", db_path.to_str().unwrap())
+        .env(
+            "BACKSCROLL_SESSION_DIR",
+            session_dir.path().to_str().unwrap(),
+        )
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("Reindex complete"));
+
+    // Search should still find data after reindex
+    Command::cargo_bin("backscroll")
+        .unwrap()
+        .arg("search")
+        .arg("kubernetes")
+        .arg("--all-projects")
+        .env("BACKSCROLL_DATABASE_PATH", db_path.to_str().unwrap())
+        .env(
+            "BACKSCROLL_SESSION_DIR",
+            session_dir.path().to_str().unwrap(),
+        )
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("kubernetes"));
+}
