@@ -964,3 +964,49 @@ fn test_purge() {
     assert!(stdout.contains("beta"), "beta (Mar) should survive purge");
     assert!(stdout.contains("gamma"), "gamma (Jun) should survive purge");
 }
+
+#[test]
+fn test_validate_healthy() {
+    let session_dir = tempdir().unwrap();
+    let db_dir = tempdir().unwrap();
+    let db_path = db_dir.path().join("validate_healthy.db");
+    sync_fixture(session_dir.path(), &db_path);
+
+    // Validate should report healthy on a clean index
+    Command::cargo_bin("backscroll")
+        .unwrap()
+        .arg("validate")
+        .env("BACKSCROLL_DATABASE_PATH", db_path.to_str().unwrap())
+        .env(
+            "BACKSCROLL_SESSION_DIR",
+            session_dir.path().to_str().unwrap(),
+        )
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("0 issues found"));
+}
+
+#[test]
+fn test_validate_orphan() {
+    let session_dir = tempdir().unwrap();
+    let db_dir = tempdir().unwrap();
+    let db_path = db_dir.path().join("validate_orphan.db");
+    sync_fixture(session_dir.path(), &db_path);
+
+    // Delete the source file to create an orphan
+    let session_file = session_dir.path().join("session.jsonl");
+    fs::remove_file(&session_file).unwrap();
+
+    // Validate should detect the orphan and exit non-zero
+    Command::cargo_bin("backscroll")
+        .unwrap()
+        .arg("validate")
+        .env("BACKSCROLL_DATABASE_PATH", db_path.to_str().unwrap())
+        .env(
+            "BACKSCROLL_SESSION_DIR",
+            session_dir.path().to_str().unwrap(),
+        )
+        .assert()
+        .failure()
+        .stdout(predicate::str::contains("Orphaned source paths"));
+}

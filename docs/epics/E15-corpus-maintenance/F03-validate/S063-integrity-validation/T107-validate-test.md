@@ -1,6 +1,6 @@
 ---
 ejecutable_en: 1 sesion
-estado: Pending # [Pending, Specified, In Progress, Completed, Blocked, On Hold, Obsolete]
+estado: Completed # [Pending, Specified, In Progress, Completed, Blocked, On Hold, Obsolete]
 tipo: test # [code, test, refactor, chore, docs]
 ---
 # T107: Integration test for validate

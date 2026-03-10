@@ -647,6 +647,7 @@ fn main() -> Result<()> {
                         report.fts_inconsistencies
                     );
                 }
+                std::process::exit(1);
             }
         }
         Commands::Status => {
