@@ -61,6 +61,9 @@ jobs:
     needs: [check-lint, test, audit, gitleaks]
     if: github.event_name == 'push' && (github.ref == 'refs/heads/master' || github.ref == 'refs/heads/main')
     runs-on: ubuntu-latest
+    outputs:
+      bump: ${{ steps.version.outputs.bump }}
+      tag: ${{ steps.version.outputs.tag }}
     permissions:
       contents: write
       id-token: write
@@ -163,3 +166,35 @@ jobs:
             backscroll-linux-x86_64 \
             --title "Release ${{ steps.version.outputs.tag }}" \
             --notes-file RELEASE_NOTES.md
+
+  release-macos:
+    name: macOS aarch64 Binary
+    needs: [release]
+    if: needs.release.outputs.bump == 'true'
+    runs-on: macos-latest
+    permissions:
+      contents: write
+      id-token: write
+      attestations: write
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+
+      - name: Install stable toolchain
+        uses: dtolnay/rust-toolchain@efa25f7f19611383d5b0ccf2d1c8914531636bf9 # stable
+
+      - name: Build macOS aarch64 Binary
+        run: |
+          cargo build --release
+          cp target/release/backscroll backscroll-macos-aarch64
+
+      - name: Attest Build Provenance
+        uses: actions/attest-build-provenance@e8998f949152b193b063cb0ec769d69d929409be # v2.4.0
+        with:
+          subject-path: backscroll-macos-aarch64
+
+      - name: Upload to GitHub Release
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh release upload ${{ needs.release.outputs.tag }} \
+            backscroll-macos-aarch64
