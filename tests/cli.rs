@@ -467,3 +467,163 @@ fn test_status_shows_project_breakdown() {
         .stdout(predicate::str::contains("By Project:"))
         .stdout(predicate::str::contains("PROJECT"));
 }
+
+/// Helper: sync a fixture with 3 messages at distinct timestamps for date filter tests.
+fn sync_date_fixture(session_dir: &std::path::Path, db_path: &std::path::Path) {
+    let session_file = session_dir.join("dates.jsonl");
+    let jsonl = r#"{"type": "user", "message": {"role": "user", "content": "alpha early message"}, "uuid": "d1", "timestamp": "2026-01-15T00:00:00Z"}
+{"type": "user", "message": {"role": "user", "content": "beta middle message"}, "uuid": "d2", "timestamp": "2026-03-01T00:00:00Z"}
+{"type": "user", "message": {"role": "user", "content": "gamma late message"}, "uuid": "d3", "timestamp": "2026-06-15T00:00:00Z"}"#;
+    fs::write(&session_file, jsonl).unwrap();
+
+    Command::cargo_bin("backscroll")
+        .unwrap()
+        .arg("sync")
+        .arg("--path")
+        .arg(session_dir.to_str().unwrap())
+        .arg("--no-plans")
+        .env("BACKSCROLL_DATABASE_PATH", db_path.to_str().unwrap())
+        .env("BACKSCROLL_SESSION_DIR", session_dir.to_str().unwrap())
+        .assert()
+        .success();
+}
+
+#[test]
+fn test_search_date_after_only() {
+    let session_dir = tempdir().unwrap();
+    let db_dir = tempdir().unwrap();
+    let db_path = db_dir.path().join("date_after.db");
+    sync_date_fixture(session_dir.path(), &db_path);
+
+    // --after 2026-03-01 should exclude "alpha" (Jan), include "beta" (Mar) and "gamma" (Jun)
+    let output = Command::cargo_bin("backscroll")
+        .unwrap()
+        .arg("search")
+        .arg("message")
+        .arg("--after")
+        .arg("2026-03-01")
+        .arg("--all-projects")
+        .env("BACKSCROLL_DATABASE_PATH", db_path.to_str().unwrap())
+        .env(
+            "BACKSCROLL_SESSION_DIR",
+            session_dir.path().to_str().unwrap(),
+        )
+        .output()
+        .unwrap();
+
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    assert!(
+        !stdout.contains("alpha"),
+        "alpha (Jan) should be excluded by --after 2026-03-01"
+    );
+    assert!(
+        stdout.contains("beta") || stdout.contains("gamma"),
+        "beta or gamma should appear after 2026-03-01"
+    );
+}
+
+#[test]
+fn test_search_date_before_only() {
+    let session_dir = tempdir().unwrap();
+    let db_dir = tempdir().unwrap();
+    let db_path = db_dir.path().join("date_before.db");
+    sync_date_fixture(session_dir.path(), &db_path);
+
+    // --before 2026-03-01 should include "alpha" (Jan), exclude "beta" (Mar) and "gamma" (Jun)
+    let output = Command::cargo_bin("backscroll")
+        .unwrap()
+        .arg("search")
+        .arg("message")
+        .arg("--before")
+        .arg("2026-03-01")
+        .arg("--all-projects")
+        .env("BACKSCROLL_DATABASE_PATH", db_path.to_str().unwrap())
+        .env(
+            "BACKSCROLL_SESSION_DIR",
+            session_dir.path().to_str().unwrap(),
+        )
+        .output()
+        .unwrap();
+
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    assert!(
+        stdout.contains("alpha"),
+        "alpha (Jan) should be included before 2026-03-01"
+    );
+    assert!(
+        !stdout.contains("beta"),
+        "beta (Mar) should be excluded by --before 2026-03-01 (exclusive)"
+    );
+    assert!(
+        !stdout.contains("gamma"),
+        "gamma (Jun) should be excluded by --before 2026-03-01"
+    );
+}
+
+#[test]
+fn test_search_date_after_and_before() {
+    let session_dir = tempdir().unwrap();
+    let db_dir = tempdir().unwrap();
+    let db_path = db_dir.path().join("date_both.db");
+    sync_date_fixture(session_dir.path(), &db_path);
+
+    // --after 2026-02-01 --before 2026-05-01 should include only "beta" (Mar)
+    let output = Command::cargo_bin("backscroll")
+        .unwrap()
+        .arg("search")
+        .arg("message")
+        .arg("--after")
+        .arg("2026-02-01")
+        .arg("--before")
+        .arg("2026-05-01")
+        .arg("--all-projects")
+        .env("BACKSCROLL_DATABASE_PATH", db_path.to_str().unwrap())
+        .env(
+            "BACKSCROLL_SESSION_DIR",
+            session_dir.path().to_str().unwrap(),
+        )
+        .output()
+        .unwrap();
+
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    assert!(
+        !stdout.contains("alpha"),
+        "alpha (Jan) should be excluded by --after 2026-02-01"
+    );
+    assert!(
+        stdout.contains("beta"),
+        "beta (Mar) should be within range Feb-May"
+    );
+    assert!(
+        !stdout.contains("gamma"),
+        "gamma (Jun) should be excluded by --before 2026-05-01"
+    );
+}
+
+#[test]
+fn test_search_date_no_flags_returns_all() {
+    let session_dir = tempdir().unwrap();
+    let db_dir = tempdir().unwrap();
+    let db_path = db_dir.path().join("date_none.db");
+    sync_date_fixture(session_dir.path(), &db_path);
+
+    // No date flags should return all messages (backward compat)
+    let output = Command::cargo_bin("backscroll")
+        .unwrap()
+        .arg("search")
+        .arg("message")
+        .arg("--all-projects")
+        .env("BACKSCROLL_DATABASE_PATH", db_path.to_str().unwrap())
+        .env(
+            "BACKSCROLL_SESSION_DIR",
+            session_dir.path().to_str().unwrap(),
+        )
+        .output()
+        .unwrap();
+
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    assert!(
+        stdout.contains("alpha") || stdout.contains("beta") || stdout.contains("gamma"),
+        "Without date flags, all messages should be searchable"
+    );
+}
