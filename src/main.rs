@@ -68,6 +68,9 @@ enum Commands {
         /// Solo resultados antes de esta fecha (ISO 8601, ej: 2026-03-09)
         #[arg(long)]
         before: Option<String>,
+        /// Filtrar por rol: human o assistant
+        #[arg(long)]
+        role: Option<String>,
     },
     /// Leer una sesión individual filtrada
     Read {
@@ -268,6 +271,7 @@ fn main() -> Result<()> {
             source,
             after,
             before,
+            role,
         } => {
             let engine = create_engine(&config)?;
 
@@ -307,8 +311,27 @@ fn main() -> Result<()> {
             } else {
                 Some(source.clone())
             };
-            let results =
-                engine.search(query, &effective_project, &source_filter, after, before)?;
+            // Validate --role value if provided
+            if let Some(r) = role {
+                match r.as_str() {
+                    "human" | "assistant" => {}
+                    _ => {
+                        return Err(miette::miette!(
+                            "Invalid --role value '{}'. Must be 'human' or 'assistant'.",
+                            r
+                        ));
+                    }
+                }
+            }
+
+            let results = engine.search(
+                query,
+                &effective_project,
+                &source_filter,
+                after,
+                before,
+                role,
+            )?;
             if results.is_empty() && !json && !robot {
                 println!("No se encontraron resultados.");
             } else {
@@ -375,7 +398,14 @@ fn main() -> Result<()> {
             } else {
                 Some(source.clone())
             };
-            let results = engine.search(query, &effective_project, &source_filter, &None, &None)?;
+            let results = engine.search(
+                query,
+                &effective_project,
+                &source_filter,
+                &None,
+                &None,
+                &None,
+            )?;
             if let Some(result) = results.first() {
                 let session_id = engine
                     .get_session_id(&result.source_path)?

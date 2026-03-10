@@ -230,6 +230,7 @@ impl SearchEngine for Database {
         source: &Option<String>,
         after: &Option<String>,
         before: &Option<String>,
+        role: &Option<String>,
     ) -> miette::Result<Vec<SearchResult>> {
         let mut results = Vec::new();
         let snippet_expr = "snippet(messages_fts, 0, '>>>', '<<<', '...', 32)";
@@ -264,6 +265,14 @@ impl SearchEngine for Database {
         if let Some(b) = before {
             conditions.push("si.timestamp IS NOT NULL AND si.timestamp < ?");
             param_values.push(Box::new(b.clone()));
+        }
+        if let Some(r) = role {
+            let db_role = match r.as_str() {
+                "human" => "user",
+                other => other,
+            };
+            conditions.push("si.role = ?");
+            param_values.push(Box::new(db_role.to_string()));
         }
 
         let sql = if conditions.is_empty() {
@@ -606,7 +615,7 @@ mod tests {
         let hashes = db.get_file_hashes()?;
         assert_eq!(hashes.get(path).unwrap(), hash);
 
-        let results = db.search("hola", &None, &None, &None, &None)?;
+        let results = db.search("hola", &None, &None, &None, &None, &None)?;
         assert_eq!(results.len(), 1);
         assert_eq!(results[0].text, "hola mundo rust");
         assert!(results[0].match_snippet.is_some());
@@ -807,7 +816,7 @@ mod tests {
             },
         ])?;
 
-        let plans = db.search("deploy", &None, &Some("plans".into()), &None, &None)?;
+        let plans = db.search("deploy", &None, &Some("plans".into()), &None, &None, &None)?;
         assert_eq!(plans.len(), 1);
         assert_eq!(plans[0].source_path, "/p/p1.md");
         Ok(())
@@ -847,7 +856,14 @@ mod tests {
             },
         ])?;
 
-        let sessions = db.search("configure", &None, &Some("sessions".into()), &None, &None)?;
+        let sessions = db.search(
+            "configure",
+            &None,
+            &Some("sessions".into()),
+            &None,
+            &None,
+            &None,
+        )?;
         assert_eq!(sessions.len(), 1);
         assert_eq!(sessions[0].source_path, "/s/s2.jsonl");
         Ok(())
@@ -887,7 +903,7 @@ mod tests {
             },
         ])?;
 
-        let all = db.search("testing", &None, &None, &None, &None)?;
+        let all = db.search("testing", &None, &None, &None, &None, &None)?;
         assert_eq!(all.len(), 2);
         Ok(())
     }

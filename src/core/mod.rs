@@ -71,6 +71,7 @@ pub trait SearchEngine {
         source: &Option<String>,
         after: &Option<String>,
         before: &Option<String>,
+        role: &Option<String>,
     ) -> miette::Result<Vec<SearchResult>>;
     fn get_file_hashes(&self) -> miette::Result<HashMap<String, String>>;
     fn get_stats(&self) -> miette::Result<Stats>;
