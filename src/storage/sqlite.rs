@@ -1,4 +1,4 @@
-use crate::core::{ParsedFile, SearchEngine, SearchResult, Stats, TopicEntry};
+use crate::core::{ParsedFile, SearchEngine, SearchResult, SessionEntry, Stats, TopicEntry};
 use miette::IntoDiagnostic;
 use rusqlite::{Connection, Result, Row, params};
 use std::collections::HashMap;
@@ -488,6 +488,55 @@ impl SearchEngine for Database {
                 Ok(results)
             }
         }
+    }
+
+    fn list_sessions(
+        &self,
+        project: Option<&str>,
+        limit: usize,
+    ) -> miette::Result<Vec<SessionEntry>> {
+        let (sql, params): (String, Vec<Box<dyn rusqlite::types::ToSql>>) = match project {
+            Some(proj) => (
+                "SELECT source_path, project, COUNT(*) as messages, \
+                 MIN(timestamp) as started, MAX(timestamp) as ended \
+                 FROM search_items WHERE source = 'session' AND project = ? \
+                 GROUP BY source_path ORDER BY MAX(timestamp) DESC LIMIT ?"
+                    .to_string(),
+                vec![
+                    Box::new(proj.to_string()) as Box<dyn rusqlite::types::ToSql>,
+                    Box::new(limit as i64),
+                ],
+            ),
+            None => (
+                "SELECT source_path, project, COUNT(*) as messages, \
+                 MIN(timestamp) as started, MAX(timestamp) as ended \
+                 FROM search_items WHERE source = 'session' \
+                 GROUP BY source_path ORDER BY MAX(timestamp) DESC LIMIT ?"
+                    .to_string(),
+                vec![Box::new(limit as i64) as Box<dyn rusqlite::types::ToSql>],
+            ),
+        };
+
+        let param_refs: Vec<&dyn rusqlite::types::ToSql> =
+            params.iter().map(|p| p.as_ref()).collect();
+        let mut stmt = self.conn.prepare(&sql).into_diagnostic()?;
+        let rows = stmt
+            .query_map(param_refs.as_slice(), |row| {
+                Ok(SessionEntry {
+                    source_path: row.get(0)?,
+                    project: row.get(1)?,
+                    messages: row.get(2)?,
+                    started: row.get(3)?,
+                    ended: row.get(4)?,
+                })
+            })
+            .into_diagnostic()?;
+
+        let mut results = Vec::new();
+        for row in rows {
+            results.push(row.into_diagnostic()?);
+        }
+        Ok(results)
     }
 }
 
@@ -986,6 +1035,101 @@ mod tests {
         let terms: Vec<&str> = topics.iter().map(|t| t.term.as_str()).collect();
         // All words in the message are stopwords or <=3 chars — should be empty
         assert!(topics.is_empty(), "Expected no topics but got: {:?}", terms);
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_list_sessions_global() -> miette::Result<()> {
+        let db = Database::open(":memory:")?;
+        db.setup_schema()?;
+
+        db.sync_files(vec![
+            ParsedFile {
+                source: "session".into(),
+                source_path: "/s/a.jsonl".into(),
+                hash: "la".into(),
+                project: Some("proj-a".into()),
+                messages: vec![
+                    ParsedMessage {
+                        role: "user".into(),
+                        text: "first".into(),
+                        ordinal: 0,
+                        uuid: None,
+                        timestamp: Some("2026-01-01T10:00:00Z".into()),
+                    },
+                    ParsedMessage {
+                        role: "assistant".into(),
+                        text: "second".into(),
+                        ordinal: 1,
+                        uuid: None,
+                        timestamp: Some("2026-01-01T10:05:00Z".into()),
+                    },
+                ],
+            },
+            ParsedFile {
+                source: "session".into(),
+                source_path: "/s/b.jsonl".into(),
+                hash: "lb".into(),
+                project: Some("proj-b".into()),
+                messages: vec![ParsedMessage {
+                    role: "user".into(),
+                    text: "only one".into(),
+                    ordinal: 0,
+                    uuid: None,
+                    timestamp: Some("2026-01-02T10:00:00Z".into()),
+                }],
+            },
+        ])?;
+
+        let sessions = db.list_sessions(None, 10)?;
+        assert_eq!(sessions.len(), 2);
+        // Most recent first
+        assert_eq!(sessions[0].source_path, "/s/b.jsonl");
+        assert_eq!(sessions[0].messages, 1);
+        assert_eq!(sessions[1].source_path, "/s/a.jsonl");
+        assert_eq!(sessions[1].messages, 2);
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_list_sessions_project_filter() -> miette::Result<()> {
+        let db = Database::open(":memory:")?;
+        db.setup_schema()?;
+
+        db.sync_files(vec![
+            ParsedFile {
+                source: "session".into(),
+                source_path: "/s/x.jsonl".into(),
+                hash: "lx".into(),
+                project: Some("alpha".into()),
+                messages: vec![ParsedMessage {
+                    role: "user".into(),
+                    text: "alpha msg".into(),
+                    ordinal: 0,
+                    uuid: None,
+                    timestamp: None,
+                }],
+            },
+            ParsedFile {
+                source: "session".into(),
+                source_path: "/s/y.jsonl".into(),
+                hash: "ly".into(),
+                project: Some("beta".into()),
+                messages: vec![ParsedMessage {
+                    role: "user".into(),
+                    text: "beta msg".into(),
+                    ordinal: 0,
+                    uuid: None,
+                    timestamp: None,
+                }],
+            },
+        ])?;
+
+        let sessions = db.list_sessions(Some("alpha"), 10)?;
+        assert_eq!(sessions.len(), 1);
+        assert_eq!(sessions[0].project.as_deref(), Some("alpha"));
 
         Ok(())
     }

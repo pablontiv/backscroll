@@ -85,6 +85,24 @@ enum Commands {
         #[arg(long, default_value = "all")]
         source: String,
     },
+    /// Listar sesiones indexadas con metadata
+    List {
+        /// Filtrar por proyecto
+        #[arg(short, long)]
+        project: Option<String>,
+        /// Listar sesiones de todos los proyectos
+        #[arg(long, default_value_t = false)]
+        all_projects: bool,
+        /// Número de sesiones recientes a mostrar
+        #[arg(short, long, default_value_t = 20)]
+        recent: usize,
+        /// Formato JSON lines
+        #[arg(long, default_value_t = false)]
+        json: bool,
+        /// Formato compacto tab-separated
+        #[arg(long, default_value_t = false)]
+        robot: bool,
+    },
     /// Mostrar temas frecuentes del corpus indexado
     Topics {
         /// Filtrar por proyecto
@@ -365,6 +383,86 @@ fn main() -> Result<()> {
             } else {
                 eprintln!("No matching session found.");
                 std::process::exit(1);
+            }
+        }
+        Commands::List {
+            project,
+            all_projects,
+            recent,
+            json,
+            robot,
+        } => {
+            let engine = create_engine(&config)?;
+
+            // Auto-sync before list
+            if let Ok(paths) = resolve_session_paths(&[], &config) {
+                for p in &paths {
+                    let hashes = engine.get_file_hashes()?;
+                    let files = parse_sessions(p, &hashes, false)?;
+                    if !files.is_empty() {
+                        engine.sync_files(files)?;
+                    }
+                }
+            }
+
+            let effective_project = if *all_projects {
+                None
+            } else {
+                match project {
+                    Some(p) => Some(p.clone()),
+                    None => std::env::current_dir()
+                        .ok()
+                        .map(|p| p.to_string_lossy().replace('/', "-")),
+                }
+            };
+
+            let sessions = engine.list_sessions(effective_project.as_deref(), *recent)?;
+
+            if sessions.is_empty() {
+                if !json && !robot {
+                    println!("No se encontraron sesiones.");
+                }
+            } else if *json {
+                for s in &sessions {
+                    println!("{}", serde_json::to_string(s).unwrap_or_default());
+                }
+            } else if *robot {
+                for s in &sessions {
+                    println!(
+                        "{}\t{}\t{}\t{}\t{}",
+                        s.source_path,
+                        s.project.as_deref().unwrap_or("-"),
+                        s.messages,
+                        s.started.as_deref().unwrap_or("-"),
+                        s.ended.as_deref().unwrap_or("-"),
+                    );
+                }
+            } else {
+                println!(
+                    "{:<60} {:<20} {:>5} {:<20}",
+                    "PATH", "PROJECT", "MSGS", "LAST ACTIVITY"
+                );
+                println!("{}", "-".repeat(107));
+                for s in &sessions {
+                    let proj = s.project.as_deref().unwrap_or("-");
+                    let proj_short = if proj.len() > 18 {
+                        &proj[proj.len() - 18..]
+                    } else {
+                        proj
+                    };
+                    let path_short = if s.source_path.len() > 58 {
+                        &s.source_path[s.source_path.len() - 58..]
+                    } else {
+                        &s.source_path
+                    };
+                    println!(
+                        "{:<60} {:<20} {:>5} {:<20}",
+                        path_short,
+                        proj_short,
+                        s.messages,
+                        s.ended.as_deref().unwrap_or("-"),
+                    );
+                }
             }
         }
         Commands::Topics {
