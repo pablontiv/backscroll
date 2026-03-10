@@ -5,9 +5,9 @@ mod core;
 mod output;
 mod storage;
 
-use crate::core::SearchEngine;
 use crate::core::plans::parse_plan;
 use crate::core::sync::parse_sessions;
+use crate::core::{SearchEngine, SearchParams};
 use crate::output::{OutputFormat, OutputOptions, format_results};
 use clap::{Parser, Subcommand};
 use config::Config;
@@ -71,6 +71,12 @@ enum Commands {
         /// Filtrar por rol: human o assistant
         #[arg(long)]
         role: Option<String>,
+        /// Máximo de resultados (default 20, 0 = sin límite)
+        #[arg(long, default_value_t = 20)]
+        limit: usize,
+        /// Número de resultados a saltar
+        #[arg(long, default_value_t = 0)]
+        offset: usize,
     },
     /// Leer una sesión individual filtrada
     Read {
@@ -272,6 +278,8 @@ fn main() -> Result<()> {
             after,
             before,
             role,
+            limit,
+            offset,
         } => {
             let engine = create_engine(&config)?;
 
@@ -324,14 +332,16 @@ fn main() -> Result<()> {
                 }
             }
 
-            let results = engine.search(
-                query,
-                &effective_project,
-                &source_filter,
-                after,
-                before,
-                role,
-            )?;
+            let params = SearchParams {
+                project: effective_project,
+                source: source_filter,
+                after: after.clone(),
+                before: before.clone(),
+                role: role.clone(),
+                limit: *limit,
+                offset: *offset,
+            };
+            let results = engine.search(query, &params)?;
             if results.is_empty() && !json && !robot {
                 println!("No se encontraron resultados.");
             } else {
@@ -398,14 +408,13 @@ fn main() -> Result<()> {
             } else {
                 Some(source.clone())
             };
-            let results = engine.search(
-                query,
-                &effective_project,
-                &source_filter,
-                &None,
-                &None,
-                &None,
-            )?;
+            let params = SearchParams {
+                project: effective_project,
+                source: source_filter,
+                limit: 20,
+                ..SearchParams::default()
+            };
+            let results = engine.search(query, &params)?;
             if let Some(result) = results.first() {
                 let session_id = engine
                     .get_session_id(&result.source_path)?

@@ -62,17 +62,20 @@ pub struct ProjectBreakdown {
     pub messages: i64,
 }
 
+#[derive(Debug, Default)]
+pub struct SearchParams {
+    pub project: Option<String>,
+    pub source: Option<String>,
+    pub after: Option<String>,
+    pub before: Option<String>,
+    pub role: Option<String>,
+    pub limit: usize,
+    pub offset: usize,
+}
+
 pub trait SearchEngine {
     fn sync_files(&self, files: Vec<ParsedFile>) -> miette::Result<()>;
-    fn search(
-        &self,
-        query: &str,
-        project: &Option<String>,
-        source: &Option<String>,
-        after: &Option<String>,
-        before: &Option<String>,
-        role: &Option<String>,
-    ) -> miette::Result<Vec<SearchResult>>;
+    fn search(&self, query: &str, params: &SearchParams) -> miette::Result<Vec<SearchResult>>;
     fn get_file_hashes(&self) -> miette::Result<HashMap<String, String>>;
     fn get_stats(&self) -> miette::Result<Stats>;
     fn get_session_id(&self, source_path: &str) -> miette::Result<Option<String>>;

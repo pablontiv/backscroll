@@ -226,16 +226,12 @@ impl SearchEngine for Database {
     fn search(
         &self,
         query_str: &str,
-        project: &Option<String>,
-        source: &Option<String>,
-        after: &Option<String>,
-        before: &Option<String>,
-        role: &Option<String>,
+        params: &crate::core::SearchParams,
     ) -> miette::Result<Vec<SearchResult>> {
         let mut results = Vec::new();
         let snippet_expr = "snippet(messages_fts, 0, '>>>', '<<<', '...', 32)";
 
-        let source_filter = match source.as_deref() {
+        let source_filter = match params.source.as_deref() {
             Some("sessions") => Some("session"),
             Some("plans") => Some("plan"),
             _ => None, // "all" or None
@@ -250,7 +246,7 @@ impl SearchEngine for Database {
         let mut param_values: Vec<Box<dyn rusqlite::types::ToSql>> = Vec::new();
         param_values.push(Box::new(query_str.to_string()));
 
-        if let Some(p) = project {
+        if let Some(p) = &params.project {
             conditions.push("si.project = ?");
             param_values.push(Box::new(p.clone()));
         }
@@ -258,15 +254,15 @@ impl SearchEngine for Database {
             conditions.push("si.source = ?");
             param_values.push(Box::new(s.to_string()));
         }
-        if let Some(a) = after {
+        if let Some(a) = &params.after {
             conditions.push("si.timestamp IS NOT NULL AND si.timestamp >= ?");
             param_values.push(Box::new(a.clone()));
         }
-        if let Some(b) = before {
+        if let Some(b) = &params.before {
             conditions.push("si.timestamp IS NOT NULL AND si.timestamp < ?");
             param_values.push(Box::new(b.clone()));
         }
-        if let Some(r) = role {
+        if let Some(r) = &params.role {
             let db_role = match r.as_str() {
                 "human" => "user",
                 other => other,
@@ -275,13 +271,20 @@ impl SearchEngine for Database {
             param_values.push(Box::new(db_role.to_string()));
         }
 
+        let limit_clause = if params.limit == 0 {
+            String::new()
+        } else {
+            format!(" LIMIT {} OFFSET {}", params.limit, params.offset)
+        };
+
         let sql = if conditions.is_empty() {
-            format!("{} ORDER BY rank LIMIT 20", base)
+            format!("{} ORDER BY rank{}", base, limit_clause)
         } else {
             format!(
-                "{} AND {} ORDER BY rank LIMIT 20",
+                "{} AND {} ORDER BY rank{}",
                 base,
-                conditions.join(" AND ")
+                conditions.join(" AND "),
+                limit_clause
             )
         };
 
@@ -585,7 +588,7 @@ impl SearchEngine for Database {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::core::ParsedMessage;
+    use crate::core::{ParsedMessage, SearchParams};
 
     #[test]
     fn test_db_workflow() -> miette::Result<()> {
@@ -615,7 +618,13 @@ mod tests {
         let hashes = db.get_file_hashes()?;
         assert_eq!(hashes.get(path).unwrap(), hash);
 
-        let results = db.search("hola", &None, &None, &None, &None, &None)?;
+        let results = db.search(
+            "hola",
+            &SearchParams {
+                limit: 20,
+                ..Default::default()
+            },
+        )?;
         assert_eq!(results.len(), 1);
         assert_eq!(results[0].text, "hola mundo rust");
         assert!(results[0].match_snippet.is_some());
@@ -816,7 +825,14 @@ mod tests {
             },
         ])?;
 
-        let plans = db.search("deploy", &None, &Some("plans".into()), &None, &None, &None)?;
+        let plans = db.search(
+            "deploy",
+            &SearchParams {
+                source: Some("plans".into()),
+                limit: 20,
+                ..Default::default()
+            },
+        )?;
         assert_eq!(plans.len(), 1);
         assert_eq!(plans[0].source_path, "/p/p1.md");
         Ok(())
@@ -858,11 +874,11 @@ mod tests {
 
         let sessions = db.search(
             "configure",
-            &None,
-            &Some("sessions".into()),
-            &None,
-            &None,
-            &None,
+            &SearchParams {
+                source: Some("sessions".into()),
+                limit: 20,
+                ..Default::default()
+            },
         )?;
         assert_eq!(sessions.len(), 1);
         assert_eq!(sessions[0].source_path, "/s/s2.jsonl");
@@ -903,7 +919,13 @@ mod tests {
             },
         ])?;
 
-        let all = db.search("testing", &None, &None, &None, &None, &None)?;
+        let all = db.search(
+            "testing",
+            &SearchParams {
+                limit: 20,
+                ..Default::default()
+            },
+        )?;
         assert_eq!(all.len(), 2);
         Ok(())
     }
