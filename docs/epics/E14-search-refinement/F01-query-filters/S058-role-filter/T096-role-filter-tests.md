@@ -1,6 +1,6 @@
 ---
 ejecutable_en: 1 sesion
-estado: Pending # [Pending, Specified, In Progress, Completed, Blocked, On Hold, Obsolete]
+estado: Completed # [Pending, Specified, In Progress, Completed, Blocked, On Hold, Obsolete]
 tipo: code # [code, test, refactor, chore, docs]
 ---
 # T096: Integration tests for role filtering
