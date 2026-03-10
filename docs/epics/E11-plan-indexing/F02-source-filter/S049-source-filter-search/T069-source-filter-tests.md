@@ -1,7 +1,7 @@
 ---
-estado: Completed
-tipo: test
 ejecutable_en: 1 sesion
+estado: Completed
+tipo: code
 ---
 # T069: Source filter tests
 
