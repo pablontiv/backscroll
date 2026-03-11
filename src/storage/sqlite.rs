@@ -11,6 +11,22 @@ pub struct Database {
     conn: Connection,
 }
 
+/// Sanitize user input for FTS5 MATCH.
+///
+/// Wraps every token in double quotes so FTS5 treats all input as literal
+/// search terms. This prevents hyphens, colons, parentheses, and other
+/// FTS5 operators from causing SQL errors or unexpected behavior.
+fn sanitize_fts5_query(query: &str) -> String {
+    query
+        .split_whitespace()
+        .map(|token| {
+            let escaped = token.replace('"', "\"\"");
+            format!("\"{}\"", escaped)
+        })
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
 impl Database {
     pub fn open(path: impl AsRef<Path>) -> miette::Result<Self> {
         let conn = Connection::open(path).into_diagnostic()?;
@@ -246,7 +262,7 @@ impl SearchEngine for Database {
 
         let mut conditions = Vec::new();
         let mut param_values: Vec<Box<dyn rusqlite::types::ToSql>> = Vec::new();
-        param_values.push(Box::new(query_str.to_string()));
+        param_values.push(Box::new(sanitize_fts5_query(query_str)));
 
         if let Some(p) = &params.project {
             conditions.push("si.project = ?");

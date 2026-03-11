@@ -1010,3 +1010,95 @@ fn test_validate_orphan() {
         .failure()
         .stdout(predicate::str::contains("Orphaned source paths"));
 }
+
+#[test]
+fn test_search_hyphenated_query() {
+    // Regression: "anti-patron" caused "no such column: patron" SQL error
+    // because FTS5 interpreted the hyphen as a column:term separator.
+    let session_dir = tempdir().unwrap();
+    let db_dir = tempdir().unwrap();
+    let db_path = db_dir.path().join("hyphen.db");
+    let session_file = session_dir.path().join("session.jsonl");
+
+    fs::write(
+        &session_file,
+        r#"{"type": "user", "message": {"role": "user", "content": "este es un anti-patron conocido"}, "uuid": "h1", "timestamp": "100"}"#,
+    )
+    .unwrap();
+
+    Command::cargo_bin("backscroll")
+        .unwrap()
+        .arg("sync")
+        .arg("--path")
+        .arg(session_dir.path().to_str().unwrap())
+        .arg("--no-plans")
+        .env("BACKSCROLL_DATABASE_PATH", db_path.to_str().unwrap())
+        .env(
+            "BACKSCROLL_SESSION_DIR",
+            session_dir.path().to_str().unwrap(),
+        )
+        .assert()
+        .success();
+
+    Command::cargo_bin("backscroll")
+        .unwrap()
+        .arg("search")
+        .arg("anti-patron")
+        .arg("--all-projects")
+        .env("BACKSCROLL_DATABASE_PATH", db_path.to_str().unwrap())
+        .env(
+            "BACKSCROLL_SESSION_DIR",
+            session_dir.path().to_str().unwrap(),
+        )
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("anti"));
+}
+
+#[test]
+fn test_search_special_chars_no_crash() {
+    // Colons, parens, and other FTS5 operators should not crash
+    let session_dir = tempdir().unwrap();
+    let db_dir = tempdir().unwrap();
+    let db_path = db_dir.path().join("special.db");
+    let session_file = session_dir.path().join("session.jsonl");
+
+    fs::write(
+        &session_file,
+        r#"{"type": "user", "message": {"role": "user", "content": "check http://localhost:8080 status (production)"}, "uuid": "s1", "timestamp": "100"}"#,
+    )
+    .unwrap();
+
+    let fake_home = tempdir().unwrap();
+
+    Command::cargo_bin("backscroll")
+        .unwrap()
+        .arg("sync")
+        .arg("--path")
+        .arg(session_dir.path().to_str().unwrap())
+        .arg("--no-plans")
+        .env("BACKSCROLL_DATABASE_PATH", db_path.to_str().unwrap())
+        .env(
+            "BACKSCROLL_SESSION_DIR",
+            session_dir.path().to_str().unwrap(),
+        )
+        .env("HOME", fake_home.path().to_str().unwrap())
+        .assert()
+        .success();
+
+    for query in &["http://localhost:8080", "status (production)", "NOT a OR b"] {
+        Command::cargo_bin("backscroll")
+            .unwrap()
+            .arg("search")
+            .arg(query)
+            .arg("--all-projects")
+            .env("BACKSCROLL_DATABASE_PATH", db_path.to_str().unwrap())
+            .env(
+                "BACKSCROLL_SESSION_DIR",
+                session_dir.path().to_str().unwrap(),
+            )
+            .env("HOME", fake_home.path().to_str().unwrap())
+            .assert()
+            .success();
+    }
+}
