@@ -134,7 +134,7 @@ After v1.0: `feat` bumps minor, breaking bumps major (standard semver).
 
 ## Release Flow
 
-Releases are fully automated via CI. On every push to master, CI analyzes conventional commits since the last tag, calculates the next semver version, builds multi-platform binaries, creates a GitHub Release, and commits the version bump back to `Cargo.toml`.
+Releases are fully automated via CI. On every push to master, CI analyzes conventional commits since the last tag, calculates the next semver version, claims it via atomic `git push origin <tag>`, builds multi-platform binaries, creates a GitHub Release, and commits the version bump back to `Cargo.toml`. Concurrent CI runs that compute the same version lose the tag-push race and skip gracefully.
 
 No manual release steps are needed — just push to master with conventional commit messages. Tags follow `v{VERSION}` format.
 
