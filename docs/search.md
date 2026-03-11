@@ -73,6 +73,10 @@ backscroll search "decisions" --robot --max-tokens 4000
 
 The limit is approximate — it will not truncate a result mid-output, but will stop before starting a result that would exceed the budget.
 
+## Query Sanitization
+
+User queries are automatically sanitized before being passed to the FTS5 engine. All tokens are wrapped in double quotes so special characters (hyphens, colons, parentheses, FTS5 operators like `AND`/`OR`/`NOT`) are treated as literal search terms. This means queries like `"anti-pattern"`, `"http://localhost:8080"`, or `"status (production)"` work without errors.
+
 ## Exit Codes
 
 | Code | Meaning |
