@@ -24,6 +24,8 @@ Run a single test: `cargo test test_name`
 
 Tests use `assert_cmd` + `predicates` for CLI integration and `insta` for snapshot tests. Unit tests are co-located in each module. Integration tests in `tests/cli.rs`. Update snapshots with `cargo insta review`.
 
+Install script tests: `bash tests/test-install.sh` (bash) and `Invoke-Pester tests/test-install.ps1` (PowerShell). Both run in CI — static checks in `check-lint`, runtime PowerShell tests in a Windows job.
+
 ## Architecture
 
 ### Module Layout

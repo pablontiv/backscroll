@@ -28,6 +28,13 @@ jobs:
         run: cargo clippy --all-targets --all-features -- -D warnings
       - name: Cargo Check
         run: cargo check --all
+      - name: ShellCheck install.sh
+        run: shellcheck install.sh
+      - name: Install script tests (bash)
+        run: bash tests/test-install.sh
+      - name: Install script tests (PowerShell static)
+        shell: pwsh
+        run: Invoke-Pester -Path tests/test-install.ps1 -Tag "Static" -CI
 
   test:
     runs-on: ubuntu-latest
@@ -59,29 +66,18 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
-  install-scripts:
-    name: Install Script Tests
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
-      - name: ShellCheck install.sh
-        run: shellcheck install.sh
-      - name: Run install.sh unit tests
-        run: bash tests/test-install.sh
-
-  install-scripts-windows:
-    name: Install Script Tests (Windows)
+  install-ps1:
+    name: PowerShell Runtime Tests
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
-      - name: Run Pester tests for install.ps1
+      - name: Pester tests (runtime)
         shell: pwsh
-        run: |
-          Invoke-Pester -Path tests/test-install.ps1 -CI
+        run: Invoke-Pester -Path tests/test-install.ps1 -Tag "Runtime" -CI
 
   release:
     name: Auto Release
-    needs: [check-lint, test, audit, gitleaks, install-scripts, install-scripts-windows]
+    needs: [check-lint, test, audit, gitleaks, install-ps1]
     if: github.event_name == 'push' && (github.ref == 'refs/heads/master' || github.ref == 'refs/heads/main')
     runs-on: ubuntu-latest
     outputs:

@@ -1,8 +1,10 @@
 # Pester tests for install.ps1
 # Run with: Invoke-Pester -Path tests/test-install.ps1
+# Static only: Invoke-Pester -Path tests/test-install.ps1 -Tag "Static"
+# Runtime only: Invoke-Pester -Path tests/test-install.ps1 -Tag "Runtime"
 
 BeforeAll {
-    $ScriptPath = Join-Path $PSScriptRoot ".." "install.ps1"
+    $ScriptPath = Join-Path (Join-Path $PSScriptRoot "..") "install.ps1"
     $ScriptContent = Get-Content $ScriptPath -Raw
 
     # Remove the final "Main" call so we can dot-source without executing
@@ -12,9 +14,33 @@ BeforeAll {
     . $TempScript
 }
 
-Describe "Get-Arch" {
+Describe "Script syntax" -Tag "Static" {
+    It "parses without errors" {
+        $ScriptPath = Join-Path (Join-Path $PSScriptRoot "..") "install.ps1"
+        $errors = $null
+        [System.Management.Automation.Language.Parser]::ParseFile($ScriptPath, [ref]$null, [ref]$errors)
+        $errors.Count | Should -Be 0
+    }
+
+    It "does not use Join-Path with more than 2 positional arguments" {
+        $ScriptPath = Join-Path (Join-Path $PSScriptRoot "..") "install.ps1"
+        $content = Get-Content $ScriptPath -Raw
+        # Match Join-Path with 3+ quoted string arguments (PS 5.1 incompatible)
+        $content | Should -Not -Match 'Join-Path\s+\S+\s+"[^"]+"\s+"[^"]+"'
+    }
+}
+
+Describe "Install-Binary parameters" -Tag "Static" {
+    It "accepts Version, Arch, and InstallDir parameters" {
+        $cmd = Get-Command Install-Binary
+        $cmd.Parameters.Keys | Should -Contain "Version"
+        $cmd.Parameters.Keys | Should -Contain "Arch"
+        $cmd.Parameters.Keys | Should -Contain "InstallDir"
+    }
+}
+
+Describe "Get-Arch" -Tag "Runtime" {
     It "returns x86_64 on AMD64" {
-        # Only runs meaningfully on AMD64, but validates the function exists
         if ($env:PROCESSOR_ARCHITECTURE -eq "AMD64") {
             Get-Arch | Should -Be "x86_64"
         } else {
@@ -23,7 +49,7 @@ Describe "Get-Arch" {
     }
 }
 
-Describe "Get-InstallDir" {
+Describe "Get-InstallDir" -Tag "Runtime" {
     Context "with BACKSCROLL_INSTALL_DIR set" {
         It "returns the custom directory" {
             $customDir = Join-Path $TestDrive "custom-install"
@@ -72,30 +98,5 @@ Describe "Get-InstallDir" {
                 $env:BACKSCROLL_INSTALL_DIR = $originalEnv
             }
         }
-    }
-}
-
-Describe "Script syntax" {
-    It "parses without errors" {
-        $ScriptPath = Join-Path $PSScriptRoot ".." "install.ps1"
-        $errors = $null
-        [System.Management.Automation.Language.Parser]::ParseFile($ScriptPath, [ref]$null, [ref]$errors)
-        $errors.Count | Should -Be 0
-    }
-
-    It "does not use Join-Path with more than 2 positional arguments" {
-        $ScriptPath = Join-Path $PSScriptRoot ".." "install.ps1"
-        $content = Get-Content $ScriptPath -Raw
-        # Match Join-Path with 3+ quoted string arguments (PS 5.1 incompatible)
-        $content | Should -Not -Match 'Join-Path\s+\S+\s+"[^"]+"\s+"[^"]+"'
-    }
-}
-
-Describe "Install-Binary parameters" {
-    It "accepts Version, Arch, and InstallDir parameters" {
-        $cmd = Get-Command Install-Binary
-        $cmd.Parameters.Keys | Should -Contain "Version"
-        $cmd.Parameters.Keys | Should -Contain "Arch"
-        $cmd.Parameters.Keys | Should -Contain "InstallDir"
     }
 }
