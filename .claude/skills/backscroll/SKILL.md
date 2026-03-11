@@ -9,8 +9,14 @@ description: |
   antes", "we talked about this", "find that conversation", "search sessions",
   "no me acuerdo", "I forgot what we discussed", quiera encontrar algo de una
   sesión pasada, o necesite recuperar contexto de trabajo previo — incluso si no
-  dice "backscroll". Para snapshots de estado estructurado (guardar/restaurar
-  progreso), usar context-save en su lugar.
+  dice "backscroll". IMPORTANTE: También usar PROACTIVAMENTE antes de iniciar
+  cualquier investigación o troubleshooting — si el tema pudo haberse discutido
+  en sesiones anteriores, consultar backscroll PRIMERO para evitar re-derivar
+  conclusiones que ya existen. Señales de activación proactiva: la conversación
+  se reanuda tras compactación, el agente dice "Continuing...", se investiga un
+  problema recurrente, o se diagnostica algo que "debería funcionar". Para
+  snapshots de estado estructurado (guardar/restaurar progreso), usar
+  context-save en su lugar.
 user-invocable: true
 disable-model-invocation: false
 argument-hint: "[query] | --topics | --recent N | --context"
