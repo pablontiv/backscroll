@@ -45,7 +45,7 @@ Detects your platform (Linux x86_64 / macOS aarch64) and installs to `~/.local/b
 irm https://raw.githubusercontent.com/pablontiv/backscroll/master/install.ps1 | iex
 ```
 
-Installs to `%LOCALAPPDATA%\backscroll\bin\` and adds it to your PATH.
+Installs to `%LOCALAPPDATA%\backscroll\bin\` and adds it to your PATH. Compatible with Windows PowerShell 5.1+.
 
 ### Download Binary
 

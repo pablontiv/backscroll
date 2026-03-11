@@ -59,9 +59,29 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
+  install-scripts:
+    name: Install Script Tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+      - name: ShellCheck install.sh
+        run: shellcheck install.sh
+      - name: Run install.sh unit tests
+        run: bash tests/test-install.sh
+
+  install-scripts-windows:
+    name: Install Script Tests (Windows)
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+      - name: Run Pester tests for install.ps1
+        shell: pwsh
+        run: |
+          Invoke-Pester -Path tests/test-install.ps1 -CI
+
   release:
     name: Auto Release
-    needs: [check-lint, test, audit, gitleaks]
+    needs: [check-lint, test, audit, gitleaks, install-scripts, install-scripts-windows]
     if: github.event_name == 'push' && (github.ref == 'refs/heads/master' || github.ref == 'refs/heads/main')
     runs-on: ubuntu-latest
     outputs:
