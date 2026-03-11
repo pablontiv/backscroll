@@ -34,7 +34,8 @@ function Get-InstallDir {
         return $env:BACKSCROLL_INSTALL_DIR
     }
 
-    $dir = Join-Path $env:LOCALAPPDATA "backscroll" "bin"
+    $baseDir = Join-Path $env:LOCALAPPDATA "backscroll"
+    $dir = Join-Path $baseDir "bin"
 
     if (-not (Test-Path $dir)) {
         New-Item -ItemType Directory -Path $dir -Force | Out-Null
@@ -58,7 +59,7 @@ function Install-Binary {
     $destPath = Join-Path $InstallDir "$Binary.exe"
 
     Write-Host "Downloading $assetName..."
-    mkdir -Force $InstallDir | Out-Null
+    New-Item -ItemType Directory -Path $InstallDir -Force | Out-Null
     Invoke-WebRequest -Uri $url -OutFile $destPath -UseBasicParsing
 }
 
