@@ -162,6 +162,10 @@ jobs:
           cargo install cargo-auditable cargo-zigbuild git-cliff
           pip3 install ziglang
 
+      - name: Set release version
+        if: steps.version.outputs.bump == 'true'
+        run: sed -i "s/^version = \".*\"/version = \"$(echo ${{ steps.version.outputs.tag }} | sed 's/^v//')\"/" Cargo.toml
+
       - name: Build Release Binary (native)
         if: steps.version.outputs.bump == 'true'
         run: cargo auditable build --release
@@ -175,7 +179,8 @@ jobs:
       - name: Smoke Test Linux Binary
         if: steps.version.outputs.bump == 'true'
         run: |
-          ./backscroll-linux-x86_64 --version
+          EXPECTED="$(echo ${{ steps.version.outputs.tag }} | sed 's/^v//')"
+          ./backscroll-linux-x86_64 --version | grep -q "$EXPECTED" || { echo "Version mismatch: expected $EXPECTED"; exit 1; }
           ./backscroll-linux-x86_64 sync --help
 
       - name: Attest Build Provenance
@@ -201,6 +206,17 @@ jobs:
             --title "Release ${{ steps.version.outputs.tag }}" \
             --notes-file RELEASE_NOTES.md
 
+      - name: Sync version to repo
+        if: steps.version.outputs.bump == 'true'
+        run: |
+          VERSION="$(echo ${{ steps.version.outputs.tag }} | sed 's/^v//')"
+          sed -i "s/^version = \".*\"/version = \"${VERSION}\"/" Cargo.toml
+          cargo generate-lockfile
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add Cargo.toml Cargo.lock
+          git diff --cached --quiet || (git commit -m "chore(release): v${VERSION}" && git push origin HEAD:master)
+
   release-macos:
     name: macOS aarch64 Binary
     needs: [release]
@@ -218,6 +234,9 @@ jobs:
         with:
           toolchain: stable
 
+      - name: Set release version
+        run: sed -i '' "s/^version = \".*\"/version = \"$(echo ${{ needs.release.outputs.tag }} | sed 's/^v//')\"/" Cargo.toml
+
       - name: Build macOS aarch64 Binary
         run: |
           cargo build --release
@@ -225,7 +244,8 @@ jobs:
 
       - name: Smoke Test macOS Binary
         run: |
-          ./backscroll-macos-aarch64 --version
+          EXPECTED="$(echo ${{ needs.release.outputs.tag }} | sed 's/^v//')"
+          ./backscroll-macos-aarch64 --version | grep -q "$EXPECTED" || { echo "Version mismatch: expected $EXPECTED"; exit 1; }
           ./backscroll-macos-aarch64 sync --help
 
       - name: Attest Build Provenance
@@ -257,6 +277,11 @@ jobs:
         with:
           toolchain: stable
 
+      - name: Set release version
+        run: |
+          $version = "${{ needs.release.outputs.tag }}" -replace '^v', ''
+          (Get-Content Cargo.toml) -replace '^version = ".*"', "version = `"$version`"" | Set-Content Cargo.toml
+
       - name: Build Windows Binary
         run: |
           cargo build --release
@@ -264,7 +289,9 @@ jobs:
 
       - name: Smoke Test Windows Binary
         run: |
-          .\backscroll-windows-x86_64.exe --version
+          $expected = "${{ needs.release.outputs.tag }}" -replace '^v', ''
+          $output = .\backscroll-windows-x86_64.exe --version
+          if ($output -notmatch $expected) { Write-Error "Version mismatch: expected $expected, got $output"; exit 1 }
           .\backscroll-windows-x86_64.exe sync --help
 
       - name: Attest Build Provenance

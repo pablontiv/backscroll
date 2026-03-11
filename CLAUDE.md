@@ -134,14 +134,11 @@ After v1.0: `feat` bumps minor, breaking bumps major (standard semver).
 
 ## Release Flow
 
-Releases use `just` recipes that run quality gates before tagging:
+Releases are fully automated via CI. On every push to master, CI analyzes conventional commits since the last tag, calculates the next semver version, builds multi-platform binaries, creates a GitHub Release, and commits the version bump back to `Cargo.toml`.
 
-```bash
-just release-patch   # check + test → bump patch → commit → tag → push
-just release-minor   # check + test → bump minor → commit → tag → push
-```
+No manual release steps are needed — just push to master with conventional commit messages. Tags follow `v{VERSION}` format.
 
-Version is managed via `cargo-edit` (`cargo set-version --bump`). Tags follow `v{VERSION}` format.
+The Justfile contains only development recipes (`check`, `test`, `build`, `fmt`, `audit`). Release logic lives exclusively in CI to avoid duplication.
 
 ## Config Resolution Order
 

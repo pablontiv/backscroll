@@ -28,9 +28,6 @@ Run `just --list` to see all available recipes. Key ones:
 | `just fmt` | Auto-format code |
 | `just audit` | Dependency license/ban audit |
 | `just build` | Release build |
-| `just sync-version` | Sync `Cargo.toml` version with latest git tag |
-| `just release-patch` | Full release: check → test → sync → bump patch → commit → tag → push |
-| `just release-minor` | Same but bumps minor version |
 
 ## Workflow
 
@@ -43,14 +40,7 @@ Run `just --list` to see all available recipes. Key ones:
 
 ## Releasing
 
-Releases use `just` recipes that sync with the latest git tag, run quality gates, bump the version, and push:
-
-```bash
-just release-patch   # v0.1.14 → v0.1.15
-just release-minor   # v0.1.14 → v0.2.0
-```
-
-CI also auto-tags on push to master based on conventional commit prefixes.
+Releases are fully automated via CI. On push to `master`, CI analyzes conventional commit prefixes, calculates the next semver version, builds multi-platform binaries (Linux, macOS, Windows), and creates a GitHub Release. The version is automatically synced back to `Cargo.toml`. No manual release steps needed.
 
 ## Commit Convention
 
