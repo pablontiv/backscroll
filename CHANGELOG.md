@@ -4,6 +4,10 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+### Fixed
+
+- Sanitize FTS5 queries to prevent SQL errors on special characters (hyphens, colons, parentheses)
+
 ### Documentation
 
 - Close E10 — all 11 tasks verified as implemented
