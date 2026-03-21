@@ -39,7 +39,8 @@ main.rs (CLI: clap)
 │   ├── models.rs      — SessionRecord wrapper, MessageContent untagged enum
 │   ├── plans.rs       — Markdown plan parser (split by ## headers)
 │   ├── reader.rs      — Direct reading of single filtered session files
-│   └── sync.rs        — WalkDir, hashing, parsing JSONL with noise filtering
+│   ├── sync.rs        — WalkDir, hashing, parsing JSONL with noise filtering
+│   └── tagging.rs     — Heuristic session auto-tagging (regex-based category detection)
 └── storage/
     └── sqlite.rs      — SQLite adapter (external FTS5, triggers, BM25)
 ```
@@ -51,10 +52,11 @@ main.rs (CLI: clap)
 - `core/models.rs` — `SessionRecord` wrapper, `MessageContent` untagged enum for defensive parsing
 - `core/plans.rs` — Markdown plan parser: splits `~/.claude/plans/*.md` by `##` headers into indexable sections
 - `core/reader.rs` — Direct reading and filtering of individual session files
-- `core/sync.rs` — WalkDir traversal, SHA-256 hashing, JSONL parsing, noise filter regex (LazyLock)
-- `storage/sqlite.rs` — SQLite adapter (external FTS5, triggers, BM25 ranking, WAL mode, source-aware filtering)
+- `core/sync.rs` — WalkDir traversal, SHA-256 hashing, JSONL parsing, noise filter regex (LazyLock), content-type classification
+- `core/tagging.rs` — Heuristic session auto-tagging: regex patterns detect categories (debugging, refactoring, feature, testing, docs, config)
+- `storage/sqlite.rs` — SQLite adapter (external FTS5 with Porter stemmer, triggers, BM25 ranking, WAL mode, source-aware filtering, session tags)
 
-Seven CLI commands: `sync [--path] [--include-agents] [--no-plans]`, `search <query> [--project] [--all-projects] [--json] [--robot] [--fields] [--max-tokens] [--source] [--after] [--before]`, `read <path>`, `resume <query> [--project] [--all-projects] [--robot] [--source]`, `topics [--project] [--all-projects] [--limit] [--json] [--robot]`, `list [--project] [--all-projects] [--recent] [--json] [--robot]`, `status`.
+Twelve CLI commands: `sync [--path] [--include-agents] [--no-plans] [--optimize]`, `search <query> [--project] [--all-projects] [--json] [--robot] [--fields] [--max-tokens] [--source] [--after] [--before] [--role] [--limit] [--offset] [--content-type] [--tag]`, `read <path>`, `resume <query> [--project] [--all-projects] [--robot] [--source]`, `topics [--project] [--all-projects] [--limit] [--json] [--robot]`, `list [--project] [--all-projects] [--recent] [--json] [--robot]`, `insights [--project] [--all-projects] [--json] [--robot]`, `export <query> [--format markdown|csv] [--project] [--all-projects]`, `reindex`, `purge --before <date>`, `validate`, `status`.
 
 The `SearchEngine` trait is the port; `storage::sqlite` is the adapter. Database is opened lazily.
 
@@ -71,12 +73,14 @@ CLI query → SearchEngine::search(source?) → BM25 ranking → format_results(
 
 - **Defensive parsing**: `SessionRecord` wrapper format extraction handles legacy schemas and noise.
 - **Noise filtering**: Excludes `system-reminder`, `task-notification`, and subagent sessions by default.
-- **External FTS5**: Uses `search_items` as content table with SQLite triggers and `snippet()` extraction.
+- **External FTS5**: Uses `search_items` as content table with SQLite triggers, `snippet()` extraction, and Porter stemmer tokenizer for morphological matching.
 - **Incremental sync**: SHA-256 hash per file stored in `indexed_files` table; unchanged files are skipped.
 - **Plan indexing**: Markdown plans from `~/.claude/plans/` split by `##` headers, each section indexed as a separate search item with `source='plan'`.
 - **Source filtering**: `search_items.source` column distinguishes sessions from plans; `--source` flag filters at query time.
 - **Date filtering**: `--after`/`--before` flags filter by `search_items.timestamp` with NULL-safe guards; `--before` uses exclusive `<` comparison.
 - **Multi-path config**: `session_dirs: Vec<String>` with backward-compatible `session_dir` alias and auto-discovery of `~/.claude/projects/`.
+- **Auto-tagging**: Regex heuristics in `core/tagging.rs` detect session categories (debugging, refactoring, feature, testing, docs, config) during sync; stored in `session_tags` table.
+- **Content-type classification**: Messages classified as `text`/`code`/`tool` based on `MessageContent::Blocks` types during sync.
 - **Bundled SQLite**: `rusqlite` with `bundled` feature — no system SQLite dependency.
 - **Rust edition 2024** with strict linting: clippy nursery + pedantic enabled, `-D warnings` in CI.
 
@@ -150,10 +154,11 @@ The Justfile contains only development recipes (`check`, `test`, `build`, `fmt`,
 ## Crate Path
 
 ```
-backscroll::core        — Domain types and SearchEngine trait
-backscroll::core::sync  — Session parsing and noise filtering
-backscroll::core::plans — Markdown plan parsing
-backscroll::storage     — SQLite FTS5 adapter
-backscroll::config      — Figment configuration + auto-discovery
-backscroll::output      — Output formatting
+backscroll::core           — Domain types and SearchEngine trait
+backscroll::core::sync     — Session parsing and noise filtering
+backscroll::core::plans    — Markdown plan parsing
+backscroll::core::tagging  — Heuristic session auto-tagging
+backscroll::storage        — SQLite FTS5 adapter (Porter stemmer)
+backscroll::config         — Figment configuration + auto-discovery
+backscroll::output         — Output formatting
 ```

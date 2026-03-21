@@ -1,6 +1,7 @@
 # E11: Plan Indexing
 
 **Objetivo**: Indexar `~/.claude/plans/*.md` en la tabla FTS5 existente con `source='plan'`, spliteando por `##` headers, y agregar filtro `--source sessions|plans|all` a la busqueda.
+**Timeline**: 2026-Q1 — hecho
 
 ## Postcondiciones
 

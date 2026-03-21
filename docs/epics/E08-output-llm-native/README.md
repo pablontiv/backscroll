@@ -1,6 +1,7 @@
 # E08: Output LLM-Native
 
 **Objetivo**: Enriquecer output de busqueda con snippets, scores, fechas. Agregar modos de salida estructurada (JSON, robot) y flags de control. Implementar status con metricas reales.
+**Timeline**: 2026-Q1 — hecho
 
 ## Postcondiciones
 

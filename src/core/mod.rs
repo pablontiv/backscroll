@@ -2,6 +2,7 @@ pub mod models;
 pub mod plans;
 pub mod reader;
 pub mod sync;
+pub mod tagging;
 
 use serde::Serialize;
 use std::collections::HashMap;
@@ -22,6 +23,7 @@ pub struct ParsedMessage {
     pub ordinal: usize,
     pub uuid: Option<String>,
     pub timestamp: Option<String>,
+    pub content_type: String,
 }
 
 pub struct ParsedFile {
@@ -85,6 +87,27 @@ impl ValidationReport {
     }
 }
 
+#[derive(Debug, Serialize)]
+pub struct DailyActivity {
+    pub date: String,
+    pub sessions: i64,
+    pub messages: i64,
+}
+
+#[derive(Debug, Serialize)]
+pub struct TagCount {
+    pub tag: String,
+    pub count: i64,
+}
+
+#[derive(Debug, Serialize)]
+pub struct InsightData {
+    pub total_sessions: i64,
+    pub total_messages: i64,
+    pub daily_activity: Vec<DailyActivity>,
+    pub tag_distribution: Vec<TagCount>,
+}
+
 #[derive(Debug, Default)]
 pub struct SearchParams {
     pub project: Option<String>,
@@ -92,6 +115,8 @@ pub struct SearchParams {
     pub after: Option<String>,
     pub before: Option<String>,
     pub role: Option<String>,
+    pub content_type: Option<String>,
+    pub tag: Option<String>,
     pub limit: usize,
     pub offset: usize,
 }
@@ -112,4 +137,6 @@ pub trait SearchEngine {
     ) -> miette::Result<Vec<SessionEntry>>;
     fn get_project_breakdown(&self) -> miette::Result<Vec<ProjectBreakdown>>;
     fn validate(&self) -> miette::Result<ValidationReport>;
+    fn optimize_fts(&self) -> miette::Result<()>;
+    fn get_insights(&self, project: Option<&str>) -> miette::Result<InsightData>;
 }

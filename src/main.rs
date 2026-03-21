@@ -36,6 +36,9 @@ enum Commands {
         /// No indexar archivos de plan (~/.claude/plans/)
         #[arg(long, default_value_t = false)]
         no_plans: bool,
+        /// Optimizar el índice FTS5 después de sincronizar
+        #[arg(long, default_value_t = false)]
+        optimize: bool,
     },
     /// Buscar en el historial de sesiones
     Search {
@@ -77,6 +80,12 @@ enum Commands {
         /// Número de resultados a saltar
         #[arg(long, default_value_t = 0)]
         offset: usize,
+        /// Filtrar por tipo de contenido: text, code, o tool
+        #[arg(long)]
+        content_type: Option<String>,
+        /// Filtrar por tag de sesión (auto-asignado)
+        #[arg(long)]
+        tag: Option<String>,
     },
     /// Leer una sesión individual filtrada
     Read {
@@ -156,6 +165,50 @@ enum Commands {
     },
     /// Verificar integridad del índice
     Validate,
+    /// Mostrar insights y analytics del corpus
+    Insights {
+        /// Filtrar por proyecto
+        #[arg(short, long)]
+        project: Option<String>,
+        /// Insights de todos los proyectos
+        #[arg(long, default_value_t = false)]
+        all_projects: bool,
+        /// Formato JSON lines
+        #[arg(long, default_value_t = false)]
+        json: bool,
+        /// Formato compacto tab-separated
+        #[arg(long, default_value_t = false)]
+        robot: bool,
+    },
+    /// Exportar resultados de búsqueda a archivo
+    Export {
+        /// Consulta de búsqueda
+        query: String,
+        /// Formato de exportación: markdown o csv
+        #[arg(long, default_value = "markdown")]
+        format: String,
+        /// Filtrar por proyecto
+        #[arg(short, long)]
+        project: Option<String>,
+        /// Exportar de todos los proyectos
+        #[arg(long, default_value_t = false)]
+        all_projects: bool,
+        /// Filtrar por fuente: sessions, plans, o all
+        #[arg(long, default_value = "all")]
+        source: String,
+        /// Solo resultados después de esta fecha
+        #[arg(long)]
+        after: Option<String>,
+        /// Solo resultados antes de esta fecha
+        #[arg(long)]
+        before: Option<String>,
+        /// Filtrar por rol
+        #[arg(long)]
+        role: Option<String>,
+        /// Máximo de resultados (default 20, 0 = sin límite)
+        #[arg(long, default_value_t = 20)]
+        limit: usize,
+    },
     /// Mostrar estado del índice
     Status,
 }
@@ -272,6 +325,7 @@ fn main() -> Result<()> {
             path,
             include_agents,
             no_plans,
+            optimize,
         } => {
             let paths = resolve_session_paths(path, &config)?;
             let engine = create_engine(&config)?;
@@ -284,6 +338,11 @@ fn main() -> Result<()> {
             if !no_plans {
                 let hashes = engine.get_file_hashes()?;
                 sync_plans(engine.as_ref(), &hashes)?;
+            }
+            if *optimize {
+                println!("Optimizando índice FTS5...");
+                engine.optimize_fts()?;
+                println!("Optimización completa.");
             }
         }
         Commands::Search {
@@ -300,6 +359,8 @@ fn main() -> Result<()> {
             role,
             limit,
             offset,
+            content_type,
+            tag,
         } => {
             let engine = create_engine(&config)?;
 
@@ -352,12 +413,27 @@ fn main() -> Result<()> {
                 }
             }
 
+            // Validate --content-type value if provided
+            if let Some(ct) = content_type {
+                match ct.as_str() {
+                    "text" | "code" | "tool" => {}
+                    _ => {
+                        return Err(miette::miette!(
+                            "Invalid --content-type value '{}'. Must be 'text', 'code', or 'tool'.",
+                            ct
+                        ));
+                    }
+                }
+            }
+
             let params = SearchParams {
                 project: effective_project,
                 source: source_filter,
                 after: after.clone(),
                 before: before.clone(),
                 role: role.clone(),
+                content_type: content_type.clone(),
+                tag: tag.clone(),
                 limit: *limit,
                 offset: *offset,
             };
@@ -648,6 +724,165 @@ fn main() -> Result<()> {
                     );
                 }
                 std::process::exit(1);
+            }
+        }
+        Commands::Insights {
+            project,
+            all_projects,
+            json,
+            robot,
+        } => {
+            let engine = create_engine(&config)?;
+
+            // Auto-sync before insights
+            if let Ok(paths) = resolve_session_paths(&[], &config) {
+                for p in &paths {
+                    let hashes = engine.get_file_hashes()?;
+                    let files = parse_sessions(p, &hashes, false)?;
+                    if !files.is_empty() {
+                        engine.sync_files(files)?;
+                    }
+                }
+            }
+
+            let effective_project = if *all_projects {
+                None
+            } else {
+                match project {
+                    Some(p) => Some(p.clone()),
+                    None => std::env::current_dir()
+                        .ok()
+                        .map(|p| p.to_string_lossy().replace('/', "-")),
+                }
+            };
+
+            let data = engine.get_insights(effective_project.as_deref())?;
+
+            if *json {
+                println!("{}", serde_json::to_string(&data).unwrap_or_default());
+            } else if *robot {
+                println!("total_sessions\t{}", data.total_sessions);
+                println!("total_messages\t{}", data.total_messages);
+                for d in &data.daily_activity {
+                    println!("daily\t{}\t{}\t{}", d.date, d.sessions, d.messages);
+                }
+                for t in &data.tag_distribution {
+                    println!("tag\t{}\t{}", t.tag, t.count);
+                }
+            } else {
+                println!("Session Insights");
+                println!(
+                    "  Total sessions: {}  Total messages: {}",
+                    data.total_sessions, data.total_messages
+                );
+                if !data.daily_activity.is_empty() {
+                    println!("\nDaily Activity (last 30 days):");
+                    println!("  {:<12} {:>10} {:>10}", "DATE", "SESSIONS", "MESSAGES");
+                    println!("  {}", "-".repeat(34));
+                    for d in &data.daily_activity {
+                        println!("  {:<12} {:>10} {:>10}", d.date, d.sessions, d.messages);
+                    }
+                }
+                if !data.tag_distribution.is_empty() {
+                    println!("\nSession Categories:");
+                    println!("  {:<20} {:>10}", "TAG", "SESSIONS");
+                    println!("  {}", "-".repeat(32));
+                    for t in &data.tag_distribution {
+                        println!("  {:<20} {:>10}", t.tag, t.count);
+                    }
+                }
+            }
+        }
+        Commands::Export {
+            query,
+            format,
+            project,
+            all_projects,
+            source,
+            after,
+            before,
+            role,
+            limit,
+        } => {
+            let engine = create_engine(&config)?;
+
+            // Auto-sync
+            if let Ok(paths) = resolve_session_paths(&[], &config) {
+                for p in &paths {
+                    let hashes = engine.get_file_hashes()?;
+                    let files = parse_sessions(p, &hashes, false)?;
+                    if !files.is_empty() {
+                        engine.sync_files(files)?;
+                    }
+                }
+            }
+
+            let effective_project = if *all_projects {
+                None
+            } else {
+                match project {
+                    Some(p) => Some(p.clone()),
+                    None => std::env::current_dir()
+                        .ok()
+                        .map(|p| p.to_string_lossy().replace('/', "-")),
+                }
+            };
+
+            let source_filter = if source == "all" {
+                None
+            } else {
+                Some(source.clone())
+            };
+
+            let params = SearchParams {
+                project: effective_project,
+                source: source_filter,
+                after: after.clone(),
+                before: before.clone(),
+                role: role.clone(),
+                limit: *limit,
+                ..SearchParams::default()
+            };
+            let results = engine.search(query, &params)?;
+
+            match format.as_str() {
+                "csv" => {
+                    println!("source_path,role,score,timestamp,snippet");
+                    for r in &results {
+                        let snippet = r
+                            .match_snippet
+                            .as_deref()
+                            .unwrap_or(&r.text)
+                            .replace('"', "\"\"")
+                            .replace(">>>", "")
+                            .replace("<<<", "");
+                        let ts = r.timestamp.as_deref().unwrap_or("");
+                        println!(
+                            "\"{}\",\"{}\",{:.4},\"{}\",\"{}\"",
+                            r.source_path.replace('"', "\"\""),
+                            r.role,
+                            r.score,
+                            ts,
+                            snippet
+                        );
+                    }
+                }
+                _ => {
+                    println!("# Search Results: {}\n", query);
+                    println!("**Results**: {}\n", results.len());
+                    for (i, r) in results.iter().enumerate() {
+                        let ts = r.timestamp.as_deref().unwrap_or("N/A");
+                        println!("## {}. [{}] {}\n", i + 1, r.role, r.source_path);
+                        println!("**Score**: {:.4} | **Timestamp**: {}\n", r.score, ts);
+                        let snippet = r
+                            .match_snippet
+                            .as_deref()
+                            .unwrap_or(&r.text)
+                            .replace(">>>", "**")
+                            .replace("<<<", "**");
+                        println!("> {}\n", snippet);
+                    }
+                }
             }
         }
         Commands::Status => {

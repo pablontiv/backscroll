@@ -1,7 +1,7 @@
 # E13: Release Pipeline
 
 **Metrica de exito**: Usuarios instalan backscroll sin Rust toolchain via binario pre-compilado o install script
-**Timeline**: 2026-Q1 — en curso
+**Timeline**: 2026-Q1 — hecho
 
 ## Intencion
 
@@ -43,7 +43,8 @@ Backscroll v0.1.14 tiene funcionalidad completa (E01-E12) pero solo es instalabl
 
 | Fecha | Decision | Razon |
 |-------|----------|-------|
+| 2026-03-20 | Todas las postcondiciones verificadas — epic completado | CI auto-release, install scripts, CHANGELOG automatico operativos |
 
 ## Gaps Activos
 
-- Ninguno identificado
+- Ninguno

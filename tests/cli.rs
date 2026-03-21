@@ -1102,3 +1102,244 @@ fn test_search_special_chars_no_crash() {
             .success();
     }
 }
+
+#[test]
+fn test_porter_stemmer_search() {
+    // Porter stemmer: searching "running" should find "run" and vice versa
+    let session_dir = tempdir().unwrap();
+    let db_dir = tempdir().unwrap();
+    let db_path = db_dir.path().join("stemmer.db");
+    let session_file = session_dir.path().join("session.jsonl");
+
+    fs::write(
+        &session_file,
+        r#"{"type": "user", "message": {"role": "user", "content": "the server is running perfectly"}, "uuid": "st1", "timestamp": "100"}"#,
+    )
+    .unwrap();
+
+    let fake_home = tempdir().unwrap();
+
+    Command::cargo_bin("backscroll")
+        .unwrap()
+        .arg("sync")
+        .arg("--path")
+        .arg(session_dir.path().to_str().unwrap())
+        .arg("--no-plans")
+        .env("BACKSCROLL_DATABASE_PATH", db_path.to_str().unwrap())
+        .env(
+            "BACKSCROLL_SESSION_DIR",
+            session_dir.path().to_str().unwrap(),
+        )
+        .env("HOME", fake_home.path().to_str().unwrap())
+        .assert()
+        .success();
+
+    // Search for "run" should find "running" thanks to Porter stemmer
+    Command::cargo_bin("backscroll")
+        .unwrap()
+        .arg("search")
+        .arg("run")
+        .arg("--all-projects")
+        .env("BACKSCROLL_DATABASE_PATH", db_path.to_str().unwrap())
+        .env(
+            "BACKSCROLL_SESSION_DIR",
+            session_dir.path().to_str().unwrap(),
+        )
+        .env("HOME", fake_home.path().to_str().unwrap())
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("running"));
+}
+
+#[test]
+fn test_sync_optimize_flag() {
+    let session_dir = tempdir().unwrap();
+    let db_dir = tempdir().unwrap();
+    let db_path = db_dir.path().join("optimize.db");
+    let session_file = session_dir.path().join("session.jsonl");
+    let fake_home = tempdir().unwrap();
+
+    fs::write(
+        &session_file,
+        r#"{"type": "user", "message": {"role": "user", "content": "optimize test content"}, "uuid": "o1", "timestamp": "100"}"#,
+    )
+    .unwrap();
+
+    Command::cargo_bin("backscroll")
+        .unwrap()
+        .arg("sync")
+        .arg("--path")
+        .arg(session_dir.path().to_str().unwrap())
+        .arg("--no-plans")
+        .arg("--optimize")
+        .env("BACKSCROLL_DATABASE_PATH", db_path.to_str().unwrap())
+        .env(
+            "BACKSCROLL_SESSION_DIR",
+            session_dir.path().to_str().unwrap(),
+        )
+        .env("HOME", fake_home.path().to_str().unwrap())
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("Optimización completa"));
+}
+
+#[test]
+fn test_insights_command() {
+    let session_dir = tempdir().unwrap();
+    let db_dir = tempdir().unwrap();
+    let db_path = db_dir.path().join("insights.db");
+    let fake_home = tempdir().unwrap();
+    sync_date_fixture(session_dir.path(), &db_path);
+
+    Command::cargo_bin("backscroll")
+        .unwrap()
+        .arg("insights")
+        .arg("--all-projects")
+        .env("BACKSCROLL_DATABASE_PATH", db_path.to_str().unwrap())
+        .env(
+            "BACKSCROLL_SESSION_DIR",
+            session_dir.path().to_str().unwrap(),
+        )
+        .env("HOME", fake_home.path().to_str().unwrap())
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("Session Insights"))
+        .stdout(predicate::str::contains("Total sessions"));
+}
+
+#[test]
+fn test_insights_json_output() {
+    let session_dir = tempdir().unwrap();
+    let db_dir = tempdir().unwrap();
+    let db_path = db_dir.path().join("insights_json.db");
+    let fake_home = tempdir().unwrap();
+    sync_date_fixture(session_dir.path(), &db_path);
+
+    let output = Command::cargo_bin("backscroll")
+        .unwrap()
+        .arg("insights")
+        .arg("--all-projects")
+        .arg("--json")
+        .env("BACKSCROLL_DATABASE_PATH", db_path.to_str().unwrap())
+        .env(
+            "BACKSCROLL_SESSION_DIR",
+            session_dir.path().to_str().unwrap(),
+        )
+        .env("HOME", fake_home.path().to_str().unwrap())
+        .output()
+        .unwrap();
+
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    let parsed: serde_json::Value = serde_json::from_str(stdout.trim())
+        .unwrap_or_else(|e| panic!("Invalid JSON: {}\n{}", e, stdout));
+    assert!(parsed.get("total_sessions").is_some());
+    assert!(parsed.get("daily_activity").is_some());
+}
+
+#[test]
+fn test_export_markdown() {
+    let session_dir = tempdir().unwrap();
+    let db_dir = tempdir().unwrap();
+    let db_path = db_dir.path().join("export_md.db");
+    let fake_home = tempdir().unwrap();
+    sync_fixture(session_dir.path(), &db_path);
+
+    Command::cargo_bin("backscroll")
+        .unwrap()
+        .arg("export")
+        .arg("kubernetes")
+        .arg("--format")
+        .arg("markdown")
+        .arg("--all-projects")
+        .env("BACKSCROLL_DATABASE_PATH", db_path.to_str().unwrap())
+        .env(
+            "BACKSCROLL_SESSION_DIR",
+            session_dir.path().to_str().unwrap(),
+        )
+        .env("HOME", fake_home.path().to_str().unwrap())
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("# Search Results"))
+        .stdout(predicate::str::contains("**Score**"));
+}
+
+#[test]
+fn test_export_csv() {
+    let session_dir = tempdir().unwrap();
+    let db_dir = tempdir().unwrap();
+    let db_path = db_dir.path().join("export_csv.db");
+    let fake_home = tempdir().unwrap();
+    sync_fixture(session_dir.path(), &db_path);
+
+    let output = Command::cargo_bin("backscroll")
+        .unwrap()
+        .arg("export")
+        .arg("kubernetes")
+        .arg("--format")
+        .arg("csv")
+        .arg("--all-projects")
+        .env("BACKSCROLL_DATABASE_PATH", db_path.to_str().unwrap())
+        .env(
+            "BACKSCROLL_SESSION_DIR",
+            session_dir.path().to_str().unwrap(),
+        )
+        .env("HOME", fake_home.path().to_str().unwrap())
+        .output()
+        .unwrap();
+
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    assert!(stdout.starts_with("source_path,role,score,timestamp,snippet"));
+    // Should have header + at least 1 data row
+    assert!(stdout.trim().lines().count() >= 2);
+}
+
+#[test]
+fn test_search_content_type_filter() {
+    // Content-type flag should be accepted without error
+    let session_dir = tempdir().unwrap();
+    let db_dir = tempdir().unwrap();
+    let db_path = db_dir.path().join("ct_filter.db");
+    let fake_home = tempdir().unwrap();
+    sync_fixture(session_dir.path(), &db_path);
+
+    Command::cargo_bin("backscroll")
+        .unwrap()
+        .arg("search")
+        .arg("kubernetes")
+        .arg("--content-type")
+        .arg("text")
+        .arg("--all-projects")
+        .env("BACKSCROLL_DATABASE_PATH", db_path.to_str().unwrap())
+        .env(
+            "BACKSCROLL_SESSION_DIR",
+            session_dir.path().to_str().unwrap(),
+        )
+        .env("HOME", fake_home.path().to_str().unwrap())
+        .assert()
+        .success();
+}
+
+#[test]
+fn test_search_content_type_invalid() {
+    let session_dir = tempdir().unwrap();
+    let db_dir = tempdir().unwrap();
+    let db_path = db_dir.path().join("ct_invalid.db");
+    let fake_home = tempdir().unwrap();
+    sync_fixture(session_dir.path(), &db_path);
+
+    Command::cargo_bin("backscroll")
+        .unwrap()
+        .arg("search")
+        .arg("test")
+        .arg("--content-type")
+        .arg("invalid")
+        .arg("--all-projects")
+        .env("BACKSCROLL_DATABASE_PATH", db_path.to_str().unwrap())
+        .env(
+            "BACKSCROLL_SESSION_DIR",
+            session_dir.path().to_str().unwrap(),
+        )
+        .env("HOME", fake_home.path().to_str().unwrap())
+        .assert()
+        .failure();
+}

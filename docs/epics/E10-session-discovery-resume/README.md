@@ -1,6 +1,7 @@
 # E10: Session Discovery & Smart Resume
 
 **Objetivo**: Auto-descubrir todos los directorios de sesion conocidos de Claude Code y proveer un comando `resume` que encuentra la sesion mas relevante por contenido y produce su session ID para piping a `claude --resume`.
+**Timeline**: 2026-Q1 — hecho
 
 ## Postcondiciones
 

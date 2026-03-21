@@ -1,7 +1,7 @@
 # E15: Corpus Maintenance
 
 **Metrica de exito**: Operadores pueden reconstruir, podar y validar el indice de backscroll sin intervencion manual en la base de datos
-**Timeline**: 2026-Q2 — planificado
+**Timeline**: 2026-Q1 — hecho
 
 ## Intencion
 
@@ -46,7 +46,8 @@ A medida que el corpus crece (1000+ sesiones), se necesitan herramientas de mant
 
 | Fecha | Decision | Razon |
 |-------|----------|-------|
+| 2026-03-20 | Todas las postcondiciones verificadas — epic completado | reindex, purge, validate implementados y testeados |
 
 ## Gaps Activos
 
-- Ninguno identificado
+- Ninguno

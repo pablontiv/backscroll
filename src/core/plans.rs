@@ -50,6 +50,7 @@ fn split_by_headers(content: &str) -> Vec<ParsedMessage> {
             ordinal: i,
             uuid: None,
             timestamp: None,
+            content_type: "text".into(),
         })
         .collect()
 }

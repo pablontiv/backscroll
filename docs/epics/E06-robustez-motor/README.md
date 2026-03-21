@@ -1,6 +1,7 @@
 # E06: Robustez del Motor
 
 **Objetivo**: Corregir el parser para JSONL real de Claude Code, migrar a schema extensible con content table, implementar el patrón ports & adapters completo, y limpiar dead code.
+**Timeline**: 2026-Q1 — hecho
 
 ## Postcondiciones
 

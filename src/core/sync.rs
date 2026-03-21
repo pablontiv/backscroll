@@ -140,16 +140,37 @@ pub fn parse_sessions(
                     }
 
                     if let Some(msg) = record.message {
-                        let text_content = match &msg.content {
-                            MessageContent::Text(t) => t.clone(),
-                            MessageContent::Blocks(blocks) => blocks
-                                .iter()
-                                .filter(|b| {
-                                    b.block_type != "tool_use" && b.block_type != "tool_result"
-                                })
-                                .filter_map(|b| b.text.clone())
-                                .collect::<Vec<_>>()
-                                .join(" "),
+                        let (text_content, content_type) = match &msg.content {
+                            MessageContent::Text(t) => (t.clone(), "text".to_string()),
+                            MessageContent::Blocks(blocks) => {
+                                let mut has_code = false;
+                                let mut has_tool = false;
+                                let parts: Vec<String> = blocks
+                                    .iter()
+                                    .filter(|b| {
+                                        b.block_type != "tool_use" && b.block_type != "tool_result"
+                                    })
+                                    .filter_map(|b| {
+                                        if b.block_type == "code" {
+                                            has_code = true;
+                                        }
+                                        b.text.clone()
+                                    })
+                                    .collect();
+                                for b in blocks {
+                                    if b.block_type == "tool_use" || b.block_type == "tool_result" {
+                                        has_tool = true;
+                                    }
+                                }
+                                let ct = if has_code {
+                                    "code"
+                                } else if has_tool {
+                                    "tool"
+                                } else {
+                                    "text"
+                                };
+                                (parts.join(" "), ct.to_string())
+                            }
                         };
 
                         let cleaned_text = filter_noise(&text_content);
@@ -162,6 +183,7 @@ pub fn parse_sessions(
                                     ordinal,
                                     uuid: record.uuid,
                                     timestamp: record.timestamp,
+                                    content_type,
                                 });
                             }
                         }
@@ -236,6 +258,7 @@ mod tests {
         assert_eq!(files.len(), 1);
         assert_eq!(files[0].messages.len(), 1);
         assert_eq!(files[0].messages[0].text, "hola");
+        assert_eq!(files[0].messages[0].content_type, "text");
 
         // Simulate subsequent run
         existing_hashes.insert(files[0].source_path.clone(), files[0].hash.clone());

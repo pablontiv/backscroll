@@ -1,5 +1,6 @@
 use crate::core::{
-    ParsedFile, ProjectBreakdown, SearchEngine, SearchResult, SessionEntry, Stats, TopicEntry,
+    InsightData, ParsedFile, ProjectBreakdown, SearchEngine, SearchResult, SessionEntry, Stats,
+    TopicEntry,
 };
 use miette::IntoDiagnostic;
 use rusqlite::{Connection, Result, Row, params};
@@ -185,6 +186,122 @@ impl Database {
                 .into_diagnostic()?;
         }
 
+        let current_version: i64 = self
+            .conn
+            .query_row("SELECT version FROM schema_version", [], |row| row.get(0))
+            .into_diagnostic()?;
+
+        if current_version == 3 {
+            self.conn
+                .execute("BEGIN TRANSACTION", [])
+                .into_diagnostic()?;
+
+            // Add content_type column for content-type filtering
+            self.conn
+                .execute(
+                    "ALTER TABLE search_items ADD COLUMN content_type TEXT NOT NULL DEFAULT 'text'",
+                    [],
+                )
+                .into_diagnostic()?;
+
+            // Create session_tags table for auto-tagging
+            self.conn
+                .execute(
+                    "CREATE TABLE IF NOT EXISTS session_tags (
+                    source_path TEXT NOT NULL,
+                    tag TEXT NOT NULL,
+                    PRIMARY KEY (source_path, tag)
+                )",
+                    [],
+                )
+                .into_diagnostic()?;
+            self.conn
+                .execute(
+                    "CREATE INDEX IF NOT EXISTS idx_session_tags_tag ON session_tags(tag)",
+                    [],
+                )
+                .into_diagnostic()?;
+
+            // Recreate FTS5 with Porter stemmer tokenizer
+            self.conn
+                .execute("DROP TABLE IF EXISTS messages_vocab", [])
+                .into_diagnostic()?;
+            self.conn
+                .execute("DROP TRIGGER IF EXISTS search_items_ai", [])
+                .into_diagnostic()?;
+            self.conn
+                .execute("DROP TRIGGER IF EXISTS search_items_ad", [])
+                .into_diagnostic()?;
+            self.conn
+                .execute("DROP TRIGGER IF EXISTS search_items_au", [])
+                .into_diagnostic()?;
+            self.conn
+                .execute("DROP TABLE IF EXISTS messages_fts", [])
+                .into_diagnostic()?;
+
+            self.conn
+                .execute(
+                    "CREATE VIRTUAL TABLE messages_fts USING fts5(
+                    text,
+                    content=search_items,
+                    content_rowid=id,
+                    tokenize='porter unicode61'
+                )",
+                    [],
+                )
+                .into_diagnostic()?;
+
+            // Rebuild FTS index from existing data
+            self.conn
+                .execute(
+                    "INSERT INTO messages_fts(rowid, text) SELECT id, text FROM search_items",
+                    [],
+                )
+                .into_diagnostic()?;
+
+            // Recreate triggers
+            self.conn
+                .execute(
+                    "CREATE TRIGGER search_items_ai AFTER INSERT ON search_items BEGIN
+                    INSERT INTO messages_fts(rowid, text) VALUES (new.id, new.text);
+                END",
+                    [],
+                )
+                .into_diagnostic()?;
+
+            self.conn
+                .execute(
+                    "CREATE TRIGGER search_items_ad AFTER DELETE ON search_items BEGIN
+                    INSERT INTO messages_fts(messages_fts, rowid, text) VALUES('delete', old.id, old.text);
+                END",
+                    [],
+                )
+                .into_diagnostic()?;
+
+            self.conn
+                .execute(
+                    "CREATE TRIGGER search_items_au AFTER UPDATE ON search_items BEGIN
+                    INSERT INTO messages_fts(messages_fts, rowid, text) VALUES('delete', old.id, old.text);
+                    INSERT INTO messages_fts(rowid, text) VALUES (new.id, new.text);
+                END",
+                    [],
+                )
+                .into_diagnostic()?;
+
+            // Recreate vocab table
+            self.conn
+                .execute(
+                    "CREATE VIRTUAL TABLE messages_vocab USING fts5vocab(messages_fts, row)",
+                    [],
+                )
+                .into_diagnostic()?;
+
+            self.conn
+                .execute("UPDATE schema_version SET version = 4", [])
+                .into_diagnostic()?;
+            self.conn.execute("COMMIT", []).into_diagnostic()?;
+        }
+
         Ok(())
     }
 
@@ -213,10 +330,10 @@ impl SearchEngine for Database {
                 )
                 .into_diagnostic()?;
 
-            for msg in file.messages {
+            for msg in &file.messages {
                 self.conn
                     .execute(
-                        "INSERT OR IGNORE INTO search_items (source, source_path, ordinal, role, text, project, uuid, timestamp) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                        "INSERT OR IGNORE INTO search_items (source, source_path, ordinal, role, text, project, uuid, timestamp, content_type) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
                         (
                             &file.source,
                             &file.source_path,
@@ -226,9 +343,29 @@ impl SearchEngine for Database {
                             file.project.as_deref(),
                             msg.uuid.as_deref(),
                             msg.timestamp.as_deref(),
+                            &msg.content_type,
                         ),
                     )
                     .into_diagnostic()?;
+            }
+
+            // Auto-tag session based on content heuristics
+            if file.source == "session" {
+                self.conn
+                    .execute(
+                        "DELETE FROM session_tags WHERE source_path = ?",
+                        [&file.source_path],
+                    )
+                    .into_diagnostic()?;
+                let tags = crate::core::tagging::detect_tags(&file.messages);
+                for tag in &tags {
+                    self.conn
+                        .execute(
+                            "INSERT OR IGNORE INTO session_tags (source_path, tag) VALUES (?, ?)",
+                            params![&file.source_path, tag],
+                        )
+                        .into_diagnostic()?;
+                }
             }
 
             self.conn.execute(
@@ -287,6 +424,15 @@ impl SearchEngine for Database {
             };
             conditions.push("si.role = ?");
             param_values.push(Box::new(db_role.to_string()));
+        }
+        if let Some(ct) = &params.content_type {
+            conditions.push("si.content_type = ?");
+            param_values.push(Box::new(ct.clone()));
+        }
+        if let Some(tag) = &params.tag {
+            conditions
+                .push("si.source_path IN (SELECT source_path FROM session_tags WHERE tag = ?)");
+            param_values.push(Box::new(tag.clone()));
         }
 
         let limit_clause = if params.limit == 0 {
@@ -473,26 +619,27 @@ impl SearchEngine for Database {
 
     fn get_topics(&self, project: Option<&str>, limit: usize) -> miette::Result<Vec<TopicEntry>> {
         const STOPWORDS: &[&str] = &[
-            // Spanish
-            "como", "cual", "debe", "desde", "donde", "ella", "ellos", "esta", "este", "esto",
-            "esta", "estan", "hacer", "hacia", "hasta", "ninguno", "nosotros", "nuestro", "otra",
-            "otras", "otro", "otros", "para", "pero", "puede", "quien", "sera", "sido", "sino",
-            "sobre", "solo", "somos", "tambien", "tiene", "tienen", "toda", "todas", "todo",
-            "todos", "usted", "vamos", // English
-            "about", "after", "also", "been", "before", "being", "between", "both", "could",
-            "does", "doing", "done", "down", "each", "even", "every", "file", "from", "have",
-            "here", "http", "https", "into", "just", "know", "like", "line", "make", "many",
-            "more", "most", "much", "must", "need", "only", "other", "over", "path", "said",
-            "same", "self", "should", "some", "such", "text", "than", "that", "them", "then",
-            "there", "these", "they", "this", "those", "through", "used", "using", "very", "want",
-            "were", "what", "when", "where", "which", "while", "will", "with", "would", "your",
-            // Code noise
-            "args", "assert", "break", "case", "catch", "class", "const", "continue", "default",
-            "else", "enum", "error", "false", "func", "function", "impl", "import", "index",
-            "item", "items", "length", "match", "module", "name", "none", "null", "option",
-            "param", "print", "println", "private", "public", "query", "result", "return", "some",
-            "string", "struct", "super", "switch", "test", "tests", "throw", "true", "type",
-            "value", "void",
+            // Spanish (includes stemmed forms)
+            "como", "cual", "deb", "debe", "desd", "desde", "donde", "ella", "ellos", "esta",
+            "estan", "este", "esto", "hacer", "hacia", "hasta", "ninguno", "nosotro", "nosotros",
+            "nuestro", "otra", "otras", "otro", "otros", "para", "pero", "pued", "puede", "quien",
+            "sera", "sido", "sino", "sobr", "sobre", "solo", "somos", "tambien", "tien", "tiene",
+            "tienen", "toda", "todas", "todo", "todos", "usted", "vamos", // English
+            "about", "after", "also", "been", "befor", "before", "being", "between", "both",
+            "could", "does", "doing", "done", "down", "each", "even", "everi", "every", "file",
+            "from", "have", "here", "http", "https", "into", "just", "know", "like", "line",
+            "make", "mani", "many", "more", "most", "much", "must", "need", "onli", "only",
+            "other", "over", "path", "said", "same", "self", "should", "some", "such", "text",
+            "than", "that", "them", "then", "there", "these", "thei", "they", "this", "those",
+            "through", "use", "used", "using", "veri", "very", "want", "were", "what", "when",
+            "where", "which", "while", "will", "with", "would", "your",
+            // Code noise (includes Porter stemmed forms)
+            "args", "assert", "break", "case", "catch", "class", "const", "continu", "continue",
+            "default", "else", "enum", "error", "false", "func", "function", "impl", "import",
+            "index", "item", "items", "length", "match", "modul", "module", "name", "none", "null",
+            "option", "param", "print", "println", "privat", "private", "public", "queri", "query",
+            "result", "return", "some", "string", "struct", "super", "switch", "test", "tests",
+            "throw", "true", "type", "valu", "value", "void",
         ];
 
         let stopword_placeholders: String =
@@ -663,6 +810,120 @@ impl SearchEngine for Database {
         Ok(results)
     }
 
+    fn optimize_fts(&self) -> miette::Result<()> {
+        self.conn
+            .execute(
+                "INSERT INTO messages_fts(messages_fts) VALUES('optimize')",
+                [],
+            )
+            .into_diagnostic()?;
+        Ok(())
+    }
+
+    fn get_insights(&self, project: Option<&str>) -> miette::Result<InsightData> {
+        // Daily activity (last 30 days)
+        let (daily_sql, daily_params): (String, Vec<Box<dyn rusqlite::types::ToSql>>) =
+            match project {
+                Some(p) => (
+                    "SELECT DATE(timestamp) as day, COUNT(DISTINCT source_path) as sessions, COUNT(*) as messages \
+                     FROM search_items \
+                     WHERE source = 'session' AND timestamp IS NOT NULL AND project = ? \
+                     GROUP BY DATE(timestamp) ORDER BY day DESC LIMIT 30"
+                        .to_string(),
+                    vec![Box::new(p.to_string()) as Box<dyn rusqlite::types::ToSql>],
+                ),
+                None => (
+                    "SELECT DATE(timestamp) as day, COUNT(DISTINCT source_path) as sessions, COUNT(*) as messages \
+                     FROM search_items \
+                     WHERE source = 'session' AND timestamp IS NOT NULL \
+                     GROUP BY DATE(timestamp) ORDER BY day DESC LIMIT 30"
+                        .to_string(),
+                    vec![],
+                ),
+            };
+
+        let daily_refs: Vec<&dyn rusqlite::types::ToSql> =
+            daily_params.iter().map(|p| p.as_ref()).collect();
+        let mut stmt = self.conn.prepare(&daily_sql).into_diagnostic()?;
+        let daily_rows = stmt
+            .query_map(daily_refs.as_slice(), |row| {
+                Ok(crate::core::DailyActivity {
+                    date: row.get(0)?,
+                    sessions: row.get(1)?,
+                    messages: row.get(2)?,
+                })
+            })
+            .into_diagnostic()?;
+
+        let mut daily_activity = Vec::new();
+        for row in daily_rows {
+            daily_activity.push(row.into_diagnostic()?);
+        }
+
+        // Tag distribution
+        let (tag_sql, tag_params): (String, Vec<Box<dyn rusqlite::types::ToSql>>) = match project {
+            Some(p) => (
+                "SELECT st.tag, COUNT(*) as count FROM session_tags st \
+                 JOIN search_items si ON st.source_path = si.source_path \
+                 WHERE si.project = ? \
+                 GROUP BY st.tag ORDER BY count DESC"
+                    .to_string(),
+                vec![Box::new(p.to_string()) as Box<dyn rusqlite::types::ToSql>],
+            ),
+            None => (
+                "SELECT tag, COUNT(*) as count FROM session_tags GROUP BY tag ORDER BY count DESC"
+                    .to_string(),
+                vec![],
+            ),
+        };
+
+        let tag_refs: Vec<&dyn rusqlite::types::ToSql> =
+            tag_params.iter().map(|p| p.as_ref()).collect();
+        let mut stmt = self.conn.prepare(&tag_sql).into_diagnostic()?;
+        let tag_rows = stmt
+            .query_map(tag_refs.as_slice(), |row| {
+                Ok(crate::core::TagCount {
+                    tag: row.get(0)?,
+                    count: row.get(1)?,
+                })
+            })
+            .into_diagnostic()?;
+
+        let mut tag_distribution = Vec::new();
+        for row in tag_rows {
+            tag_distribution.push(row.into_diagnostic()?);
+        }
+
+        // Total stats
+        let (stats_sql, stats_params): (&str, Vec<Box<dyn rusqlite::types::ToSql>>) = match project
+        {
+            Some(p) => (
+                "SELECT COUNT(DISTINCT source_path), COUNT(*) FROM search_items WHERE source = 'session' AND project = ?",
+                vec![Box::new(p.to_string()) as Box<dyn rusqlite::types::ToSql>],
+            ),
+            None => (
+                "SELECT COUNT(DISTINCT source_path), COUNT(*) FROM search_items WHERE source = 'session'",
+                vec![],
+            ),
+        };
+
+        let stats_refs: Vec<&dyn rusqlite::types::ToSql> =
+            stats_params.iter().map(|p| p.as_ref()).collect();
+        let (total_sessions, total_messages): (i64, i64) = self
+            .conn
+            .query_row(stats_sql, stats_refs.as_slice(), |row| {
+                Ok((row.get(0)?, row.get(1)?))
+            })
+            .into_diagnostic()?;
+
+        Ok(InsightData {
+            total_sessions,
+            total_messages,
+            daily_activity,
+            tag_distribution,
+        })
+    }
+
     fn validate(&self) -> miette::Result<crate::core::ValidationReport> {
         // 1. Orphaned search_items: source_path points to file that no longer exists on disk
         let mut stmt = self
@@ -733,6 +994,7 @@ mod tests {
                 ordinal: 0,
                 uuid: None,
                 timestamp: None,
+                content_type: "text".into(),
             }],
         };
 
@@ -770,6 +1032,7 @@ mod tests {
                 ordinal: 0,
                 uuid: Some("04df2262-a48e-4549-97a9-11bcf4bb0257".to_string()),
                 timestamp: None,
+                content_type: "text".into(),
             }],
         };
         db.sync_files(vec![file])?;
@@ -795,6 +1058,7 @@ mod tests {
                 ordinal: 0,
                 uuid: None,
                 timestamp: None,
+                content_type: "text".into(),
             }],
         };
         db.sync_files(vec![file])?;
@@ -830,6 +1094,7 @@ mod tests {
                 ordinal: 0,
                 uuid: None,
                 timestamp: None,
+                content_type: "text".into(),
             }],
         };
         db.sync_files(vec![file])?;
@@ -863,6 +1128,7 @@ mod tests {
                     ordinal: 0,
                     uuid: None,
                     timestamp: None,
+                    content_type: "text".into(),
                 },
                 ParsedMessage {
                     role: "plan".to_string(),
@@ -870,6 +1136,7 @@ mod tests {
                     ordinal: 1,
                     uuid: None,
                     timestamp: None,
+                    content_type: "text".into(),
                 },
             ],
         };
@@ -903,6 +1170,7 @@ mod tests {
                 ordinal: 0,
                 uuid: None,
                 timestamp: None,
+                content_type: "text".into(),
             }],
         };
         db.sync_files(vec![file])?;
@@ -930,6 +1198,7 @@ mod tests {
                     ordinal: 0,
                     uuid: None,
                     timestamp: None,
+                    content_type: "text".into(),
                 }],
             },
             ParsedFile {
@@ -943,6 +1212,7 @@ mod tests {
                     ordinal: 0,
                     uuid: None,
                     timestamp: None,
+                    content_type: "text".into(),
                 }],
             },
         ])?;
@@ -977,6 +1247,7 @@ mod tests {
                     ordinal: 0,
                     uuid: None,
                     timestamp: None,
+                    content_type: "text".into(),
                 }],
             },
             ParsedFile {
@@ -990,6 +1261,7 @@ mod tests {
                     ordinal: 0,
                     uuid: None,
                     timestamp: None,
+                    content_type: "text".into(),
                 }],
             },
         ])?;
@@ -1024,6 +1296,7 @@ mod tests {
                     ordinal: 0,
                     uuid: None,
                     timestamp: None,
+                    content_type: "text".into(),
                 }],
             },
             ParsedFile {
@@ -1037,6 +1310,7 @@ mod tests {
                     ordinal: 0,
                     uuid: None,
                     timestamp: None,
+                    content_type: "text".into(),
                 }],
             },
         ])?;
@@ -1068,6 +1342,7 @@ mod tests {
                 ordinal: 0,
                 uuid: None,
                 timestamp: None,
+                content_type: "text".into(),
             }],
         };
         let plan = ParsedFile {
@@ -1081,6 +1356,7 @@ mod tests {
                 ordinal: 0,
                 uuid: None,
                 timestamp: None,
+                content_type: "text".into(),
             }],
         };
         db.sync_files(vec![session])?;
@@ -1124,6 +1400,7 @@ mod tests {
                     ordinal: 0,
                     uuid: None,
                     timestamp: None,
+                    content_type: "text".into(),
                 }],
             },
             ParsedFile {
@@ -1137,6 +1414,7 @@ mod tests {
                     ordinal: 0,
                     uuid: None,
                     timestamp: None,
+                    content_type: "text".into(),
                 }],
             },
             ParsedFile {
@@ -1150,14 +1428,15 @@ mod tests {
                     ordinal: 0,
                     uuid: None,
                     timestamp: None,
+                    content_type: "text".into(),
                 }],
             },
         ])?;
 
         let topics = db.get_topics(None, 10)?;
         assert!(!topics.is_empty());
-        // "kubernetes" appears in 2 sessions, should be top
-        assert_eq!(topics[0].term, "kubernetes");
+        // Porter stemmer: "kubernetes" → "kubernet", appears in 2 sessions
+        assert_eq!(topics[0].term, "kubernet");
         assert_eq!(topics[0].sessions, 2);
 
         Ok(())
@@ -1180,6 +1459,7 @@ mod tests {
                     ordinal: 0,
                     uuid: None,
                     timestamp: None,
+                    content_type: "text".into(),
                 }],
             },
             ParsedFile {
@@ -1193,13 +1473,15 @@ mod tests {
                     ordinal: 0,
                     uuid: None,
                     timestamp: None,
+                    content_type: "text".into(),
                 }],
             },
         ])?;
 
         let alpha_topics = db.get_topics(Some("alpha"), 10)?;
         let terms: Vec<&str> = alpha_topics.iter().map(|t| t.term.as_str()).collect();
-        assert!(terms.contains(&"kubernetes"));
+        // Porter stemmer: "kubernetes" → "kubernet"
+        assert!(terms.contains(&"kubernet"));
         assert!(!terms.contains(&"postgresql"));
 
         Ok(())
@@ -1221,6 +1503,7 @@ mod tests {
                 ordinal: 0,
                 uuid: None,
                 timestamp: None,
+                content_type: "text".into(),
             }],
         }])?;
 
@@ -1250,6 +1533,7 @@ mod tests {
                         ordinal: 0,
                         uuid: None,
                         timestamp: Some("2026-01-01T10:00:00Z".into()),
+                        content_type: "text".into(),
                     },
                     ParsedMessage {
                         role: "assistant".into(),
@@ -1257,6 +1541,7 @@ mod tests {
                         ordinal: 1,
                         uuid: None,
                         timestamp: Some("2026-01-01T10:05:00Z".into()),
+                        content_type: "text".into(),
                     },
                 ],
             },
@@ -1271,6 +1556,7 @@ mod tests {
                     ordinal: 0,
                     uuid: None,
                     timestamp: Some("2026-01-02T10:00:00Z".into()),
+                    content_type: "text".into(),
                 }],
             },
         ])?;
@@ -1303,6 +1589,7 @@ mod tests {
                     ordinal: 0,
                     uuid: None,
                     timestamp: None,
+                    content_type: "text".into(),
                 }],
             },
             ParsedFile {
@@ -1316,6 +1603,7 @@ mod tests {
                     ordinal: 0,
                     uuid: None,
                     timestamp: None,
+                    content_type: "text".into(),
                 }],
             },
         ])?;
@@ -1345,6 +1633,7 @@ mod tests {
                         ordinal: 0,
                         uuid: None,
                         timestamp: None,
+                        content_type: "text".into(),
                     },
                     ParsedMessage {
                         role: "assistant".into(),
@@ -1352,6 +1641,7 @@ mod tests {
                         ordinal: 1,
                         uuid: None,
                         timestamp: None,
+                        content_type: "text".into(),
                     },
                 ],
             },
@@ -1366,6 +1656,7 @@ mod tests {
                     ordinal: 0,
                     uuid: None,
                     timestamp: None,
+                    content_type: "text".into(),
                 }],
             },
             ParsedFile {
@@ -1379,6 +1670,7 @@ mod tests {
                     ordinal: 0,
                     uuid: None,
                     timestamp: None,
+                    content_type: "text".into(),
                 }],
             },
         ])?;

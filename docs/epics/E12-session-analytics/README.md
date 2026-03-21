@@ -1,6 +1,7 @@
 # E12: Session Analytics
 
 **Objetivo**: Dar a backscroll la capacidad de responder queries analiticas sobre el corpus de sesiones — frecuencia de terminos (topics), listado de sesiones, y desglose por proyecto — usando datos que ya existen en el indice FTS5.
+**Timeline**: 2026-Q1 — hecho
 
 ## Postcondiciones
 

@@ -1,6 +1,7 @@
 # E07: Calidad de Corpus
 
 **Objetivo**: Filtrar ruido, excluir subagent sessions, y asociar cada mensaje con su proyecto. Que el indice contenga solo contenido util para busqueda.
+**Timeline**: 2026-Q1 — hecho
 
 ## Postcondiciones
 

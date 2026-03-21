@@ -36,6 +36,7 @@ pub fn read_session(path: &Path) -> miette::Result<Vec<ParsedMessage>> {
                             ordinal,
                             uuid: record.uuid,
                             timestamp: record.timestamp,
+                            content_type: "text".into(),
                         });
                     }
                 }

@@ -1,7 +1,7 @@
 # E14: Search Refinement
 
 **Metrica de exito**: Search queries filtran por fecha, rol y paginan resultados — reduciendo tokens consumidos por skills en >50%
-**Timeline**: 2026-Q1 — en curso
+**Timeline**: 2026-Q1 — hecho
 
 ## Intencion
 
@@ -45,7 +45,8 @@ El skill `/backscroll` hace queries frecuentes como "que discutimos la semana pa
 
 | Fecha | Decision | Razon |
 |-------|----------|-------|
+| 2026-03-20 | Todas las postcondiciones verificadas — epic completado | --after, --before, --role, --limit, --offset implementados y testeados |
 
 ## Gaps Activos
 
-- Ninguno identificado
+- Ninguno

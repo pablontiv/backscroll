@@ -1,6 +1,7 @@
 # E09: Hardening Post-Validacion
 
 **Objetivo**: Cerrar los gaps detectados en la validacion de research docs vs implementacion. Completar filtros de ruido faltantes, optimizar compilacion regex, y eliminar dead code.
+**Timeline**: 2026-Q1 — hecho
 
 ## Postcondiciones
 
