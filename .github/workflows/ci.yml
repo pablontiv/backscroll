@@ -216,16 +216,9 @@ jobs:
             fi
           }
 
-      - name: Sync version to repo
-        if: steps.version.outputs.bump == 'true'
-        run: |
-          VERSION="$(echo ${{ steps.version.outputs.tag }} | sed 's/^v//')"
-          sed -i "s/^version = \".*\"/version = \"${VERSION}\"/" Cargo.toml
-          cargo generate-lockfile
-          git config user.name "github-actions[bot]"
-          git config user.email "github-actions[bot]@users.noreply.github.com"
-          git add Cargo.toml Cargo.lock
-          git diff --cached --quiet || (git commit -m "chore(release): v${VERSION}" && git push origin HEAD:master)
+      # Version in Cargo.toml is set at build time via the "Set release version"
+      # step. No need to push back — the git tag is the source of truth for
+      # the release version, same as rootline's CI.
 
   release-macos:
     name: macOS aarch64 Binary
