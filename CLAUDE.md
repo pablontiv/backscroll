@@ -154,11 +154,14 @@ The Justfile contains only development recipes (`check`, `test`, `build`, `fmt`,
 ## Crate Path
 
 ```
+backscroll (library crate) — Public API for programmatic use
 backscroll::core           — Domain types and SearchEngine trait
 backscroll::core::sync     — Session parsing and noise filtering
 backscroll::core::plans    — Markdown plan parsing
 backscroll::core::tagging  — Heuristic session auto-tagging
 backscroll::storage        — SQLite FTS5 adapter (Porter stemmer)
-backscroll::config         — Figment configuration + auto-discovery
-backscroll::output         — Output formatting
+
+Binary-only modules (not part of library API):
+config                     — Figment configuration + auto-discovery
+output                     — Output formatting
 ```
