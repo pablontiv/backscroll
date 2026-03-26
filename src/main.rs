@@ -1,19 +1,17 @@
 #![forbid(unsafe_code)]
 
 mod config;
-mod core;
 mod output;
-mod storage;
 
-use crate::core::plans::parse_plan;
-use crate::core::sync::parse_sessions;
-use crate::core::{SearchEngine, SearchParams};
 use crate::output::{OutputFormat, OutputOptions, format_results};
+use backscroll::core::plans::parse_plan;
+use backscroll::core::sync::parse_sessions;
+use backscroll::core::{SearchEngine, SearchParams};
+use backscroll::storage::sqlite::Database;
 use clap::{Parser, Subcommand};
 use config::Config;
 use miette::Result;
 use std::path::PathBuf;
-use storage::sqlite::Database;
 
 #[derive(Parser)]
 #[command(name = "backscroll")]
@@ -459,7 +457,7 @@ fn main() -> Result<()> {
             }
         }
         Commands::Read { path } => {
-            let messages = crate::core::reader::read_session(path)?;
+            let messages = backscroll::core::reader::read_session(path)?;
             for msg in messages {
                 println!("[{}]", msg.role);
                 println!("{}", msg.text);

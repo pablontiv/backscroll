@@ -1,4 +1,4 @@
-use crate::core::SearchResult;
+use backscroll::core::SearchResult;
 use std::io::{self, Write};
 
 pub enum OutputFormat {
