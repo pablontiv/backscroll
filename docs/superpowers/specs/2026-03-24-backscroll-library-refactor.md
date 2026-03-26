@@ -1,5 +1,7 @@
 # Spec: Backscroll Library Refactor
 
+> **Status: COMPLETED** (2026-03-26) — Implemented in commits `18202ef`..`b515775`. Design spec: `2026-03-24-backscroll-library-refactor-design.md`.
+
 ## Context
 Backscroll is currently a standalone CLI tool. Other ecosystem components (like Kedral) need its sophisticated session parsing and noise-filtering logic without the overhead of subprocess calls.
 
@@ -8,10 +10,10 @@ Backscroll is currently a standalone CLI tool. Other ecosystem components (like 
 > **Priority elevated post-domain types** (2026-03-26): Rootline's `domain` semantic types are now implemented (commit `6593c1c`), enabling consumer tools to discover fields like `lifecycle_state` without knowing localized names. This unblocks Kedral's agnostic engine spec (`kedral-agnostic-engine.md`), which depends on `libbackscroll` for noise-filtered session analysis. Dependency chain:
 >
 > ```
-> rootline domains (✅ done) → kedral agnostic engine (blocked on libbackscroll) → this refactor
+> rootline domains (✅ done) → libbackscroll (✅ done) → kedral agnostic engine (next)
 > ```
 >
-> This refactor is now the **next bottleneck** in the ecosystem pipeline.
+> Library refactor complete. Kedral agnostic engine is now **unblocked**.
 
 ## Objectives
 1. **Library-First Architecture**: Refactor the codebase to support both a library (`lib`) and a binary (`bin`).

@@ -1,5 +1,7 @@
 # Backscroll Library Refactor — Design Spec
 
+> **Status: COMPLETED** (2026-03-26) — All changes implemented and verified. CI green. Release published.
+
 ## Context
 
 Backscroll is currently a standalone CLI tool. Kedral's agnostic engine needs programmatic access to backscroll's session parsing, noise filtering, and FTS5 search — without subprocess overhead. The dependency chain is:
