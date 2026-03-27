@@ -144,6 +144,16 @@ No manual release steps are needed — just push to master with conventional com
 
 The Justfile contains only development recipes (`check`, `test`, `build`, `fmt`, `audit`). Release logic lives exclusively in CI to avoid duplication.
 
+## CI/CD
+
+Workflows delegate to [pablontiv/crossbeam](https://github.com/pablontiv/crossbeam) reusable workflows at `@v1`:
+
+| Workflow | Crossbeam caller |
+|---|---|
+| `ci.yml` | `rust-ci.yml`, `gitleaks.yml`, `rust-release.yml` |
+| `codeql.yml` | `codeql.yml` |
+| `scorecard.yml` | `scorecard.yml` |
+
 ## Config Resolution Order
 
 1. `./backscroll.toml` (current directory)
