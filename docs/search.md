@@ -75,7 +75,13 @@ The limit is approximate — it will not truncate a result mid-output, but will 
 
 ## Query Sanitization
 
-User queries are automatically sanitized before being passed to the FTS5 engine. All tokens are wrapped in double quotes so special characters (hyphens, colons, parentheses, FTS5 operators like `AND`/`OR`/`NOT`) are treated as literal search terms. This means queries like `"anti-pattern"`, `"http://localhost:8080"`, or `"status (production)"` work without errors.
+User queries are automatically sanitized before being passed to the FTS5 engine:
+
+1. **Dynamic stopword removal** — High-frequency terms (appearing in >50% of documents) are automatically filtered out. These stopwords are computed during `sync` and stored in a `dynamic_stopwords` table, adapting to the corpus without hardcoded dictionaries.
+2. **Literal quoting** — Remaining tokens are wrapped in double quotes so special characters (hyphens, colons, parentheses, FTS5 operators like `AND`/`OR`/`NOT`) are treated as literal search terms.
+3. **Prefix matching** — Each token gets an FTS5 prefix `*` suffix, enabling substring matching (e.g., "crash" matches "crashloopbackoff").
+
+If all tokens in a query are stopwords, the original query is used unfiltered as a fallback. The FTS5 tokenizer (`porter unicode61`) provides stemming on top of these features.
 
 ## Exit Codes
 
