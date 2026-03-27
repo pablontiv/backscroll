@@ -367,7 +367,7 @@ impl Database {
         self.conn
             .execute(
                 "INSERT INTO dynamic_stopwords (term) \
-                 SELECT term FROM messages_vocab WHERE doc > ?",
+                 SELECT term FROM messages_vocab WHERE doc > ? AND length(term) > 1",
                 params![threshold as i64],
             )
             .into_diagnostic()?;
