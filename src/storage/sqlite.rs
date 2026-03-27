@@ -4,7 +4,7 @@ use crate::core::{
 };
 use miette::IntoDiagnostic;
 use rusqlite::{Connection, Result, Row, params};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::Path;
 use std::time::Duration;
 
@@ -14,15 +14,34 @@ pub struct Database {
 
 /// Sanitize user input for FTS5 MATCH.
 ///
-/// Wraps every token in double quotes so FTS5 treats all input as literal
-/// search terms. This prevents hyphens, colons, parentheses, and other
-/// FTS5 operators from causing SQL errors or unexpected behavior.
-fn sanitize_fts5_query(query: &str) -> String {
-    query
-        .split_whitespace()
+/// Removes dynamic stopwords (high-frequency terms) from the query, then wraps
+/// every remaining token in double quotes with a `*` suffix for prefix matching.
+/// This prevents hyphens, colons, parentheses, and other FTS5 operators from
+/// causing SQL errors, while enabling partial-word searches (e.g. "crash"
+/// matches "crashloopbackoff").
+///
+/// If all tokens are stopwords, falls back to the unfiltered query with prefix
+/// matching to avoid returning zero results.
+fn sanitize_fts5_query(query: &str, stopwords: &HashSet<String>) -> String {
+    let tokens: Vec<&str> = query.split_whitespace().collect();
+    let filtered: Vec<&str> = tokens
+        .iter()
+        .filter(|t| !stopwords.contains(&t.to_lowercase()))
+        .copied()
+        .collect();
+
+    // Fall back to unfiltered if all tokens were stopwords
+    let effective = if filtered.is_empty() {
+        &tokens
+    } else {
+        &filtered
+    };
+
+    effective
+        .iter()
         .map(|token| {
             let escaped = token.replace('"', "\"\"");
-            format!("\"{}\"", escaped)
+            format!("\"{}\"*", escaped)
         })
         .collect::<Vec<_>>()
         .join(" ")
@@ -302,7 +321,78 @@ impl Database {
             self.conn.execute("COMMIT", []).into_diagnostic()?;
         }
 
+        let current_version: i64 = self
+            .conn
+            .query_row("SELECT version FROM schema_version", [], |row| row.get(0))
+            .into_diagnostic()?;
+
+        if current_version == 4 {
+            self.conn
+                .execute(
+                    "CREATE TABLE IF NOT EXISTS dynamic_stopwords (term TEXT PRIMARY KEY)",
+                    [],
+                )
+                .into_diagnostic()?;
+
+            self.conn
+                .execute("UPDATE schema_version SET version = 5", [])
+                .into_diagnostic()?;
+        }
+
         Ok(())
+    }
+
+    /// Compute high-frequency terms (>50% doc frequency) from the FTS5 vocab
+    /// table and store them in `dynamic_stopwords`.
+    fn refresh_stopwords(&self) -> miette::Result<()> {
+        let total_docs: i64 = self
+            .conn
+            .query_row(
+                "SELECT COUNT(DISTINCT source_path) FROM search_items",
+                [],
+                |row| row.get(0),
+            )
+            .into_diagnostic()?;
+
+        if total_docs == 0 {
+            return Ok(());
+        }
+
+        let threshold = total_docs as f64 * 0.5;
+
+        self.conn
+            .execute("DELETE FROM dynamic_stopwords", [])
+            .into_diagnostic()?;
+
+        self.conn
+            .execute(
+                "INSERT INTO dynamic_stopwords (term) \
+                 SELECT term FROM messages_vocab WHERE doc > ?",
+                params![threshold as i64],
+            )
+            .into_diagnostic()?;
+
+        Ok(())
+    }
+
+    /// Load the current set of dynamic stopwords into a HashSet for query-time filtering.
+    fn load_stopwords(&self) -> miette::Result<HashSet<String>> {
+        let mut stmt = self
+            .conn
+            .prepare("SELECT term FROM dynamic_stopwords")
+            .into_diagnostic()?;
+        let rows = stmt
+            .query_map([], |row| {
+                let term: String = row.get(0)?;
+                Ok(term)
+            })
+            .into_diagnostic()?;
+
+        let mut stopwords = HashSet::new();
+        for row in rows {
+            stopwords.insert(row.into_diagnostic()?);
+        }
+        Ok(stopwords)
     }
 
     fn map_search_row(row: &Row<'_>) -> Result<SearchResult> {
@@ -374,6 +464,7 @@ impl SearchEngine for Database {
             ).into_diagnostic()?;
         }
         self.conn.execute("COMMIT", []).into_diagnostic()?;
+        self.refresh_stopwords()?;
         Ok(())
     }
 
@@ -397,9 +488,11 @@ impl SearchEngine for Database {
             snippet_expr
         );
 
+        let stopwords = self.load_stopwords()?;
+
         let mut conditions = Vec::new();
         let mut param_values: Vec<Box<dyn rusqlite::types::ToSql>> = Vec::new();
-        param_values.push(Box::new(sanitize_fts5_query(query_str)));
+        param_values.push(Box::new(sanitize_fts5_query(query_str, &stopwords)));
 
         if let Some(p) = &params.project {
             conditions.push("si.project = ?");
@@ -618,53 +711,16 @@ impl SearchEngine for Database {
     }
 
     fn get_topics(&self, project: Option<&str>, limit: usize) -> miette::Result<Vec<TopicEntry>> {
-        const STOPWORDS: &[&str] = &[
-            // Spanish (includes stemmed forms)
-            "como", "cual", "deb", "debe", "desd", "desde", "donde", "ella", "ellos", "esta",
-            "estan", "este", "esto", "hacer", "hacia", "hasta", "ninguno", "nosotro", "nosotros",
-            "nuestro", "otra", "otras", "otro", "otros", "para", "pero", "pued", "puede", "quien",
-            "sera", "sido", "sino", "sobr", "sobre", "solo", "somos", "tambien", "tien", "tiene",
-            "tienen", "toda", "todas", "todo", "todos", "usted", "vamos", // English
-            "about", "after", "also", "been", "befor", "before", "being", "between", "both",
-            "could", "does", "doing", "done", "down", "each", "even", "everi", "every", "file",
-            "from", "have", "here", "http", "https", "into", "just", "know", "like", "line",
-            "make", "mani", "many", "more", "most", "much", "must", "need", "onli", "only",
-            "other", "over", "path", "said", "same", "self", "should", "some", "such", "text",
-            "than", "that", "them", "then", "there", "these", "thei", "they", "this", "those",
-            "through", "use", "used", "using", "veri", "very", "want", "were", "what", "when",
-            "where", "which", "while", "will", "with", "would", "your",
-            // Code noise (includes Porter stemmed forms)
-            "args", "assert", "break", "case", "catch", "class", "const", "continu", "continue",
-            "default", "else", "enum", "error", "false", "func", "function", "impl", "import",
-            "index", "item", "items", "length", "match", "modul", "module", "name", "none", "null",
-            "option", "param", "print", "println", "privat", "private", "public", "queri", "query",
-            "result", "return", "some", "string", "struct", "super", "switch", "test", "tests",
-            "throw", "true", "type", "valu", "value", "void",
-        ];
-
-        let stopword_placeholders: String =
-            STOPWORDS.iter().map(|_| "?").collect::<Vec<_>>().join(",");
-
         match project {
             None => {
-                let sql = format!(
-                    "SELECT term, doc, cnt FROM messages_vocab \
-                     WHERE length(term) > 3 AND term NOT IN ({}) \
-                     ORDER BY doc DESC LIMIT ?",
-                    stopword_placeholders
-                );
-                let mut stmt = self.conn.prepare(&sql).into_diagnostic()?;
-                let mut params: Vec<Box<dyn rusqlite::types::ToSql>> = STOPWORDS
-                    .iter()
-                    .map(|s| Box::new(s.to_string()) as Box<dyn rusqlite::types::ToSql>)
-                    .collect();
-                params.push(Box::new(limit as i64));
-
-                let param_refs: Vec<&dyn rusqlite::types::ToSql> =
-                    params.iter().map(|p| p.as_ref()).collect();
+                let sql = "SELECT term, doc, cnt FROM messages_vocab \
+                     WHERE length(term) > 3 \
+                       AND term NOT IN (SELECT term FROM dynamic_stopwords) \
+                     ORDER BY doc DESC LIMIT ?";
+                let mut stmt = self.conn.prepare(sql).into_diagnostic()?;
 
                 let rows = stmt
-                    .query_map(param_refs.as_slice(), |row| {
+                    .query_map(params![limit as i64], |row| {
                         Ok(TopicEntry {
                             term: row.get(0)?,
                             sessions: row.get(1)?,
@@ -682,24 +738,14 @@ impl SearchEngine for Database {
             Some(proj) => {
                 // Get candidate terms from global vocab
                 let candidate_limit = limit * 5;
-                let candidates_sql = format!(
-                    "SELECT term FROM messages_vocab \
-                     WHERE length(term) > 3 AND term NOT IN ({}) \
-                     ORDER BY doc DESC LIMIT ?",
-                    stopword_placeholders
-                );
-                let mut stmt = self.conn.prepare(&candidates_sql).into_diagnostic()?;
-                let mut params: Vec<Box<dyn rusqlite::types::ToSql>> = STOPWORDS
-                    .iter()
-                    .map(|s| Box::new(s.to_string()) as Box<dyn rusqlite::types::ToSql>)
-                    .collect();
-                params.push(Box::new(candidate_limit as i64));
-
-                let param_refs: Vec<&dyn rusqlite::types::ToSql> =
-                    params.iter().map(|p| p.as_ref()).collect();
+                let candidates_sql = "SELECT term FROM messages_vocab \
+                     WHERE length(term) > 3 \
+                       AND term NOT IN (SELECT term FROM dynamic_stopwords) \
+                     ORDER BY doc DESC LIMIT ?";
+                let mut stmt = self.conn.prepare(candidates_sql).into_diagnostic()?;
 
                 let candidate_rows = stmt
-                    .query_map(param_refs.as_slice(), |row| {
+                    .query_map(params![candidate_limit as i64], |row| {
                         let term: String = row.get(0)?;
                         Ok(term)
                     })
@@ -1388,6 +1434,7 @@ mod tests {
         let db = Database::open(":memory:")?;
         db.setup_schema()?;
 
+        // Use 5 documents so "kubernet" at 2/5 = 40% stays below the 50% stopword threshold.
         db.sync_files(vec![
             ParsedFile {
                 source: "session".into(),
@@ -1431,11 +1478,39 @@ mod tests {
                     content_type: "text".into(),
                 }],
             },
+            ParsedFile {
+                source: "session".into(),
+                source_path: "/s/s4.jsonl".into(),
+                hash: "t4".into(),
+                project: Some("gamma".into()),
+                messages: vec![ParsedMessage {
+                    role: "user".into(),
+                    text: "terraform infrastructure provisioning".into(),
+                    ordinal: 0,
+                    uuid: None,
+                    timestamp: None,
+                    content_type: "text".into(),
+                }],
+            },
+            ParsedFile {
+                source: "session".into(),
+                source_path: "/s/s5.jsonl".into(),
+                hash: "t5".into(),
+                project: Some("gamma".into()),
+                messages: vec![ParsedMessage {
+                    role: "user".into(),
+                    text: "ansible playbook automation".into(),
+                    ordinal: 0,
+                    uuid: None,
+                    timestamp: None,
+                    content_type: "text".into(),
+                }],
+            },
         ])?;
 
         let topics = db.get_topics(None, 10)?;
         assert!(!topics.is_empty());
-        // Porter stemmer: "kubernetes" → "kubernet", appears in 2 sessions
+        // Porter stemmer: "kubernetes" → "kubernet", appears in 2 sessions (2/5 = 40%, not a stopword)
         assert_eq!(topics[0].term, "kubernet");
         assert_eq!(topics[0].sessions, 2);
 
@@ -1611,6 +1686,107 @@ mod tests {
         let sessions = db.list_sessions(Some("alpha"), 10)?;
         assert_eq!(sessions.len(), 1);
         assert_eq!(sessions[0].project.as_deref(), Some("alpha"));
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_search_dynamic_stopword_removal() -> miette::Result<()> {
+        let db = Database::open(":memory:")?;
+        db.setup_schema()?;
+
+        // Create 10 documents that all contain "common" and "filler" words
+        // so those become dynamic stopwords (appearing in >50% of docs).
+        let mut files: Vec<ParsedFile> = Vec::new();
+        for i in 0..10 {
+            files.push(ParsedFile {
+                source: "session".into(),
+                source_path: format!("/s/common{}.jsonl", i),
+                hash: format!("c{}", i),
+                project: None,
+                messages: vec![ParsedMessage {
+                    role: "user".into(),
+                    text: "common filler padding words repeated everywhere".into(),
+                    ordinal: 0,
+                    uuid: None,
+                    timestamp: None,
+                    content_type: "text".into(),
+                }],
+            });
+        }
+        // Add 1 target document with a unique word "crashloopbackoff"
+        files.push(ParsedFile {
+            source: "session".into(),
+            source_path: "/s/target.jsonl".into(),
+            hash: "target".into(),
+            project: None,
+            messages: vec![ParsedMessage {
+                role: "user".into(),
+                text: "common filler crashloopbackoff detected".into(),
+                ordinal: 0,
+                uuid: None,
+                timestamp: None,
+                content_type: "text".into(),
+            }],
+        });
+        db.sync_files(files)?;
+
+        // Search for "common crashloopbackoff" — "common" should be removed as
+        // a dynamic stopword, and "crashloopbackoff" should still match via prefix.
+        let results = db.search(
+            "common crashloopbackoff",
+            &SearchParams {
+                limit: 20,
+                ..Default::default()
+            },
+        )?;
+        // Should find the target document
+        assert!(
+            !results.is_empty(),
+            "Expected results but got none — stopword removal + prefix search failed"
+        );
+        assert!(
+            results.iter().any(|r| r.source_path == "/s/target.jsonl"),
+            "Expected target doc in results"
+        );
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_search_prefix_matching() -> miette::Result<()> {
+        let db = Database::open(":memory:")?;
+        db.setup_schema()?;
+
+        db.sync_files(vec![ParsedFile {
+            source: "session".into(),
+            source_path: "/s/prefix.jsonl".into(),
+            hash: "pfx".into(),
+            project: None,
+            messages: vec![ParsedMessage {
+                role: "user".into(),
+                text: "pod is in crashloopbackoff state".into(),
+                ordinal: 0,
+                uuid: None,
+                timestamp: None,
+                content_type: "text".into(),
+            }],
+        }])?;
+
+        // "crash" should prefix-match "crashloopbackoff"
+        let results = db.search(
+            "crash",
+            &SearchParams {
+                limit: 20,
+                ..Default::default()
+            },
+        )?;
+        assert_eq!(
+            results.len(),
+            1,
+            "prefix 'crash' should match 'crashloopbackoff'"
+        );
+        assert_eq!(results[0].source_path, "/s/prefix.jsonl");
 
         Ok(())
     }
