@@ -58,7 +58,7 @@ main.rs (CLI: clap)
 
 Twelve CLI commands: `sync [--path] [--include-agents] [--no-plans] [--optimize]`, `search <query> [--project] [--all-projects] [--json] [--robot] [--fields] [--max-tokens] [--source] [--after] [--before] [--role] [--limit] [--offset] [--content-type] [--tag]`, `read <path>`, `resume <query> [--project] [--all-projects] [--robot] [--source]`, `topics [--project] [--all-projects] [--limit] [--json] [--robot]`, `list [--project] [--all-projects] [--recent] [--json] [--robot]`, `insights [--project] [--all-projects] [--json] [--robot]`, `export <query> [--format markdown|csv] [--project] [--all-projects]`, `reindex`, `purge --before <date>`, `validate`, `status`.
 
-The `SearchEngine` trait is the port; `storage::sqlite` is the adapter. Database is opened lazily.
+The `SearchEngine` trait is the port; `storage::sqlite` is the adapter. Database is opened lazily. `Database::open_readonly()` provides read-only access for external consumers (e.g., kedral) via `SQLITE_OPEN_READ_ONLY` — fails fast if DB file missing.
 
 ### Core Pipeline
 
