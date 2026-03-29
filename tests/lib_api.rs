@@ -6,6 +6,7 @@ use backscroll::core::{ParsedFile, SearchEngine, SearchParams, SearchResult};
 use backscroll::storage::sqlite::Database;
 use std::collections::HashMap;
 use std::fs;
+use std::path::PathBuf;
 use tempfile::tempdir;
 
 #[test]
@@ -57,4 +58,30 @@ fn test_filter_noise_exposed() {
         noisy.is_none(),
         "system-reminder tags should be filtered as noise"
     );
+}
+
+#[test]
+fn test_open_readonly_existing_db() {
+    let dir = tempdir().unwrap();
+    let db_path = dir.path().join("readonly_test.db");
+
+    // Create and populate DB in read-write mode
+    {
+        let db = Database::open(db_path.to_str().unwrap()).unwrap();
+        db.setup_schema().unwrap();
+    }
+
+    // Reopen in read-only mode
+    let db = Database::open_readonly(db_path.to_str().unwrap()).unwrap();
+    let stats = db.get_stats().unwrap();
+    // Fresh DB should have zero sessions
+    assert_eq!(stats.file_count, 0);
+}
+
+#[test]
+fn test_open_readonly_missing_db_fails() {
+    let path = PathBuf::from("/tmp/backscroll_nonexistent_test.db");
+    assert!(!path.exists());
+    let result = Database::open_readonly(path.to_str().unwrap());
+    assert!(result.is_err(), "open_readonly on missing file should fail");
 }

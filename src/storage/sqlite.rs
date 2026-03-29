@@ -62,6 +62,26 @@ impl Database {
         Ok(Self { conn })
     }
 
+    pub fn open_readonly(path: impl AsRef<Path>) -> miette::Result<Self> {
+        let path = path.as_ref();
+        if !path.exists() {
+            return Err(miette::miette!(
+                "backscroll database not found: {}",
+                path.display()
+            ));
+        }
+        let conn = Connection::open_with_flags(
+            path,
+            rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY | rusqlite::OpenFlags::SQLITE_OPEN_NO_MUTEX,
+        )
+        .into_diagnostic()?;
+
+        conn.busy_timeout(Duration::from_millis(5000))
+            .into_diagnostic()?;
+
+        Ok(Self { conn })
+    }
+
     pub fn setup_schema(&self) -> miette::Result<()> {
         self.conn
             .execute(
