@@ -1,6 +1,0 @@
-version: 2
-schema:
-  id:
-    type: sequence
-    match:
-      "F*": {prefix: F, digits: 2}
