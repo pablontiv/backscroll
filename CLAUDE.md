@@ -4,9 +4,9 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-Backscroll is a Rust CLI tool that indexes Claude Code session JSONL logs into SQLite FTS5 for full-text search with BM25 ranking. It treats sessions as an event store with incremental sync via SHA-256 deduplication.
+Backscroll is a Rust CLI tool that indexes Claude Code sessions, plans, and external knowledge sources into SQLite for hybrid search (BM25 + vector embeddings via sqlite-vec + RRF fusion). It treats sessions as an event store with incremental sync via SHA-256 deduplication.
 
-**Status**: Pre-1.0 — Core engine complete (sync, search, read, status). >95% test coverage. Requires Rust 1.85+.
+**Status**: 1.0 — Hybrid search engine complete (BM25 + embeddings + RRF). External source types (KEs, decisions, memories, rules, specs, backlog). >95% test coverage. Requires Rust 1.85+.
 
 ## Build & Test Commands
 
@@ -40,9 +40,13 @@ main.rs (CLI: clap)
 │   ├── plans.rs       — Markdown plan parser (split by ## headers)
 │   ├── reader.rs      — Direct reading of single filtered session files
 │   ├── sync.rs        — WalkDir, hashing, parsing JSONL with noise filtering
-│   └── tagging.rs     — Heuristic session auto-tagging (regex-based category detection)
+│   ├── tagging.rs     — Heuristic session auto-tagging (regex-based category detection)
+│   ├── embedding.rs   — EmbeddingProvider trait, MockProvider, OnnxProvider
+│   ├── chunking.rs    — Text chunking pipeline (~512 tokens, sentence-aware)
+│   ├── sources.rs     — External source parsers (KE, decision, memory, rule, spec, backlog) + SourceRegistry
+│   └── hybrid.rs      — Reciprocal Rank Fusion (RRF) for combining BM25 + vector rankings
 └── storage/
-    └── sqlite.rs      — SQLite adapter (external FTS5, triggers, BM25)
+    └── sqlite.rs      — SQLite adapter (FTS5 + sqlite-vec, hybrid search, embeddings)
 ```
 
 - `main.rs` — CLI entrypoint (clap `Parser`/`Subcommand`), command dispatch, plan sync orchestration
@@ -63,11 +67,24 @@ The `SearchEngine` trait is the port; `storage::sqlite` is the adapter. Database
 ### Core Pipeline
 
 ```
-JSONL files → WalkDir → SHA-256 dedup → parse_sessions() ─→ SQLite FTS5
-Markdown plans → discover_plan_files() → parse_plan() ────┘       │
-                                                                   │
-CLI query → SearchEngine::search(source?) → BM25 ranking → format_results()
+JSONL files → WalkDir → SHA-256 dedup → parse_sessions() ─┐
+Markdown plans → discover_plan_files() → parse_plan() ─────┤
+External sources → SourceRegistry::parse_all() ─────────────┤
+                                                            ▼
+                                              sync_files() → SQLite FTS5
+                                                           → chunk_text() → embed() → sqlite-vec
+                                                            │
+CLI query → search() → BM25 ──────────────┐
+                     → embed(query) → KNN ─┤→ RRF fusion → format_results()
 ```
+
+### Hybrid Search
+
+Search defaults to hybrid mode (BM25 + vector + RRF). Use `--lexical-only` for BM25-only. Embedding provider is configurable via `EmbeddingProvider` trait (default: all-MiniLM-L6-v2 via ONNX Runtime, download-on-first-use).
+
+### External Source Types
+
+Configurable in `[sources]` section of `backscroll.toml`. Source types: `ke`, `decision`, `memory`, `rule`, `spec`, `backlog`. Each has per-type parsers (whole-document or sectioned by ## headers). All filterable via `--source` flag.
 
 ### Key Design Decisions
 
@@ -87,7 +104,11 @@ CLI query → SearchEngine::search(source?) → BM25 ranking → format_results(
 ## Dependencies
 
 - `clap 4.5` — CLI argument parsing with derive macros
-- `rusqlite 0.38` (bundled) — SQLite with FTS5, WAL mode, no system dependency
+- `rusqlite 0.39` (bundled, load_extension) — SQLite with FTS5, WAL mode, sqlite-vec support
+- `sqlite-vec 0.1` — Vector similarity search extension for SQLite
+- `ort =2.0.0-rc.10` — ONNX Runtime for embedding inference (load-dynamic)
+- `tokenizers 0.21` — HuggingFace tokenizer for model-agnostic text encoding
+- `ndarray 0.16` — N-dimensional arrays for tensor operations
 - `figment 0.10` — Layered config resolution (TOML + env vars)
 - `serde` / `serde_json` — Defensive JSONL deserialization with `untagged` enums
 - `sha2` / `hex` — SHA-256 hashing for incremental sync deduplication
@@ -165,13 +186,19 @@ Workflows delegate to [pablontiv/crossbeam](https://github.com/pablontiv/crossbe
 
 ```
 backscroll (library crate) — Public API for programmatic use
+backscroll::config         — Config structs (EmbeddingConfig, SourcesConfig)
 backscroll::core           — Domain types and SearchEngine trait
 backscroll::core::sync     — Session parsing and noise filtering
 backscroll::core::plans    — Markdown plan parsing
 backscroll::core::tagging  — Heuristic session auto-tagging
-backscroll::storage        — SQLite FTS5 adapter (Porter stemmer)
+backscroll::core::sources  — External source parsers + SourceRegistry
+backscroll::storage        — SQLite FTS5 + sqlite-vec adapter (hybrid search)
 
-Binary-only modules (not part of library API):
-config                     — Figment configuration + auto-discovery
+Internal modules (pub(crate)):
+core::embedding            — EmbeddingProvider trait + OnnxProvider + MockProvider
+core::chunking             — Text chunking pipeline
+core::hybrid               — RRF fusion logic
+
+Binary-only modules:
 output                     — Output formatting
 ```
