@@ -22,6 +22,45 @@ where
     }
 }
 
+#[derive(Debug, Deserialize, Serialize, Clone)]
+#[serde(default)]
+pub struct EmbeddingConfig {
+    pub model_name: String,
+    pub model_path: String,
+    pub similarity_threshold: f32,
+    pub top_k: usize,
+    pub rrf_k: usize,
+}
+
+impl Default for EmbeddingConfig {
+    fn default() -> Self {
+        Self {
+            model_name: "all-MiniLM-L6-v2".to_string(),
+            model_path: String::new(),
+            similarity_threshold: 0.3,
+            top_k: 50,
+            rrf_k: 60,
+        }
+    }
+}
+
+#[derive(Debug, Default, Deserialize, Serialize, Clone)]
+#[serde(default)]
+pub struct SourcesConfig {
+    #[serde(deserialize_with = "string_or_vec")]
+    pub ke: Vec<String>,
+    #[serde(deserialize_with = "string_or_vec")]
+    pub decisions: Vec<String>,
+    #[serde(deserialize_with = "string_or_vec")]
+    pub memories: Vec<String>,
+    #[serde(deserialize_with = "string_or_vec")]
+    pub rules: Vec<String>,
+    #[serde(deserialize_with = "string_or_vec")]
+    pub specs: Vec<String>,
+    #[serde(deserialize_with = "string_or_vec")]
+    pub backlog: Vec<String>,
+}
+
 #[derive(Deserialize, Serialize, Debug)]
 pub struct Config {
     pub database_path: String,
@@ -31,6 +70,10 @@ pub struct Config {
         default = "default_session_dirs"
     )]
     pub session_dirs: Vec<String>,
+    #[serde(default)]
+    pub embedding: EmbeddingConfig,
+    #[serde(default)]
+    pub sources: SourcesConfig,
 }
 
 fn default_session_dirs() -> Vec<String> {
@@ -103,6 +146,8 @@ impl Config {
         Self {
             database_path: db_path.to_string_lossy().into(),
             session_dirs: vec![".".into()],
+            embedding: EmbeddingConfig::default(),
+            sources: SourcesConfig::default(),
         }
     }
 }
@@ -212,5 +257,26 @@ mod tests {
 
         let dirs = Config::discover_session_dirs_from(&nonexistent);
         assert!(dirs.is_empty());
+    }
+
+    #[test]
+    fn test_embedding_config_defaults() {
+        let config = EmbeddingConfig::default();
+        assert_eq!(config.model_name, "all-MiniLM-L6-v2");
+        assert_eq!(config.model_path, "");
+        assert!((config.similarity_threshold - 0.3).abs() < f32::EPSILON);
+        assert_eq!(config.top_k, 50);
+        assert_eq!(config.rrf_k, 60);
+    }
+
+    #[test]
+    fn test_sources_config_defaults() {
+        let config = SourcesConfig::default();
+        assert!(config.ke.is_empty());
+        assert!(config.decisions.is_empty());
+        assert!(config.memories.is_empty());
+        assert!(config.rules.is_empty());
+        assert!(config.specs.is_empty());
+        assert!(config.backlog.is_empty());
     }
 }

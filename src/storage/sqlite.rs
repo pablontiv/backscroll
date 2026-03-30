@@ -48,7 +48,16 @@ fn sanitize_fts5_query(query: &str, stopwords: &HashSet<String>) -> String {
 }
 
 impl Database {
+    #[allow(unsafe_code)] // sqlite-vec extension requires unsafe to load
     pub fn open(path: impl AsRef<Path>) -> miette::Result<Self> {
+        // Register sqlite-vec BEFORE opening connection so it's available immediately
+        unsafe {
+            #[allow(clippy::missing_transmute_annotations)]
+            rusqlite::ffi::sqlite3_auto_extension(Some(std::mem::transmute(
+                sqlite_vec::sqlite3_vec_init as *const (),
+            )));
+        }
+
         let conn = Connection::open(path).into_diagnostic()?;
 
         let _: String = conn
@@ -62,6 +71,7 @@ impl Database {
         Ok(Self { conn })
     }
 
+    #[allow(unsafe_code)] // sqlite-vec extension requires unsafe to load
     pub fn open_readonly(path: impl AsRef<Path>) -> miette::Result<Self> {
         let path = path.as_ref();
         if !path.exists() {
@@ -70,6 +80,15 @@ impl Database {
                 path.display()
             ));
         }
+
+        // Register sqlite-vec BEFORE opening connection
+        unsafe {
+            #[allow(clippy::missing_transmute_annotations)]
+            rusqlite::ffi::sqlite3_auto_extension(Some(std::mem::transmute(
+                sqlite_vec::sqlite3_vec_init as *const (),
+            )));
+        }
+
         let conn = Connection::open_with_flags(
             path,
             rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY | rusqlite::OpenFlags::SQLITE_OPEN_NO_MUTEX,
@@ -356,6 +375,58 @@ impl Database {
 
             self.conn
                 .execute("UPDATE schema_version SET version = 5", [])
+                .into_diagnostic()?;
+        }
+
+        let current_version: i64 = self
+            .conn
+            .query_row("SELECT version FROM schema_version", [], |row| row.get(0))
+            .into_diagnostic()?;
+
+        if current_version < 6 {
+            tracing::info!("Migrating schema to v6: source_metadata + embeddings");
+
+            self.conn
+                .execute(
+                    "ALTER TABLE search_items ADD COLUMN source_metadata TEXT DEFAULT NULL",
+                    [],
+                )
+                .into_diagnostic()?;
+
+            self.conn
+                .execute_batch(
+                    "CREATE TABLE IF NOT EXISTS chunks (
+                    id INTEGER PRIMARY KEY,
+                    source_item_id INTEGER NOT NULL,
+                    chunk_index INTEGER NOT NULL,
+                    chunk_text TEXT NOT NULL,
+                    FOREIGN KEY (source_item_id) REFERENCES search_items(id) ON DELETE CASCADE
+                );
+                CREATE INDEX IF NOT EXISTS idx_chunks_source_item_id ON chunks(source_item_id);",
+                )
+                .into_diagnostic()?;
+
+            self.conn
+                .execute(
+                    "CREATE VIRTUAL TABLE IF NOT EXISTS vec_embeddings USING vec0(
+                    embedding float[384] distance_metric=cosine
+                )",
+                    [],
+                )
+                .into_diagnostic()?;
+
+            self.conn
+                .execute_batch(
+                    "CREATE TABLE IF NOT EXISTS embedding_metadata (
+                    model_name TEXT NOT NULL,
+                    dimensions INTEGER NOT NULL,
+                    last_embedded_at TEXT NOT NULL
+                )",
+                )
+                .into_diagnostic()?;
+
+            self.conn
+                .execute("UPDATE schema_version SET version = 6", [])
                 .into_diagnostic()?;
         }
 
@@ -1882,5 +1953,37 @@ mod tests {
         assert_eq!(breakdown[1].messages, 1);
 
         Ok(())
+    }
+
+    #[test]
+    fn test_schema_v6_migration() {
+        let dir = tempfile::tempdir().unwrap();
+        let db_path = dir.path().join("test.db");
+        let db = Database::open(db_path.to_str().unwrap()).unwrap();
+        db.setup_schema().unwrap();
+
+        // Verify source_metadata column is queryable
+        db.conn
+            .prepare("SELECT source_metadata FROM search_items LIMIT 1")
+            .unwrap();
+
+        // Verify chunks table exists
+        db.conn
+            .prepare("SELECT id, source_item_id, chunk_index, chunk_text FROM chunks LIMIT 1")
+            .unwrap();
+
+        // Verify embedding_metadata table exists
+        db.conn
+            .prepare(
+                "SELECT model_name, dimensions, last_embedded_at FROM embedding_metadata LIMIT 1",
+            )
+            .unwrap();
+
+        // Verify schema version is 6
+        let version: i32 = db
+            .conn
+            .query_row("SELECT version FROM schema_version", [], |row| row.get(0))
+            .unwrap();
+        assert_eq!(version, 6);
     }
 }

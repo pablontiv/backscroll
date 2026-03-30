@@ -1,3 +1,5 @@
+pub(crate) mod chunking;
+pub(crate) mod embedding;
 pub mod models;
 pub mod plans;
 pub mod reader;
