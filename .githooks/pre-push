@@ -14,8 +14,8 @@ while read local_ref local_sha remote_ref remote_sha; do
     range="$remote_sha..$local_sha"
   fi
 
-  # Validate docs/epics/ if changed
-  if git diff --name-only "$range" -- docs/epics/ 2>/dev/null | grep -q .; then
+  # Validate docs/epics/ if changed and directory exists
+  if git diff --name-only "$range" -- docs/epics/ 2>/dev/null | grep -q . && [ -d docs/epics/ ]; then
     echo "Validating docs/epics/ before push..."
     if command -v rootline &>/dev/null; then
       if ! rootline validate --all docs/epics/ > /dev/null 2>&1; then
