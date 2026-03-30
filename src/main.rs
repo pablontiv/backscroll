@@ -1,15 +1,14 @@
 #![deny(unsafe_code)]
 
-mod config;
 mod output;
 
 use crate::output::{OutputFormat, OutputOptions, format_results};
+use backscroll::config::Config;
 use backscroll::core::plans::parse_plan;
 use backscroll::core::sync::parse_sessions;
 use backscroll::core::{SearchEngine, SearchParams};
 use backscroll::storage::sqlite::Database;
 use clap::{Parser, Subcommand};
-use config::Config;
 use miette::Result;
 use std::path::PathBuf;
 
@@ -434,6 +433,7 @@ fn main() -> Result<()> {
                 tag: tag.clone(),
                 limit: *limit,
                 offset: *offset,
+                ..SearchParams::default()
             };
             let results = engine.search(query, &params)?;
             if results.is_empty() && !json && !robot {

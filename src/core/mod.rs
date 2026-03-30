@@ -1,8 +1,11 @@
 pub(crate) mod chunking;
 pub(crate) mod embedding;
+pub(crate) mod hybrid;
 pub mod models;
 pub mod plans;
 pub mod reader;
+#[allow(dead_code)]
+pub(crate) mod sources;
 pub mod sync;
 pub mod tagging;
 
@@ -110,7 +113,7 @@ pub struct InsightData {
     pub tag_distribution: Vec<TagCount>,
 }
 
-#[derive(Debug, Default)]
+#[derive(Debug)]
 pub struct SearchParams {
     pub project: Option<String>,
     pub source: Option<String>,
@@ -121,6 +124,31 @@ pub struct SearchParams {
     pub tag: Option<String>,
     pub limit: usize,
     pub offset: usize,
+    // Hybrid search fields
+    pub hybrid: bool,
+    pub similarity_threshold: f32,
+    pub top_k: usize,
+    pub rrf_k: Option<usize>,
+}
+
+impl Default for SearchParams {
+    fn default() -> Self {
+        Self {
+            project: None,
+            source: None,
+            after: None,
+            before: None,
+            role: None,
+            content_type: None,
+            tag: None,
+            limit: 20,
+            offset: 0,
+            hybrid: true,
+            similarity_threshold: 0.3,
+            top_k: 50,
+            rrf_k: None,
+        }
+    }
 }
 
 pub trait SearchEngine {

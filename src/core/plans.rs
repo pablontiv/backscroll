@@ -20,7 +20,7 @@ pub fn parse_plan(path: &Path) -> miette::Result<ParsedFile> {
     })
 }
 
-fn split_by_headers(content: &str) -> Vec<ParsedMessage> {
+pub(crate) fn split_by_headers(content: &str) -> Vec<ParsedMessage> {
     if content.trim().is_empty() {
         return Vec::new();
     }
