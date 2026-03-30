@@ -36,6 +36,9 @@ enum Commands {
         /// Optimizar el índice FTS5 después de sincronizar
         #[arg(long, default_value_t = false)]
         optimize: bool,
+        /// Skip embedding generation during sync
+        #[arg(long)]
+        no_embeddings: bool,
     },
     /// Buscar en el historial de sesiones
     Search {
@@ -59,7 +62,7 @@ enum Commands {
         /// Máximo de tokens aproximados a mostrar
         #[arg(long)]
         max_tokens: Option<usize>,
-        /// Filtrar por fuente: sessions, plans, o all
+        /// Filter by source type: session, plan, ke, decision, memory, rule, spec, backlog
         #[arg(long, default_value = "all")]
         source: String,
         /// Solo resultados después de esta fecha (ISO 8601, ej: 2026-03-01)
@@ -83,6 +86,12 @@ enum Commands {
         /// Filtrar por tag de sesión (auto-asignado)
         #[arg(long)]
         tag: Option<String>,
+        /// Use lexical search only (disable hybrid vector+BM25)
+        #[arg(long)]
+        lexical_only: bool,
+        /// Minimum similarity threshold for vector results (0.0-1.0)
+        #[arg(long, default_value = "0.3")]
+        similarity_threshold: f32,
     },
     /// Leer una sesión individual filtrada
     Read {
@@ -153,6 +162,9 @@ enum Commands {
         /// No indexar archivos de plan
         #[arg(long, default_value_t = false)]
         no_plans: bool,
+        /// Skip embedding generation during sync
+        #[arg(long)]
+        no_embeddings: bool,
     },
     /// Eliminar datos antiguos del índice
     Purge {
@@ -323,6 +335,7 @@ fn main() -> Result<()> {
             include_agents,
             no_plans,
             optimize,
+            no_embeddings: _,
         } => {
             let paths = resolve_session_paths(path, &config)?;
             let engine = create_engine(&config)?;
@@ -335,6 +348,15 @@ fn main() -> Result<()> {
             if !no_plans {
                 let hashes = engine.get_file_hashes()?;
                 sync_plans(engine.as_ref(), &hashes)?;
+            }
+            // Parse and sync external sources
+            let source_registry =
+                backscroll::core::sources::SourceRegistry::from_config(&config.sources);
+            let existing_hashes = engine.get_file_hashes()?;
+            let external_files = source_registry.parse_all(&existing_hashes)?;
+            if !external_files.is_empty() {
+                tracing::info!(count = external_files.len(), "Syncing external sources");
+                engine.sync_files(external_files)?;
             }
             if *optimize {
                 println!("Optimizando índice FTS5...");
@@ -358,6 +380,8 @@ fn main() -> Result<()> {
             offset,
             content_type,
             tag,
+            lexical_only,
+            similarity_threshold,
         } => {
             let engine = create_engine(&config)?;
 
@@ -374,6 +398,17 @@ fn main() -> Result<()> {
             // Auto-sync plans
             if let Ok(hashes) = engine.get_file_hashes() {
                 let _ = sync_plans(engine.as_ref(), &hashes);
+            }
+            // Auto-sync external sources
+            {
+                let source_registry =
+                    backscroll::core::sources::SourceRegistry::from_config(&config.sources);
+                let existing_hashes = engine.get_file_hashes()?;
+                let external_files = source_registry.parse_all(&existing_hashes)?;
+                if !external_files.is_empty() {
+                    tracing::info!(count = external_files.len(), "Syncing external sources");
+                    engine.sync_files(external_files)?;
+                }
             }
 
             // Proyecto: --all-projects → None, --project → explícito, default → CWD
@@ -433,6 +468,8 @@ fn main() -> Result<()> {
                 tag: tag.clone(),
                 limit: *limit,
                 offset: *offset,
+                hybrid: !*lexical_only,
+                similarity_threshold: *similarity_threshold,
                 ..SearchParams::default()
             };
             let results = engine.search(query, &params)?;
@@ -678,6 +715,7 @@ fn main() -> Result<()> {
             path,
             include_agents,
             no_plans,
+            no_embeddings: _,
         } => {
             let paths = resolve_session_paths(path, &config)?;
             let engine = create_engine(&config)?;
@@ -915,6 +953,17 @@ fn main() -> Result<()> {
                         "  Last sync:      {}",
                         stats.last_sync.unwrap_or_else(|| "N/A".to_string())
                     );
+
+                    if let Some(model) = &stats.embedding_model {
+                        println!("Embedding model:  {model}");
+                        println!("Embeddings:       {}", stats.embedding_count);
+                    }
+                    if !stats.source_breakdown.is_empty() {
+                        println!("\nSources:");
+                        for sc in &stats.source_breakdown {
+                            println!("  {:<12} {} files", sc.source, sc.count);
+                        }
+                    }
                 }
 
                 if let Ok(breakdown) = engine.get_project_breakdown() {

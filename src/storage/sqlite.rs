@@ -1015,12 +1015,46 @@ impl SearchEngine for Database {
             )
             .unwrap_or(0);
 
+        let embedding_count: i64 = self
+            .conn
+            .query_row("SELECT COUNT(*) FROM chunks", [], |row| row.get(0))
+            .unwrap_or(0);
+
+        let embedding_model: Option<String> = self
+            .conn
+            .query_row(
+                "SELECT model_name FROM embedding_metadata LIMIT 1",
+                [],
+                |row| row.get(0),
+            )
+            .ok();
+
+        let mut source_stmt = self
+            .conn
+            .prepare(
+                "SELECT source, COUNT(DISTINCT source_path) as cnt FROM search_items GROUP BY source ORDER BY cnt DESC",
+            )
+            .into_diagnostic()?;
+        let source_breakdown: Vec<crate::core::SourceCount> = source_stmt
+            .query_map([], |row| {
+                Ok(crate::core::SourceCount {
+                    source: row.get(0)?,
+                    count: row.get(1)?,
+                })
+            })
+            .into_diagnostic()?
+            .filter_map(|r| r.ok())
+            .collect();
+
         Ok(Stats {
             file_count,
             message_count,
             db_size_bytes,
             last_sync,
             project_count,
+            embedding_count,
+            embedding_model,
+            source_breakdown,
         })
     }
 
@@ -1320,10 +1354,30 @@ impl SearchEngine for Database {
             )
             .into_diagnostic()?;
 
+        let has_embeddings: bool = self
+            .conn
+            .query_row("SELECT COUNT(*) > 0 FROM embedding_metadata", [], |row| {
+                row.get(0)
+            })
+            .unwrap_or(false);
+
+        let missing_embeddings: i64 = if has_embeddings {
+            self.conn
+                .query_row(
+                    "SELECT COUNT(*) FROM search_items si WHERE NOT EXISTS (SELECT 1 FROM chunks c WHERE c.source_item_id = si.id)",
+                    [],
+                    |row| row.get(0),
+                )
+                .unwrap_or(0)
+        } else {
+            0
+        };
+
         Ok(crate::core::ValidationReport {
             orphaned_items,
             stale_files,
             fts_inconsistencies,
+            missing_embeddings,
         })
     }
 }

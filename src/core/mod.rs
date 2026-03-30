@@ -4,8 +4,7 @@ pub(crate) mod hybrid;
 pub mod models;
 pub mod plans;
 pub mod reader;
-#[allow(dead_code)]
-pub(crate) mod sources;
+pub mod sources;
 pub mod sync;
 pub mod tagging;
 
@@ -46,6 +45,15 @@ pub struct Stats {
     pub db_size_bytes: i64,
     pub last_sync: Option<String>,
     pub project_count: i64,
+    pub embedding_count: i64,
+    pub embedding_model: Option<String>,
+    pub source_breakdown: Vec<SourceCount>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct SourceCount {
+    pub source: String,
+    pub count: i64,
 }
 
 #[derive(Debug, Serialize)]
@@ -84,11 +92,12 @@ pub struct ValidationReport {
     pub orphaned_items: i64,
     pub stale_files: i64,
     pub fts_inconsistencies: i64,
+    pub missing_embeddings: i64,
 }
 
 impl ValidationReport {
     pub fn total_issues(&self) -> i64 {
-        self.orphaned_items + self.stale_files + self.fts_inconsistencies
+        self.orphaned_items + self.stale_files + self.fts_inconsistencies + self.missing_embeddings
     }
 }
 
