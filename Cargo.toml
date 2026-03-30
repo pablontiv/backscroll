@@ -34,13 +34,19 @@ figment = { version = "0.10.19", features = ["toml", "env"] }
 hex = "0.4.3"
 miette = { version = "7.6.0", features = ["fancy"] }
 regex = "1.12.3"
-rusqlite = { version = "0.39.0", features = ["bundled"] }
+rusqlite = { version = "0.39.0", features = ["bundled", "load_extension"] }
 serde = { version = "1.0.228", features = ["derive"] }
 serde_json = "1.0.149"
 sha2 = "0.10.9"
 tracing = "0.1.44"
 tracing-subscriber = { version = "0.3.23", features = ["env-filter"] }
 walkdir = "2.5.0"
+sqlite-vec = "0.1"
+zerocopy = { version = "0.8", features = ["derive"] }
+ort = { version = "=2.0.0-rc.10", default-features = false, features = ["load-dynamic"] }
+tokenizers = { version = "0.21", default-features = false, features = ["fancy-regex"] }
+ndarray = "0.16"
+dirs = "6"
 
 [dev-dependencies]
 assert_cmd = "2.1.2"
