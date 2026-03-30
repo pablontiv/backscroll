@@ -1343,3 +1343,36 @@ fn test_search_content_type_invalid() {
         .assert()
         .failure();
 }
+
+#[test]
+fn test_lexical_only_flag() {
+    let dir = tempdir().unwrap();
+    let db_path = dir.path().join("test.db");
+
+    Command::cargo_bin("backscroll")
+        .unwrap()
+        .env("BACKSCROLL_DATABASE_PATH", db_path.to_str().unwrap())
+        .args(["search", "test", "--lexical-only"])
+        .assert()
+        .success();
+}
+
+#[test]
+fn test_no_embeddings_flag() {
+    let dir = tempdir().unwrap();
+    let db_path = dir.path().join("test.db");
+    let session_dir = dir.path().join("sessions");
+    std::fs::create_dir_all(&session_dir).unwrap();
+
+    Command::cargo_bin("backscroll")
+        .unwrap()
+        .env("BACKSCROLL_DATABASE_PATH", db_path.to_str().unwrap())
+        .args([
+            "sync",
+            "--path",
+            session_dir.to_str().unwrap(),
+            "--no-embeddings",
+        ])
+        .assert()
+        .success();
+}

@@ -19,7 +19,7 @@ pub struct Database {
 
 impl Database {
     #[allow(dead_code)]
-    pub(crate) fn set_embedding_provider(&self, provider: Box<dyn EmbeddingProvider>) {
+    pub fn set_embedding_provider(&self, provider: Box<dyn EmbeddingProvider>) {
         *self.embedding_provider.lock().unwrap() = Some(provider);
     }
 }

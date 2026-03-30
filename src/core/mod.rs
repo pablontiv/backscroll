@@ -1,5 +1,5 @@
 pub(crate) mod chunking;
-pub(crate) mod embedding;
+pub mod embedding;
 pub(crate) mod hybrid;
 pub mod models;
 pub mod plans;

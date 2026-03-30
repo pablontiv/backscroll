@@ -79,6 +79,76 @@ fn test_open_readonly_existing_db() {
 }
 
 #[test]
+fn test_hybrid_search_pipeline() {
+    let dir = tempfile::tempdir().unwrap();
+    let db_path = dir.path().join("test.db");
+    let db = backscroll::storage::sqlite::Database::open(db_path.to_str().unwrap()).unwrap();
+    db.setup_schema().unwrap();
+
+    let provider = backscroll::core::embedding::MockEmbeddingProvider::new(384);
+    db.set_embedding_provider(Box::new(provider));
+
+    let files = vec![
+        backscroll::core::ParsedFile {
+            source: "session".to_string(),
+            source_path: "/test/session.jsonl".to_string(),
+            hash: "s1".to_string(),
+            project: Some("homeserver".to_string()),
+            messages: vec![backscroll::core::ParsedMessage {
+                role: "assistant".to_string(),
+                text: "Fixed the Kyverno webhook timeout by increasing to 30 seconds".to_string(),
+                ordinal: 0,
+                uuid: None,
+                timestamp: Some("2026-03-29T10:00:00Z".to_string()),
+                content_type: "text".to_string(),
+            }],
+        },
+        backscroll::core::ParsedFile {
+            source: "ke".to_string(),
+            source_path: "/test/KE-0042.md".to_string(),
+            hash: "k1".to_string(),
+            project: None,
+            messages: vec![backscroll::core::ParsedMessage {
+                role: "ke".to_string(),
+                text: "Known error: admission webhook failures under cluster load".to_string(),
+                ordinal: 0,
+                uuid: None,
+                timestamp: None,
+                content_type: "text".to_string(),
+            }],
+        },
+    ];
+
+    use backscroll::core::SearchEngine;
+    db.sync_files(files).unwrap();
+
+    // Hybrid search should find results
+    let params = backscroll::core::SearchParams {
+        hybrid: true,
+        ..Default::default()
+    };
+    let results = db.search("webhook", &params).unwrap();
+    assert!(!results.is_empty(), "Hybrid search should find results");
+
+    // Lexical-only should also find results
+    let params = backscroll::core::SearchParams {
+        hybrid: false,
+        ..Default::default()
+    };
+    let results = db.search("webhook", &params).unwrap();
+    assert!(!results.is_empty(), "Lexical search should find results");
+
+    // Source filter: only KEs
+    let params = backscroll::core::SearchParams {
+        source: Some("ke".to_string()),
+        hybrid: false,
+        ..Default::default()
+    };
+    let results = db.search("webhook", &params).unwrap();
+    assert!(!results.is_empty(), "KE source filter should find results");
+}
+
+#[test]
 fn test_open_readonly_missing_db_fails() {
     let path = PathBuf::from("/tmp/backscroll_nonexistent_test.db");
     assert!(!path.exists());
