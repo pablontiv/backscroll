@@ -1,3 +1,6 @@
+use crate::core::chunking::chunk_text;
+use crate::core::embedding::EmbeddingProvider;
+use crate::core::hybrid::{RankedItem, reciprocal_rank_fusion};
 use crate::core::{
     InsightData, ParsedFile, ProjectBreakdown, SearchEngine, SearchResult, SessionEntry, Stats,
     TopicEntry,
@@ -6,10 +9,19 @@ use miette::IntoDiagnostic;
 use rusqlite::{Connection, Result, Row, params};
 use std::collections::{HashMap, HashSet};
 use std::path::Path;
+use std::sync::Mutex;
 use std::time::Duration;
 
 pub struct Database {
     conn: Connection,
+    embedding_provider: Mutex<Option<Box<dyn EmbeddingProvider>>>,
+}
+
+impl Database {
+    #[allow(dead_code)]
+    pub(crate) fn set_embedding_provider(&self, provider: Box<dyn EmbeddingProvider>) {
+        *self.embedding_provider.lock().unwrap() = Some(provider);
+    }
 }
 
 /// Sanitize user input for FTS5 MATCH.
@@ -68,7 +80,10 @@ impl Database {
         conn.busy_timeout(Duration::from_millis(5000))
             .into_diagnostic()?;
 
-        Ok(Self { conn })
+        Ok(Self {
+            conn,
+            embedding_provider: Mutex::new(None),
+        })
     }
 
     #[allow(unsafe_code)] // sqlite-vec extension requires unsafe to load
@@ -98,7 +113,10 @@ impl Database {
         conn.busy_timeout(Duration::from_millis(5000))
             .into_diagnostic()?;
 
-        Ok(Self { conn })
+        Ok(Self {
+            conn,
+            embedding_provider: Mutex::new(None),
+        })
     }
 
     pub fn setup_schema(&self) -> miette::Result<()> {
@@ -496,71 +514,8 @@ impl Database {
             timestamp: row.get(5)?,
         })
     }
-}
 
-impl SearchEngine for Database {
-    fn sync_files(&self, files: Vec<ParsedFile>) -> miette::Result<()> {
-        self.conn
-            .execute("BEGIN TRANSACTION", [])
-            .into_diagnostic()?;
-        for file in files {
-            self.conn
-                .execute(
-                    "DELETE FROM search_items WHERE source_path = ?",
-                    [&file.source_path],
-                )
-                .into_diagnostic()?;
-
-            for msg in &file.messages {
-                self.conn
-                    .execute(
-                        "INSERT OR IGNORE INTO search_items (source, source_path, ordinal, role, text, project, uuid, timestamp, content_type) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
-                        (
-                            &file.source,
-                            &file.source_path,
-                            msg.ordinal as i64,
-                            &msg.role,
-                            &msg.text,
-                            file.project.as_deref(),
-                            msg.uuid.as_deref(),
-                            msg.timestamp.as_deref(),
-                            &msg.content_type,
-                        ),
-                    )
-                    .into_diagnostic()?;
-            }
-
-            // Auto-tag session based on content heuristics
-            if file.source == "session" {
-                self.conn
-                    .execute(
-                        "DELETE FROM session_tags WHERE source_path = ?",
-                        [&file.source_path],
-                    )
-                    .into_diagnostic()?;
-                let tags = crate::core::tagging::detect_tags(&file.messages);
-                for tag in &tags {
-                    self.conn
-                        .execute(
-                            "INSERT OR IGNORE INTO session_tags (source_path, tag) VALUES (?, ?)",
-                            params![&file.source_path, tag],
-                        )
-                        .into_diagnostic()?;
-                }
-            }
-
-            self.conn.execute(
-                "INSERT OR REPLACE INTO indexed_files (path, hash, last_indexed) VALUES (?, ?, CURRENT_TIMESTAMP)",
-                [&file.source_path, &file.hash],
-            ).into_diagnostic()?;
-        }
-        self.conn.execute("COMMIT", []).into_diagnostic()?;
-        self.refresh_stopwords()?;
-        Ok(())
-    }
-
-    #[tracing::instrument(skip(self))]
-    fn search(
+    fn bm25_search(
         &self,
         query_str: &str,
         params: &crate::core::SearchParams,
@@ -571,7 +526,7 @@ impl SearchEngine for Database {
         let source_filter = match params.source.as_deref() {
             Some("sessions") => Some("session"),
             Some("plans") => Some("plan"),
-            _ => None, // "all" or None
+            _ => None,
         };
 
         let base = format!(
@@ -636,17 +591,285 @@ impl SearchEngine for Database {
             )
         };
 
-        let params: Vec<&dyn rusqlite::types::ToSql> =
+        let param_refs: Vec<&dyn rusqlite::types::ToSql> =
             param_values.iter().map(|p| p.as_ref()).collect();
         let mut stmt = self.conn.prepare(&sql).into_diagnostic()?;
         let rows = stmt
-            .query_map(params.as_slice(), Database::map_search_row)
+            .query_map(param_refs.as_slice(), Database::map_search_row)
             .into_diagnostic()?;
         for row in rows {
             results.push(row.into_diagnostic()?);
         }
 
         Ok(results)
+    }
+}
+
+impl SearchEngine for Database {
+    fn sync_files(&self, files: Vec<ParsedFile>) -> miette::Result<()> {
+        self.conn
+            .execute("BEGIN TRANSACTION", [])
+            .into_diagnostic()?;
+        for file in files {
+            self.conn
+                .execute(
+                    "DELETE FROM chunks WHERE source_item_id IN (SELECT id FROM search_items WHERE source_path = ?)",
+                    [&file.source_path],
+                )
+                .into_diagnostic()?;
+
+            self.conn
+                .execute(
+                    "DELETE FROM search_items WHERE source_path = ?",
+                    [&file.source_path],
+                )
+                .into_diagnostic()?;
+
+            for msg in &file.messages {
+                self.conn
+                    .execute(
+                        "INSERT OR IGNORE INTO search_items (source, source_path, ordinal, role, text, project, uuid, timestamp, content_type) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                        (
+                            &file.source,
+                            &file.source_path,
+                            msg.ordinal as i64,
+                            &msg.role,
+                            &msg.text,
+                            file.project.as_deref(),
+                            msg.uuid.as_deref(),
+                            msg.timestamp.as_deref(),
+                            &msg.content_type,
+                        ),
+                    )
+                    .into_diagnostic()?;
+            }
+
+            // Auto-tag session based on content heuristics
+            if file.source == "session" {
+                self.conn
+                    .execute(
+                        "DELETE FROM session_tags WHERE source_path = ?",
+                        [&file.source_path],
+                    )
+                    .into_diagnostic()?;
+                let tags = crate::core::tagging::detect_tags(&file.messages);
+                for tag in &tags {
+                    self.conn
+                        .execute(
+                            "INSERT OR IGNORE INTO session_tags (source_path, tag) VALUES (?, ?)",
+                            params![&file.source_path, tag],
+                        )
+                        .into_diagnostic()?;
+                }
+            }
+
+            self.conn.execute(
+                "INSERT OR REPLACE INTO indexed_files (path, hash, last_indexed) VALUES (?, ?, CURRENT_TIMESTAMP)",
+                [&file.source_path, &file.hash],
+            ).into_diagnostic()?;
+
+            // Generate embeddings if provider is available
+            {
+                let guard = self.embedding_provider.lock().unwrap();
+                if let Some(ref provider) = *guard {
+                    for msg in &file.messages {
+                        let item_id: i64 = self
+                            .conn
+                            .query_row(
+                                "SELECT id FROM search_items WHERE source_path = ? AND ordinal = ?",
+                                params![&file.source_path, msg.ordinal as i64],
+                                |row| row.get(0),
+                            )
+                            .into_diagnostic()?;
+
+                        let chunks = chunk_text(&msg.text, 512);
+                        if chunks.is_empty() {
+                            continue;
+                        }
+
+                        let chunk_texts: Vec<&str> =
+                            chunks.iter().map(|c| c.text.as_str()).collect();
+                        let embeddings = provider
+                            .embed(&chunk_texts)
+                            .map_err(|e| miette::miette!("{}", e))?;
+
+                        for (chunk, embedding) in chunks.iter().zip(embeddings.iter()) {
+                            self.conn
+                                .execute(
+                                    "INSERT INTO chunks (source_item_id, chunk_index, chunk_text) VALUES (?, ?, ?)",
+                                    params![item_id, chunk.chunk_index as i64, &chunk.text],
+                                )
+                                .into_diagnostic()?;
+
+                            let chunk_id = self.conn.last_insert_rowid();
+                            let embedding_bytes: Vec<u8> =
+                                embedding.iter().flat_map(|f| f.to_le_bytes()).collect();
+
+                            self.conn
+                                .execute(
+                                    "INSERT INTO vec_embeddings (rowid, embedding) VALUES (?, ?)",
+                                    params![chunk_id, embedding_bytes],
+                                )
+                                .into_diagnostic()?;
+                        }
+                    }
+
+                    // Update embedding metadata
+                    self.conn
+                        .execute("DELETE FROM embedding_metadata", [])
+                        .into_diagnostic()?;
+                    self.conn
+                        .execute(
+                            "INSERT INTO embedding_metadata (model_name, dimensions, last_embedded_at) VALUES (?, ?, datetime('now'))",
+                            params![provider.model_name(), provider.dimensions() as i64],
+                        )
+                        .into_diagnostic()?;
+                }
+            }
+        }
+        self.conn.execute("COMMIT", []).into_diagnostic()?;
+        self.refresh_stopwords()?;
+        Ok(())
+    }
+
+    #[tracing::instrument(skip(self))]
+    fn search(
+        &self,
+        query_str: &str,
+        params: &crate::core::SearchParams,
+    ) -> miette::Result<Vec<SearchResult>> {
+        let bm25_results = self.bm25_search(query_str, params)?;
+
+        if !params.hybrid {
+            return Ok(bm25_results);
+        }
+
+        // Check if embeddings exist
+        let has_embeddings: bool = self
+            .conn
+            .query_row("SELECT COUNT(*) FROM chunks", [], |row| {
+                let count: i64 = row.get(0)?;
+                Ok(count > 0)
+            })
+            .unwrap_or(false);
+
+        let guard = self.embedding_provider.lock().unwrap();
+        if !has_embeddings || guard.is_none() {
+            return Ok(bm25_results);
+        }
+        let provider = guard.as_ref().unwrap();
+
+        // Embed query
+        let query_embeddings = provider
+            .embed(&[query_str])
+            .map_err(|e| miette::miette!("{}", e))?;
+        let query_embedding = &query_embeddings[0];
+        let query_bytes: Vec<u8> = query_embedding
+            .iter()
+            .flat_map(|f| f.to_le_bytes())
+            .collect();
+
+        let knn_limit = if params.limit == 0 { 50 } else { params.limit };
+
+        // KNN search via vec_embeddings
+        let mut knn_stmt = self
+            .conn
+            .prepare("SELECT rowid, distance FROM vec_embeddings WHERE embedding MATCH ? AND k = ?")
+            .into_diagnostic()?;
+
+        let knn_rows = knn_stmt
+            .query_map(params![query_bytes, knn_limit as i64], |row| {
+                let rowid: i64 = row.get(0)?;
+                let distance: f64 = row.get(1)?;
+                Ok((rowid, distance))
+            })
+            .into_diagnostic()?;
+
+        // Map chunk rowids back to search_item ids and collect as RankedItems
+        let mut vec_ranked: Vec<RankedItem> = Vec::new();
+        for row in knn_rows {
+            let (chunk_rowid, distance) = row.into_diagnostic()?;
+            let similarity = 1.0 - distance;
+            let source_item_id: i64 = self
+                .conn
+                .query_row(
+                    "SELECT source_item_id FROM chunks WHERE id = ?",
+                    params![chunk_rowid],
+                    |row| row.get(0),
+                )
+                .into_diagnostic()?;
+            vec_ranked.push(RankedItem {
+                id: source_item_id,
+                score: similarity,
+            });
+        }
+
+        // Deduplicate vec_ranked by id, keeping highest score
+        let mut seen: HashMap<i64, f64> = HashMap::new();
+        for item in &vec_ranked {
+            let entry = seen.entry(item.id).or_insert(0.0);
+            if item.score > *entry {
+                *entry = item.score;
+            }
+        }
+        let mut vec_deduped: Vec<RankedItem> = seen
+            .into_iter()
+            .map(|(id, score)| RankedItem { id, score })
+            .collect();
+        vec_deduped.sort_by(|a, b| {
+            b.score
+                .partial_cmp(&a.score)
+                .unwrap_or(std::cmp::Ordering::Equal)
+        });
+
+        // Build BM25 ranked items — we need search_item ids
+        // Query for the ids matching bm25 results by source_path + text
+        let mut bm25_ranked: Vec<RankedItem> = Vec::new();
+        for (rank, result) in bm25_results.iter().enumerate() {
+            let item_id: std::result::Result<i64, _> = self.conn.query_row(
+                "SELECT id FROM search_items WHERE source_path = ? AND text = ? LIMIT 1",
+                params![&result.source_path, &result.text],
+                |row| row.get(0),
+            );
+            if let Ok(id) = item_id {
+                bm25_ranked.push(RankedItem {
+                    id,
+                    score: 1.0 / (rank as f64 + 1.0),
+                });
+            }
+        }
+
+        // RRF fusion
+        let fused = reciprocal_rank_fusion(&[bm25_ranked, vec_deduped], 60);
+
+        // Fetch full results for fused ids
+        let limit = if params.limit == 0 {
+            fused.len()
+        } else {
+            params.limit
+        };
+        let mut final_results: Vec<SearchResult> = Vec::new();
+        for fused_item in fused.iter().take(limit) {
+            let result: std::result::Result<SearchResult, _> = self.conn.query_row(
+                "SELECT source_path, text, role, timestamp FROM search_items WHERE id = ?",
+                params![fused_item.id],
+                |row| {
+                    Ok(SearchResult {
+                        source_path: row.get(0)?,
+                        text: row.get(1)?,
+                        score: fused_item.rrf_score,
+                        match_snippet: None,
+                        role: row.get(2)?,
+                        timestamp: row.get(3)?,
+                    })
+                },
+            );
+            if let Ok(r) = result {
+                final_results.push(r);
+            }
+        }
+
+        Ok(final_results)
     }
 
     fn get_file_hashes(&self) -> miette::Result<HashMap<String, String>> {
@@ -1985,5 +2208,120 @@ mod tests {
             .query_row("SELECT version FROM schema_version", [], |row| row.get(0))
             .unwrap();
         assert_eq!(version, 6);
+    }
+
+    #[test]
+    fn test_sync_with_embeddings_creates_chunks() -> miette::Result<()> {
+        use crate::core::embedding::MockEmbeddingProvider;
+
+        let db = Database::open(":memory:")?;
+        db.setup_schema()?;
+        db.set_embedding_provider(Box::new(MockEmbeddingProvider::new(384)));
+
+        let file = ParsedFile {
+            source: "session".into(),
+            source_path: "/s/embed.jsonl".to_string(),
+            hash: "emb1".to_string(),
+            project: None,
+            messages: vec![ParsedMessage {
+                role: "user".to_string(),
+                text: "This is a test message for embedding generation".to_string(),
+                ordinal: 0,
+                uuid: None,
+                timestamp: None,
+                content_type: "text".into(),
+            }],
+        };
+
+        db.sync_files(vec![file])?;
+
+        let chunk_count: i64 = db
+            .conn
+            .query_row("SELECT COUNT(*) FROM chunks", [], |row| row.get(0))
+            .into_diagnostic()?;
+        assert!(chunk_count > 0, "Expected chunks to be created");
+
+        let vec_count: i64 = db
+            .conn
+            .query_row("SELECT COUNT(*) FROM vec_embeddings", [], |row| row.get(0))
+            .into_diagnostic()?;
+        assert_eq!(
+            chunk_count, vec_count,
+            "Each chunk should have an embedding"
+        );
+
+        let meta_count: i64 = db
+            .conn
+            .query_row("SELECT COUNT(*) FROM embedding_metadata", [], |row| {
+                row.get(0)
+            })
+            .into_diagnostic()?;
+        assert_eq!(meta_count, 1, "Should have one metadata row");
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_hybrid_search_returns_results() -> miette::Result<()> {
+        use crate::core::embedding::MockEmbeddingProvider;
+
+        let db = Database::open(":memory:")?;
+        db.setup_schema()?;
+        db.set_embedding_provider(Box::new(MockEmbeddingProvider::new(384)));
+
+        db.sync_files(vec![
+            ParsedFile {
+                source: "session".into(),
+                source_path: "/s/h1.jsonl".into(),
+                hash: "h1".into(),
+                project: None,
+                messages: vec![ParsedMessage {
+                    role: "user".into(),
+                    text: "kubernetes deployment configuration yaml manifest".into(),
+                    ordinal: 0,
+                    uuid: None,
+                    timestamp: None,
+                    content_type: "text".into(),
+                }],
+            },
+            ParsedFile {
+                source: "session".into(),
+                source_path: "/s/h2.jsonl".into(),
+                hash: "h2".into(),
+                project: None,
+                messages: vec![ParsedMessage {
+                    role: "user".into(),
+                    text: "database migration postgresql schema upgrade".into(),
+                    ordinal: 0,
+                    uuid: None,
+                    timestamp: None,
+                    content_type: "text".into(),
+                }],
+            },
+        ])?;
+
+        // BM25-only search
+        let bm25_results = db.search(
+            "kubernetes",
+            &SearchParams {
+                limit: 20,
+                hybrid: false,
+                ..Default::default()
+            },
+        )?;
+        assert!(!bm25_results.is_empty(), "BM25 should find results");
+
+        // Hybrid search
+        let hybrid_results = db.search(
+            "kubernetes",
+            &SearchParams {
+                limit: 20,
+                hybrid: true,
+                ..Default::default()
+            },
+        )?;
+        assert!(!hybrid_results.is_empty(), "Hybrid should find results");
+
+        Ok(())
     }
 }
