@@ -50,7 +50,7 @@ dirs = "6"
 
 [dev-dependencies]
 assert_cmd = "2.1.2"
-insta = { version = "1.46.3", features = ["yaml", "json"] }
+insta = { version = "1.47.2", features = ["yaml", "json"] }
 predicates = "3.1.4"
 tempfile = "3.26.0"
 
