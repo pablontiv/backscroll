@@ -8,14 +8,16 @@ tipo: outcome
 
 Convertir Backscroll en un motor de ingestión genérico donde toda semántica específica de CLI/agente vive en archivos `*.inputs.toml` (`claude.inputs.toml`, `pi.inputs.toml`, etc.) y el core solo interpreta mecanismos genéricos: discovery, decode, selectors, filters, mapping, normalization e indexing.
 
+O01 fue una etapa transicional para preservar compatibilidad con `--path`, `session_dir(s)` y discovery Claude implícito. O02 es el modelo canónico: ingesta TOML-only mediante manifests `*.inputs.toml`/`backscroll.inputs.d/*.toml`, con `backscroll.toml` reservado para configuración de aplicación.
+
 ## Criterios de Éxito
 
 - CE1: Claude y Pi se indexan desde presets TOML, no desde parsers hardcodeados.
   - Verificar: tests de fixtures `claude.inputs.toml` y `pi.inputs.toml` pasan sin llamar parsers `ClaudeInputParser`/`PiInputParser`.
 - CE2: `backscroll.toml` queda separado de la configuración de inputs.
-  - Verificar: app config no contiene rutas de ingesta; los inputs se cargan desde `*.inputs.toml`.
+  - Verificar: app config no contiene rutas de ingesta canónicas; los inputs se cargan desde `*.inputs.toml`/`backscroll.inputs.d/*.toml`.
 - CE3: El pipeline canónico es genérico: discover → decode → filter → map → emit.
-  - Verificar: `sync`, autosync y `read` pasan por el mismo input engine.
+  - Verificar: `sync`, autosync y `read` pasan por el mismo input engine sin fallback Claude implícito.
 - CE4: Las capacidades específicas (`subagents`, `think`, tags de ruido Claude, mappings Pi) viven en TOML.
   - Verificar: búsqueda textual en `src/` no encuentra esas semánticas como decisiones hardcodeadas del core.
 
@@ -33,10 +35,11 @@ Convertir Backscroll en un motor de ingestión genérico donde toda semántica e
 ## Alcance
 
 **In**:
-- Loader de `*.inputs.toml`.
+- Loader de `*.inputs.toml`/`backscroll.inputs.d/*.toml`.
+- Separación de app config (`backscroll.toml`) e input config (manifests de ingesta).
 - Discovery genérico con globs.
-- Parser genérico JSONL con selectores JSONPath.
-- Filtros y transforms declarativos mínimos.
+- Parser genérico JSON/JSONL con selectores JSONPath.
+- Filtros y transforms declarativos mínimos del contrato MVP.
 - Presets `claude.inputs.toml` y `pi.inputs.toml`.
 - Refactor de `sync`, autosync, `read` y tests al input engine.
 - Validación/dry-run de inputs.
@@ -45,7 +48,8 @@ Convertir Backscroll en un motor de ingestión genérico donde toda semántica e
 - Plugins/script adapters ejecutables.
 - JMESPath como dependencia del MVP.
 - Cambios de esquema SQLite obligatorios.
-- Compatibilidad legacy con `session_dirs`, `--path` o fallback Claude si contradice el modelo TOML-only.
+- `--path`, `session_dirs` o fallback Claude como flujo canónico de ingesta.
+- Compatibilidad legacy silenciosa que contradiga el modelo TOML-only.
 
 ## Tasks
 
@@ -54,7 +58,7 @@ Convertir Backscroll en un motor de ingestión genérico donde toda semántica e
 | [T001](T001-define-generic-input-contract.md) | Definir contrato TOML genérico para inputs |
 | [T002](T002-separate-app-config-from-input-config.md) | Separar app config de input config |
 | [T003](T003-implement-glob-discovery.md) | Implementar discovery declarativo con globset |
-| [T004](T004-implement-jsonl-jsonpath-engine.md) | Implementar decoder JSONL y selectors JSONPath |
+| [T004](T004-implement-jsonl-jsonpath-engine.md) | Implementar decoder JSON/JSONL y selectors JSONPath |
 | [T005](T005-implement-declarative-filters-transforms.md) | Implementar filtros/transforms declarativos |
 | [T006](T006-create-claude-input-preset.md) | Crear preset `claude.inputs.toml` |
 | [T007](T007-create-pi-input-preset.md) | Crear preset `pi.inputs.toml` |

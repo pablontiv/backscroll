@@ -23,20 +23,25 @@ tipo: task
 
 El cambio central desplaza semántica de Rust a TOML; la suite debe probar manifests reales, no solo funciones internas.
 
+Las regresiones deben demostrar que el flujo O02 es TOML-only: no `--path`, no `session_dirs` como fuente canónica, no fallback Claude/Pi implícito y no parsers provider-specific en el camino principal.
+
 ## Alcance
 
 **In**:
-1. Tests unitarios del engine: discovery, selectors, filters, text transforms.
+1. Tests unitarios del engine: discovery, selectors JSONPath, predicates, content selection y text transforms.
 2. Tests CLI con `claude.inputs.toml` y `pi.inputs.toml`.
 3. Test de `read` vía manifest.
 4. Test de `sync/search` vía manifest.
-5. Test de invalid manifest fail-fast.
-6. Test de filters downstream (`--source`, role/content/hybrid).
-7. Snapshots de output normalizado si aporta estabilidad.
+5. Test de invalid manifest fail-fast para sync/autosync/read manifest-driven.
+6. Tests de separación app config vs input config: `backscroll.toml` no aporta rutas de ingesta canónicas.
+7. Tests de ausencia de fallback: sin manifest activo no se asume Claude/Pi.
+8. Test de filters downstream (`--source`, role/content/hybrid) cuando corresponda al estado de T011.
+9. Snapshots de output normalizado si aporta estabilidad.
 
 **Out**:
 - Benchmarks extensos.
-- Tests de plugin/script adapters.
+- Tests de plugin adapters.
+- Tests que dependan de JMESPath.
 
 ## Estado inicial esperado
 
@@ -46,11 +51,13 @@ El cambio central desplaza semántica de Rust a TOML; la suite debe probar manif
 
 - Ningún test principal requiere parser Claude/Pi hardcodeado.
 - Fixtures prueban exclusión `subagents` por TOML y `think` por TOML.
+- Tests fallan si se reintroduce parser implícito Claude/Pi en el flujo canónico.
+- Tests cubren que `source = "session"` se conserva para Claude/Pi.
 - `cargo test` pasa completo.
-- Los tests fallarían si se reintroduce parser implícito Claude en el flujo canónico.
 
 ## Fuente de verdad
 
+- `docs/input-contract.md`
 - `tests/cli.rs`
 - `tests/lib_api.rs`
 - `src/core/sync.rs`

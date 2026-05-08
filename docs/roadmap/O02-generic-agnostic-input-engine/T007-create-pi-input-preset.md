@@ -12,7 +12,7 @@ tipo: task
 ## Preserva
 
 - INV1: `source = "session"` permanece como categoría semántica estable para conversaciones.
-  - Verificar: preset Pi emite `source = "session"`.
+  - Verificar: preset Pi emite `source = "session"`, no `source = "pi"`.
 - INV2: `ParsedFile` y `ParsedMessage` siguen siendo la frontera interna de ingestión.
   - Verificar: Pi fixture termina en esas estructuras.
 
@@ -20,18 +20,23 @@ tipo: task
 
 Pi no usa semánticas Claude como subagents, pero puede tener blocks `think`. Esa diferencia debe vivir en `pi.inputs.toml`, no en Rust.
 
+En O02, Pi se incorpora igual que Claude: manifest TOML activo, decode genérico, selectors JSONPath, predicados y normalización declarativa.
+
 ## Alcance
 
 **In**:
-1. Crear `pi.inputs.toml` o fixture equivalente en la ubicación definida por T001.
-2. Declarar discovery JSONL apropiado para Pi.
-3. Declarar mappings `role`, `content`, `timestamp`, `uuid`/`session_id` según fixtures reales.
-4. Declarar eliminación de blocks `think` si el formato lo requiere.
-5. Cubrir fallback de contenido si fue parte del comportamiento aprobado.
+1. Crear `pi.inputs.toml` o fixture equivalente en la ubicación definida por T001/T002.
+2. Declarar `version = 1` y `[[inputs]]` con `id = "pi"`, `source = "session"` y `active = true`.
+3. Declarar discovery JSONL apropiado para Pi con `roots`, `include` y `exclude`.
+4. Declarar mappings `role`, `content`, `timestamp`, `uuid`/`session_id` según fixtures reales.
+5. Declarar `role_aliases` si Pi usa roles como `human` que deben normalizarse a `user`.
+6. Declarar eliminación de blocks `think` con `content.exclude_when` si el formato lo requiere.
+7. Declarar `default_content_type = "text"` y normalización de texto según el contrato.
 
 **Out**:
 - Parser Pi dedicado como camino principal.
 - Semánticas Claude dentro del preset Pi.
+- Fallback de contenido no descrito por el contrato final.
 
 ## Estado inicial esperado
 
@@ -43,10 +48,12 @@ Pi no usa semánticas Claude como subagents, pero puede tener blocks `think`. Es
 - Fixture Pi se indexa desde TOML usando generic engine.
 - Blocks `think` se excluyen mediante configuración.
 - `source = "session"` y roles/timestamps esperados se preservan.
-- No hay `PiInputParser` en el camino principal.
+- No hay `PiInputParser` ni lógica Pi hardcodeada en el camino principal.
+- Si el manifest Pi está ausente o inválido, no se activa un parser Pi implícito.
 
 ## Fuente de verdad
 
+- `docs/input-contract.md`
 - `src/core/sync.rs`
 - `tests/fixtures/`
 - `docs/configuration.md`

@@ -12,26 +12,31 @@ tipo: task
 ## Preserva
 
 - INV1: `source = "session"` permanece como categoría semántica estable para conversaciones.
-  - Verificar: preset Claude emite `source = "session"`.
+  - Verificar: preset Claude emite `source = "session"`, no `source = "claude"`.
 - INV4: JMESPath queda como evaluación futura, no dependencia del MVP.
-  - Verificar: preset usa JSONPath y operadores declarativos.
+  - Verificar: preset usa JSONPath y operadores declarativos MVP.
 
 ## Contexto
 
-Claude debe dejar de ser parser especial en Rust. Su comportamiento actual debe materializarse como preset TOML.
+Claude debe dejar de ser parser especial en Rust. Su comportamiento actual debe materializarse como un manifest `claude.inputs.toml` compatible con `docs/input-contract.md`.
+
+O01 podía descubrir Claude de forma implícita. En O02, Claude solo entra al flujo canónico si existe un manifest activo válido.
 
 ## Alcance
 
 **In**:
-1. Crear `claude.inputs.toml` o fixture equivalente en la ubicación definida por T001.
-2. Declarar discovery de JSONL con exclude de subagents mediante glob.
-3. Declarar filtros de record `isMeta` y `type`.
-4. Declarar mapping `message.role`, `message.content`, `uuid`, `timestamp`.
-5. Declarar eliminación de blocks `tool_use`/`tool_result`.
-6. Declarar regexes/text drops actualmente en `filter_noise()`.
+1. Crear `claude.inputs.toml` o fixture equivalente en la ubicación definida por T001/T002.
+2. Declarar `version = 1` y `[[inputs]]` con `id = "claude"`, `source = "session"` y `active = true`.
+3. Declarar discovery con `roots`, `include = ["**/*.jsonl"]` y `exclude = ["**/subagents/**"]`.
+4. Declarar `decode.format = "jsonl"`.
+5. Declarar filtros de record para tipos `user`/`assistant` y metadata Claude usando `include_when`/`exclude_when`.
+6. Declarar mapping `message.role`, `uuid`, `timestamp` y `sessionId` usando `[inputs.map]`.
+7. Declarar contenido desde `message.content`, incluyendo blocks de texto con `content.include_when` en lugar de lógica Rust específica.
+8. Declarar regexes de ruido actualmente en `filter_noise()` mediante `text.remove`.
 
 **Out**:
-- Mantener `ClaudeInputParser` como camino principal.
+- Mantener `ClaudeInputParser` o `parse_sessions` Claude-only como camino principal.
+- Fallback Claude implícito cuando no hay manifest activo.
 - Resolver `sessions-index.json` si no cabe en el contrato MVP; si queda pendiente, documentar gap explícito.
 
 ## Estado inicial esperado
@@ -42,12 +47,14 @@ Claude debe dejar de ser parser especial en Rust. Su comportamiento actual debe 
 ## Criterios de Aceptación
 
 - Fixture Claude se indexa usando solo manifest + generic engine.
-- Resultado normalizado conserva roles, texto, timestamp y uuid esperados.
+- Resultado normalizado conserva roles, texto, timestamp, uuid y `source = "session"` esperados.
 - Subagents se excluyen por TOML, no por lógica del core.
 - Strings de ruido Claude viven en preset TOML.
+- Si el manifest Claude está ausente o inválido, el flujo canónico falla claramente en vez de asumir Claude.
 
 ## Fuente de verdad
 
+- `docs/input-contract.md`
 - `src/core/sync.rs`
 - `src/core/models.rs`
 - `tests/cli.rs`
