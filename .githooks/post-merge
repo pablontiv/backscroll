@@ -5,20 +5,15 @@
 
 REPO_ROOT="$(git rev-parse --show-toplevel)"
 
-# Sync skills
-SKILLS_SRC="$REPO_ROOT/.claude/skills"
+# Install project skills to the Claude user scope.
+# Pi is configured by .pi/settings.json to discover ~/.claude/skills.
 SKILLS_DEST="$HOME/.claude/skills"
-if [ -d "$SKILLS_SRC" ]; then
-  mkdir -p "$SKILLS_DEST"
-  for skill_dir in "$SKILLS_SRC"/*/; do
-    [ -d "$skill_dir" ] || continue
-    skill_name=$(basename "$skill_dir")
-    [[ "$skill_name" == *-workspace ]] && continue
-    rm -rf "${SKILLS_DEST:?}/$skill_name"
-    cp -r "$skill_dir" "$SKILLS_DEST/$skill_name"
-  done
-  echo "backscroll: synced skills → $SKILLS_DEST"
-fi
+mkdir -p "$SKILLS_DEST"
+for skill in backscroll; do
+  rm -rf "${SKILLS_DEST:?}/$skill"
+  cp -r "$REPO_ROOT/.claude/skills/$skill" "$SKILLS_DEST/$skill"
+  echo "backscroll: installed $skill skill → $SKILLS_DEST/$skill"
+done
 
 USER_BIN_DIR="${XDG_BIN_HOME:-$HOME/.local/bin}"
 echo "Rebuilding backscroll..."
