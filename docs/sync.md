@@ -8,24 +8,21 @@ estado: Completed
 ## CLI Usage
 
 ```bash
-backscroll sync --path ~/.claude/sessions              # Index all sessions
-backscroll sync --path ~/.claude/sessions --include-agents  # Include subagent sessions
+backscroll sync                                      # Index files declared in *.inputs.toml
 ```
 
 ### Flags
 
 | Flag | Description |
 |------|-------------|
-| `--path <DIR>` | Directory containing session files (default: configured `session_dirs`) |
-| `--include-agents` | Include subagent sessions (excluded by default) |
-| `--no-plans` | Skip parsing markdown plans (`~/.claude/plans/`) |
+| `--no-plans` | Deprecated compatibility flag; plans are indexed only when declared as inputs |
 | `--optimize` | Run FTS5 optimization after sync |
 
 ## Declarative Inputs
 
-O01 allowed transitional ingestion through `--path`, `session_dir(s)`, and implicit Claude discovery. O02 makes TOML input manifests canonical: app settings stay in `backscroll.toml`, while session ingestion is declared in `*.inputs.toml` and/or `backscroll.inputs.d/*.toml`.
+O01 allowed transitional ingestion through `--path`, `session_dir(s)`, implicit Claude discovery, hardcoded `~/.claude/plans`, and `[sources]` directory config. O02 makes TOML input manifests canonical: app settings stay in `backscroll.toml`, while sessions, plans, and external markdown documents are declared in `*.inputs.toml` and/or `backscroll.inputs.d/*.toml`.
 
-The O02 generic input manifest contract is specified in [Generic input manifest contract](input-contract.md). It describes the provider-neutral `discover -> decode -> record -> map -> content -> text -> emit` pipeline and keeps Claude/Pi conversations normalized as `source = "session"`.
+The O02 generic input manifest contract is specified in [Generic input manifest contract](input-contract.md). It describes the provider-neutral `discover -> decode -> record -> map -> content -> text -> emit` pipeline and keeps Claude/Pi conversations normalized as `source = "session"`. Markdown document inputs use `decode.format = "markdown"` for whole documents or `decode.format = "markdown_sections"` to split on `## ` headers.
 
 Canonical manifests are loaded from:
 
@@ -56,6 +53,49 @@ role = "$.message.role"
 
 [inputs.content]
 selector = "$.message.content"
+```
+
+Plans are no longer discovered from a hardcoded Claude path. Declare them explicitly:
+
+```toml
+version = 1
+
+[[inputs]]
+id = "plans"
+source = "plan"
+
+[inputs.discover]
+roots = ["~/.claude/plans"]
+include = ["**/*.md", "**/*.markdown"]
+
+[inputs.decode]
+format = "markdown_sections"
+```
+
+External document sources are also inputs. The `source` value is stored unchanged, so `ke`, `decision`, `memory`, `rule`, `spec`, and `backlog` remain searchable and filterable by source:
+
+```toml
+[[inputs]]
+id = "specs"
+source = "spec"
+
+[inputs.discover]
+roots = ["docs/specs"]
+include = ["**/*.md"]
+
+[inputs.decode]
+format = "markdown_sections"
+
+[[inputs]]
+id = "decisions"
+source = "decision"
+
+[inputs.discover]
+roots = ["docs/decisions"]
+include = ["**/*.md"]
+
+[inputs.decode]
+format = "markdown"
 ```
 
 Discovery roots may be files or directories. `~` is expanded to the user's home directory, and relative roots are resolved relative to the manifest file that declares them. Include and exclude rules are generic `globset` patterns matched against candidate paths; Backscroll does not hardcode provider-specific exclusions such as `subagents`. `follow_symlinks` defaults to `false`, so symlinked directories are not traversed unless the manifest opts in.

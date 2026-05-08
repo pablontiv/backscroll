@@ -192,7 +192,8 @@ fn test_hybrid_search_pipeline() {
         ..Default::default()
     };
     let results = db.search("webhook", &params).unwrap();
-    assert!(!results.is_empty(), "KE source filter should find results");
+    assert_eq!(results.len(), 1, "KE source filter should only return KEs");
+    assert_eq!(results[0].source_path, "/test/KE-0042.md");
 }
 
 #[test]

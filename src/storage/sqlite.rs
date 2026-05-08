@@ -515,6 +515,84 @@ impl Database {
         })
     }
 
+    fn normalized_source_filter(source: &str) -> Option<String> {
+        match source {
+            "all" => None,
+            "sessions" => Some("session".to_string()),
+            "plans" => Some("plan".to_string()),
+            other => Some(other.to_string()),
+        }
+    }
+
+    fn normalized_role_filter(role: &str) -> String {
+        // Backward-compatible query alias for Claude/session terminology. Generic
+        // roles from input manifests and external sources pass through unchanged.
+        match role {
+            "human" => "user".to_string(),
+            other => other.to_string(),
+        }
+    }
+
+    fn append_search_item_filters(
+        conditions: &mut Vec<&'static str>,
+        param_values: &mut Vec<Box<dyn rusqlite::types::ToSql>>,
+        params: &crate::core::SearchParams,
+    ) {
+        if let Some(p) = &params.project {
+            conditions.push("si.project = ?");
+            param_values.push(Box::new(p.clone()));
+        }
+        if let Some(source) = params
+            .source
+            .as_deref()
+            .and_then(Database::normalized_source_filter)
+        {
+            conditions.push("si.source = ?");
+            param_values.push(Box::new(source));
+        }
+        if let Some(a) = &params.after {
+            conditions.push("si.timestamp IS NOT NULL AND si.timestamp >= ?");
+            param_values.push(Box::new(a.clone()));
+        }
+        if let Some(b) = &params.before {
+            conditions.push("si.timestamp IS NOT NULL AND si.timestamp < ?");
+            param_values.push(Box::new(b.clone()));
+        }
+        if let Some(r) = &params.role {
+            conditions.push("si.role = ?");
+            param_values.push(Box::new(Database::normalized_role_filter(r)));
+        }
+        if let Some(ct) = &params.content_type {
+            conditions.push("si.content_type = ?");
+            param_values.push(Box::new(ct.clone()));
+        }
+        if let Some(tag) = &params.tag {
+            conditions
+                .push("si.source_path IN (SELECT source_path FROM session_tags WHERE tag = ?)");
+            param_values.push(Box::new(tag.clone()));
+        }
+    }
+
+    fn search_item_matches_filters(
+        &self,
+        search_item_id: i64,
+        params: &crate::core::SearchParams,
+    ) -> miette::Result<bool> {
+        let mut conditions = vec!["si.id = ?"];
+        let mut param_values: Vec<Box<dyn rusqlite::types::ToSql>> = vec![Box::new(search_item_id)];
+        Database::append_search_item_filters(&mut conditions, &mut param_values, params);
+
+        let sql = format!(
+            "SELECT EXISTS(SELECT 1 FROM search_items si WHERE {})",
+            conditions.join(" AND ")
+        );
+        let param_refs: Vec<&dyn rusqlite::types::ToSql> =
+            param_values.iter().map(|p| p.as_ref()).collect();
+        self.conn
+            .query_row(&sql, param_refs.as_slice(), |row| row.get(0))
+            .into_diagnostic()
+    }
+
     fn bm25_search(
         &self,
         query_str: &str,
@@ -522,12 +600,6 @@ impl Database {
     ) -> miette::Result<Vec<SearchResult>> {
         let mut results = Vec::new();
         let snippet_expr = "snippet(messages_fts, 0, '>>>', '<<<', '...', 32)";
-
-        let source_filter = match params.source.as_deref() {
-            Some("sessions") => Some("session"),
-            Some("plans") => Some("plan"),
-            _ => None,
-        };
 
         let base = format!(
             "SELECT si.source_path, si.text, m.rank as score, {} as snippet, si.role, si.timestamp FROM messages_fts m JOIN search_items si ON m.rowid = si.id WHERE messages_fts MATCH ?",
@@ -539,40 +611,7 @@ impl Database {
         let mut conditions = Vec::new();
         let mut param_values: Vec<Box<dyn rusqlite::types::ToSql>> = Vec::new();
         param_values.push(Box::new(sanitize_fts5_query(query_str, &stopwords)));
-
-        if let Some(p) = &params.project {
-            conditions.push("si.project = ?");
-            param_values.push(Box::new(p.clone()));
-        }
-        if let Some(s) = source_filter {
-            conditions.push("si.source = ?");
-            param_values.push(Box::new(s.to_string()));
-        }
-        if let Some(a) = &params.after {
-            conditions.push("si.timestamp IS NOT NULL AND si.timestamp >= ?");
-            param_values.push(Box::new(a.clone()));
-        }
-        if let Some(b) = &params.before {
-            conditions.push("si.timestamp IS NOT NULL AND si.timestamp < ?");
-            param_values.push(Box::new(b.clone()));
-        }
-        if let Some(r) = &params.role {
-            let db_role = match r.as_str() {
-                "human" => "user",
-                other => other,
-            };
-            conditions.push("si.role = ?");
-            param_values.push(Box::new(db_role.to_string()));
-        }
-        if let Some(ct) = &params.content_type {
-            conditions.push("si.content_type = ?");
-            param_values.push(Box::new(ct.clone()));
-        }
-        if let Some(tag) = &params.tag {
-            conditions
-                .push("si.source_path IN (SELECT source_path FROM session_tags WHERE tag = ?)");
-            param_values.push(Box::new(tag.clone()));
-        }
+        Database::append_search_item_filters(&mut conditions, &mut param_values, params);
 
         let limit_clause = if params.limit == 0 {
             String::new()
@@ -769,7 +808,11 @@ impl SearchEngine for Database {
             .flat_map(|f| f.to_le_bytes())
             .collect();
 
-        let knn_limit = if params.limit == 0 { 50 } else { params.limit };
+        let knn_limit = if params.limit == 0 {
+            params.top_k
+        } else {
+            params.top_k.max(params.limit)
+        };
 
         // KNN search via vec_embeddings
         let mut knn_stmt = self
@@ -798,6 +841,9 @@ impl SearchEngine for Database {
                     |row| row.get(0),
                 )
                 .into_diagnostic()?;
+            if !self.search_item_matches_filters(source_item_id, params)? {
+                continue;
+            }
             vec_ranked.push(RankedItem {
                 id: source_item_id,
                 score: similarity,
@@ -1139,6 +1185,8 @@ impl SearchEngine for Database {
         project: Option<&str>,
         limit: usize,
     ) -> miette::Result<Vec<SessionEntry>> {
+        // Product API is intentionally session-only; external/document sources are
+        // searchable but are not conversation sessions.
         let (sql, params): (String, Vec<Box<dyn rusqlite::types::ToSql>>) = match project {
             Some(proj) => (
                 "SELECT source_path, project, COUNT(*) as messages, \
@@ -1215,6 +1263,8 @@ impl SearchEngine for Database {
     }
 
     fn get_insights(&self, project: Option<&str>) -> miette::Result<InsightData> {
+        // Product API is intentionally session-only; external/document sources are
+        // searchable but excluded from conversation activity metrics.
         // Daily activity (last 30 days)
         let (daily_sql, daily_params): (String, Vec<Box<dyn rusqlite::types::ToSql>>) =
             match project {
@@ -1386,6 +1436,29 @@ impl SearchEngine for Database {
 mod tests {
     use super::*;
     use crate::core::{ParsedMessage, SearchParams};
+
+    fn single_message_file(
+        source: &str,
+        source_path: &str,
+        role: &str,
+        text: &str,
+        content_type: &str,
+    ) -> ParsedFile {
+        ParsedFile {
+            source: source.into(),
+            source_path: source_path.into(),
+            hash: format!("hash:{source_path}"),
+            project: None,
+            messages: vec![ParsedMessage {
+                role: role.into(),
+                text: text.into(),
+                ordinal: 0,
+                uuid: None,
+                timestamp: None,
+                content_type: content_type.into(),
+            }],
+        }
+    }
 
     #[test]
     fn test_db_workflow() -> miette::Result<()> {
@@ -1800,6 +1873,165 @@ mod tests {
             },
         )?;
         assert_eq!(all.len(), 2);
+        Ok(())
+    }
+
+    #[test]
+    fn test_search_source_filter_arbitrary_source_ke_only() -> miette::Result<()> {
+        let db = Database::open(":memory:")?;
+        db.setup_schema()?;
+
+        db.sync_files(vec![
+            single_message_file(
+                "session",
+                "/s/source-generic.jsonl",
+                "user",
+                "generic source filter sentinel",
+                "text",
+            ),
+            single_message_file(
+                "ke",
+                "/ke/KE-100.md",
+                "ke",
+                "generic source filter sentinel",
+                "text",
+            ),
+        ])?;
+
+        let results = db.search(
+            "sentinel",
+            &SearchParams {
+                source: Some("ke".into()),
+                limit: 20,
+                hybrid: false,
+                ..Default::default()
+            },
+        )?;
+
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0].source_path, "/ke/KE-100.md");
+        Ok(())
+    }
+
+    #[test]
+    fn test_search_combined_generic_source_role_content_type_filters() -> miette::Result<()> {
+        let db = Database::open(":memory:")?;
+        db.setup_schema()?;
+
+        db.sync_files(vec![
+            single_message_file(
+                "decision",
+                "/decisions/ADR-1.md",
+                "reviewer",
+                "combined filter target architecture",
+                "rationale",
+            ),
+            single_message_file(
+                "decision",
+                "/decisions/ADR-2.md",
+                "author",
+                "combined filter target architecture",
+                "rationale",
+            ),
+            single_message_file(
+                "ke",
+                "/ke/KE-101.md",
+                "reviewer",
+                "combined filter target architecture",
+                "rationale",
+            ),
+            single_message_file(
+                "decision",
+                "/decisions/ADR-3.md",
+                "reviewer",
+                "combined filter target architecture",
+                "summary",
+            ),
+        ])?;
+
+        let results = db.search(
+            "architecture",
+            &SearchParams {
+                source: Some("decision".into()),
+                role: Some("reviewer".into()),
+                content_type: Some("rationale".into()),
+                limit: 20,
+                hybrid: false,
+                ..Default::default()
+            },
+        )?;
+
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0].source_path, "/decisions/ADR-1.md");
+        assert_eq!(results[0].role, "reviewer");
+        Ok(())
+    }
+
+    #[test]
+    fn test_hybrid_search_applies_generic_filters_to_vector_results() -> miette::Result<()> {
+        use crate::core::embedding::MockEmbeddingProvider;
+
+        let db = Database::open(":memory:")?;
+        db.setup_schema()?;
+        db.set_embedding_provider(Box::new(MockEmbeddingProvider::new(384)));
+
+        db.sync_files(vec![
+            single_message_file(
+                "session",
+                "/s/vector-leak.jsonl",
+                "user",
+                "unrelated session text that must not leak",
+                "text",
+            ),
+            single_message_file(
+                "ke",
+                "/ke/KE-vector.md",
+                "ke",
+                "vectorfilterterm external knowledge entry",
+                "text",
+            ),
+        ])?;
+
+        let results = db.search(
+            "vectorfilterterm",
+            &SearchParams {
+                source: Some("ke".into()),
+                limit: 20,
+                hybrid: true,
+                ..Default::default()
+            },
+        )?;
+
+        assert!(!results.is_empty());
+        assert!(results.iter().all(|r| r.source_path.starts_with("/ke/")));
+        Ok(())
+    }
+
+    #[test]
+    fn test_list_sessions_intentionally_excludes_external_sources() -> miette::Result<()> {
+        let db = Database::open(":memory:")?;
+        db.setup_schema()?;
+
+        db.sync_files(vec![
+            single_message_file(
+                "session",
+                "/s/list-session.jsonl",
+                "user",
+                "session list entry",
+                "text",
+            ),
+            single_message_file(
+                "ke",
+                "/ke/list-external.md",
+                "ke",
+                "external list entry",
+                "text",
+            ),
+        ])?;
+
+        let sessions = db.list_sessions(None, 10)?;
+        assert_eq!(sessions.len(), 1);
+        assert_eq!(sessions[0].source_path, "/s/list-session.jsonl");
         Ok(())
     }
 

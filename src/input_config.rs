@@ -152,9 +152,10 @@ pub struct InputDefinition {
     pub decode: DecodeConfig,
     #[serde(default)]
     pub record: RecordConfig,
-    #[serde(rename = "map")]
-    pub mapping: MapConfig,
-    pub content: ContentConfig,
+    #[serde(default, rename = "map")]
+    pub mapping: Option<MapConfig>,
+    #[serde(default)]
+    pub content: Option<ContentConfig>,
     #[serde(default)]
     pub text: TextConfig,
 }
@@ -183,6 +184,8 @@ pub struct DecodeConfig {
 pub enum DecodeFormat {
     Jsonl,
     Json,
+    Markdown,
+    MarkdownSections,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
@@ -640,6 +643,30 @@ impl InputDefinition {
     }
 
     fn validate_selectors(&self, path: &Path) -> miette::Result<()> {
+        if matches!(
+            self.decode.format,
+            DecodeFormat::Markdown | DecodeFormat::MarkdownSections
+        ) {
+            return Ok(());
+        }
+
+        let Some(mapping) = &self.mapping else {
+            return Err(miette::miette!(
+                "Active input '{}' in {} must define [inputs.map] for decode.format = {:?}",
+                self.id,
+                path.display(),
+                self.decode.format
+            ));
+        };
+        let Some(content) = &self.content else {
+            return Err(miette::miette!(
+                "Active input '{}' in {} must define [inputs.content] for decode.format = {:?}",
+                self.id,
+                path.display(),
+                self.decode.format
+            ));
+        };
+
         validate_jsonpath_selector(path, &self.id, "record.selector", &self.record.selector)?;
         validate_predicate_selectors(
             path,
@@ -654,42 +681,42 @@ impl InputDefinition {
             &self.record.exclude_when,
         )?;
 
-        validate_jsonpath_selector(path, &self.id, "map.role", &self.mapping.role)?;
-        if let Some(selector) = &self.mapping.uuid {
+        validate_jsonpath_selector(path, &self.id, "map.role", &mapping.role)?;
+        if let Some(selector) = &mapping.uuid {
             validate_jsonpath_selector(path, &self.id, "map.uuid", selector)?;
         }
-        if let Some(selector) = &self.mapping.timestamp {
+        if let Some(selector) = &mapping.timestamp {
             validate_jsonpath_selector(path, &self.id, "map.timestamp", selector)?;
         }
-        if let Some(selector) = &self.mapping.session_id {
+        if let Some(selector) = &mapping.session_id {
             validate_jsonpath_selector(path, &self.id, "map.session_id", selector)?;
         }
-        if let Some(selector) = &self.mapping.project {
+        if let Some(selector) = &mapping.project {
             validate_jsonpath_selector(path, &self.id, "map.project", selector)?;
         }
 
-        validate_jsonpath_selector(path, &self.id, "content.selector", &self.content.selector)?;
-        validate_jsonpath_selector(path, &self.id, "content.string", &self.content.string)?;
-        if let Some(selector) = &self.content.blocks {
+        validate_jsonpath_selector(path, &self.id, "content.selector", &content.selector)?;
+        validate_jsonpath_selector(path, &self.id, "content.string", &content.string)?;
+        if let Some(selector) = &content.blocks {
             validate_jsonpath_selector(path, &self.id, "content.blocks", selector)?;
         }
-        if let Some(selector) = &self.content.block_text {
+        if let Some(selector) = &content.block_text {
             validate_jsonpath_selector(path, &self.id, "content.block_text", selector)?;
         }
-        if let Some(selector) = &self.content.content_type {
+        if let Some(selector) = &content.content_type {
             validate_jsonpath_selector(path, &self.id, "content.content_type", selector)?;
         }
         validate_predicate_selectors(
             path,
             &self.id,
             "content.include_when",
-            &self.content.include_when,
+            &content.include_when,
         )?;
         validate_predicate_selectors(
             path,
             &self.id,
             "content.exclude_when",
-            &self.content.exclude_when,
+            &content.exclude_when,
         )?;
         Ok(())
     }

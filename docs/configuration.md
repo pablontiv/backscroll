@@ -30,7 +30,7 @@ top_k = 50
 rrf_k = 60
 ```
 
-Legacy `session_dir`, `session_dirs`, and source-directory keys may still deserialize for migration compatibility, but they are not the canonical O02 input source and do not silently feed the canonical session sync path.
+Legacy `session_dir`, `session_dirs`, and source-directory keys may still deserialize for migration compatibility, but they are not the canonical O02 input source and do not silently feed the canonical sync path. Plans and external documents (`ke`, `decision`, `memory`, `rule`, `spec`, `backlog`) are declared as inputs, not `[sources]` app config.
 
 ## Input config: `*.inputs.toml` and `backscroll.inputs.d/*.toml`
 
@@ -62,6 +62,34 @@ role = "$.message.role"
 
 [inputs.content]
 selector = "$.message.content"
+```
+
+Markdown documents use the same input list with `decode.format = "markdown"` for whole-document indexing or `decode.format = "markdown_sections"` for `## ` header splitting:
+
+```toml
+version = 1
+
+[[inputs]]
+id = "plans"
+source = "plan"
+
+[inputs.discover]
+roots = ["~/.claude/plans"]
+include = ["**/*.md", "**/*.markdown"]
+
+[inputs.decode]
+format = "markdown_sections"
+
+[[inputs]]
+id = "knowledge"
+source = "ke"
+
+[inputs.discover]
+roots = ["docs/knowledge"]
+include = ["**/*.md"]
+
+[inputs.decode]
+format = "markdown"
 ```
 
 Invalid TOML, unknown fields, unsupported versions, or invalid active manifests fail with an error that includes the manifest path. Full selector/filter execution belongs to later O02 tasks; T002 establishes the separate canonical manifest loader and removes silent legacy fallback from the canonical path.

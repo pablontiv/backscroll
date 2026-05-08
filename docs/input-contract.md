@@ -121,7 +121,7 @@ Declares the technical file format.
 
 | Field | Type | Default | Meaning |
 |---|---:|---:|---|
-| `format` | enum | required | MVP values: `jsonl`, `json`. |
+| `format` | enum | required | MVP values: `jsonl`, `json`, `markdown`, `markdown_sections`. |
 | `encoding` | string | `utf-8` | Text encoding for file reads. |
 
 ## `record`
@@ -144,7 +144,7 @@ MVP operators are `eq`, `ne`, `in`, `exists`, and `missing`.
 
 ## `map`
 
-Maps record fields to Backscroll metadata.
+Maps record fields to Backscroll metadata. Required for `jsonl` and `json` inputs. Markdown inputs (`markdown` and `markdown_sections`) emit document text directly and may omit this section.
 
 | Field | Type | Default | Meaning |
 |---|---:|---:|---|
@@ -157,7 +157,7 @@ Maps record fields to Backscroll metadata.
 
 ## `content`
 
-Selects text-bearing values and optional content blocks.
+Selects text-bearing values and optional content blocks. Required for `jsonl` and `json` inputs. Markdown inputs may omit this section; when omitted, emitted messages use `content_type = "text"`.
 
 | Field | Type | Default | Meaning |
 |---|---:|---:|---|
@@ -308,6 +308,44 @@ join = "\n"
 trim = true
 drop_empty = true
 ```
+
+## Markdown document inputs
+
+Plans and external documents are declared as normal inputs. Whole-document markdown uses `decode.format = "markdown"`; sectioned markdown uses `decode.format = "markdown_sections"`, which splits on `## ` headers and preserves any pre-header preamble as the first message.
+
+```toml
+version = 1
+
+[[inputs]]
+id = "claude-plans"
+source = "plan"
+active = true
+
+[inputs.discover]
+roots = ["~/.claude/plans"]
+include = ["**/*.md", "**/*.markdown"]
+
+[inputs.decode]
+format = "markdown_sections"
+```
+
+```toml
+version = 1
+
+[[inputs]]
+id = "knowledge-entries"
+source = "ke"
+active = true
+
+[inputs.discover]
+roots = ["docs/knowledge"]
+include = ["**/*.md"]
+
+[inputs.decode]
+format = "markdown"
+```
+
+Use `source = "plan"`, `"ke"`, `"decision"`, `"memory"`, `"rule"`, `"spec"`, or `"backlog"` to preserve the semantic source stored in SQLite. Specs can opt into `markdown_sections` when section-level indexing is desired.
 
 ## Validation policy
 

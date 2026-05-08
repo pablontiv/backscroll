@@ -4,7 +4,6 @@ mod output;
 
 use crate::output::{OutputFormat, OutputOptions, format_results};
 use backscroll::config::Config;
-use backscroll::core::plans::parse_plan;
 use backscroll::core::sync::{dry_run_input_definition, parse_input_definitions};
 use backscroll::core::{ParsedMessage, SearchEngine, SearchParams};
 use backscroll::input_config::InputConfig;
@@ -26,7 +25,7 @@ struct Cli {
 enum Commands {
     /// Sincronizar inputs declarados en manifests
     Sync {
-        /// No indexar archivos de plan (~/.claude/plans/)
+        /// Deprecated compatibility flag; plans are indexed only from input manifests
         #[arg(long, default_value_t = false)]
         no_plans: bool,
         /// Optimizar el índice FTS5 después de sincronizar
@@ -67,7 +66,7 @@ enum Commands {
         /// Solo resultados antes de esta fecha (ISO 8601, ej: 2026-03-09)
         #[arg(long)]
         before: Option<String>,
-        /// Filtrar por rol: human o assistant
+        /// Filtrar por rol exacto (human se conserva como alias de user)
         #[arg(long)]
         role: Option<String>,
         /// Máximo de resultados (default 20, 0 = sin límite)
@@ -76,7 +75,7 @@ enum Commands {
         /// Número de resultados a saltar
         #[arg(long, default_value_t = 0)]
         offset: usize,
-        /// Filtrar por tipo de contenido: text, code, o tool
+        /// Filtrar por tipo de contenido exacto (por ejemplo: text, code, tool, rationale)
         #[arg(long)]
         content_type: Option<String>,
         /// Filtrar por tag de sesión (auto-asignado)
@@ -149,7 +148,7 @@ enum Commands {
     },
     /// Re-indexar todos los archivos declarados en manifests (fuerza re-procesamiento)
     Reindex {
-        /// No indexar archivos de plan
+        /// Deprecated compatibility flag; plans are indexed only from input manifests
         #[arg(long, default_value_t = false)]
         no_plans: bool,
         /// Skip embedding generation during sync
@@ -246,69 +245,6 @@ enum InputCommands {
     },
 }
 
-fn discover_plan_files() -> Vec<PathBuf> {
-    let home = std::env::var("HOME").unwrap_or_else(|_| ".".into());
-    let plans_dir = PathBuf::from(&home).join(".claude/plans");
-    discover_plan_files_from(&plans_dir)
-}
-
-fn discover_plan_files_from(plans_dir: &std::path::Path) -> Vec<PathBuf> {
-    if !plans_dir.is_dir() {
-        return Vec::new();
-    }
-    walkdir::WalkDir::new(plans_dir)
-        .into_iter()
-        .filter_map(|e| e.ok())
-        .filter(|e| {
-            e.file_type().is_file()
-                && e.path()
-                    .extension()
-                    .is_some_and(|ext| ext == "md" || ext == "markdown")
-        })
-        .map(|e| e.into_path())
-        .collect()
-}
-
-fn sync_plans(
-    engine: &dyn SearchEngine,
-    hashes: &std::collections::HashMap<String, String>,
-) -> Result<()> {
-    let plan_files = discover_plan_files();
-    if plan_files.is_empty() {
-        return Ok(());
-    }
-
-    let mut parsed = Vec::new();
-    for path in &plan_files {
-        let path_str = path.to_string_lossy();
-        let existing_hash = hashes.get(path_str.as_ref());
-
-        // Compute hash to check if changed
-        let content =
-            std::fs::read(path).map_err(|e| miette::miette!("Failed to read plan: {}", e))?;
-        let hash = format!("{:x}", <sha2::Sha256 as sha2::Digest>::digest(&content));
-
-        if existing_hash.is_some_and(|h| h == &hash) {
-            continue;
-        }
-
-        match parse_plan(path) {
-            Ok(file) => parsed.push(file),
-            Err(e) => tracing::warn!("Failed to parse plan {}: {}", path_str, e),
-        }
-    }
-
-    if !parsed.is_empty() {
-        println!(
-            "Sincronizando {} plans desde ~/.claude/plans/",
-            parsed.len()
-        );
-        engine.sync_files(parsed)?;
-    }
-
-    Ok(())
-}
-
 fn create_engine(config: &Config) -> Result<Box<dyn SearchEngine>> {
     let db = Database::open(&config.database_path)?;
     db.setup_schema()?;
@@ -362,6 +298,8 @@ fn decode_format_name(format: &backscroll::input_config::DecodeFormat) -> &'stat
     match format {
         backscroll::input_config::DecodeFormat::Jsonl => "jsonl",
         backscroll::input_config::DecodeFormat::Json => "json",
+        backscroll::input_config::DecodeFormat::Markdown => "markdown",
+        backscroll::input_config::DecodeFormat::MarkdownSections => "markdown_sections",
     }
 }
 
@@ -533,25 +471,12 @@ fn main() -> Result<()> {
 
     match &cli.command {
         Commands::Sync {
-            no_plans,
+            no_plans: _,
             optimize,
             no_embeddings: _,
         } => {
             let engine = create_engine(&config)?;
             sync_manifest_inputs(engine.as_ref(), &input_config)?;
-            if !no_plans {
-                let hashes = engine.get_file_hashes()?;
-                sync_plans(engine.as_ref(), &hashes)?;
-            }
-            // Parse and sync external sources
-            let source_registry =
-                backscroll::core::sources::SourceRegistry::from_config(&config.sources);
-            let existing_hashes = engine.get_file_hashes()?;
-            let external_files = source_registry.parse_all(&existing_hashes)?;
-            if !external_files.is_empty() {
-                tracing::info!(count = external_files.len(), "Syncing external sources");
-                engine.sync_files(external_files)?;
-            }
             if *optimize {
                 println!("Optimizando índice FTS5...");
                 engine.optimize_fts()?;
@@ -581,21 +506,6 @@ fn main() -> Result<()> {
 
             // Auto-sync: indexar inputs declarados antes de buscar (incremental, rápido)
             sync_manifest_inputs(engine.as_ref(), &input_config)?;
-            // Auto-sync plans
-            if let Ok(hashes) = engine.get_file_hashes() {
-                let _ = sync_plans(engine.as_ref(), &hashes);
-            }
-            // Auto-sync external sources
-            {
-                let source_registry =
-                    backscroll::core::sources::SourceRegistry::from_config(&config.sources);
-                let existing_hashes = engine.get_file_hashes()?;
-                let external_files = source_registry.parse_all(&existing_hashes)?;
-                if !external_files.is_empty() {
-                    tracing::info!(count = external_files.len(), "Syncing external sources");
-                    engine.sync_files(external_files)?;
-                }
-            }
 
             // Proyecto: --all-projects → None, --project → explícito, default → CWD
             let effective_project = if *all_projects {
@@ -618,32 +528,6 @@ fn main() -> Result<()> {
             } else {
                 Some(source.clone())
             };
-            // Validate --role value if provided
-            if let Some(r) = role {
-                match r.as_str() {
-                    "human" | "assistant" => {}
-                    _ => {
-                        return Err(miette::miette!(
-                            "Invalid --role value '{}'. Must be 'human' or 'assistant'.",
-                            r
-                        ));
-                    }
-                }
-            }
-
-            // Validate --content-type value if provided
-            if let Some(ct) = content_type {
-                match ct.as_str() {
-                    "text" | "code" | "tool" => {}
-                    _ => {
-                        return Err(miette::miette!(
-                            "Invalid --content-type value '{}'. Must be 'text', 'code', or 'tool'.",
-                            ct
-                        ));
-                    }
-                }
-            }
-
             let params = SearchParams {
                 project: effective_project,
                 source: source_filter,
@@ -698,9 +582,6 @@ fn main() -> Result<()> {
 
             // Auto-sync before resume search
             sync_manifest_inputs(engine.as_ref(), &input_config)?;
-            if let Ok(hashes) = engine.get_file_hashes() {
-                let _ = sync_plans(engine.as_ref(), &hashes);
-            }
 
             let effective_project = if *all_projects {
                 None
@@ -874,17 +755,13 @@ fn main() -> Result<()> {
             );
         }
         Commands::Reindex {
-            no_plans,
+            no_plans: _,
             no_embeddings: _,
         } => {
             let engine = create_engine(&config)?;
             println!("Clearing index hashes for full re-sync...");
             engine.clear_hashes()?;
             sync_manifest_inputs(engine.as_ref(), &input_config)?;
-            if !no_plans {
-                let hashes = engine.get_file_hashes()?;
-                sync_plans(engine.as_ref(), &hashes)?;
-            }
             println!("Reindex complete.");
         }
         Commands::Validate => {

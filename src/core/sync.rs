@@ -1,4 +1,5 @@
 use crate::core::models::{MessageContent, SessionRecord};
+use crate::core::plans::split_by_headers;
 use crate::core::session_inputs::claude;
 use crate::core::{ParsedFile, ParsedMessage};
 use crate::input_config::{
@@ -704,9 +705,12 @@ fn content_block_passes_predicates(
     ordinal: usize,
     block_index: usize,
 ) -> bool {
+    let Some(content) = &input.content else {
+        return false;
+    };
     if !predicates_match_all(
         &input.id,
-        &input.content.include_when,
+        &content.include_when,
         block,
         "content.include_when",
     ) {
@@ -720,7 +724,7 @@ fn content_block_passes_predicates(
     }
     if predicates_match_any(
         &input.id,
-        &input.content.exclude_when,
+        &content.exclude_when,
         block,
         "content.exclude_when",
     ) {
@@ -740,7 +744,8 @@ fn extract_content_from_record(
     record: &Value,
     ordinal: usize,
 ) -> Option<(String, String)> {
-    let content_selector = parse_jsonpath(&input.content.selector, &input.id, "content.selector")?;
+    let content = input.content.as_ref()?;
+    let content_selector = parse_jsonpath(&content.selector, &input.id, "content.selector")?;
     let content_nodes = query_nodes(&content_selector, record);
     if content_nodes.is_empty() {
         return None;
@@ -749,15 +754,15 @@ fn extract_content_from_record(
     let mut parts = Vec::new();
     let mut content_types = Vec::new();
 
-    if let Some(blocks_selector) = &input.content.blocks {
+    if let Some(blocks_selector) = &content.blocks {
         if let Some(blocks_path) = parse_jsonpath(blocks_selector, &input.id, "content.blocks") {
             let block_nodes = query_nodes(&blocks_path, record);
             if !block_nodes.is_empty() {
-                let block_text_path =
-                    input.content.block_text.as_ref().and_then(|selector| {
-                        parse_jsonpath(selector, &input.id, "content.block_text")
-                    });
-                let content_type_path = input.content.content_type.as_ref().and_then(|selector| {
+                let block_text_path = content
+                    .block_text
+                    .as_ref()
+                    .and_then(|selector| parse_jsonpath(selector, &input.id, "content.block_text"));
+                let content_type_path = content.content_type.as_ref().and_then(|selector| {
                     parse_jsonpath(selector, &input.id, "content.content_type")
                 });
 
@@ -779,24 +784,23 @@ fn extract_content_from_record(
                     let text = parts.join(&input.text.join);
                     return Some((
                         text,
-                        aggregate_content_type(&content_types, &input.content.default_content_type),
+                        aggregate_content_type(&content_types, &content.default_content_type),
                     ));
                 }
             }
         }
     }
 
-    let string_path = parse_jsonpath(&input.content.string, &input.id, "content.string")?;
-    let content_type_path = input
-        .content
+    let string_path = parse_jsonpath(&content.string, &input.id, "content.string")?;
+    let content_type_path = content
         .content_type
         .as_ref()
         .and_then(|selector| parse_jsonpath(selector, &input.id, "content.content_type"));
 
-    for content in content_nodes {
-        parts.extend(selected_strings(&string_path, content));
+    for content_node in content_nodes {
+        parts.extend(selected_strings(&string_path, content_node));
         if let Some(path) = &content_type_path {
-            content_types.extend(selected_strings(path, content));
+            content_types.extend(selected_strings(path, content_node));
         }
     }
 
@@ -808,7 +812,7 @@ fn extract_content_from_record(
 
     Some((
         parts.join(&input.text.join),
-        aggregate_content_type(&content_types, &input.content.default_content_type),
+        aggregate_content_type(&content_types, &content.default_content_type),
     ))
 }
 
@@ -857,8 +861,15 @@ fn parsed_message_from_record(
     record: &Value,
     ordinal: usize,
 ) -> Option<ParsedMessage> {
-    let Some(raw_role) = select_first_string(&input.mapping.role, record, &input.id, "map.role")
-    else {
+    let Some(mapping) = &input.mapping else {
+        tracing::debug!(
+            input_id = %input.id,
+            ordinal,
+            "Dropping message because map configuration is missing"
+        );
+        return None;
+    };
+    let Some(raw_role) = select_first_string(&mapping.role, record, &input.id, "map.role") else {
         tracing::debug!(
             input_id = %input.id,
             ordinal,
@@ -866,8 +877,7 @@ fn parsed_message_from_record(
         );
         return None;
     };
-    let role = input
-        .mapping
+    let role = mapping
         .role_aliases
         .get(&raw_role)
         .cloned()
@@ -893,9 +903,9 @@ fn parsed_message_from_record(
         role,
         text,
         ordinal,
-        uuid: select_optional_string(input.mapping.uuid.as_ref(), record, &input.id, "map.uuid"),
+        uuid: select_optional_string(mapping.uuid.as_ref(), record, &input.id, "map.uuid"),
         timestamp: select_optional_string(
-            input.mapping.timestamp.as_ref(),
+            mapping.timestamp.as_ref(),
             record,
             &input.id,
             "map.timestamp",
@@ -947,12 +957,14 @@ fn parse_generic_jsonl_content(
                 continue;
             }
             if project.is_none() {
-                project = select_optional_string(
-                    input.mapping.project.as_ref(),
-                    record,
-                    &input.id,
-                    "map.project",
-                );
+                project = input.mapping.as_ref().and_then(|mapping| {
+                    select_optional_string(
+                        mapping.project.as_ref(),
+                        record,
+                        &input.id,
+                        "map.project",
+                    )
+                });
             }
             match parsed_message_from_record(input, record, line_number) {
                 Some(message) => messages.push(message),
@@ -991,12 +1003,9 @@ fn parse_generic_json_content(
             continue;
         }
         if project.is_none() {
-            project = select_optional_string(
-                input.mapping.project.as_ref(),
-                record,
-                &input.id,
-                "map.project",
-            );
+            project = input.mapping.as_ref().and_then(|mapping| {
+                select_optional_string(mapping.project.as_ref(), record, &input.id, "map.project")
+            });
         }
         match parsed_message_from_record(input, record, ordinal) {
             Some(message) => messages.push(message),
@@ -1109,9 +1118,13 @@ fn content_block_passes_predicates_dry_run(
     block_index: usize,
     report: &mut InputDryRunReport,
 ) -> bool {
+    let Some(content) = &input.content else {
+        report.block_drop(ordinal, block_index, "content configuration is missing");
+        return false;
+    };
     if !predicates_match_all(
         &input.id,
-        &input.content.include_when,
+        &content.include_when,
         block,
         "content.include_when",
     ) {
@@ -1120,7 +1133,7 @@ fn content_block_passes_predicates_dry_run(
     }
     if predicates_match_any(
         &input.id,
-        &input.content.exclude_when,
+        &content.exclude_when,
         block,
         "content.exclude_when",
     ) {
@@ -1136,7 +1149,8 @@ fn extract_content_from_record_dry_run(
     ordinal: usize,
     report: &mut InputDryRunReport,
 ) -> Option<(String, String)> {
-    let content_selector = parse_jsonpath(&input.content.selector, &input.id, "content.selector")?;
+    let content = input.content.as_ref()?;
+    let content_selector = parse_jsonpath(&content.selector, &input.id, "content.selector")?;
     let content_nodes = query_nodes(&content_selector, record);
     if content_nodes.is_empty() {
         return None;
@@ -1145,15 +1159,15 @@ fn extract_content_from_record_dry_run(
     let mut parts = Vec::new();
     let mut content_types = Vec::new();
 
-    if let Some(blocks_selector) = &input.content.blocks {
+    if let Some(blocks_selector) = &content.blocks {
         if let Some(blocks_path) = parse_jsonpath(blocks_selector, &input.id, "content.blocks") {
             let block_nodes = query_nodes(&blocks_path, record);
             if !block_nodes.is_empty() {
-                let block_text_path =
-                    input.content.block_text.as_ref().and_then(|selector| {
-                        parse_jsonpath(selector, &input.id, "content.block_text")
-                    });
-                let content_type_path = input.content.content_type.as_ref().and_then(|selector| {
+                let block_text_path = content
+                    .block_text
+                    .as_ref()
+                    .and_then(|selector| parse_jsonpath(selector, &input.id, "content.block_text"));
+                let content_type_path = content.content_type.as_ref().and_then(|selector| {
                     parse_jsonpath(selector, &input.id, "content.content_type")
                 });
 
@@ -1182,24 +1196,23 @@ fn extract_content_from_record_dry_run(
                     let text = parts.join(&input.text.join);
                     return Some((
                         text,
-                        aggregate_content_type(&content_types, &input.content.default_content_type),
+                        aggregate_content_type(&content_types, &content.default_content_type),
                     ));
                 }
             }
         }
     }
 
-    let string_path = parse_jsonpath(&input.content.string, &input.id, "content.string")?;
-    let content_type_path = input
-        .content
+    let string_path = parse_jsonpath(&content.string, &input.id, "content.string")?;
+    let content_type_path = content
         .content_type
         .as_ref()
         .and_then(|selector| parse_jsonpath(selector, &input.id, "content.content_type"));
 
-    for content in content_nodes {
-        parts.extend(selected_strings(&string_path, content));
+    for content_node in content_nodes {
+        parts.extend(selected_strings(&string_path, content_node));
         if let Some(path) = &content_type_path {
-            content_types.extend(selected_strings(path, content));
+            content_types.extend(selected_strings(path, content_node));
         }
     }
 
@@ -1211,7 +1224,7 @@ fn extract_content_from_record_dry_run(
 
     Some((
         parts.join(&input.text.join),
-        aggregate_content_type(&content_types, &input.content.default_content_type),
+        aggregate_content_type(&content_types, &content.default_content_type),
     ))
 }
 
@@ -1221,13 +1234,15 @@ fn parsed_message_from_record_dry_run(
     ordinal: usize,
     report: &mut InputDryRunReport,
 ) -> Option<ParsedMessage> {
-    let Some(raw_role) = select_first_string(&input.mapping.role, record, &input.id, "map.role")
-    else {
+    let Some(mapping) = &input.mapping else {
+        report.record_drop(ordinal, "map configuration is missing");
+        return None;
+    };
+    let Some(raw_role) = select_first_string(&mapping.role, record, &input.id, "map.role") else {
         report.record_drop(ordinal, "map.role did not yield a scalar value");
         return None;
     };
-    let role = input
-        .mapping
+    let role = mapping
         .role_aliases
         .get(&raw_role)
         .cloned()
@@ -1247,15 +1262,61 @@ fn parsed_message_from_record_dry_run(
         role,
         text,
         ordinal,
-        uuid: select_optional_string(input.mapping.uuid.as_ref(), record, &input.id, "map.uuid"),
+        uuid: select_optional_string(mapping.uuid.as_ref(), record, &input.id, "map.uuid"),
         timestamp: select_optional_string(
-            input.mapping.timestamp.as_ref(),
+            mapping.timestamp.as_ref(),
             record,
             &input.id,
             "map.timestamp",
         ),
         content_type,
     })
+}
+
+fn parse_markdown_content(input: &InputDefinition, content: &str) -> Vec<ParsedMessage> {
+    if content.trim().is_empty() {
+        return Vec::new();
+    }
+
+    let content_type = input.content.as_ref().map_or_else(
+        || "text".to_string(),
+        |content| content.default_content_type.clone(),
+    );
+
+    match input.decode.format {
+        DecodeFormat::Markdown => {
+            normalize_extracted_text(input, content).map_or_else(Vec::new, |text| {
+                vec![ParsedMessage {
+                    role: input.source.clone(),
+                    text,
+                    ordinal: 0,
+                    uuid: None,
+                    timestamp: None,
+                    content_type,
+                }]
+            })
+        }
+        DecodeFormat::MarkdownSections => split_by_headers(content)
+            .into_iter()
+            .filter_map(|mut message| {
+                let text = normalize_extracted_text(input, &message.text)?;
+                message.role = input.source.clone();
+                message.text = text;
+                message.content_type = content_type.clone();
+                Some(message)
+            })
+            .collect(),
+        DecodeFormat::Jsonl | DecodeFormat::Json => Vec::new(),
+    }
+}
+
+fn dry_run_markdown_content(
+    input: &InputDefinition,
+    content: &str,
+    report: &mut InputDryRunReport,
+) {
+    report.records_read = if content.trim().is_empty() { 0 } else { 1 };
+    report.messages = parse_markdown_content(input, content);
 }
 
 fn dry_run_jsonl_content(input: &InputDefinition, content: &str, report: &mut InputDryRunReport) {
@@ -1332,6 +1393,9 @@ pub fn dry_run_input_definition(
     match input.decode.format {
         DecodeFormat::Jsonl => dry_run_jsonl_content(input, &content, &mut report),
         DecodeFormat::Json => dry_run_json_content(input, &content, &mut report),
+        DecodeFormat::Markdown | DecodeFormat::MarkdownSections => {
+            dry_run_markdown_content(input, &content, &mut report);
+        }
     }
     report.records_emitted = report.messages.len();
     Ok(report)
@@ -1366,6 +1430,9 @@ pub(crate) fn parse_input_file_with_definition(
     let (messages, project, data_errors) = match input.decode.format {
         DecodeFormat::Jsonl => parse_generic_jsonl_content(input, &content),
         DecodeFormat::Json => parse_generic_json_content(input, &content),
+        DecodeFormat::Markdown | DecodeFormat::MarkdownSections => {
+            (parse_markdown_content(input, &content), None, 0)
+        }
     };
 
     if data_errors > 0 {
@@ -1381,7 +1448,12 @@ pub(crate) fn parse_input_file_with_definition(
         source: input.source.clone(),
         source_path: path_str,
         hash,
-        project: project.or_else(|| Some("unknown".to_string())),
+        project: match input.decode.format {
+            DecodeFormat::Markdown | DecodeFormat::MarkdownSections => project,
+            DecodeFormat::Jsonl | DecodeFormat::Json => {
+                project.or_else(|| Some("unknown".to_string()))
+            }
+        },
         messages,
     })
 }
@@ -1650,7 +1722,7 @@ mod tests {
                 include_when: Vec::new(),
                 exclude_when: Vec::new(),
             },
-            mapping: crate::input_config::MapConfig {
+            mapping: Some(crate::input_config::MapConfig {
                 role: "$.role".into(),
                 uuid: Some("$.uuid".into()),
                 timestamp: Some("$.timestamp".into()),
@@ -1659,8 +1731,8 @@ mod tests {
                 role_aliases: [("human".to_string(), "user".to_string())]
                     .into_iter()
                     .collect(),
-            },
-            content: crate::input_config::ContentConfig {
+            }),
+            content: Some(crate::input_config::ContentConfig {
                 selector: "$.content".into(),
                 string: content_string.into(),
                 blocks: content_blocks.map(str::to_string),
@@ -1669,7 +1741,7 @@ mod tests {
                 include_when: Vec::new(),
                 exclude_when: Vec::new(),
                 default_content_type: "text".into(),
-            },
+            }),
             text: crate::input_config::TextConfig::default(),
         }
     }
@@ -1847,7 +1919,7 @@ not-json
             Some("$.content.blocks[*]"),
             Some("$.type"),
         );
-        input.content.exclude_when = vec![predicate(
+        input.content.as_mut().unwrap().exclude_when = vec![predicate(
             "$.type",
             crate::input_config::PredicateOp::Eq,
             Some(string_value("think")),
@@ -2058,6 +2130,98 @@ remove = [
         assert_eq!(files[0].messages[0].text, "from json");
         assert_eq!(files[0].messages[1].text, "json answer");
 
+        Ok(())
+    }
+
+    #[test]
+    fn test_generic_markdown_input_indexes_whole_document() -> miette::Result<()> {
+        let dir = tempdir().into_diagnostic()?;
+        let docs = dir.path().join("docs");
+        fs::create_dir(&docs).into_diagnostic()?;
+        fs::write(
+            docs.join("ke.md"),
+            "# Knowledge Entry\n\nDeclarative markdown source signal.",
+        )
+        .into_diagnostic()?;
+        fs::write(
+            dir.path().join("docs.inputs.toml"),
+            format!(
+                r#"version = 1
+
+[[inputs]]
+id = "ke-docs"
+source = "ke"
+
+[inputs.discover]
+roots = ["{}"]
+include = ["**/*.md"]
+
+[inputs.decode]
+format = "markdown"
+"#,
+                docs.display()
+            ),
+        )
+        .into_diagnostic()?;
+
+        let input_config = crate::input_config::InputConfig::load_from_dir(dir.path())?;
+        let files = parse_input_definitions(&input_config.active_inputs(), &HashMap::new());
+
+        assert_eq!(files.len(), 1);
+        assert_eq!(files[0].source, "ke");
+        assert_eq!(files[0].project, None);
+        assert_eq!(files[0].messages.len(), 1);
+        assert_eq!(files[0].messages[0].role, "ke");
+        assert!(files[0].messages[0].text.contains("markdown source signal"));
+        Ok(())
+    }
+
+    #[test]
+    fn test_generic_markdown_sections_input_splits_headers() -> miette::Result<()> {
+        let dir = tempdir().into_diagnostic()?;
+        let docs = dir.path().join("plans");
+        fs::create_dir(&docs).into_diagnostic()?;
+        fs::write(
+            docs.join("plan.md"),
+            "# Plan\n\nIntro\n\n## First\n\nFirst body\n\n## Second\n\nSecond body",
+        )
+        .into_diagnostic()?;
+        fs::write(
+            dir.path().join("plans.inputs.toml"),
+            format!(
+                r#"version = 1
+
+[[inputs]]
+id = "plans"
+source = "plan"
+
+[inputs.discover]
+roots = ["{}"]
+include = ["**/*.md"]
+
+[inputs.decode]
+format = "markdown_sections"
+"#,
+                docs.display()
+            ),
+        )
+        .into_diagnostic()?;
+
+        let input_config = crate::input_config::InputConfig::load_from_dir(dir.path())?;
+        let files = parse_input_definitions(&input_config.active_inputs(), &HashMap::new());
+
+        assert_eq!(files.len(), 1);
+        assert_eq!(files[0].source, "plan");
+        assert_eq!(files[0].messages.len(), 3);
+        assert!(files[0].messages[0].text.contains("Intro"));
+        assert!(files[0].messages[1].text.starts_with("## First"));
+        assert!(files[0].messages[2].text.starts_with("## Second"));
+        assert!(
+            files[0]
+                .messages
+                .iter()
+                .all(|message| message.role == "plan")
+        );
         Ok(())
     }
 

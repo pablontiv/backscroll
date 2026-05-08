@@ -297,6 +297,11 @@ fn sync_fixture(session_dir: &std::path::Path, db_path: &std::path::Path) {
         r#"{"type": "user", "message": {"role": "user", "content": "deploy kubernetes cluster"}, "uuid": "r1", "timestamp": "100"}"#,
     )
     .unwrap();
+    fs::write(
+        session_dir.join("session-2.jsonl"),
+        r#"{"type": "assistant", "message": {"role": "assistant", "content": "observe prometheus metrics"}, "uuid": "r2", "timestamp": "101"}"#,
+    )
+    .unwrap();
     write_claude_input_manifest(session_dir, session_dir);
 
     Command::cargo_bin("backscroll")
@@ -941,6 +946,287 @@ fn test_search_source_flag_cli() {
         .assert()
         .success()
         .stdout(predicate::str::contains("No se encontraron resultados"));
+}
+
+#[test]
+fn test_cli_sync_indexes_plan_from_declarative_markdown_sections_input() {
+    let work_dir = tempdir().unwrap();
+    let plans_dir = work_dir.path().join("declared-plans");
+    fs::create_dir(&plans_dir).unwrap();
+    fs::write(
+        plans_dir.join("roadmap.md"),
+        "# Roadmap\n\nIntro\n\n## Declarative Plan Section\n\nunique-plan-input-sentinel",
+    )
+    .unwrap();
+    fs::write(
+        work_dir.path().join("plans.inputs.toml"),
+        format!(
+            r#"version = 1
+
+[[inputs]]
+id = "plans"
+source = "plan"
+active = true
+
+[inputs.discover]
+roots = ["{}"]
+include = ["**/*.md"]
+
+[inputs.decode]
+format = "markdown_sections"
+"#,
+            plans_dir.display()
+        ),
+    )
+    .unwrap();
+
+    let db_dir = tempdir().unwrap();
+    let db_path = db_dir.path().join("declared_plan.db");
+    let fake_home = tempdir().unwrap();
+
+    Command::cargo_bin("backscroll")
+        .unwrap()
+        .current_dir(work_dir.path())
+        .arg("sync")
+        .env("BACKSCROLL_DATABASE_PATH", db_path.to_str().unwrap())
+        .env("HOME", fake_home.path().to_str().unwrap())
+        .assert()
+        .success();
+
+    Command::cargo_bin("backscroll")
+        .unwrap()
+        .current_dir(work_dir.path())
+        .arg("search")
+        .arg("unique-plan-input-sentinel")
+        .arg("--source")
+        .arg("plans")
+        .arg("--all-projects")
+        .env("BACKSCROLL_DATABASE_PATH", db_path.to_str().unwrap())
+        .env("HOME", fake_home.path().to_str().unwrap())
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("Declarative Plan Section"));
+}
+
+#[test]
+fn test_cli_sync_indexes_external_source_from_declarative_markdown_input() {
+    let work_dir = tempdir().unwrap();
+    let docs_dir = work_dir.path().join("knowledge");
+    fs::create_dir(&docs_dir).unwrap();
+    fs::write(
+        docs_dir.join("ke.md"),
+        "# KE\n\nunique-ke-input-sentinel from declarative input",
+    )
+    .unwrap();
+    fs::write(
+        work_dir.path().join("ke.inputs.toml"),
+        format!(
+            r#"version = 1
+
+[[inputs]]
+id = "ke-docs"
+source = "ke"
+active = true
+
+[inputs.discover]
+roots = ["{}"]
+include = ["**/*.md"]
+
+[inputs.decode]
+format = "markdown"
+"#,
+            docs_dir.display()
+        ),
+    )
+    .unwrap();
+
+    let db_dir = tempdir().unwrap();
+    let db_path = db_dir.path().join("declared_ke.db");
+    let fake_home = tempdir().unwrap();
+
+    Command::cargo_bin("backscroll")
+        .unwrap()
+        .current_dir(work_dir.path())
+        .arg("sync")
+        .env("BACKSCROLL_DATABASE_PATH", db_path.to_str().unwrap())
+        .env("HOME", fake_home.path().to_str().unwrap())
+        .assert()
+        .success();
+
+    Command::cargo_bin("backscroll")
+        .unwrap()
+        .current_dir(work_dir.path())
+        .arg("search")
+        .arg("unique-ke-input-sentinel")
+        .arg("--source")
+        .arg("ke")
+        .arg("--all-projects")
+        .env("BACKSCROLL_DATABASE_PATH", db_path.to_str().unwrap())
+        .env("HOME", fake_home.path().to_str().unwrap())
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("declarative input"));
+}
+
+#[test]
+fn test_cli_sync_does_not_use_hardcoded_claude_plans_without_input() {
+    let work_dir = tempdir().unwrap();
+    let fake_home = tempdir().unwrap();
+    let hardcoded_plans = fake_home.path().join(".claude/plans");
+    fs::create_dir_all(&hardcoded_plans).unwrap();
+    fs::write(
+        hardcoded_plans.join("implicit.md"),
+        "# Implicit\n\nunique-hardcoded-plan-sentinel",
+    )
+    .unwrap();
+    let db_dir = tempdir().unwrap();
+    let db_path = db_dir.path().join("no_implicit_plans.db");
+
+    Command::cargo_bin("backscroll")
+        .unwrap()
+        .current_dir(work_dir.path())
+        .arg("sync")
+        .env("BACKSCROLL_DATABASE_PATH", db_path.to_str().unwrap())
+        .env("HOME", fake_home.path().to_str().unwrap())
+        .assert()
+        .success();
+
+    Command::cargo_bin("backscroll")
+        .unwrap()
+        .current_dir(work_dir.path())
+        .arg("search")
+        .arg("unique-hardcoded-plan-sentinel")
+        .arg("--source")
+        .arg("plans")
+        .arg("--all-projects")
+        .env("BACKSCROLL_DATABASE_PATH", db_path.to_str().unwrap())
+        .env("HOME", fake_home.path().to_str().unwrap())
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("No se encontraron resultados"));
+}
+
+#[test]
+fn test_cli_sync_does_not_use_sources_app_config_without_input() {
+    let work_dir = tempdir().unwrap();
+    let docs_dir = work_dir.path().join("legacy-ke");
+    fs::create_dir(&docs_dir).unwrap();
+    fs::write(
+        docs_dir.join("ke.md"),
+        "# Legacy KE\n\nunique-legacy-source-config-sentinel",
+    )
+    .unwrap();
+    fs::write(
+        work_dir.path().join("backscroll.toml"),
+        format!(
+            r#"[sources]
+ke = ["{}"]
+"#,
+            docs_dir.display()
+        ),
+    )
+    .unwrap();
+    let db_dir = tempdir().unwrap();
+    let db_path = db_dir.path().join("no_legacy_sources.db");
+    let fake_home = tempdir().unwrap();
+
+    Command::cargo_bin("backscroll")
+        .unwrap()
+        .current_dir(work_dir.path())
+        .arg("sync")
+        .env("BACKSCROLL_DATABASE_PATH", db_path.to_str().unwrap())
+        .env("HOME", fake_home.path().to_str().unwrap())
+        .assert()
+        .success();
+
+    Command::cargo_bin("backscroll")
+        .unwrap()
+        .current_dir(work_dir.path())
+        .arg("search")
+        .arg("unique-legacy-source-config-sentinel")
+        .arg("--source")
+        .arg("ke")
+        .arg("--all-projects")
+        .env("BACKSCROLL_DATABASE_PATH", db_path.to_str().unwrap())
+        .env("HOME", fake_home.path().to_str().unwrap())
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("No se encontraron resultados"));
+}
+
+#[test]
+fn test_search_source_flag_cli_filters_external_source() {
+    let work_dir = tempdir().unwrap();
+    let db_dir = tempdir().unwrap();
+    let ke_dir = tempdir().unwrap();
+    let decision_dir = tempdir().unwrap();
+    let fake_home = tempdir().unwrap();
+    let db_path = db_dir.path().join("external_source_filter.db");
+
+    fs::write(
+        ke_dir.path().join("KE-CLI.md"),
+        "# KE\n\ngenericcli external source target",
+    )
+    .unwrap();
+    fs::write(
+        decision_dir.path().join("ADR-CLI.md"),
+        "# Decision\n\ngenericcli external source decoy",
+    )
+    .unwrap();
+    fs::write(
+        work_dir.path().join("docs.inputs.toml"),
+        format!(
+            r#"version = 1
+
+[[inputs]]
+id = "ke-docs"
+source = "ke"
+active = true
+
+[inputs.discover]
+roots = ["{}"]
+include = ["**/*.md"]
+
+[inputs.decode]
+format = "markdown"
+
+[[inputs]]
+id = "decisions"
+source = "decision"
+active = true
+
+[inputs.discover]
+roots = ["{}"]
+include = ["**/*.md"]
+
+[inputs.decode]
+format = "markdown"
+"#,
+            ke_dir.path().display(),
+            decision_dir.path().display()
+        ),
+    )
+    .unwrap();
+
+    let output = Command::cargo_bin("backscroll")
+        .unwrap()
+        .current_dir(work_dir.path())
+        .arg("search")
+        .arg("genericcli")
+        .arg("--source")
+        .arg("ke")
+        .arg("--all-projects")
+        .env("BACKSCROLL_DATABASE_PATH", db_path.to_str().unwrap())
+        .env("HOME", fake_home.path().to_str().unwrap())
+        .env_remove("BACKSCROLL_SESSION_DIR")
+        .env_remove("BACKSCROLL_SESSION_DIRS")
+        .output()
+        .unwrap();
+
+    assert!(output.status.success());
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    assert!(stdout.contains("KE-CLI.md"), "stdout was: {stdout}");
+    assert!(!stdout.contains("ADR-CLI.md"), "stdout was: {stdout}");
 }
 
 #[test]
@@ -2064,10 +2350,10 @@ fn test_search_content_type_filter() {
 }
 
 #[test]
-fn test_search_content_type_invalid() {
+fn test_search_content_type_allows_custom_values() {
     let session_dir = tempdir().unwrap();
     let db_dir = tempdir().unwrap();
-    let db_path = db_dir.path().join("ct_invalid.db");
+    let db_path = db_dir.path().join("ct_custom.db");
     let fake_home = tempdir().unwrap();
     sync_fixture(session_dir.path(), &db_path);
 
@@ -2076,7 +2362,7 @@ fn test_search_content_type_invalid() {
         .arg("search")
         .arg("test")
         .arg("--content-type")
-        .arg("invalid")
+        .arg("rationale")
         .arg("--all-projects")
         .env("BACKSCROLL_DATABASE_PATH", db_path.to_str().unwrap())
         .env(
@@ -2085,7 +2371,7 @@ fn test_search_content_type_invalid() {
         )
         .env("HOME", fake_home.path().to_str().unwrap())
         .assert()
-        .failure();
+        .success();
 }
 
 #[test]
