@@ -64,3 +64,4 @@ Convertir Backscroll en un motor de ingestión genérico donde toda semántica e
 | [T011](T011-make-search-filters-generic.md) | Hacer filtros downstream genéricos y consistentes |
 | [T012](T012-add-manifest-regression-tests.md) | Agregar regresión integral manifest-driven |
 | [T013](T013-evaluate-jmespath-future.md) | Evaluar JMESPath como mapping futuro |
+| [T014](T014-reconcile-roadmap-with-final-input-contract.md) | Reconciliar tasks O02 con el contrato final de inputs |

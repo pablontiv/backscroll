@@ -8,6 +8,7 @@ tipo: task
 **Contribuye a**: CE2
 
 [[blocked_by:./T001-define-generic-input-contract.md]]
+[[blocked_by:./T014-reconcile-roadmap-with-final-input-contract.md]]
 
 ## Preserva
 
