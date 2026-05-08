@@ -1,161 +1,119 @@
 ---
 name: backscroll
 description: |
-  Buscar en el historial de sesiones anteriores de Claude Code usando backscroll
-  (búsqueda full-text FTS5 con ranking BM25). Recupera contexto perdido, filtra
-  por keyword con relevancia, muestra distribución de temas, y extrae snippets
-  rankeados. Usar este skill cuando el usuario mencione sesiones anteriores,
-  pregunte "de que hablamos sobre X?", "what did we decide about", "lo discutimos
-  antes", "we talked about this", "find that conversation", "search sessions",
-  "no me acuerdo", "I forgot what we discussed", quiera encontrar algo de una
-  sesión pasada, o necesite recuperar contexto de trabajo previo — incluso si no
-  dice "backscroll". IMPORTANTE: También usar PROACTIVAMENTE antes de iniciar
-  cualquier investigación o troubleshooting — si el tema pudo haberse discutido
-  en sesiones anteriores, consultar backscroll PRIMERO para evitar re-derivar
-  conclusiones que ya existen. Señales de activación proactiva: la conversación
-  se reanuda tras compactación, el agente dice "Continuing...", se investiga un
-  problema recurrente, o se diagnostica algo que "debería funcionar". Para
-  snapshots de estado estructurado (guardar/restaurar progreso), usar
-  context-save en su lugar.
+  Use when the user asks about previous Claude/Pi sessions, prior decisions, old context, forgotten discussions, recurring bugs, project history, indexed notes/plans/knowledge, or wants to search/list/read/export Backscroll data. Also use proactively before re-investigating topics that may already exist in prior sessions.
 user-invocable: true
 allowed-tools:
   - Bash
-  - Agent
-hooks:
-  Stop:
-    - type: agent
-      prompt: "Verify that the critic agent was invoked during this skill execution and its evaluation passed. If no critic evaluation occurred and the skill produced artifacts, return {ok: false, reason: 'Critic evaluation was skipped'}. If work is still in progress, return {ok: true}."
-      timeout: 60
----
-
-**Evaluates against**: .claude/rules/operaciones.md
-disable-model-invocation: false
-argument-hint: "[query] | --topics | --recent N | --inputs | --context"
-allowed-tools: Bash
 ---
 
 # Skill: Backscroll
 
-## Contexto
-Este skill busca en las sesiones anteriores de Claude Code usando `backscroll`, un motor de búsqueda full-text con FTS5 y ranking BM25. Los resultados se ordenan por relevancia, no solo por coincidencia textual.
+Backscroll is the local indexed memory/search tool for sessions and declared knowledge inputs. It indexes only active TOML manifests (`*.inputs.toml` or `backscroll.inputs.d/*.toml`); there is no implicit Claude/Pi fallback.
 
-## Proceso
+## Gate Check
 
-### 1. Gate check
-
-Verificar que backscroll está instalado:
 ```bash
 command -v backscroll >/dev/null 2>&1
 ```
 
-Si no está disponible, informar al usuario:
-> backscroll no está instalado. Instalar con:
-> ```
-> cargo install --git https://github.com/pablontiv/backscroll.git
-> ```
-
-### 2. Aplicar según argumento
-
-Backscroll auto-sincroniza el índice y filtra por proyecto (derivado del CWD) automáticamente. La ingesta canónica requiere manifests activos `*.inputs.toml` o `backscroll.inputs.d/*.toml`; no hay fallback implícito a Claude/Pi.
-
-| Argumento | Acción |
-|-----------|--------|
-| (vacío) | Vista general: validar inputs + status del índice + sesiones recientes |
-| `[query]` | Búsqueda full-text rankeada por relevancia |
-| `--topics` | Análisis de temas frecuentes |
-| `--recent N` | Últimas N sesiones con resumen |
-| `--inputs` | Listar/validar manifests de ingesta |
-| `--context` | Query structured session-state (requiere rootline + context-save) |
-
-#### 2a. Búsqueda por keyword (camino principal)
-
+If missing:
 ```bash
-backscroll search "QUERY" --robot --max-tokens 4000
+cargo install --git https://github.com/pablontiv/backscroll.git
 ```
 
-El formato `--robot` produce output compacto tab-separated (path, score, snippet) optimizado para consumo por LLM. Presentar resultados al usuario agrupados por sesión, mostrando:
-- Ruta de la sesión y score de relevancia
-- Snippets con contexto alrededor de la coincidencia
+## First Check in Any Project
 
-Si no devuelve resultados, intentar en todos los proyectos:
-```bash
-backscroll search "QUERY" --all-projects --robot --max-tokens 4000
-```
-
-#### 2b. Vista general (sin argumentos)
-
-Validar manifests, mostrar status del índice y sesiones recientes:
 ```bash
 backscroll inputs validate
-backscroll status
-backscroll list --recent 5 --robot
-```
-
-Si `inputs validate` indica que no hay manifests o que son inválidos, informar que se requiere `claude.inputs.toml`, `pi.inputs.toml` o `backscroll.inputs.d/*.toml` antes de esperar resultados nuevos.
-
-#### 2c. Sesiones recientes (`--recent N`)
-
-```bash
-backscroll list --recent N --robot
-```
-
-Para contenido de una sesión específica:
-```bash
-backscroll read PATH_TO_SESSION
-```
-
-#### 2d. Temas (`--topics`)
-
-```bash
-backscroll topics --all-projects --robot
-```
-
-Para profundizar en un tema específico:
-```bash
-backscroll search "TOPIC" --all-projects --robot --max-tokens 4000
-```
-
-Analizar los resultados y sintetizar una distribución de temas discutidos. Agrupar por proyecto y tema frecuente.
-
-#### 2e. Inputs (`--inputs`)
-
-```bash
 backscroll inputs list
-backscroll inputs validate
+backscroll status
 ```
 
-Para probar un archivo sin escribir en SQLite:
+If validation fails or no manifests are listed, explain that current ingestion requires manifests such as `claude.inputs.toml`, `pi.inputs.toml`, or files under `backscroll.inputs.d/*.toml`.
+
+## Main Uses
+
+| Need | Command |
+|---|---|
+| Search current project | `backscroll search "QUERY" --robot --max-tokens 4000` |
+| Search all projects | `backscroll search "QUERY" --all-projects --robot --max-tokens 4000` |
+| Recent sessions | `backscroll list --recent 10 --robot` |
+| Read one indexed input file | `backscroll read PATH` |
+| Resume target | `backscroll resume "QUERY" --all-projects --robot` |
+| Topics | `backscroll topics --all-projects --robot` |
+| Insights | `backscroll insights --all-projects --robot` |
+| Export results | `backscroll export "QUERY" --format markdown --all-projects` |
+| Validate DB | `backscroll validate` |
+
+Prefer `--robot` for LLM-readable tab-separated output. Use `--json` when machine-readable output is needed.
+
+## Inputs / Dry Run
+
 ```bash
+backscroll inputs validate
+backscroll inputs list --json
 backscroll inputs test --input INPUT_ID --file PATH --json
 ```
 
-#### 2f. Contexto (`--context`)
+Use `inputs test` before blaming search: it shows normalized messages, dropped records/blocks, and drop reasons without writing SQLite.
 
-Requiere rootline y context-save. Ver [ref-context-mode.md](ref-context-mode.md) para el procedimiento completo de queries rootline (session-state, líneas activas, investigaciones, roadmap, teorías).
+## Sync / Reindex
 
-## Modos de uso
+```bash
+backscroll sync
+backscroll reindex
+```
 
-| Comando | Descripción |
-|---------|-------------|
-| `/backscroll` | Status del índice + sesiones recientes |
-| `/backscroll [query]` | Búsqueda full-text con ranking BM25 |
-| `/backscroll --topics` | Distribución de temas discutidos |
-| `/backscroll --recent N` | Últimas N sesiones con resumen limpio |
-| `/backscroll --inputs` | Validar/listar manifests de ingesta |
-| `/backscroll --context` | Contexto estructurado via rootline (requiere /context-save) |
+`sync` is incremental by file hash. `reindex` clears hashes and reprocesses manifest-declared inputs. `--no-plans` is legacy/no-op for canonical ingestion; plans are indexed only when declared as inputs.
 
-## Cuándo usar
+## Search Filters
 
-- **Recuperar contexto**: "¿Qué discutimos sobre X en sesiones anteriores?"
-- **Continuidad**: Antes de retomar una línea, buscar qué se avanzó
-- **Conexiones**: Descubrir que un tema se discutió en múltiples sesiones
-- **Al inicio de sesión**: Si el estado no es suficiente para recuperar contexto
+Backscroll now supports generic sources and filters:
 
-## Notas
+```bash
+backscroll search "QUERY" --source sessions --role human --content-type text
+backscroll search "QUERY" --source ke --all-projects
+backscroll search "QUERY" --source decision --after 2026-03-01 --before 2026-04-01
+backscroll search "QUERY" --lexical-only
+```
 
-- Solo lee datos — no modifica ningún archivo
-- Auto-sync incremental (SHA-256 dedup) en cada query — siempre sobre manifests activos
-- Por defecto filtra por proyecto del CWD; `--all-projects` para buscar en todo
-- Los resultados se rankean por relevancia (BM25), no solo coincidencia textual
-- Ruido Claude, exclusión de subagents y blocks `think` deben vivir en TOML, no en fallback implícito
-- `--source sessions` filtra conversaciones (`source = "session"`); otros sources como `plan`, `ke` o `decision` también son exactos
+Notes:
+- `--source sessions` maps to `source = "session"`; `plans` maps to `plan`.
+- Other sources are exact: `plan`, `ke`, `decision`, `memory`, `rule`, `spec`, `backlog`, etc.
+- `--role human` is a query alias for `user`; other roles pass through exactly.
+- `--content-type` is exact and generic, not Claude-only.
+- BM25 and hybrid/vector paths apply filters consistently.
+
+## Canonical Input Model
+
+Current canonical ingestion is TOML-only:
+
+- Claude/Pi conversations emit `source = "session"`.
+- Claude subagents are excluded by TOML discovery globs.
+- Claude noise removal lives in `[inputs.text].remove`.
+- Pi `think` blocks are excluded by TOML `content.exclude_when`.
+- Plans and markdown knowledge sources use `decode.format = "markdown"` or `"markdown_sections"`.
+- App config (`backscroll.toml`) does not provide canonical ingestion paths.
+
+## Slash Command Modes
+
+| Invocation | Action |
+|---|---|
+| `/backscroll` | `inputs validate`, `status`, recent sessions |
+| `/backscroll QUERY` | Search current project, retry all-projects if empty |
+| `/backscroll --topics` | Topic distribution, then optionally search a topic |
+| `/backscroll --recent N` | Recent session list |
+| `/backscroll --inputs` | Validate/list manifests |
+| `/backscroll --context` | Use `ref-context-mode.md` rootline/context-save workflow |
+
+## Context Mode
+
+For `/backscroll --context`, read [ref-context-mode.md](ref-context-mode.md). It combines Backscroll with Rootline/context-save session-state queries.
+
+## Common Mistakes
+
+- Do not assume Claude/Pi sessions are indexed without an active manifest.
+- Do not use `session_dirs`, `BACKSCROLL_SESSION_DIR`, or `--path` as canonical ingestion.
+- If search is empty, check `backscroll inputs validate`, then run `inputs test` on a sample file.
+- Use `--all-projects` when looking for cross-project history.

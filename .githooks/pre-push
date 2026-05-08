@@ -73,18 +73,19 @@ if [ -d "$SKILLS_SRC" ]; then
   echo "backscroll: synced skills → $SKILLS_DEST"
 fi
 
-# Rebuild binary
+# Rebuild binary into user PATH
+USER_BIN_DIR="${XDG_BIN_HOME:-$HOME/.local/bin}"
 echo "Rebuilding backscroll..."
 if cargo build --release --manifest-path "$REPO_ROOT/Cargo.toml" 2>&1; then
-  cp "$REPO_ROOT/target/release/backscroll" /usr/local/bin/backscroll
-  echo "backscroll rebuilt: $(backscroll --version 2>/dev/null || echo 'installed')"
+  mkdir -p "$USER_BIN_DIR"
+  cp "$REPO_ROOT/target/release/backscroll" "$USER_BIN_DIR/backscroll"
+  chmod +x "$USER_BIN_DIR/backscroll"
+  echo "backscroll installed to $USER_BIN_DIR/backscroll"
+  if command -v backscroll >/dev/null 2>&1; then
+    echo "backscroll available: $(backscroll --version 2>/dev/null || echo 'installed')"
+  elif [[ ":$PATH:" != *":$USER_BIN_DIR:"* ]]; then
+    echo "Warning: $USER_BIN_DIR is not in PATH; add it to use backscroll globally."
+  fi
 else
   echo "Warning: backscroll rebuild failed (push continues)"
-fi
-
-# Distribute skill to global ~/.claude/skills/
-if [ -d "$REPO_ROOT/.claude/skills/backscroll" ]; then
-  mkdir -p "$HOME/.claude/skills/backscroll"
-  cp "$REPO_ROOT/.claude/skills/backscroll/SKILL.md" "$HOME/.claude/skills/backscroll/SKILL.md"
-  echo "backscroll skill distributed to ~/.claude/skills/"
 fi
