@@ -1141,6 +1141,35 @@ mod tests {
     }
 
     #[test]
+    fn test_resolve_session_inputs_prefers_cli_over_config_inputs_and_discovery()
+    -> miette::Result<()> {
+        let config = Config {
+            session_dirs: vec!["/config/path".into()],
+            session_inputs: vec![SessionInput {
+                source: "session".into(),
+                parser: "pi".into(),
+                paths: vec!["/declarative/path".into()],
+                glob: None,
+                include_agents: false,
+                active: true,
+            }],
+            session_dirs_explicit: true,
+            ..Config::default_with_paths()
+        };
+
+        let inputs =
+            resolve_session_inputs_with_discovery(&["/cli/path".into()], &config, true, || {
+                panic!("CLI --path must not evaluate fallback discovery")
+            })?;
+
+        assert_eq!(inputs.len(), 1);
+        assert_eq!(inputs[0].paths, vec!["/cli/path".to_string()]);
+        assert_eq!(inputs[0].parser, "claude");
+        assert!(inputs[0].include_agents);
+        Ok(())
+    }
+
+    #[test]
     fn test_resolve_session_inputs_prefers_session_dirs() -> miette::Result<()> {
         let config = Config {
             session_dirs: vec!["/session/one".into(), "/session/two".into()],
@@ -1160,6 +1189,35 @@ mod tests {
         assert_eq!(inputs[0].paths, vec!["/session/one".to_string()]);
         assert_eq!(inputs[0].parser, "claude");
         assert_eq!(inputs[1].paths, vec!["/session/two".to_string()]);
+        Ok(())
+    }
+
+    #[test]
+    fn test_resolve_session_inputs_prefers_config_over_inputs_and_discovery() -> miette::Result<()>
+    {
+        let config = Config {
+            session_dirs: vec!["/config/one".into(), "/config/two".into()],
+            session_inputs: vec![SessionInput {
+                source: "session".into(),
+                parser: "pi".into(),
+                paths: vec!["/declarative/path".into()],
+                glob: None,
+                include_agents: true,
+                active: true,
+            }],
+            session_dirs_explicit: true,
+            ..Config::default_with_paths()
+        };
+
+        let inputs = resolve_session_inputs_with_discovery(&[], &config, false, || {
+            panic!("explicit config session_dirs must not evaluate fallback discovery")
+        })?;
+
+        assert_eq!(inputs.len(), 2);
+        assert_eq!(inputs[0].paths, vec!["/config/one".to_string()]);
+        assert_eq!(inputs[0].parser, "claude");
+        assert!(!inputs[0].include_agents);
+        assert_eq!(inputs[1].paths, vec!["/config/two".to_string()]);
         Ok(())
     }
 
@@ -1243,5 +1301,26 @@ mod tests {
         assert!(inputs[0].include_agents);
         assert!(inputs[0].active);
         Ok(())
+    }
+
+    #[test]
+    fn test_resolve_session_inputs_invalid_inputs_do_not_block_fallback_error() {
+        let config = Config {
+            session_inputs: vec![SessionInput {
+                source: "unsupported".into(),
+                parser: "claude".into(),
+                paths: vec!["/invalid/input".into()],
+                glob: None,
+                include_agents: false,
+                active: true,
+            }],
+            ..Config::default_with_paths()
+        };
+
+        let err = resolve_session_inputs_with_discovery(&[], &config, false, Vec::new)
+            .expect_err("invalid declarative inputs alone should not resolve session paths");
+
+        let msg = err.to_string();
+        assert!(msg.contains("No session directories found"), "{msg}");
     }
 }

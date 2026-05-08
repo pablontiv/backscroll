@@ -220,6 +220,8 @@ paths = ["{}"]
             .arg("--no-plans")
             .env("BACKSCROLL_DATABASE_PATH", db_path.to_str().unwrap())
             .env("HOME", fake_home.path().to_str().unwrap())
+            .env_remove("BACKSCROLL_SESSION_DIR")
+            .env_remove("BACKSCROLL_SESSION_DIRS")
             .assert()
             .success();
 
@@ -233,10 +235,162 @@ paths = ["{}"]
             .arg("--all-projects")
             .env("BACKSCROLL_DATABASE_PATH", db_path.to_str().unwrap())
             .env("HOME", fake_home.path().to_str().unwrap())
+            .env_remove("BACKSCROLL_SESSION_DIR")
+            .env_remove("BACKSCROLL_SESSION_DIRS")
             .assert()
             .success()
             .stdout(predicate::str::contains("fixture signal"));
     }
+}
+
+#[test]
+fn test_cli_sync_distinct_input_manifests_indexes_all_sessions() {
+    let work_dir = tempdir().unwrap();
+    let db_dir = tempdir().unwrap();
+    let db_path = db_dir.path().join("distinct_manifests.db");
+    let fake_home = tempdir().unwrap();
+    let claude_dir = tempdir().unwrap();
+    let pi_dir = tempdir().unwrap();
+
+    fs::write(
+        claude_dir.path().join("claude.jsonl"),
+        r#"{"type":"user","message":{"role":"user","content":"alpha distinct manifest"},"uuid":"dm1","timestamp":"100"}"#,
+    )
+    .unwrap();
+    fs::write(
+        pi_dir.path().join("pi.jsonl"),
+        r#"{"role":"assistant","content":"beta distinct manifest","uuid":"dm2","timestamp":"101"}"#,
+    )
+    .unwrap();
+
+    fs::create_dir(work_dir.path().join("backscroll.inputs.d")).unwrap();
+    fs::write(
+        work_dir.path().join("backscroll.inputs.d/01-claude.toml"),
+        format!(
+            r#"[[inputs]]
+source = "session"
+parser = "claude"
+paths = ["{}"]
+"#,
+            claude_dir.path().display()
+        ),
+    )
+    .unwrap();
+    fs::write(
+        work_dir.path().join("backscroll.inputs.d/02-pi.toml"),
+        format!(
+            r#"[[inputs]]
+source = "session"
+parser = "pi"
+paths = ["{}"]
+"#,
+            pi_dir.path().display()
+        ),
+    )
+    .unwrap();
+
+    Command::cargo_bin("backscroll")
+        .unwrap()
+        .current_dir(work_dir.path())
+        .arg("sync")
+        .arg("--no-plans")
+        .env("BACKSCROLL_DATABASE_PATH", db_path.to_str().unwrap())
+        .env("HOME", fake_home.path().to_str().unwrap())
+        .env_remove("BACKSCROLL_SESSION_DIR")
+        .env_remove("BACKSCROLL_SESSION_DIRS")
+        .assert()
+        .success();
+
+    for (query, expected) in [
+        ("alpha", "distinct manifest"),
+        ("beta", "distinct manifest"),
+    ] {
+        Command::cargo_bin("backscroll")
+            .unwrap()
+            .current_dir(work_dir.path())
+            .arg("search")
+            .arg(query)
+            .arg("--source")
+            .arg("sessions")
+            .arg("--all-projects")
+            .env("BACKSCROLL_DATABASE_PATH", db_path.to_str().unwrap())
+            .env("HOME", fake_home.path().to_str().unwrap())
+            .env_remove("BACKSCROLL_SESSION_DIR")
+            .env_remove("BACKSCROLL_SESSION_DIRS")
+            .assert()
+            .success()
+            .stdout(predicate::str::contains(expected));
+    }
+}
+
+#[test]
+fn test_cli_sync_invalid_input_manifest_fails_cleanly() {
+    let work_dir = tempdir().unwrap();
+    let db_dir = tempdir().unwrap();
+    let db_path = db_dir.path().join("invalid_manifest.db");
+    let fake_home = tempdir().unwrap();
+
+    fs::write(
+        work_dir.path().join("backscroll.inputs.toml"),
+        "[[inputs]\n",
+    )
+    .unwrap();
+
+    Command::cargo_bin("backscroll")
+        .unwrap()
+        .current_dir(work_dir.path())
+        .arg("sync")
+        .arg("--no-plans")
+        .env("BACKSCROLL_DATABASE_PATH", db_path.to_str().unwrap())
+        .env("HOME", fake_home.path().to_str().unwrap())
+        .env_remove("BACKSCROLL_SESSION_DIR")
+        .env_remove("BACKSCROLL_SESSION_DIRS")
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("No session directories found"));
+}
+
+#[test]
+fn test_cli_sync_skips_invalid_session_file_and_indexes_valid_neighbor() {
+    let session_dir = tempdir().unwrap();
+    let db_dir = tempdir().unwrap();
+    let db_path = db_dir.path().join("invalid_file_neighbor.db");
+    let fake_home = tempdir().unwrap();
+
+    fs::write(session_dir.path().join("invalid.jsonl"), b"\xFF\xFE\xFD").unwrap();
+    fs::write(
+        session_dir.path().join("valid.jsonl"),
+        r#"{"type":"user","message":{"role":"user","content":"valid neighbor survives"},"uuid":"iv1","timestamp":"100"}"#,
+    )
+    .unwrap();
+
+    Command::cargo_bin("backscroll")
+        .unwrap()
+        .arg("sync")
+        .arg("--path")
+        .arg(session_dir.path().to_str().unwrap())
+        .arg("--no-plans")
+        .env("BACKSCROLL_DATABASE_PATH", db_path.to_str().unwrap())
+        .env("HOME", fake_home.path().to_str().unwrap())
+        .assert()
+        .success();
+
+    Command::cargo_bin("backscroll")
+        .unwrap()
+        .arg("search")
+        .arg("neighbor")
+        .arg("--source")
+        .arg("sessions")
+        .arg("--all-projects")
+        .env("BACKSCROLL_DATABASE_PATH", db_path.to_str().unwrap())
+        .env(
+            "BACKSCROLL_SESSION_DIR",
+            session_dir.path().to_str().unwrap(),
+        )
+        .env("HOME", fake_home.path().to_str().unwrap())
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("survives"));
 }
 
 #[test]
