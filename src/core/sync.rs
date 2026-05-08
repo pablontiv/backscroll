@@ -1,7 +1,10 @@
 use crate::core::models::{MessageContent, SessionRecord};
 use crate::core::session_inputs::claude;
 use crate::core::{ParsedFile, ParsedMessage};
-use crate::input_config::{DecodeFormat, DiscoverConfig, InputDefinition, SessionInput};
+use crate::input_config::{
+    DecodeFormat, DiscoverConfig, InputDefinition, Predicate, PredicateOp, PredicateValue,
+    RemoveKind, SessionInput,
+};
 use globset::{Glob, GlobSet, GlobSetBuilder};
 use miette::IntoDiagnostic;
 use regex::Regex;
@@ -590,9 +593,152 @@ fn selected_strings(path: &JsonPath, value: &Value) -> Vec<String> {
         .collect()
 }
 
+fn predicate_value_to_json(value: &PredicateValue) -> Option<Value> {
+    match value {
+        PredicateValue::String(value) => Some(Value::String(value.clone())),
+        PredicateValue::Bool(value) => Some(Value::Bool(*value)),
+        PredicateValue::Integer(value) => Some(Value::Number((*value).into())),
+        PredicateValue::Float(value) => serde_json::Number::from_f64(*value).map(Value::Number),
+        PredicateValue::Array(values) => values
+            .iter()
+            .map(predicate_value_to_json)
+            .collect::<Option<Vec<_>>>()
+            .map(Value::Array),
+    }
+}
+
+fn predicate_matches(input_id: &str, predicate: &Predicate, subject: &Value, field: &str) -> bool {
+    let Some(path) = parse_jsonpath(&predicate.selector, input_id, field) else {
+        return false;
+    };
+    let nodes = query_nodes(&path, subject);
+
+    match predicate.op {
+        PredicateOp::Exists => !nodes.is_empty(),
+        PredicateOp::Missing => nodes.is_empty(),
+        PredicateOp::Eq => predicate.value.as_ref().is_some_and(|expected| {
+            predicate_value_to_json(expected)
+                .as_ref()
+                .is_some_and(|expected| nodes.contains(&expected))
+        }),
+        PredicateOp::Ne => predicate.value.as_ref().is_none_or(|expected| {
+            predicate_value_to_json(expected)
+                .as_ref()
+                .is_none_or(|expected| {
+                    nodes.is_empty() || nodes.iter().all(|value| *value != expected)
+                })
+        }),
+        PredicateOp::In => {
+            let Some(PredicateValue::Array(values)) = predicate.value.as_ref() else {
+                tracing::warn!(
+                    "Input '{}' predicate '{}' uses op='in' without an array value",
+                    input_id,
+                    field
+                );
+                return false;
+            };
+            let expected_values: Vec<Value> =
+                values.iter().filter_map(predicate_value_to_json).collect();
+            nodes
+                .iter()
+                .any(|value| expected_values.iter().any(|expected| *value == expected))
+        }
+    }
+}
+
+fn predicates_match_all(
+    input_id: &str,
+    predicates: &[Predicate],
+    subject: &Value,
+    field: &str,
+) -> bool {
+    predicates
+        .iter()
+        .all(|predicate| predicate_matches(input_id, predicate, subject, field))
+}
+
+fn predicates_match_any(
+    input_id: &str,
+    predicates: &[Predicate],
+    subject: &Value,
+    field: &str,
+) -> bool {
+    predicates
+        .iter()
+        .any(|predicate| predicate_matches(input_id, predicate, subject, field))
+}
+
+fn record_passes_predicates(input: &InputDefinition, record: &Value, ordinal: usize) -> bool {
+    if !predicates_match_all(
+        &input.id,
+        &input.record.include_when,
+        record,
+        "record.include_when",
+    ) {
+        tracing::debug!(
+            input_id = %input.id,
+            ordinal,
+            "Dropping record because record.include_when did not match"
+        );
+        return false;
+    }
+    if predicates_match_any(
+        &input.id,
+        &input.record.exclude_when,
+        record,
+        "record.exclude_when",
+    ) {
+        tracing::debug!(
+            input_id = %input.id,
+            ordinal,
+            "Dropping record because record.exclude_when matched"
+        );
+        return false;
+    }
+    true
+}
+
+fn content_block_passes_predicates(
+    input: &InputDefinition,
+    block: &Value,
+    ordinal: usize,
+    block_index: usize,
+) -> bool {
+    if !predicates_match_all(
+        &input.id,
+        &input.content.include_when,
+        block,
+        "content.include_when",
+    ) {
+        tracing::debug!(
+            input_id = %input.id,
+            ordinal,
+            block_index,
+            "Dropping content block because content.include_when did not match"
+        );
+        return false;
+    }
+    if predicates_match_any(
+        &input.id,
+        &input.content.exclude_when,
+        block,
+        "content.exclude_when",
+    ) {
+        tracing::debug!(
+            input_id = %input.id,
+            ordinal,
+            block_index,
+            "Dropping content block because content.exclude_when matched"
+        );
+        return false;
+    }
+    true
+}
+
 fn extract_content_from_record(
     input: &InputDefinition,
     record: &Value,
+    ordinal: usize,
 ) -> Option<(String, String)> {
     let content_selector = parse_jsonpath(&input.content.selector, &input.id, "content.selector")?;
     let content_nodes = query_nodes(&content_selector, record);
@@ -615,7 +761,10 @@ fn extract_content_from_record(
                     parse_jsonpath(selector, &input.id, "content.content_type")
                 });
 
-                for block in block_nodes {
+                for (block_index, block) in block_nodes.into_iter().enumerate() {
+                    if !content_block_passes_predicates(input, block, ordinal, block_index) {
+                        continue;
+                    }
                     if let Some(path) = &block_text_path {
                         parts.extend(selected_strings(path, block));
                     } else if let Some(text) = value_to_field_string(block) {
@@ -663,11 +812,43 @@ fn extract_content_from_record(
     ))
 }
 
-fn normalize_extracted_text(_input: &InputDefinition, text: &str) -> Option<String> {
-    if text.is_empty() {
+fn normalize_extracted_text(input: &InputDefinition, text: &str) -> Option<String> {
+    let mut normalized = text.to_string();
+
+    for rule in &input.text.remove {
+        match rule.kind {
+            RemoveKind::Regex => match Regex::new(&rule.pattern) {
+                Ok(regex) => {
+                    normalized = regex.replace_all(&normalized, "").to_string();
+                }
+                Err(err) => tracing::warn!(
+                    input_id = %input.id,
+                    pattern = %rule.pattern,
+                    "Ignoring invalid text.remove regex: {}",
+                    err
+                ),
+            },
+            RemoveKind::Prefix => {
+                if let Some(stripped) = normalized.strip_prefix(&rule.pattern) {
+                    normalized = stripped.to_string();
+                }
+            }
+            RemoveKind::Suffix => {
+                if let Some(stripped) = normalized.strip_suffix(&rule.pattern) {
+                    normalized = stripped.to_string();
+                }
+            }
+        }
+    }
+
+    if input.text.trim {
+        normalized = normalized.trim().to_string();
+    }
+
+    if input.text.drop_empty && normalized.is_empty() {
         None
     } else {
-        Some(text.to_string())
+        Some(normalized)
     }
 }
 
@@ -676,15 +857,37 @@ fn parsed_message_from_record(
     record: &Value,
     ordinal: usize,
 ) -> Option<ParsedMessage> {
-    let raw_role = select_first_string(&input.mapping.role, record, &input.id, "map.role")?;
+    let Some(raw_role) = select_first_string(&input.mapping.role, record, &input.id, "map.role")
+    else {
+        tracing::debug!(
+            input_id = %input.id,
+            ordinal,
+            "Dropping message because map.role did not yield a scalar value"
+        );
+        return None;
+    };
     let role = input
         .mapping
         .role_aliases
         .get(&raw_role)
         .cloned()
         .unwrap_or(raw_role);
-    let (raw_text, content_type) = extract_content_from_record(input, record)?;
-    let text = normalize_extracted_text(input, &raw_text)?;
+    let Some((raw_text, content_type)) = extract_content_from_record(input, record, ordinal) else {
+        tracing::debug!(
+            input_id = %input.id,
+            ordinal,
+            "Dropping message because content selectors did not yield text"
+        );
+        return None;
+    };
+    let Some(text) = normalize_extracted_text(input, &raw_text) else {
+        tracing::debug!(
+            input_id = %input.id,
+            ordinal,
+            "Dropping message because text normalization produced an empty message"
+        );
+        return None;
+    };
 
     Some(ParsedMessage {
         role,
@@ -740,6 +943,9 @@ fn parse_generic_jsonl_content(
             continue;
         };
         for record in records {
+            if !record_passes_predicates(input, record, line_number) {
+                continue;
+            }
             if project.is_none() {
                 project = select_optional_string(
                     input.mapping.project.as_ref(),
@@ -781,6 +987,9 @@ fn parse_generic_json_content(
     let mut project = None;
     let mut data_errors = 0;
     for (ordinal, record) in records.into_iter().enumerate() {
+        if !record_passes_predicates(input, record, ordinal) {
+            continue;
+        }
         if project.is_none() {
             project = select_optional_string(
                 input.mapping.project.as_ref(),
@@ -1132,6 +1341,26 @@ mod tests {
         }
     }
 
+    fn predicate(
+        selector: &str,
+        op: crate::input_config::PredicateOp,
+        value: Option<crate::input_config::PredicateValue>,
+    ) -> crate::input_config::Predicate {
+        crate::input_config::Predicate {
+            selector: selector.into(),
+            op,
+            value,
+        }
+    }
+
+    fn string_value(value: &str) -> crate::input_config::PredicateValue {
+        crate::input_config::PredicateValue::String(value.into())
+    }
+
+    fn bool_value(value: bool) -> crate::input_config::PredicateValue {
+        crate::input_config::PredicateValue::Bool(value)
+    }
+
     #[test]
     fn test_generic_jsonl_input_parses_string_content_role_aliases_and_defaults()
     -> miette::Result<()> {
@@ -1162,7 +1391,7 @@ not-json
         assert_eq!(files[0].project.as_deref(), Some("project-a"));
         assert_eq!(files[0].messages.len(), 2);
         assert_eq!(files[0].messages[0].role, "user");
-        assert_eq!(files[0].messages[0].text, " hello from jsonl ");
+        assert_eq!(files[0].messages[0].text, "hello from jsonl");
         assert_eq!(files[0].messages[0].uuid.as_deref(), Some("u1"));
         assert_eq!(
             files[0].messages[0].timestamp.as_deref(),
@@ -1204,6 +1433,206 @@ not-json
         assert_eq!(files[0].messages[1].text, "array text\nfn main() {}");
         assert_eq!(files[0].messages[1].content_type, "code");
 
+        Ok(())
+    }
+
+    #[test]
+    fn test_generic_predicates_filter_records_with_all_mvp_operators() -> miette::Result<()> {
+        let dir = tempdir().into_diagnostic()?;
+        fs::write(
+            dir.path().join("predicate-records.jsonl"),
+            r#"{"role":"user","type":"user","status":"active","archived":false,"required":"yes","drop":false,"content":"keep"}
+{"role":"user","type":"summary","status":"active","archived":false,"required":"yes","content":"drop in"}
+{"role":"user","type":"user","status":"inactive","archived":false,"required":"yes","content":"drop eq"}
+{"role":"user","type":"user","status":"active","archived":true,"required":"yes","content":"drop ne"}
+{"role":"user","type":"user","status":"active","archived":false,"content":"drop exists"}
+{"role":"user","type":"user","status":"active","archived":false,"required":"yes","deleted":true,"content":"drop missing"}
+{"role":"user","type":"user","status":"active","archived":false,"required":"yes","drop":true,"content":"drop exclude"}"#,
+        )
+        .into_diagnostic()?;
+
+        let mut input = generic_input_definition(
+            "predicate-records",
+            dir.path(),
+            crate::input_config::DecodeFormat::Jsonl,
+            "$",
+            "$",
+            None,
+            None,
+        );
+        input.record.include_when = vec![
+            predicate(
+                "$.type",
+                crate::input_config::PredicateOp::In,
+                Some(crate::input_config::PredicateValue::Array(vec![
+                    string_value("user"),
+                    string_value("assistant"),
+                ])),
+            ),
+            predicate(
+                "$.status",
+                crate::input_config::PredicateOp::Eq,
+                Some(string_value("active")),
+            ),
+            predicate(
+                "$.archived",
+                crate::input_config::PredicateOp::Ne,
+                Some(bool_value(true)),
+            ),
+            predicate("$.required", crate::input_config::PredicateOp::Exists, None),
+            predicate("$.deleted", crate::input_config::PredicateOp::Missing, None),
+        ];
+        input.record.exclude_when = vec![predicate(
+            "$.drop",
+            crate::input_config::PredicateOp::Eq,
+            Some(bool_value(true)),
+        )];
+
+        let files = parse_input_definitions(&[input], &HashMap::new());
+
+        assert_eq!(files.len(), 1);
+        assert_eq!(files[0].messages.len(), 1);
+        assert_eq!(files[0].messages[0].text, "keep");
+        Ok(())
+    }
+
+    #[test]
+    fn test_generic_content_predicates_can_exclude_pi_think_blocks() -> miette::Result<()> {
+        let dir = tempdir().into_diagnostic()?;
+        fs::write(
+            dir.path().join("pi-blocks.jsonl"),
+            r#"{"role":"assistant","content":{"blocks":[{"type":"text","text":"visible"},{"type":"think","text":"hidden reasoning"},{"type":"code","text":"let x = 1;"}]}}"#,
+        )
+        .into_diagnostic()?;
+
+        let mut input = generic_input_definition(
+            "pi-blocks",
+            dir.path(),
+            crate::input_config::DecodeFormat::Jsonl,
+            "$",
+            "$.text",
+            Some("$.content.blocks[*]"),
+            Some("$.type"),
+        );
+        input.content.exclude_when = vec![predicate(
+            "$.type",
+            crate::input_config::PredicateOp::Eq,
+            Some(string_value("think")),
+        )];
+
+        let files = parse_input_definitions(&[input], &HashMap::new());
+
+        assert_eq!(files.len(), 1);
+        assert_eq!(files[0].messages.len(), 1);
+        assert_eq!(files[0].messages[0].text, "visible\nlet x = 1;");
+        assert_eq!(files[0].messages[0].content_type, "code");
+        Ok(())
+    }
+
+    #[test]
+    fn test_generic_text_normalization_applies_each_remove_kind_trim_and_drop_empty()
+    -> miette::Result<()> {
+        let dir = tempdir().into_diagnostic()?;
+        fs::write(
+            dir.path().join("normalize.jsonl"),
+            r#"{"role":"user","content":"PREFIX:  keep  <noise>drop</noise>  :SUFFIX"}
+{"role":"user","content":"PREFIX:<noise>drop</noise>:SUFFIX"}"#,
+        )
+        .into_diagnostic()?;
+
+        let mut input = generic_input_definition(
+            "normalize",
+            dir.path(),
+            crate::input_config::DecodeFormat::Jsonl,
+            "$",
+            "$",
+            None,
+            None,
+        );
+        input.text.remove = vec![
+            crate::input_config::RemoveRule {
+                kind: crate::input_config::RemoveKind::Regex,
+                pattern: r"<noise>[\s\S]*?</noise>".into(),
+            },
+            crate::input_config::RemoveRule {
+                kind: crate::input_config::RemoveKind::Prefix,
+                pattern: "PREFIX:".into(),
+            },
+            crate::input_config::RemoveRule {
+                kind: crate::input_config::RemoveKind::Suffix,
+                pattern: ":SUFFIX".into(),
+            },
+        ];
+
+        let files = parse_input_definitions(&[input], &HashMap::new());
+
+        assert_eq!(files.len(), 1);
+        assert_eq!(files[0].messages.len(), 1);
+        assert_eq!(files[0].messages[0].text, "keep");
+        Ok(())
+    }
+
+    #[test]
+    fn test_claude_noise_can_be_expressed_with_manifest_predicates_and_text_remove()
+    -> miette::Result<()> {
+        let dir = tempdir().into_diagnostic()?;
+        let data_dir = dir.path().join("data");
+        fs::create_dir(&data_dir).into_diagnostic()?;
+        fs::write(
+            data_dir.join("claude.jsonl"),
+            r#"{"type":"user","message":{"role":"user","content":"keep <system-reminder>drop</system-reminder> text"}}
+{"type":"summary","message":{"role":"assistant","content":"drop by type"}}
+{"type":"user","isMeta":true,"message":{"role":"user","content":"drop meta"}}
+{"type":"assistant","message":{"role":"assistant","content":"<task-notification>drop all</task-notification>"}}"#,
+        )
+        .into_diagnostic()?;
+        let data_root = data_dir.to_string_lossy().replace('\\', "\\\\");
+        fs::write(
+            dir.path().join("claude.inputs.toml"),
+            format!(
+                r#"version = 1
+
+[[inputs]]
+id = "claude-test"
+source = "session"
+
+[inputs.discover]
+roots = ["{data_root}"]
+include = ["**/*.jsonl"]
+
+[inputs.decode]
+format = "jsonl"
+
+[inputs.record]
+selector = "$"
+include_when = [{{ selector = "$.type", op = "in", value = ["user", "assistant"] }}]
+exclude_when = [{{ selector = "$.isMeta", op = "eq", value = true }}]
+
+[inputs.map]
+role = "$.message.role"
+
+[inputs.content]
+selector = "$.message.content"
+string = "$"
+
+[inputs.text]
+trim = true
+drop_empty = true
+remove = [
+  {{ kind = "regex", pattern = "<system-reminder>[\\s\\S]*?</system-reminder>" }},
+  {{ kind = "regex", pattern = "<task-notification>[\\s\\S]*?</task-notification>" }},
+]
+"#
+            ),
+        )
+        .into_diagnostic()?;
+
+        let input_config = crate::input_config::InputConfig::load_from_dir(dir.path())?;
+        let files = parse_input_definitions(&input_config.active_inputs(), &HashMap::new());
+
+        assert_eq!(files.len(), 1);
+        assert_eq!(files[0].messages.len(), 1);
+        assert_eq!(files[0].messages[0].text, "keep  text");
         Ok(())
     }
 

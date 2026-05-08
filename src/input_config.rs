@@ -693,6 +693,52 @@ impl InputDefinition {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use miette::IntoDiagnostic;
+
+    #[test]
+    fn rejects_unknown_predicate_operator_with_clear_error() -> miette::Result<()> {
+        let dir = tempfile::tempdir().into_diagnostic()?;
+        let root = dir.path().join("data");
+        fs::create_dir(&root).into_diagnostic()?;
+        fs::write(root.join("session.jsonl"), "{}").into_diagnostic()?;
+        let root_toml = root.to_string_lossy().replace('\\', "\\\\");
+        fs::write(
+            dir.path().join("bad.inputs.toml"),
+            format!(
+                r#"version = 1
+
+[[inputs]]
+id = "bad"
+source = "session"
+
+[inputs.discover]
+roots = ["{}"]
+include = ["**/*.jsonl"]
+
+[inputs.decode]
+format = "jsonl"
+
+[inputs.record]
+include_when = [{{ selector = "$.type", op = "contains", value = "user" }}]
+
+[inputs.map]
+role = "$.role"
+
+[inputs.content]
+selector = "$.content"
+"#,
+                root_toml
+            ),
+        )
+        .into_diagnostic()?;
+
+        let error = InputConfig::load_from_dir(dir.path()).expect_err("unknown op should fail");
+        let message = error.to_string();
+        assert!(message.contains("contains"), "{message}");
+        assert!(message.contains("eq"), "{message}");
+        assert!(message.contains("missing"), "{message}");
+        Ok(())
+    }
 
     #[test]
     fn expands_tilde_roots_against_home_directory() -> miette::Result<()> {
