@@ -1,8 +1,9 @@
 //! Integration test verifying the public library API surface.
 //! Exercises the parse → sync → search pipeline as a library consumer (like Kedral).
 
-use backscroll::core::sync::{filter_noise, parse_sessions};
+use backscroll::core::sync::{filter_noise, parse_input_definitions};
 use backscroll::core::{ParsedFile, SearchEngine, SearchParams, SearchResult};
+use backscroll::input_config::InputConfig;
 use backscroll::storage::sqlite::Database;
 use std::collections::HashMap;
 use std::fs;
@@ -20,16 +21,62 @@ fn test_library_parse_sync_search_pipeline() {
 {"type":"assistant","message":{"role":"assistant","content":"The authentication bug is caused by an expired token. You need to refresh the OAuth token before making the API call."},"timestamp":"2026-03-01T10:01:00Z","session_id":"test-session-1"}"#;
 
     fs::write(session_dir.path().join("session.jsonl"), session_content).unwrap();
+    fs::write(
+        session_dir.path().join("claude.inputs.toml"),
+        format!(
+            r#"version = 1
+
+[[inputs]]
+id = "claude"
+source = "session"
+active = true
+
+[inputs.discover]
+roots = ["{}"]
+include = ["**/*.jsonl"]
+exclude = ["**/subagents/**"]
+
+[inputs.decode]
+format = "jsonl"
+
+[inputs.record]
+include_when = [
+  {{ selector = "$.type", op = "in", value = ["human", "user", "assistant"] }},
+]
+
+[inputs.map]
+role = "$.message.role"
+timestamp = "$.timestamp"
+session_id = "$.session_id"
+
+[inputs.map.role_aliases]
+human = "user"
+
+[inputs.content]
+selector = "$.message.content"
+string = "$"
+"#,
+            session_dir.path().display()
+        ),
+    )
+    .unwrap();
 
     // Step 1: Open database and setup schema (as a library consumer would)
     let db = Database::open(db_path.to_str().unwrap()).unwrap();
     db.setup_schema().unwrap();
 
-    // Step 2: Parse sessions
+    // Step 2: Load manifests and parse through the generic input engine.
     let hashes: HashMap<String, String> = db.get_file_hashes().unwrap();
-    let files: Vec<ParsedFile> =
-        parse_sessions(session_dir.path().to_str().unwrap(), &hashes, false).unwrap();
+    let input_config = InputConfig::load_from_dir(session_dir.path()).unwrap();
+    let files: Vec<ParsedFile> = parse_input_definitions(&input_config.active_inputs(), &hashes);
     assert!(!files.is_empty(), "Should parse at least one file");
+
+    let empty_manifest_dir = tempdir().unwrap();
+    let empty_input_config = InputConfig::load_from_dir(empty_manifest_dir.path()).unwrap();
+    assert!(
+        parse_input_definitions(&empty_input_config.active_inputs(), &hashes).is_empty(),
+        "library parsing must not fall back to Claude sessions without an active manifest"
+    );
 
     // Step 3: Sync to database
     db.sync_files(files).unwrap();

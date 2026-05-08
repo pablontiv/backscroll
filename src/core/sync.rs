@@ -1007,7 +1007,337 @@ fn parse_generic_json_content(
     (messages, project, data_errors)
 }
 
-fn parse_generic_input_file(
+#[derive(Debug, serde::Serialize)]
+pub struct InputDryRunDrop {
+    pub scope: String,
+    pub ordinal: Option<usize>,
+    pub block_index: Option<usize>,
+    pub reason: String,
+}
+
+#[derive(Debug, serde::Serialize)]
+pub struct InputDryRunReport {
+    pub input_id: String,
+    pub source: String,
+    pub file: String,
+    pub records_read: usize,
+    pub records_emitted: usize,
+    pub records_dropped: usize,
+    pub blocks_read: usize,
+    pub blocks_dropped: usize,
+    pub drop_reasons: Vec<InputDryRunDrop>,
+    pub messages: Vec<ParsedMessage>,
+}
+
+impl InputDryRunReport {
+    fn new(input: &InputDefinition, path: &Path) -> Self {
+        Self {
+            input_id: input.id.clone(),
+            source: input.source.clone(),
+            file: path.to_string_lossy().into_owned(),
+            records_read: 0,
+            records_emitted: 0,
+            records_dropped: 0,
+            blocks_read: 0,
+            blocks_dropped: 0,
+            drop_reasons: Vec::new(),
+            messages: Vec::new(),
+        }
+    }
+
+    fn record_drop(&mut self, ordinal: usize, reason: impl Into<String>) {
+        self.records_dropped += 1;
+        self.drop_reasons.push(InputDryRunDrop {
+            scope: "record".to_string(),
+            ordinal: Some(ordinal),
+            block_index: None,
+            reason: reason.into(),
+        });
+    }
+
+    fn block_drop(&mut self, ordinal: usize, block_index: usize, reason: impl Into<String>) {
+        self.blocks_dropped += 1;
+        self.drop_reasons.push(InputDryRunDrop {
+            scope: "block".to_string(),
+            ordinal: Some(ordinal),
+            block_index: Some(block_index),
+            reason: reason.into(),
+        });
+    }
+
+    fn file_drop(&mut self, reason: impl Into<String>) {
+        self.drop_reasons.push(InputDryRunDrop {
+            scope: "file".to_string(),
+            ordinal: None,
+            block_index: None,
+            reason: reason.into(),
+        });
+    }
+}
+
+fn record_passes_predicates_dry_run(
+    input: &InputDefinition,
+    record: &Value,
+    ordinal: usize,
+    report: &mut InputDryRunReport,
+) -> bool {
+    if !predicates_match_all(
+        &input.id,
+        &input.record.include_when,
+        record,
+        "record.include_when",
+    ) {
+        report.record_drop(ordinal, "record.include_when did not match");
+        return false;
+    }
+    if predicates_match_any(
+        &input.id,
+        &input.record.exclude_when,
+        record,
+        "record.exclude_when",
+    ) {
+        report.record_drop(ordinal, "record.exclude_when matched");
+        return false;
+    }
+    true
+}
+
+fn content_block_passes_predicates_dry_run(
+    input: &InputDefinition,
+    block: &Value,
+    ordinal: usize,
+    block_index: usize,
+    report: &mut InputDryRunReport,
+) -> bool {
+    if !predicates_match_all(
+        &input.id,
+        &input.content.include_when,
+        block,
+        "content.include_when",
+    ) {
+        report.block_drop(ordinal, block_index, "content.include_when did not match");
+        return false;
+    }
+    if predicates_match_any(
+        &input.id,
+        &input.content.exclude_when,
+        block,
+        "content.exclude_when",
+    ) {
+        report.block_drop(ordinal, block_index, "content.exclude_when matched");
+        return false;
+    }
+    true
+}
+
+fn extract_content_from_record_dry_run(
+    input: &InputDefinition,
+    record: &Value,
+    ordinal: usize,
+    report: &mut InputDryRunReport,
+) -> Option<(String, String)> {
+    let content_selector = parse_jsonpath(&input.content.selector, &input.id, "content.selector")?;
+    let content_nodes = query_nodes(&content_selector, record);
+    if content_nodes.is_empty() {
+        return None;
+    }
+
+    let mut parts = Vec::new();
+    let mut content_types = Vec::new();
+
+    if let Some(blocks_selector) = &input.content.blocks {
+        if let Some(blocks_path) = parse_jsonpath(blocks_selector, &input.id, "content.blocks") {
+            let block_nodes = query_nodes(&blocks_path, record);
+            if !block_nodes.is_empty() {
+                let block_text_path =
+                    input.content.block_text.as_ref().and_then(|selector| {
+                        parse_jsonpath(selector, &input.id, "content.block_text")
+                    });
+                let content_type_path = input.content.content_type.as_ref().and_then(|selector| {
+                    parse_jsonpath(selector, &input.id, "content.content_type")
+                });
+
+                for (block_index, block) in block_nodes.into_iter().enumerate() {
+                    report.blocks_read += 1;
+                    if !content_block_passes_predicates_dry_run(
+                        input,
+                        block,
+                        ordinal,
+                        block_index,
+                        report,
+                    ) {
+                        continue;
+                    }
+                    if let Some(path) = &block_text_path {
+                        parts.extend(selected_strings(path, block));
+                    } else if let Some(text) = value_to_field_string(block) {
+                        parts.push(text);
+                    }
+                    if let Some(path) = &content_type_path {
+                        content_types.extend(selected_strings(path, block));
+                    }
+                }
+
+                if !parts.is_empty() {
+                    let text = parts.join(&input.text.join);
+                    return Some((
+                        text,
+                        aggregate_content_type(&content_types, &input.content.default_content_type),
+                    ));
+                }
+            }
+        }
+    }
+
+    let string_path = parse_jsonpath(&input.content.string, &input.id, "content.string")?;
+    let content_type_path = input
+        .content
+        .content_type
+        .as_ref()
+        .and_then(|selector| parse_jsonpath(selector, &input.id, "content.content_type"));
+
+    for content in content_nodes {
+        parts.extend(selected_strings(&string_path, content));
+        if let Some(path) = &content_type_path {
+            content_types.extend(selected_strings(path, content));
+        }
+    }
+
+    if content_types.is_empty() {
+        if let Some(path) = &content_type_path {
+            content_types.extend(selected_strings(path, record));
+        }
+    }
+
+    Some((
+        parts.join(&input.text.join),
+        aggregate_content_type(&content_types, &input.content.default_content_type),
+    ))
+}
+
+fn parsed_message_from_record_dry_run(
+    input: &InputDefinition,
+    record: &Value,
+    ordinal: usize,
+    report: &mut InputDryRunReport,
+) -> Option<ParsedMessage> {
+    let Some(raw_role) = select_first_string(&input.mapping.role, record, &input.id, "map.role")
+    else {
+        report.record_drop(ordinal, "map.role did not yield a scalar value");
+        return None;
+    };
+    let role = input
+        .mapping
+        .role_aliases
+        .get(&raw_role)
+        .cloned()
+        .unwrap_or(raw_role);
+    let Some((raw_text, content_type)) =
+        extract_content_from_record_dry_run(input, record, ordinal, report)
+    else {
+        report.record_drop(ordinal, "content selectors did not yield text");
+        return None;
+    };
+    let Some(text) = normalize_extracted_text(input, &raw_text) else {
+        report.record_drop(ordinal, "text normalization produced an empty message");
+        return None;
+    };
+
+    Some(ParsedMessage {
+        role,
+        text,
+        ordinal,
+        uuid: select_optional_string(input.mapping.uuid.as_ref(), record, &input.id, "map.uuid"),
+        timestamp: select_optional_string(
+            input.mapping.timestamp.as_ref(),
+            record,
+            &input.id,
+            "map.timestamp",
+        ),
+        content_type,
+    })
+}
+
+fn dry_run_jsonl_content(input: &InputDefinition, content: &str, report: &mut InputDryRunReport) {
+    for (line_number, line) in content.lines().enumerate() {
+        if line.trim().is_empty() {
+            continue;
+        }
+        let value = match serde_json::from_str::<Value>(line) {
+            Ok(value) => value,
+            Err(err) => {
+                report.file_drop(format!("invalid JSONL line {}: {}", line_number + 1, err));
+                continue;
+            }
+        };
+        let Some(records) = parse_records_from_value(input, &value, "record.selector") else {
+            report.file_drop("record.selector is invalid");
+            continue;
+        };
+        for record in records {
+            report.records_read += 1;
+            if !record_passes_predicates_dry_run(input, record, line_number, report) {
+                continue;
+            }
+            if let Some(message) =
+                parsed_message_from_record_dry_run(input, record, line_number, report)
+            {
+                report.messages.push(message);
+            }
+        }
+    }
+}
+
+fn dry_run_json_content(input: &InputDefinition, content: &str, report: &mut InputDryRunReport) {
+    let value = match serde_json::from_str::<Value>(content) {
+        Ok(value) => value,
+        Err(err) => {
+            report.file_drop(format!("invalid JSON file: {err}"));
+            return;
+        }
+    };
+    let Some(records) = parse_records_from_value(input, &value, "record.selector") else {
+        report.file_drop("record.selector is invalid");
+        return;
+    };
+    for (ordinal, record) in records.into_iter().enumerate() {
+        report.records_read += 1;
+        if !record_passes_predicates_dry_run(input, record, ordinal, report) {
+            continue;
+        }
+        if let Some(message) = parsed_message_from_record_dry_run(input, record, ordinal, report) {
+            report.messages.push(message);
+        }
+    }
+}
+
+pub fn dry_run_input_definition(
+    input: &InputDefinition,
+    path: &Path,
+) -> miette::Result<InputDryRunReport> {
+    if !input.active {
+        return Err(miette::miette!(
+            "Input '{}' is inactive; enable it before running inputs test",
+            input.id
+        ));
+    }
+    let content = fs::read_to_string(path).map_err(|err| {
+        miette::miette!(
+            "Failed to read dry-run sample file {}: {}",
+            path.display(),
+            err
+        )
+    })?;
+    let mut report = InputDryRunReport::new(input, path);
+    match input.decode.format {
+        DecodeFormat::Jsonl => dry_run_jsonl_content(input, &content, &mut report),
+        DecodeFormat::Json => dry_run_json_content(input, &content, &mut report),
+    }
+    report.records_emitted = report.messages.len();
+    Ok(report)
+}
+
+pub(crate) fn parse_input_file_with_definition(
     input: &InputDefinition,
     path: &Path,
     existing_hashes: &HashMap<String, String>,
@@ -1083,7 +1413,7 @@ fn parse_generic_input_definition(
 
     entries
         .into_iter()
-        .filter_map(|path| parse_generic_input_file(input, &path, existing_hashes))
+        .filter_map(|path| parse_input_file_with_definition(input, &path, existing_hashes))
         .collect()
 }
 
@@ -1272,7 +1602,8 @@ pub fn parse_input_definitions(
 }
 
 #[tracing::instrument(skip(existing_hashes))]
-pub fn parse_sessions(
+#[deprecated(note = "legacy Claude-only parser; use InputConfig + parse_input_definitions")]
+pub fn parse_legacy_claude_sessions(
     session_dir: &str,
     existing_hashes: &HashMap<String, String>,
     include_agents: bool,
@@ -1286,6 +1617,8 @@ pub fn parse_sessions(
 
 #[cfg(test)]
 mod tests {
+    #![allow(deprecated)]
+
     use super::*;
     use tempfile::tempdir;
 
@@ -1740,7 +2073,8 @@ remove = [
         .into_diagnostic()?;
 
         let mut existing_hashes = HashMap::new();
-        let files = parse_sessions(dir.path().to_str().unwrap(), &existing_hashes, false)?;
+        let files =
+            parse_legacy_claude_sessions(dir.path().to_str().unwrap(), &existing_hashes, false)?;
 
         assert_eq!(files.len(), 1);
         assert_eq!(files[0].messages.len(), 1);
@@ -1749,7 +2083,8 @@ remove = [
 
         // Simulate subsequent run
         existing_hashes.insert(files[0].source_path.clone(), files[0].hash.clone());
-        let files2 = parse_sessions(dir.path().to_str().unwrap(), &existing_hashes, false)?;
+        let files2 =
+            parse_legacy_claude_sessions(dir.path().to_str().unwrap(), &existing_hashes, false)?;
         assert_eq!(files2.len(), 0);
 
         Ok(())
@@ -1882,7 +2217,7 @@ remove = [
         .into_diagnostic()?;
 
         let hashes = HashMap::new();
-        let legacy = parse_sessions(dir.path().to_str().unwrap(), &hashes, false)?;
+        let legacy = parse_legacy_claude_sessions(dir.path().to_str().unwrap(), &hashes, false)?;
         let declarative = parse_session_inputs(
             &[SessionInput {
                 source: "session".into(),

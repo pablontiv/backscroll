@@ -22,6 +22,7 @@ pub struct SearchResult {
     pub timestamp: Option<String>,
 }
 
+#[derive(Debug, Serialize, Clone)]
 pub struct ParsedMessage {
     pub role: String,
     pub text: String,

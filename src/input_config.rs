@@ -617,6 +617,25 @@ impl InputDefinition {
             ));
         }
         self.validate_selectors(path)?;
+        self.validate_text_rules(path)?;
+        Ok(())
+    }
+
+    fn validate_text_rules(&self, path: &Path) -> miette::Result<()> {
+        for (index, rule) in self.text.remove.iter().enumerate() {
+            if matches!(rule.kind, RemoveKind::Regex) {
+                regex::Regex::new(&rule.pattern).map_err(|err| {
+                    miette::miette!(
+                        "Active input '{}' in {} has invalid text.remove[{}].pattern regex '{}': {}",
+                        self.id,
+                        path.display(),
+                        index,
+                        rule.pattern,
+                        err
+                    )
+                })?;
+            }
+        }
         Ok(())
     }
 

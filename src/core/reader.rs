@@ -1,47 +1,51 @@
 use crate::core::ParsedMessage;
-use crate::core::models::{MessageContent, SessionRecord};
-use crate::core::sync::filter_noise;
-use std::fs;
+use crate::core::sync::{discover_candidate_files, parse_input_file_with_definition};
+use crate::input_config::{InputConfig, InputDefinition};
+use std::collections::HashMap;
 use std::path::Path;
 
-pub fn read_session(path: &Path) -> miette::Result<Vec<ParsedMessage>> {
-    let content = fs::read_to_string(path).map_err(|e| miette::miette!(e))?;
-    let mut messages = Vec::new();
-
-    for (ordinal, line) in content.lines().enumerate() {
-        if let Ok(record) = serde_json::from_str::<SessionRecord>(line) {
-            if record.is_meta == Some(true) {
-                continue;
-            }
-            if record.record_type != "user" && record.record_type != "assistant" {
-                continue;
-            }
-
-            if let Some(msg) = record.message {
-                let text_content = match &msg.content {
-                    MessageContent::Text(t) => t.clone(),
-                    MessageContent::Blocks(blocks) => blocks
-                        .iter()
-                        .filter(|b| b.block_type != "tool_use" && b.block_type != "tool_result")
-                        .filter_map(|b| b.text.clone())
-                        .collect::<Vec<_>>()
-                        .join(" "),
-                };
-
-                if let Some(cleaned) = filter_noise(&text_content) {
-                    if !cleaned.is_empty() {
-                        messages.push(ParsedMessage {
-                            role: msg.role,
-                            text: cleaned,
-                            ordinal,
-                            uuid: record.uuid,
-                            timestamp: record.timestamp,
-                            content_type: "text".into(),
-                        });
-                    }
-                }
-            }
-        }
+fn paths_refer_to_same_file(left: &Path, right: &Path) -> bool {
+    match (left.canonicalize(), right.canonicalize()) {
+        (Ok(left), Ok(right)) => left == right,
+        _ => left == right,
     }
-    Ok(messages)
+}
+
+fn input_discovers_path(input: &InputDefinition, path: &Path) -> miette::Result<bool> {
+    let candidates = discover_candidate_files(&input.discover)?;
+    Ok(candidates
+        .iter()
+        .any(|candidate| paths_refer_to_same_file(candidate, path)))
+}
+
+pub fn read_input_file(
+    path: &Path,
+    input_config: &InputConfig,
+) -> miette::Result<Vec<ParsedMessage>> {
+    let inputs = input_config.active_inputs();
+    if inputs.is_empty() {
+        return Err(miette::miette!(
+            "No active input manifest found; read requires a matching *.inputs.toml or backscroll.inputs.d/*.toml manifest"
+        ));
+    }
+
+    for input in &inputs {
+        if !input_discovers_path(input, path)? {
+            continue;
+        }
+        let file =
+            parse_input_file_with_definition(input, path, &HashMap::new()).ok_or_else(|| {
+                miette::miette!(
+                    "Failed to read {} with input manifest '{}'",
+                    path.display(),
+                    input.id
+                )
+            })?;
+        return Ok(file.messages);
+    }
+
+    Err(miette::miette!(
+        "No active input manifest applies to {}; read will not use an implicit Claude parser fallback",
+        path.display()
+    ))
 }

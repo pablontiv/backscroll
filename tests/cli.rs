@@ -4,6 +4,114 @@ use predicates::prelude::*;
 use std::fs;
 use tempfile::tempdir;
 
+fn write_claude_input_manifest(work_dir: &std::path::Path, root: &std::path::Path) {
+    fs::write(
+        work_dir.join("claude.inputs.toml"),
+        format!(
+            r#"version = 1
+
+[[inputs]]
+id = "claude"
+source = "session"
+active = true
+
+[inputs.discover]
+roots = ["{}"]
+include = ["**/*.jsonl"]
+exclude = ["**/subagents/**"]
+
+[inputs.decode]
+format = "jsonl"
+
+[inputs.record]
+include_when = [
+  {{ selector = "$.type", op = "in", value = ["user", "assistant"] }},
+]
+exclude_when = [
+  {{ selector = "$.isMeta", op = "eq", value = true }},
+]
+
+[inputs.map]
+role = "$.message.role"
+uuid = "$.uuid"
+timestamp = "$.timestamp"
+session_id = "$.sessionId"
+
+[inputs.content]
+selector = "$.message.content"
+string = "$"
+blocks = "$.message.content[*]"
+block_text = "$.text"
+content_type = "$.type"
+include_when = [
+  {{ selector = "$.type", op = "eq", value = "text" }},
+]
+default_content_type = "text"
+
+[inputs.text]
+join = "\n"
+trim = true
+drop_empty = true
+remove = [
+  {{ kind = "regex", pattern = "<system-reminder>[\\s\\S]*?</system-reminder>" }},
+  {{ kind = "regex", pattern = "<task-notification>[\\s\\S]*?</task-notification>" }},
+]
+"#,
+            root.display()
+        ),
+    )
+    .unwrap();
+}
+
+fn write_pi_input_manifest(work_dir: &std::path::Path, root: &std::path::Path) {
+    fs::write(
+        work_dir.join("pi.inputs.toml"),
+        format!(
+            r#"version = 1
+
+[[inputs]]
+id = "pi"
+source = "session"
+active = true
+
+[inputs.discover]
+roots = ["{}"]
+include = ["**/*.jsonl"]
+
+[inputs.decode]
+format = "jsonl"
+
+[inputs.map]
+role = "$.role"
+uuid = "$.uuid"
+timestamp = "$.timestamp"
+session_id = "$.session_id"
+
+[inputs.map.role_aliases]
+human = "user"
+
+[inputs.content]
+selector = "$.content"
+string = "$"
+blocks = "$.content.blocks[*]"
+block_text = "$.text"
+content_type = "$.type"
+exclude_when = [
+  {{ selector = "$.type", op = "eq", value = "think" }},
+]
+default_content_type = "text"
+
+[inputs.text]
+join = "\n"
+trim = true
+drop_empty = true
+"#,
+            root.display()
+        ),
+    )
+    .unwrap();
+}
+
 #[test]
 fn test_cli_help() {
     let dir = tempdir().unwrap();
@@ -33,6 +141,75 @@ fn test_cli_status() {
 }
 
 #[test]
+fn test_cli_sync_rejects_legacy_path_flag() {
+    let session_dir = tempdir().unwrap();
+    let db_dir = tempdir().unwrap();
+    let db_path = db_dir.path().join("reject_path.db");
+
+    Command::cargo_bin("backscroll")
+        .unwrap()
+        .arg("sync")
+        .arg("--path")
+        .arg(session_dir.path().to_str().unwrap())
+        .env("BACKSCROLL_DATABASE_PATH", db_path.to_str().unwrap())
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("--path"));
+}
+
+#[test]
+fn test_cli_read_requires_matching_input_manifest() {
+    let work_dir = tempdir().unwrap();
+    let data_dir = tempdir().unwrap();
+    let db_dir = tempdir().unwrap();
+    let db_path = db_dir.path().join("read_requires_manifest.db");
+    let session_file = data_dir.path().join("session.jsonl");
+
+    fs::write(
+        &session_file,
+        r#"{"role":"assistant","content":"read should not fallback"}"#,
+    )
+    .unwrap();
+
+    Command::cargo_bin("backscroll")
+        .unwrap()
+        .current_dir(work_dir.path())
+        .arg("read")
+        .arg(session_file.to_str().unwrap())
+        .env("BACKSCROLL_DATABASE_PATH", db_path.to_str().unwrap())
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("No active input manifest"));
+}
+
+#[test]
+fn test_cli_read_uses_input_manifest_for_pi_jsonl() {
+    let work_dir = tempdir().unwrap();
+    let data_dir = tempdir().unwrap();
+    let db_dir = tempdir().unwrap();
+    let db_path = db_dir.path().join("read_pi.db");
+    let session_file = data_dir.path().join("pi.jsonl");
+
+    fs::write(
+        &session_file,
+        r#"{"role":"assistant","content":{"blocks":[{"type":"think","text":"hidden chain"},{"type":"text","text":"visible manifest read"}]},"uuid":"pi-read","timestamp":"100"}"#,
+    )
+    .unwrap();
+    write_pi_input_manifest(work_dir.path(), data_dir.path());
+
+    Command::cargo_bin("backscroll")
+        .unwrap()
+        .current_dir(work_dir.path())
+        .arg("read")
+        .arg(session_file.to_str().unwrap())
+        .env("BACKSCROLL_DATABASE_PATH", db_path.to_str().unwrap())
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("visible manifest read"))
+        .stdout(predicate::str::contains("hidden chain").not());
+}
+
+#[test]
 fn test_cli_sync_and_search() {
     let session_dir = tempdir().unwrap();
     let db_dir = tempdir().unwrap();
@@ -44,18 +221,16 @@ fn test_cli_sync_and_search() {
         r#"{"type": "user", "message": {"role": "user", "content": "buscame esto"}, "uuid": "123", "timestamp": "12345"}"#,
     )
     .unwrap();
+    write_claude_input_manifest(session_dir.path(), session_dir.path());
 
     // Sincronizar
     let mut sync_cmd = Command::cargo_bin("backscroll").unwrap();
     sync_cmd
+        .current_dir(session_dir.path())
         .arg("sync")
-        .arg("--path")
-        .arg(session_dir.path().to_str().unwrap())
         .env("BACKSCROLL_DATABASE_PATH", db_path.to_str().unwrap())
-        .env(
-            "BACKSCROLL_SESSION_DIR",
-            session_dir.path().to_str().unwrap(),
-        )
+        .env_remove("BACKSCROLL_SESSION_DIR")
+        .env_remove("BACKSCROLL_SESSION_DIRS")
         .assert()
         .success();
 
@@ -88,17 +263,15 @@ fn test_parse_real_jsonl() {
 {"type": "assistant", "message": {"role": "assistant", "content": [{"type": "text", "text": "mundo"}]}, "uuid": "ghi", "timestamp": "456"}
 "#;
     fs::write(&session_file, real_jsonl).unwrap();
+    write_claude_input_manifest(session_dir.path(), session_dir.path());
 
     let mut sync_cmd = Command::cargo_bin("backscroll").unwrap();
     sync_cmd
+        .current_dir(session_dir.path())
         .arg("sync")
-        .arg("--path")
-        .arg(session_dir.path().to_str().unwrap())
         .env("BACKSCROLL_DATABASE_PATH", db_path.to_str().unwrap())
-        .env(
-            "BACKSCROLL_SESSION_DIR",
-            session_dir.path().to_str().unwrap(),
-        )
+        .env_remove("BACKSCROLL_SESSION_DIR")
+        .env_remove("BACKSCROLL_SESSION_DIRS")
         .assert()
         .success();
 
@@ -124,14 +297,15 @@ fn sync_fixture(session_dir: &std::path::Path, db_path: &std::path::Path) {
         r#"{"type": "user", "message": {"role": "user", "content": "deploy kubernetes cluster"}, "uuid": "r1", "timestamp": "100"}"#,
     )
     .unwrap();
+    write_claude_input_manifest(session_dir, session_dir);
 
     Command::cargo_bin("backscroll")
         .unwrap()
+        .current_dir(session_dir)
         .arg("sync")
-        .arg("--path")
-        .arg(session_dir.to_str().unwrap())
         .env("BACKSCROLL_DATABASE_PATH", db_path.to_str().unwrap())
-        .env("BACKSCROLL_SESSION_DIR", session_dir.to_str().unwrap())
+        .env_remove("BACKSCROLL_SESSION_DIR")
+        .env_remove("BACKSCROLL_SESSION_DIRS")
         .assert()
         .success();
 }
@@ -439,6 +613,225 @@ fn test_cli_sync_invalid_input_manifest_fails_cleanly() {
         .stderr(predicate::str::contains("Failed to parse input manifest"));
 }
 
+fn write_cli_input_manifest(work_dir: &std::path::Path, root: &std::path::Path, extra: &str) {
+    fs::write(
+        work_dir.join("pi.inputs.toml"),
+        format!(
+            r#"version = 1
+
+[[inputs]]
+id = "pi"
+source = "session"
+active = true
+
+[inputs.discover]
+roots = ["{}"]
+include = ["**/*.jsonl"]
+
+[inputs.decode]
+format = "jsonl"
+
+[inputs.record]
+include_when = [{{ selector = "$.role", op = "in", value = ["user", "assistant", "human"] }}]
+
+[inputs.map]
+role = "$.role"
+uuid = "$.uuid"
+timestamp = "$.timestamp"
+
+[inputs.map.role_aliases]
+human = "user"
+
+[inputs.content]
+selector = "$.content"
+string = "$"
+blocks = "$.content.blocks[*]"
+block_text = "$.text"
+content_type = "$.type"
+exclude_when = [{{ selector = "$.type", op = "eq", value = "think" }}]
+
+[inputs.text]
+trim = true
+{extra}
+"#,
+            root.display()
+        ),
+    )
+    .unwrap();
+}
+
+#[test]
+fn test_cli_inputs_list_and_validate_json() {
+    let work_dir = tempdir().unwrap();
+    let data_dir = tempdir().unwrap();
+    let fake_home = tempdir().unwrap();
+    fs::write(data_dir.path().join("session.jsonl"), "{}\n").unwrap();
+    write_cli_input_manifest(work_dir.path(), data_dir.path(), "");
+
+    Command::cargo_bin("backscroll")
+        .unwrap()
+        .current_dir(work_dir.path())
+        .arg("inputs")
+        .arg("validate")
+        .arg("--json")
+        .env("HOME", fake_home.path().to_str().unwrap())
+        .assert()
+        .success()
+        .stdout(predicate::str::contains(r#""valid":true"#))
+        .stdout(predicate::str::contains(r#""input_count":1"#));
+
+    Command::cargo_bin("backscroll")
+        .unwrap()
+        .current_dir(work_dir.path())
+        .arg("inputs")
+        .arg("list")
+        .arg("--json")
+        .env("HOME", fake_home.path().to_str().unwrap())
+        .assert()
+        .success()
+        .stdout(predicate::str::contains(r#""id":"pi""#))
+        .stdout(predicate::str::contains(r#""source":"session""#));
+}
+
+#[test]
+fn test_cli_inputs_validate_reports_invalid_selector() {
+    let work_dir = tempdir().unwrap();
+    let data_dir = tempdir().unwrap();
+    let fake_home = tempdir().unwrap();
+    fs::write(data_dir.path().join("session.jsonl"), "{}\n").unwrap();
+    write_cli_input_manifest(work_dir.path(), data_dir.path(), "");
+    let manifest = fs::read_to_string(work_dir.path().join("pi.inputs.toml")).unwrap();
+    fs::write(
+        work_dir.path().join("pi.inputs.toml"),
+        manifest.replace("role = \"$.role\"", "role = \"$[\""),
+    )
+    .unwrap();
+
+    Command::cargo_bin("backscroll")
+        .unwrap()
+        .current_dir(work_dir.path())
+        .arg("inputs")
+        .arg("validate")
+        .env("HOME", fake_home.path().to_str().unwrap())
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("map.role"))
+        .stderr(predicate::str::contains("JSONPath"));
+}
+
+#[test]
+fn test_cli_inputs_validate_reports_invalid_regex() {
+    let work_dir = tempdir().unwrap();
+    let data_dir = tempdir().unwrap();
+    let fake_home = tempdir().unwrap();
+    fs::write(data_dir.path().join("session.jsonl"), "{}\n").unwrap();
+    write_cli_input_manifest(
+        work_dir.path(),
+        data_dir.path(),
+        "remove = [{ kind = \"regex\", pattern = \"[\" }]",
+    );
+
+    Command::cargo_bin("backscroll")
+        .unwrap()
+        .current_dir(work_dir.path())
+        .arg("inputs")
+        .arg("validate")
+        .env("HOME", fake_home.path().to_str().unwrap())
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("text.remove[0].pattern"))
+        .stderr(predicate::str::contains("regex"));
+}
+
+#[test]
+fn test_cli_inputs_validate_reports_unknown_field() {
+    let work_dir = tempdir().unwrap();
+    let data_dir = tempdir().unwrap();
+    let fake_home = tempdir().unwrap();
+    fs::write(data_dir.path().join("session.jsonl"), "{}\n").unwrap();
+    write_cli_input_manifest(
+        work_dir.path(),
+        data_dir.path(),
+        "unknown_text_field = true",
+    );
+
+    Command::cargo_bin("backscroll")
+        .unwrap()
+        .current_dir(work_dir.path())
+        .arg("inputs")
+        .arg("validate")
+        .env("HOME", fake_home.path().to_str().unwrap())
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("unknown_text_field"))
+        .stderr(predicate::str::contains("Failed to parse input manifest"));
+}
+
+#[test]
+fn test_cli_inputs_validate_reports_invalid_operator() {
+    let work_dir = tempdir().unwrap();
+    let data_dir = tempdir().unwrap();
+    let fake_home = tempdir().unwrap();
+    fs::write(data_dir.path().join("session.jsonl"), "{}\n").unwrap();
+    write_cli_input_manifest(work_dir.path(), data_dir.path(), "");
+    let manifest = fs::read_to_string(work_dir.path().join("pi.inputs.toml")).unwrap();
+    fs::write(
+        work_dir.path().join("pi.inputs.toml"),
+        manifest.replace("op = \"in\"", "op = \"contains\""),
+    )
+    .unwrap();
+
+    Command::cargo_bin("backscroll")
+        .unwrap()
+        .current_dir(work_dir.path())
+        .arg("inputs")
+        .arg("validate")
+        .env("HOME", fake_home.path().to_str().unwrap())
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("contains"))
+        .stderr(predicate::str::contains("eq"));
+}
+
+#[test]
+fn test_cli_inputs_test_dry_run_outputs_normalized_messages_without_db_write() {
+    let work_dir = tempdir().unwrap();
+    let data_dir = tempdir().unwrap();
+    let fake_home = tempdir().unwrap();
+    let db_path = work_dir.path().join("dry-run.db");
+    let sample = data_dir.path().join("session.jsonl");
+    fs::write(
+        &sample,
+        r#"{"role":"human","content":{"blocks":[{"type":"think","text":"hidden"},{"type":"text","text":" dry run visible "}]},"uuid":"u1","timestamp":"100"}
+{"role":"system","content":"drop me","uuid":"u2","timestamp":"101"}
+{"role":"assistant","content":{"blocks":[{"type":"think","text":"only hidden"}]},"uuid":"u3","timestamp":"102"}
+"#,
+    )
+    .unwrap();
+    write_cli_input_manifest(work_dir.path(), data_dir.path(), "");
+
+    Command::cargo_bin("backscroll")
+        .unwrap()
+        .current_dir(work_dir.path())
+        .arg("inputs")
+        .arg("test")
+        .arg("--input")
+        .arg("pi")
+        .arg("--file")
+        .arg(sample.to_str().unwrap())
+        .arg("--json")
+        .env("BACKSCROLL_DATABASE_PATH", db_path.to_str().unwrap())
+        .env("HOME", fake_home.path().to_str().unwrap())
+        .assert()
+        .success()
+        .stdout(predicate::str::contains(r#""records_read":3"#))
+        .stdout(predicate::str::contains(r#""blocks_dropped":2"#))
+        .stdout(predicate::str::contains(r#""role":"user""#))
+        .stdout(predicate::str::contains("dry run visible"));
+
+    assert!(!db_path.exists(), "inputs test must not create a SQLite DB");
+}
+
 #[test]
 fn test_cli_sync_skips_invalid_session_file_and_indexes_valid_neighbor() {
     let session_dir = tempdir().unwrap();
@@ -452,12 +845,12 @@ fn test_cli_sync_skips_invalid_session_file_and_indexes_valid_neighbor() {
         r#"{"type":"user","message":{"role":"user","content":"valid neighbor survives"},"uuid":"iv1","timestamp":"100"}"#,
     )
     .unwrap();
+    write_claude_input_manifest(session_dir.path(), session_dir.path());
 
     Command::cargo_bin("backscroll")
         .unwrap()
+        .current_dir(session_dir.path())
         .arg("sync")
-        .arg("--path")
-        .arg(session_dir.path().to_str().unwrap())
         .arg("--no-plans")
         .env("BACKSCROLL_DATABASE_PATH", db_path.to_str().unwrap())
         .env("HOME", fake_home.path().to_str().unwrap())
@@ -494,15 +887,15 @@ fn test_search_source_flag_cli() {
         r#"{"type": "user", "message": {"role": "user", "content": "source filter test"}, "uuid": "sf1", "timestamp": "100"}"#,
     )
     .unwrap();
+    write_claude_input_manifest(session_dir.path(), session_dir.path());
 
     let fake_home = tempdir().unwrap();
 
     // Sync (isolated HOME to prevent real plan discovery)
     Command::cargo_bin("backscroll")
         .unwrap()
+        .current_dir(session_dir.path())
         .arg("sync")
-        .arg("--path")
-        .arg(session_dir.path().to_str().unwrap())
         .arg("--no-plans")
         .env("BACKSCROLL_DATABASE_PATH", db_path.to_str().unwrap())
         .env(
@@ -562,12 +955,12 @@ fn test_sync_no_plans_flag() {
         r#"{"type": "user", "message": {"role": "user", "content": "test no plans"}, "uuid": "np1", "timestamp": "100"}"#,
     )
     .unwrap();
+    write_claude_input_manifest(session_dir.path(), session_dir.path());
 
     Command::cargo_bin("backscroll")
         .unwrap()
+        .current_dir(session_dir.path())
         .arg("sync")
-        .arg("--path")
-        .arg(session_dir.path().to_str().unwrap())
         .arg("--no-plans")
         .env("BACKSCROLL_DATABASE_PATH", db_path.to_str().unwrap())
         .env(
@@ -591,14 +984,14 @@ fn test_cli_sync_preserves_valid_content_after_noise_filter() {
 {"type":"user","message":{"role":"user","content":"<task-notification>drop entirely</task-notification>"},"uuid":"noise2","timestamp":"101"}"#,
     )
     .unwrap();
+    write_claude_input_manifest(session_dir.path(), session_dir.path());
 
     let fake_home = tempdir().unwrap();
 
     Command::cargo_bin("backscroll")
         .unwrap()
+        .current_dir(session_dir.path())
         .arg("sync")
-        .arg("--path")
-        .arg(session_dir.path().to_str().unwrap())
         .arg("--no-plans")
         .env("BACKSCROLL_DATABASE_PATH", db_path.to_str().unwrap())
         .env(
@@ -824,15 +1217,16 @@ fn sync_date_fixture(session_dir: &std::path::Path, db_path: &std::path::Path) {
 {"type": "user", "message": {"role": "user", "content": "beta middle message"}, "uuid": "d2", "timestamp": "2026-03-01T00:00:00Z"}
 {"type": "user", "message": {"role": "user", "content": "gamma late message"}, "uuid": "d3", "timestamp": "2026-06-15T00:00:00Z"}"#;
     fs::write(&session_file, jsonl).unwrap();
+    write_claude_input_manifest(session_dir, session_dir);
 
     Command::cargo_bin("backscroll")
         .unwrap()
+        .current_dir(session_dir)
         .arg("sync")
-        .arg("--path")
-        .arg(session_dir.to_str().unwrap())
         .arg("--no-plans")
         .env("BACKSCROLL_DATABASE_PATH", db_path.to_str().unwrap())
-        .env("BACKSCROLL_SESSION_DIR", session_dir.to_str().unwrap())
+        .env_remove("BACKSCROLL_SESSION_DIR")
+        .env_remove("BACKSCROLL_SESSION_DIRS")
         .assert()
         .success();
 }
@@ -983,15 +1377,16 @@ fn sync_role_fixture(session_dir: &std::path::Path, db_path: &std::path::Path) {
     let jsonl = r#"{"type": "user", "message": {"role": "user", "content": "userquestion about deployment"}, "uuid": "r1", "timestamp": "100"}
 {"type": "assistant", "message": {"role": "assistant", "content": [{"type": "text", "text": "assistantanswer about deployment"}]}, "uuid": "r2", "timestamp": "200"}"#;
     fs::write(&session_file, jsonl).unwrap();
+    write_claude_input_manifest(session_dir, session_dir);
 
     Command::cargo_bin("backscroll")
         .unwrap()
+        .current_dir(session_dir)
         .arg("sync")
-        .arg("--path")
-        .arg(session_dir.to_str().unwrap())
         .arg("--no-plans")
         .env("BACKSCROLL_DATABASE_PATH", db_path.to_str().unwrap())
-        .env("BACKSCROLL_SESSION_DIR", session_dir.to_str().unwrap())
+        .env_remove("BACKSCROLL_SESSION_DIR")
+        .env_remove("BACKSCROLL_SESSION_DIRS")
         .assert()
         .success();
 }
@@ -1100,15 +1495,16 @@ fn sync_pagination_fixture(session_dir: &std::path::Path, db_path: &std::path::P
         ));
     }
     fs::write(&session_file, lines.join("\n")).unwrap();
+    write_claude_input_manifest(session_dir, session_dir);
 
     Command::cargo_bin("backscroll")
         .unwrap()
+        .current_dir(session_dir)
         .arg("sync")
-        .arg("--path")
-        .arg(session_dir.to_str().unwrap())
         .arg("--no-plans")
         .env("BACKSCROLL_DATABASE_PATH", db_path.to_str().unwrap())
-        .env("BACKSCROLL_SESSION_DIR", session_dir.to_str().unwrap())
+        .env_remove("BACKSCROLL_SESSION_DIR")
+        .env_remove("BACKSCROLL_SESSION_DIRS")
         .assert()
         .success();
 }
@@ -1215,9 +1611,8 @@ fn test_reindex() {
     // Reindex should complete successfully
     Command::cargo_bin("backscroll")
         .unwrap()
+        .current_dir(session_dir.path())
         .arg("reindex")
-        .arg("--path")
-        .arg(session_dir.path().to_str().unwrap())
         .arg("--no-plans")
         .env("BACKSCROLL_DATABASE_PATH", db_path.to_str().unwrap())
         .env(
@@ -1374,12 +1769,12 @@ fn test_search_hyphenated_query() {
         r#"{"type": "user", "message": {"role": "user", "content": "este es un anti-patron conocido"}, "uuid": "h1", "timestamp": "100"}"#,
     )
     .unwrap();
+    write_claude_input_manifest(session_dir.path(), session_dir.path());
 
     Command::cargo_bin("backscroll")
         .unwrap()
+        .current_dir(session_dir.path())
         .arg("sync")
-        .arg("--path")
-        .arg(session_dir.path().to_str().unwrap())
         .arg("--no-plans")
         .env("BACKSCROLL_DATABASE_PATH", db_path.to_str().unwrap())
         .env(
@@ -1417,14 +1812,14 @@ fn test_search_special_chars_no_crash() {
         r#"{"type": "user", "message": {"role": "user", "content": "check http://localhost:8080 status (production)"}, "uuid": "s1", "timestamp": "100"}"#,
     )
     .unwrap();
+    write_claude_input_manifest(session_dir.path(), session_dir.path());
 
     let fake_home = tempdir().unwrap();
 
     Command::cargo_bin("backscroll")
         .unwrap()
+        .current_dir(session_dir.path())
         .arg("sync")
-        .arg("--path")
-        .arg(session_dir.path().to_str().unwrap())
         .arg("--no-plans")
         .env("BACKSCROLL_DATABASE_PATH", db_path.to_str().unwrap())
         .env(
@@ -1465,14 +1860,14 @@ fn test_porter_stemmer_search() {
         r#"{"type": "user", "message": {"role": "user", "content": "the server is running perfectly"}, "uuid": "st1", "timestamp": "100"}"#,
     )
     .unwrap();
+    write_claude_input_manifest(session_dir.path(), session_dir.path());
 
     let fake_home = tempdir().unwrap();
 
     Command::cargo_bin("backscroll")
         .unwrap()
+        .current_dir(session_dir.path())
         .arg("sync")
-        .arg("--path")
-        .arg(session_dir.path().to_str().unwrap())
         .arg("--no-plans")
         .env("BACKSCROLL_DATABASE_PATH", db_path.to_str().unwrap())
         .env(
@@ -1513,12 +1908,12 @@ fn test_sync_optimize_flag() {
         r#"{"type": "user", "message": {"role": "user", "content": "optimize test content"}, "uuid": "o1", "timestamp": "100"}"#,
     )
     .unwrap();
+    write_claude_input_manifest(session_dir.path(), session_dir.path());
 
     Command::cargo_bin("backscroll")
         .unwrap()
+        .current_dir(session_dir.path())
         .arg("sync")
-        .arg("--path")
-        .arg(session_dir.path().to_str().unwrap())
         .arg("--no-plans")
         .arg("--optimize")
         .env("BACKSCROLL_DATABASE_PATH", db_path.to_str().unwrap())
@@ -1712,16 +2107,13 @@ fn test_no_embeddings_flag() {
     let db_path = dir.path().join("test.db");
     let session_dir = dir.path().join("sessions");
     std::fs::create_dir_all(&session_dir).unwrap();
+    write_claude_input_manifest(dir.path(), &session_dir);
 
     Command::cargo_bin("backscroll")
         .unwrap()
+        .current_dir(dir.path())
         .env("BACKSCROLL_DATABASE_PATH", db_path.to_str().unwrap())
-        .args([
-            "sync",
-            "--path",
-            session_dir.to_str().unwrap(),
-            "--no-embeddings",
-        ])
+        .args(["sync", "--no-embeddings"])
         .assert()
         .success();
 }

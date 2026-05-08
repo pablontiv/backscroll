@@ -5,12 +5,13 @@ mod output;
 use crate::output::{OutputFormat, OutputOptions, format_results};
 use backscroll::config::Config;
 use backscroll::core::plans::parse_plan;
-use backscroll::core::sync::{parse_input_definitions, parse_session_inputs};
-use backscroll::core::{SearchEngine, SearchParams};
-use backscroll::input_config::{InputConfig, SessionInput};
+use backscroll::core::sync::{dry_run_input_definition, parse_input_definitions};
+use backscroll::core::{ParsedMessage, SearchEngine, SearchParams};
+use backscroll::input_config::InputConfig;
 use backscroll::storage::sqlite::Database;
 use clap::{Parser, Subcommand};
 use miette::Result;
+use serde::Serialize;
 use std::path::PathBuf;
 
 #[derive(Parser)]
@@ -23,14 +24,8 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Commands {
-    /// Sincronizar sesiones de Claude Code
+    /// Sincronizar inputs declarados en manifests
     Sync {
-        /// Directorios de entrada de las sesiones (repetir para múltiples)
-        #[arg(short, long)]
-        path: Vec<String>,
-        /// Incluir sesiones de subagentes (ignora la exclusión por defecto de /subagents/)
-        #[arg(long, default_value_t = false)]
-        include_agents: bool,
         /// No indexar archivos de plan (~/.claude/plans/)
         #[arg(long, default_value_t = false)]
         no_plans: bool,
@@ -152,14 +147,8 @@ enum Commands {
         #[arg(long, default_value_t = false)]
         robot: bool,
     },
-    /// Re-indexar todos los archivos (fuerza re-procesamiento)
+    /// Re-indexar todos los archivos declarados en manifests (fuerza re-procesamiento)
     Reindex {
-        /// Directorios de entrada de las sesiones (repetir para múltiples)
-        #[arg(short, long)]
-        path: Vec<String>,
-        /// Incluir sesiones de subagentes
-        #[arg(long, default_value_t = false)]
-        include_agents: bool,
         /// No indexar archivos de plan
         #[arg(long, default_value_t = false)]
         no_plans: bool,
@@ -219,8 +208,42 @@ enum Commands {
         #[arg(long, default_value_t = 20)]
         limit: usize,
     },
+    /// Tooling for generic input manifests
+    Inputs {
+        #[command(subcommand)]
+        command: InputCommands,
+    },
     /// Mostrar estado del índice
     Status,
+}
+
+#[derive(Subcommand)]
+enum InputCommands {
+    /// List discovered input manifests and inputs
+    List {
+        /// Emit machine-readable JSON
+        #[arg(long, default_value_t = false)]
+        json: bool,
+    },
+    /// Validate input manifests without syncing
+    Validate {
+        /// Emit machine-readable JSON
+        #[arg(long, default_value_t = false)]
+        json: bool,
+    },
+    /// Dry-run a manifest input against a sample file
+    #[command(visible_alias = "dry-run")]
+    Test {
+        /// Input id from the manifest
+        #[arg(long = "input")]
+        input_id: String,
+        /// Sample file to parse without writing SQLite
+        #[arg(long)]
+        file: PathBuf,
+        /// Emit machine-readable JSON
+        #[arg(long, default_value_t = false)]
+        json: bool,
+    },
 }
 
 fn discover_plan_files() -> Vec<PathBuf> {
@@ -292,76 +315,204 @@ fn create_engine(config: &Config) -> Result<Box<dyn SearchEngine>> {
     Ok(Box::new(db))
 }
 
-fn resolve_session_inputs(
-    cli_paths: &[String],
-    input_config: &InputConfig,
-    include_agents: bool,
-) -> Vec<SessionInput> {
-    if !cli_paths.is_empty() {
+fn sync_manifest_inputs(engine: &dyn SearchEngine, input_config: &InputConfig) -> Result<()> {
+    let inputs = input_config.active_inputs();
+    if inputs.is_empty() {
         tracing::debug!(
-            resolution_source = "explicit-legacy-cli-path",
-            cli_path_count = cli_paths.len(),
-            include_agents,
-            "Resolved session inputs from explicit legacy CLI --path"
+            resolution_source = "none",
+            "No active O02 input manifests found; skipping input sync"
         );
-        return cli_paths
-            .iter()
-            .map(|path| SessionInput {
-                source: "session".into(),
-                parser: "claude".into(),
-                paths: vec![path.clone()],
-                glob: None,
-                include_agents,
-                include: backscroll::input_config::default_discover_include(),
-                exclude: if include_agents {
-                    Vec::new()
-                } else {
-                    backscroll::input_config::default_discover_exclude()
-                },
-                follow_symlinks: false,
-                active: true,
-            })
-            .collect();
+        return Ok(());
     }
 
-    let declared_inputs = input_config.active_session_inputs();
-    if !declared_inputs.is_empty() {
-        tracing::debug!(
-            resolution_source = "o02-input-manifests",
-            input_count = declared_inputs.len(),
-            "Resolved session inputs from O02 input manifests"
-        );
-        return declared_inputs;
-    }
-
-    tracing::debug!(
-        resolution_source = "none",
-        "No active O02 session input manifests found; skipping session sync"
-    );
-    Vec::new()
-}
-
-fn sync_session_inputs(
-    engine: &dyn SearchEngine,
-    cli_paths: &[String],
-    input_config: &InputConfig,
-    include_agents: bool,
-) -> Result<()> {
     let hashes = engine.get_file_hashes()?;
-    let files = if cli_paths.is_empty() && !input_config.active_inputs().is_empty() {
-        let inputs = input_config.active_inputs();
-        parse_input_definitions(&inputs, &hashes)
-    } else {
-        let inputs = resolve_session_inputs(cli_paths, input_config, include_agents);
-        if inputs.is_empty() {
-            return Ok(());
-        }
-        parse_session_inputs(&inputs, &hashes)
-    };
+    let files = parse_input_definitions(&inputs, &hashes);
     if !files.is_empty() {
         engine.sync_files(files)?;
     }
     Ok(())
+}
+
+#[derive(Serialize)]
+struct InputListEntry {
+    manifest: String,
+    id: String,
+    source: String,
+    active: bool,
+    roots: Vec<String>,
+    include: Vec<String>,
+    exclude: Vec<String>,
+    format: String,
+}
+
+#[derive(Serialize)]
+struct InputListOutput {
+    manifests: usize,
+    inputs: Vec<InputListEntry>,
+}
+
+#[derive(Serialize)]
+struct InputValidationOutput {
+    valid: bool,
+    manifest_count: usize,
+    input_count: usize,
+}
+
+fn decode_format_name(format: &backscroll::input_config::DecodeFormat) -> &'static str {
+    match format {
+        backscroll::input_config::DecodeFormat::Jsonl => "jsonl",
+        backscroll::input_config::DecodeFormat::Json => "json",
+    }
+}
+
+fn list_input_entries(input_config: &InputConfig) -> Vec<InputListEntry> {
+    input_config
+        .manifests
+        .iter()
+        .flat_map(|loaded| {
+            loaded.manifest.inputs.iter().map(|input| InputListEntry {
+                manifest: loaded.path.to_string_lossy().into_owned(),
+                id: input.id.clone(),
+                source: input.source.clone(),
+                active: input.active,
+                roots: input.discover.roots.clone(),
+                include: input.discover.include.clone(),
+                exclude: input.discover.exclude.clone(),
+                format: decode_format_name(&input.decode.format).to_string(),
+            })
+        })
+        .collect()
+}
+
+fn print_input_list(input_config: &InputConfig, json: bool) -> Result<()> {
+    let entries = list_input_entries(input_config);
+    if json {
+        let output = InputListOutput {
+            manifests: input_config.manifests.len(),
+            inputs: entries,
+        };
+        println!(
+            "{}",
+            serde_json::to_string(&output)
+                .map_err(|err| miette::miette!("Failed to serialize input list: {}", err))?
+        );
+        return Ok(());
+    }
+
+    if entries.is_empty() {
+        println!("No input manifests found.");
+        return Ok(());
+    }
+
+    for entry in entries {
+        println!(
+            "{}\t{}\t{}\tactive={}\tformat={}\troots={}",
+            entry.manifest,
+            entry.id,
+            entry.source,
+            entry.active,
+            entry.format,
+            entry.roots.join(",")
+        );
+    }
+    Ok(())
+}
+
+fn print_input_validation(input_config: &InputConfig, json: bool) -> Result<()> {
+    if json {
+        let output = InputValidationOutput {
+            valid: true,
+            manifest_count: input_config.manifests.len(),
+            input_count: input_config.inputs.len(),
+        };
+        println!(
+            "{}",
+            serde_json::to_string(&output)
+                .map_err(|err| miette::miette!("Failed to serialize validation output: {}", err))?
+        );
+    } else {
+        println!(
+            "Input manifests valid ({} manifests, {} inputs).",
+            input_config.manifests.len(),
+            input_config.inputs.len()
+        );
+    }
+    Ok(())
+}
+
+fn print_dry_run_messages(messages: &[ParsedMessage]) {
+    for message in messages {
+        println!(
+            "{}\t{}\t{}\t{}",
+            message.ordinal, message.role, message.content_type, message.text
+        );
+    }
+}
+
+fn handle_inputs_command(command: &InputCommands) -> Result<()> {
+    match command {
+        InputCommands::List { json } => {
+            let input_config = InputConfig::load()?;
+            print_input_list(&input_config, *json)
+        }
+        InputCommands::Validate { json } => match InputConfig::load() {
+            Ok(input_config) => print_input_validation(&input_config, *json),
+            Err(err) => {
+                if *json {
+                    println!(
+                        "{}",
+                        serde_json::json!({
+                            "valid": false,
+                            "error": err.to_string(),
+                        })
+                    );
+                }
+                Err(err)
+            }
+        },
+        InputCommands::Test {
+            input_id,
+            file,
+            json,
+        } => {
+            let input_config = InputConfig::load()?;
+            let input = input_config
+                .inputs
+                .iter()
+                .find(|candidate| candidate.id == *input_id)
+                .ok_or_else(|| {
+                    miette::miette!("No input manifest entry found with id '{}'", input_id)
+                })?;
+            let report = dry_run_input_definition(input, file)?;
+            if *json {
+                println!(
+                    "{}",
+                    serde_json::to_string(&report).map_err(|err| miette::miette!(
+                        "Failed to serialize dry-run output: {}",
+                        err
+                    ))?
+                );
+            } else {
+                println!(
+                    "Input '{}' dry-run for {}: {} records read, {} emitted, {} records dropped, {} blocks dropped",
+                    report.input_id,
+                    report.file,
+                    report.records_read,
+                    report.records_emitted,
+                    report.records_dropped,
+                    report.blocks_dropped
+                );
+                for drop in &report.drop_reasons {
+                    println!(
+                        "drop\t{}\tordinal={:?}\tblock={:?}\t{}",
+                        drop.scope, drop.ordinal, drop.block_index, drop.reason
+                    );
+                }
+                print_dry_run_messages(&report.messages);
+            }
+            Ok(())
+        }
+    }
 }
 
 use tracing_subscriber::EnvFilter;
@@ -375,18 +526,19 @@ fn main() -> Result<()> {
 
     // Cargar configuración de aplicación e inputs por separado (no requiere DB)
     let config = Config::load().unwrap_or_else(|_| Config::default_with_paths());
+    if let Commands::Inputs { command } = &cli.command {
+        return handle_inputs_command(command);
+    }
     let input_config = InputConfig::load()?;
 
     match &cli.command {
         Commands::Sync {
-            path,
-            include_agents,
             no_plans,
             optimize,
             no_embeddings: _,
         } => {
             let engine = create_engine(&config)?;
-            sync_session_inputs(engine.as_ref(), path, &input_config, *include_agents)?;
+            sync_manifest_inputs(engine.as_ref(), &input_config)?;
             if !no_plans {
                 let hashes = engine.get_file_hashes()?;
                 sync_plans(engine.as_ref(), &hashes)?;
@@ -427,8 +579,8 @@ fn main() -> Result<()> {
         } => {
             let engine = create_engine(&config)?;
 
-            // Auto-sync: indexar sesiones nuevas antes de buscar (incremental, rápido)
-            sync_session_inputs(engine.as_ref(), &Vec::new(), &input_config, false)?;
+            // Auto-sync: indexar inputs declarados antes de buscar (incremental, rápido)
+            sync_manifest_inputs(engine.as_ref(), &input_config)?;
             // Auto-sync plans
             if let Ok(hashes) = engine.get_file_hashes() {
                 let _ = sync_plans(engine.as_ref(), &hashes);
@@ -528,7 +680,7 @@ fn main() -> Result<()> {
             }
         }
         Commands::Read { path } => {
-            let messages = backscroll::core::reader::read_session(path)?;
+            let messages = backscroll::core::reader::read_input_file(path, &input_config)?;
             for msg in messages {
                 println!("[{}]", msg.role);
                 println!("{}", msg.text);
@@ -545,7 +697,7 @@ fn main() -> Result<()> {
             let engine = create_engine(&config)?;
 
             // Auto-sync before resume search
-            sync_session_inputs(engine.as_ref(), &Vec::new(), &input_config, false)?;
+            sync_manifest_inputs(engine.as_ref(), &input_config)?;
             if let Ok(hashes) = engine.get_file_hashes() {
                 let _ = sync_plans(engine.as_ref(), &hashes);
             }
@@ -600,7 +752,7 @@ fn main() -> Result<()> {
             let engine = create_engine(&config)?;
 
             // Auto-sync before list
-            sync_session_inputs(engine.as_ref(), &Vec::new(), &input_config, false)?;
+            sync_manifest_inputs(engine.as_ref(), &input_config)?;
 
             let effective_project = if *all_projects {
                 None
@@ -672,7 +824,7 @@ fn main() -> Result<()> {
             let engine = create_engine(&config)?;
 
             // Auto-sync before topics
-            sync_session_inputs(engine.as_ref(), &Vec::new(), &input_config, false)?;
+            sync_manifest_inputs(engine.as_ref(), &input_config)?;
 
             let effective_project = if *all_projects {
                 None
@@ -722,15 +874,13 @@ fn main() -> Result<()> {
             );
         }
         Commands::Reindex {
-            path,
-            include_agents,
             no_plans,
             no_embeddings: _,
         } => {
             let engine = create_engine(&config)?;
             println!("Clearing index hashes for full re-sync...");
             engine.clear_hashes()?;
-            sync_session_inputs(engine.as_ref(), path, &input_config, *include_agents)?;
+            sync_manifest_inputs(engine.as_ref(), &input_config)?;
             if !no_plans {
                 let hashes = engine.get_file_hashes()?;
                 sync_plans(engine.as_ref(), &hashes)?;
@@ -775,7 +925,7 @@ fn main() -> Result<()> {
             let engine = create_engine(&config)?;
 
             // Auto-sync before insights
-            sync_session_inputs(engine.as_ref(), &Vec::new(), &input_config, false)?;
+            sync_manifest_inputs(engine.as_ref(), &input_config)?;
 
             let effective_project = if *all_projects {
                 None
@@ -839,7 +989,7 @@ fn main() -> Result<()> {
             let engine = create_engine(&config)?;
 
             // Auto-sync
-            sync_session_inputs(engine.as_ref(), &Vec::new(), &input_config, false)?;
+            sync_manifest_inputs(engine.as_ref(), &input_config)?;
 
             let effective_project = if *all_projects {
                 None
@@ -909,6 +1059,7 @@ fn main() -> Result<()> {
                 }
             }
         }
+        Commands::Inputs { .. } => unreachable!("inputs commands are handled before DB setup"),
         Commands::Status => {
             println!("Backscroll v{}", env!("CARGO_PKG_VERSION"));
             println!("Base de datos: {}", config.database_path);
@@ -919,7 +1070,7 @@ fn main() -> Result<()> {
 
             if let Ok(engine) = create_engine(&config) {
                 // Auto-sync antes de mostrar stats
-                let _ = sync_session_inputs(engine.as_ref(), &Vec::new(), &input_config, false);
+                let _ = sync_manifest_inputs(engine.as_ref(), &input_config);
 
                 if let Ok(stats) = engine.get_stats() {
                     println!("\nBackscroll Index Status");
@@ -979,72 +1130,24 @@ fn main() -> Result<()> {
 mod tests {
     use super::*;
     use std::fs;
-    use std::sync::{Arc, Mutex};
     use tempfile::tempdir;
-    use tracing::field::{Field, Visit};
-    use tracing::{Event, Subscriber};
-    use tracing_subscriber::Layer;
-    use tracing_subscriber::layer::Context;
-    use tracing_subscriber::prelude::*;
-    #[derive(Clone, Default)]
-    struct CapturedLogs {
-        messages: Arc<Mutex<Vec<String>>>,
-    }
 
-    impl CapturedLogs {
-        fn messages(&self) -> Vec<String> {
-            self.messages
-                .lock()
-                .unwrap_or_else(|e| e.into_inner())
-                .clone()
-        }
-    }
-
-    impl<S> Layer<S> for CapturedLogs
-    where
-        S: Subscriber,
-    {
-        fn on_event(&self, event: &Event<'_>, _ctx: Context<'_, S>) {
-            let mut visitor = LogVisitor::default();
-            event.record(&mut visitor);
-            self.messages
-                .lock()
-                .unwrap_or_else(|e| e.into_inner())
-                .push(visitor.fields.join(" "));
-        }
-    }
-
-    #[derive(Default)]
-    struct LogVisitor {
-        fields: Vec<String>,
-    }
-
-    impl Visit for LogVisitor {
-        fn record_str(&mut self, field: &Field, value: &str) {
-            self.fields.push(format!("{}={value}", field.name()));
-        }
-
-        fn record_debug(&mut self, field: &Field, value: &dyn std::fmt::Debug) {
-            self.fields.push(format!("{}={value:?}", field.name()));
-        }
-    }
-
-    fn write_manifest(dir: &std::path::Path, id: &str, root: &str, active: bool) {
+    fn write_manifest(dir: &std::path::Path, root: &std::path::Path, active: bool) {
         if active {
             fs::create_dir_all(root).unwrap();
         }
         fs::write(
-            dir.join(format!("{id}.inputs.toml")),
+            dir.join("test.inputs.toml"),
             format!(
                 r#"version = 1
 
 [[inputs]]
-id = "{id}"
+id = "test"
 source = "session"
 active = {active}
 
 [inputs.discover]
-roots = ["{root}"]
+roots = ["{}"]
 include = ["**/*.jsonl"]
 exclude = ["**/subagents/**"]
 
@@ -1056,85 +1159,66 @@ role = "$.message.role"
 
 [inputs.content]
 selector = "$.message.content"
-"#
+"#,
+                root.display()
             ),
         )
         .unwrap();
     }
 
     #[test]
-    fn test_resolve_session_inputs_logs_selected_source() {
-        let logs = CapturedLogs::default();
-        let subscriber = tracing_subscriber::registry().with(logs.clone());
-        let input_config = InputConfig::default();
-
-        tracing::subscriber::with_default(subscriber, || {
-            resolve_session_inputs(&["/cli/path".into()], &input_config, true);
-        });
-
-        let messages = logs.messages();
-        assert!(
-            messages
-                .iter()
-                .any(|message| message.contains("resolution_source=explicit-legacy-cli-path")),
-            "expected explicit legacy CLI resolution trace in {messages:?}"
-        );
-    }
-
-    #[test]
-    fn test_resolve_session_inputs_uses_explicit_legacy_cli_paths() {
-        let input_config = InputConfig::default();
-        let inputs = resolve_session_inputs(
-            &["/cli/path/one".into(), "/cli/path/two".into()],
-            &input_config,
-            true,
-        );
-
-        assert_eq!(inputs.len(), 2);
-        assert_eq!(inputs[0].source, "session");
-        assert_eq!(inputs[0].parser, "claude");
-        assert_eq!(inputs[0].paths[0], "/cli/path/one");
-        assert!(inputs[0].include_agents);
-        assert_eq!(inputs[1].paths[0], "/cli/path/two");
-        assert!(inputs[0].active);
-    }
-
-    #[test]
-    fn test_resolve_session_inputs_uses_o02_manifest_inputs() -> miette::Result<()> {
+    fn sync_manifest_inputs_indexes_active_inputs() -> miette::Result<()> {
         let dir = tempdir().unwrap();
-        let root = dir.path().join("declarative/active");
-        write_manifest(dir.path(), "pi", root.to_str().unwrap(), true);
+        let data = dir.path().join("data");
+        fs::create_dir(&data).unwrap();
+        fs::write(
+            data.join("session.jsonl"),
+            r#"{"message":{"role":"user","content":"manifest sync signal"}}"#,
+        )
+        .unwrap();
+        write_manifest(dir.path(), &data, true);
         let input_config = InputConfig::load_from_dir(dir.path())?;
 
-        let inputs = resolve_session_inputs(&[], &input_config, false);
+        let db_dir = tempdir().unwrap();
+        let db_path = db_dir.path().join("sync_manifest.db");
+        let db = Database::open(db_path.to_str().unwrap())?;
+        db.setup_schema()?;
 
-        assert_eq!(inputs.len(), 1);
-        assert_eq!(inputs[0].source, "session");
-        assert_eq!(inputs[0].parser, "pi");
-        assert_eq!(inputs[0].paths, vec![root.to_string_lossy().to_string()]);
-        assert!(inputs[0].include_agents);
-        assert_eq!(inputs[0].exclude, vec!["**/subagents/**".to_string()]);
+        sync_manifest_inputs(&db, &input_config)?;
+
+        let results = db.search("signal", &SearchParams::default())?;
+        assert!(!results.is_empty());
         Ok(())
     }
 
     #[test]
-    fn test_resolve_session_inputs_ignores_inactive_manifest_inputs() -> miette::Result<()> {
-        let dir = tempdir().unwrap();
-        write_manifest(dir.path(), "claude", "/declarative/inactive", false);
-        let input_config = InputConfig::load_from_dir(dir.path())?;
+    fn sync_manifest_inputs_does_not_use_implicit_inputs_when_empty() -> miette::Result<()> {
+        let db_dir = tempdir().unwrap();
+        let db_path = db_dir.path().join("sync_empty.db");
+        let db = Database::open(db_path.to_str().unwrap())?;
+        db.setup_schema()?;
 
-        let inputs = resolve_session_inputs(&[], &input_config, false);
+        sync_manifest_inputs(&db, &InputConfig::default())?;
 
-        assert!(inputs.is_empty());
+        assert_eq!(db.get_stats()?.file_count, 0);
         Ok(())
     }
 
     #[test]
-    fn test_resolve_session_inputs_does_not_use_implicit_discovery_or_session_dirs() {
-        let input_config = InputConfig::default();
+    fn sync_manifest_inputs_ignores_inactive_inputs() -> miette::Result<()> {
+        let dir = tempdir().unwrap();
+        let data = dir.path().join("inactive");
+        write_manifest(dir.path(), &data, false);
+        let input_config = InputConfig::load_from_dir(dir.path())?;
 
-        let inputs = resolve_session_inputs(&[], &input_config, false);
+        let db_dir = tempdir().unwrap();
+        let db_path = db_dir.path().join("sync_inactive.db");
+        let db = Database::open(db_path.to_str().unwrap())?;
+        db.setup_schema()?;
 
-        assert!(inputs.is_empty());
+        sync_manifest_inputs(&db, &input_config)?;
+
+        assert_eq!(db.get_stats()?.file_count, 0);
+        Ok(())
     }
 }
