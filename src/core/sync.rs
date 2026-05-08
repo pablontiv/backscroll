@@ -1,14 +1,15 @@
 use crate::core::models::{MessageContent, SessionRecord};
 use crate::core::session_inputs::claude;
 use crate::core::{ParsedFile, ParsedMessage};
-use crate::input_config::SessionInput;
+use crate::input_config::{DiscoverConfig, SessionInput};
+use globset::{Glob, GlobSet, GlobSetBuilder};
 use miette::IntoDiagnostic;
 use regex::Regex;
 use serde_json::Value;
 use sha2::{Digest, Sha256};
 use std::collections::HashMap;
 use std::fs;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::LazyLock;
 use walkdir::WalkDir;
 
@@ -90,7 +91,7 @@ pub fn compute_hash(path: impl AsRef<Path>) -> miette::Result<String> {
 }
 
 fn infer_project(
-    entry: &walkdir::DirEntry,
+    path: &Path,
     file_uuid: Option<&String>,
     index_map: &HashMap<String, String>,
 ) -> String {
@@ -100,7 +101,7 @@ fn infer_project(
         }
     }
 
-    if let Some(parent) = entry.path().parent() {
+    if let Some(parent) = path.parent() {
         if parent.ends_with("sessions") || parent.ends_with("subagents") {
             if let Some(proj_dir) = parent.parent() {
                 if let Some(slug) = proj_dir.file_name() {
@@ -115,51 +116,92 @@ fn infer_project(
     "unknown".to_string()
 }
 
-pub(crate) fn discover_candidate_files(
-    session_dir: &Path,
-    include_agents: bool,
-) -> Vec<walkdir::DirEntry> {
-    if !session_dir.exists() {
-        return Vec::new();
+fn add_glob(builder: &mut GlobSetBuilder, pattern: &str) -> miette::Result<()> {
+    let glob = Glob::new(pattern)
+        .map_err(|err| miette::miette!("Invalid discovery glob '{}': {}", pattern, err))?;
+    builder.add(glob);
+
+    if let Some(stripped) = pattern.strip_prefix("**/") {
+        let glob = Glob::new(stripped)
+            .map_err(|err| miette::miette!("Invalid discovery glob '{}': {}", pattern, err))?;
+        builder.add(glob);
     }
 
-    let target_extensions = |path: &Path| {
-        path.extension()
-            .is_some_and(|ext| ext == "json" || ext == "jsonl")
-    };
+    Ok(())
+}
 
-    if session_dir.is_file() {
-        if !target_extensions(session_dir) {
-            return Vec::new();
+fn build_glob_set(patterns: &[String], field: &str) -> miette::Result<GlobSet> {
+    let mut builder = GlobSetBuilder::new();
+    for pattern in patterns {
+        add_glob(&mut builder, pattern).map_err(|err| {
+            miette::miette!("Failed to build {} pattern '{}': {}", field, pattern, err)
+        })?;
+    }
+    builder
+        .build()
+        .map_err(|err| miette::miette!("Failed to build {} globset: {}", field, err))
+}
+
+fn relative_candidate_path(root: &Path, candidate: &Path) -> PathBuf {
+    if root.is_file() {
+        return candidate
+            .file_name()
+            .map_or_else(|| candidate.to_path_buf(), PathBuf::from);
+    }
+
+    candidate
+        .strip_prefix(root)
+        .map_or_else(|_| candidate.to_path_buf(), Path::to_path_buf)
+}
+
+fn matches_discovery_globs(set: &GlobSet, root: &Path, candidate: &Path) -> bool {
+    let relative = relative_candidate_path(root, candidate);
+    set.is_match(&relative) || set.is_match(candidate)
+}
+
+pub(crate) fn discover_candidate_files(discover: &DiscoverConfig) -> miette::Result<Vec<PathBuf>> {
+    if discover.include.is_empty() {
+        return Err(miette::miette!(
+            "Discovery requires at least one discover.include glob"
+        ));
+    }
+
+    let include = build_glob_set(&discover.include, "discover.include")?;
+    let exclude = build_glob_set(&discover.exclude, "discover.exclude")?;
+    let mut candidates = Vec::new();
+
+    for raw_root in &discover.roots {
+        let root = Path::new(raw_root);
+        if !root.exists() {
+            return Err(miette::miette!(
+                "Discovery root does not exist in discover.roots: {}",
+                root.display()
+            ));
         }
 
-        return WalkDir::new(session_dir)
+        for entry in WalkDir::new(root)
+            .follow_links(discover.follow_symlinks)
             .into_iter()
-            .filter_map(|e| e.ok())
-            .filter(|entry| entry.file_type().is_file())
-            .filter(|entry| {
-                include_agents || !entry.path().to_string_lossy().contains("/subagents/")
-            })
-            .collect();
+        {
+            let entry = entry.map_err(|err| {
+                miette::miette!("Failed to walk discovery root {}: {}", root.display(), err)
+            })?;
+            if !entry.file_type().is_file() {
+                continue;
+            }
+
+            let path = entry.path();
+            if matches_discovery_globs(&include, root, path)
+                && !matches_discovery_globs(&exclude, root, path)
+            {
+                candidates.push(path.to_path_buf());
+            }
+        }
     }
 
-    WalkDir::new(session_dir)
-        .into_iter()
-        .filter_map(|e| e.ok())
-        .filter(|e| {
-            if !e.file_type().is_file() {
-                return false;
-            }
-            let is_target_ext = target_extensions(e.path());
-            if !is_target_ext {
-                return false;
-            }
-            if !include_agents && e.path().to_string_lossy().contains("/subagents/") {
-                return false;
-            }
-            true
-        })
-        .collect()
+    candidates.sort_by(|a, b| a.to_string_lossy().cmp(&b.to_string_lossy()));
+    candidates.dedup();
+    Ok(candidates)
 }
 
 type ClaudeMessageLine = (
@@ -245,17 +287,12 @@ fn parse_claude_message_lines(
 }
 
 pub(crate) fn parse_session_file_claude(
-    entry: walkdir::DirEntry,
+    path: &Path,
     existing_hashes: &HashMap<String, String>,
-    include_agents: bool,
 ) -> Option<ParsedFile> {
-    let path_str = entry.path().to_string_lossy().to_string();
+    let path_str = path.to_string_lossy().to_string();
 
-    if !include_agents && path_str.contains("/subagents/") {
-        return None;
-    }
-
-    let hash = match compute_hash(entry.path()) {
+    let hash = match compute_hash(path) {
         Ok(hash) => hash,
         Err(err) => {
             tracing::warn!("Could not hash {}: {}", path_str, err);
@@ -267,7 +304,7 @@ pub(crate) fn parse_session_file_claude(
         return None;
     }
 
-    let content = match fs::read_to_string(entry.path()) {
+    let content = match fs::read_to_string(path) {
         Ok(c) => c,
         Err(err) => {
             tracing::warn!("Could not read {}: {}", path_str, err);
@@ -296,8 +333,8 @@ pub(crate) fn parse_session_file_claude(
         }
     }
 
-    let index_map = load_session_index(entry.path().parent().unwrap_or_else(|| Path::new(".")));
-    let project = infer_project(&entry, file_uuid.as_ref(), &index_map);
+    let index_map = load_session_index(path.parent().unwrap_or_else(|| Path::new(".")));
+    let project = infer_project(path, file_uuid.as_ref(), &index_map);
 
     Some(ParsedFile {
         source: "session".into(),
@@ -369,13 +406,9 @@ fn parse_pi_value(value: &Value) -> Option<(String, String)> {
     Some(content)
 }
 
-fn parse_pi_file(
-    entry: walkdir::DirEntry,
-    existing_hashes: &HashMap<String, String>,
-    _include_agents: bool,
-) -> Option<ParsedFile> {
-    let path_str = entry.path().to_string_lossy().to_string();
-    let hash = match compute_hash(entry.path()) {
+fn parse_pi_file(path: &Path, existing_hashes: &HashMap<String, String>) -> Option<ParsedFile> {
+    let path_str = path.to_string_lossy().to_string();
+    let hash = match compute_hash(path) {
         Ok(hash) => hash,
         Err(err) => {
             tracing::warn!("Could not hash {}: {}", path_str, err);
@@ -387,7 +420,7 @@ fn parse_pi_file(
         return None;
     }
 
-    let content = match fs::read_to_string(entry.path()) {
+    let content = match fs::read_to_string(path) {
         Ok(c) => c,
         Err(err) => {
             tracing::warn!("Could not read {}: {}", path_str, err);
@@ -468,9 +501,9 @@ fn parse_pi_file(
     }
 
     let project = infer_project(
-        &entry,
+        path,
         file_uuid.as_ref(),
-        &load_session_index(entry.path().parent().unwrap_or_else(|| Path::new("."))),
+        &load_session_index(path.parent().unwrap_or_else(|| Path::new("."))),
     );
 
     Some(ParsedFile {
@@ -579,12 +612,7 @@ impl SessionInputParser for ClaudeInputParser {
         input: &SessionInput,
         existing_hashes: &HashMap<String, String>,
     ) -> Vec<ParsedFile> {
-        claude::parse_paths_with_glob(
-            &input.paths,
-            input.glob.as_deref(),
-            input.include_agents,
-            existing_hashes,
-        )
+        claude::parse_discovered_paths(&input.discover_config(), existing_hashes)
     }
 }
 
@@ -611,17 +639,29 @@ impl SessionInputParser for PiInputParser {
             return parsed;
         }
 
-        for path in &input.paths {
-            let mut any_found = false;
-            let entries = discover_candidate_files(Path::new(path), input.include_agents);
-            for entry in entries {
-                if let Some(file) = parse_pi_file(entry, existing_hashes, input.include_agents) {
-                    parsed.push(file);
-                    any_found = true;
+        let discover = input.discover_config();
+        let mut entries = Vec::new();
+        for root in &discover.roots {
+            let mut single_root = discover.clone();
+            single_root.roots = vec![root.clone()];
+            match discover_candidate_files(&single_root) {
+                Ok(root_entries) => entries.extend(root_entries),
+                Err(err) => {
+                    tracing::warn!("Could not discover files for input root {}: {}", root, err)
                 }
             }
-            if !any_found {
-                tracing::warn!("No files found for input path: {}", path);
+        }
+        entries.sort_by(|a, b| a.to_string_lossy().cmp(&b.to_string_lossy()));
+        entries.dedup();
+
+        if entries.is_empty() {
+            tracing::warn!("No files found for input paths: {:?}", input.paths);
+            return parsed;
+        }
+
+        for path in entries {
+            if let Some(file) = parse_pi_file(&path, existing_hashes) {
+                parsed.push(file);
             }
         }
 
@@ -708,6 +748,9 @@ mod tests {
             paths: vec![dir.path().to_str().unwrap().into()],
             glob: None,
             include_agents: false,
+            include: crate::input_config::default_discover_include(),
+            exclude: crate::input_config::default_discover_exclude(),
+            follow_symlinks: false,
             active: true,
         };
 
@@ -737,6 +780,9 @@ mod tests {
             paths: vec![dir.path().to_str().unwrap().into()],
             glob: None,
             include_agents: false,
+            include: crate::input_config::default_discover_include(),
+            exclude: crate::input_config::default_discover_exclude(),
+            follow_symlinks: false,
             active: true,
         };
         let wrong_source_input = SessionInput {
@@ -745,6 +791,9 @@ mod tests {
             paths: vec![dir.path().to_str().unwrap().into()],
             glob: None,
             include_agents: false,
+            include: crate::input_config::default_discover_include(),
+            exclude: crate::input_config::default_discover_exclude(),
+            follow_symlinks: false,
             active: true,
         };
 
@@ -773,6 +822,9 @@ mod tests {
             paths: vec![dir.path().to_str().unwrap().into()],
             glob: None,
             include_agents: false,
+            include: crate::input_config::default_discover_include(),
+            exclude: crate::input_config::default_discover_exclude(),
+            follow_symlinks: false,
             active: true,
         };
 
@@ -814,6 +866,9 @@ mod tests {
                 paths: vec![dir.path().to_string_lossy().into_owned()],
                 glob: None,
                 include_agents: false,
+                include: crate::input_config::default_discover_include(),
+                exclude: crate::input_config::default_discover_exclude(),
+                follow_symlinks: false,
                 active: true,
             }],
             &hashes,
@@ -877,6 +932,9 @@ mod tests {
             paths: vec![dir.path().to_string_lossy().into_owned()],
             glob: Some("keep-*.jsonl".into()),
             include_agents: false,
+            include: crate::input_config::default_discover_include(),
+            exclude: crate::input_config::default_discover_exclude(),
+            follow_symlinks: false,
             active: true,
         };
 
@@ -914,6 +972,9 @@ mod tests {
             paths: vec![dir.path().to_string_lossy().into_owned()],
             glob: Some("*.{json,jsonl}".into()),
             include_agents: false,
+            include: crate::input_config::default_discover_include(),
+            exclude: crate::input_config::default_discover_exclude(),
+            follow_symlinks: false,
             active: true,
         };
 
@@ -925,6 +986,84 @@ mod tests {
 
         assert_eq!(texts, vec!["json kept", "jsonl kept"]);
 
+        Ok(())
+    }
+
+    #[test]
+    fn test_discovery_uses_include_exclude_globs_for_files_and_dirs() -> miette::Result<()> {
+        let dir = tempdir().into_diagnostic()?;
+        let root = dir.path().join("root");
+        let subagents = root.join("project/subagents");
+        fs::create_dir_all(&subagents).into_diagnostic()?;
+        fs::write(root.join("b.jsonl"), "{}").into_diagnostic()?;
+        fs::write(root.join("a.jsonl"), "{}").into_diagnostic()?;
+        fs::write(root.join("skip.txt"), "{}").into_diagnostic()?;
+        fs::write(subagents.join("agent.jsonl"), "{}").into_diagnostic()?;
+        let direct = dir.path().join("direct.jsonl");
+        fs::write(&direct, "{}").into_diagnostic()?;
+
+        let discovered = discover_candidate_files(&crate::input_config::DiscoverConfig {
+            roots: vec![
+                root.to_string_lossy().into_owned(),
+                direct.to_string_lossy().into_owned(),
+            ],
+            include: vec!["**/*.jsonl".into()],
+            exclude: vec!["**/subagents/**".into()],
+            follow_symlinks: false,
+        })?;
+
+        assert_eq!(
+            discovered,
+            vec![direct, root.join("a.jsonl"), root.join("b.jsonl")]
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn test_discovery_include_glob_is_not_hardcoded_to_jsonl() -> miette::Result<()> {
+        let dir = tempdir().into_diagnostic()?;
+        let root = dir.path();
+        let data_file = root.join("session.data");
+        fs::write(&data_file, "{}").into_diagnostic()?;
+        fs::write(root.join("session.jsonl"), "{}").into_diagnostic()?;
+
+        let discovered = discover_candidate_files(&crate::input_config::DiscoverConfig {
+            roots: vec![root.to_string_lossy().into_owned()],
+            include: vec!["**/*.data".into()],
+            exclude: Vec::new(),
+            follow_symlinks: false,
+        })?;
+
+        assert_eq!(discovered, vec![data_file]);
+        Ok(())
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn test_discovery_does_not_follow_symlinks_by_default() -> miette::Result<()> {
+        use std::os::unix::fs::symlink;
+
+        let dir = tempdir().into_diagnostic()?;
+        let target = dir.path().join("target");
+        let root = dir.path().join("root");
+        fs::create_dir_all(&target).into_diagnostic()?;
+        fs::create_dir_all(&root).into_diagnostic()?;
+        fs::write(target.join("linked.jsonl"), "{}").into_diagnostic()?;
+        symlink(&target, root.join("link")).into_diagnostic()?;
+
+        let mut discover = crate::input_config::DiscoverConfig {
+            roots: vec![root.to_string_lossy().into_owned()],
+            include: vec!["**/*.jsonl".into()],
+            exclude: Vec::new(),
+            follow_symlinks: false,
+        };
+
+        assert!(discover_candidate_files(&discover)?.is_empty());
+        discover.follow_symlinks = true;
+        assert_eq!(
+            discover_candidate_files(&discover)?,
+            vec![root.join("link/linked.jsonl")]
+        );
         Ok(())
     }
 
@@ -943,6 +1082,9 @@ mod tests {
             paths: vec![dir.path().to_string_lossy().into_owned()],
             glob: None,
             include_agents: false,
+            include: crate::input_config::default_discover_include(),
+            exclude: crate::input_config::default_discover_exclude(),
+            follow_symlinks: false,
             active: false,
         };
 
@@ -973,10 +1115,14 @@ mod tests {
             paths: vec![dir.path().to_string_lossy().into_owned()],
             glob: None,
             include_agents: false,
+            include: crate::input_config::default_discover_include(),
+            exclude: crate::input_config::default_discover_exclude(),
+            follow_symlinks: false,
             active: true,
         };
         let with_agents = SessionInput {
             include_agents: true,
+            exclude: Vec::new(),
             ..without_agents.clone()
         };
 
@@ -1014,6 +1160,9 @@ mod tests {
             ],
             glob: None,
             include_agents: false,
+            include: crate::input_config::default_discover_include(),
+            exclude: crate::input_config::default_discover_exclude(),
+            follow_symlinks: false,
             active: true,
         };
 
@@ -1042,6 +1191,9 @@ mod tests {
             paths: vec![dir.path().to_string_lossy().into_owned()],
             glob: None,
             include_agents: false,
+            include: crate::input_config::default_discover_include(),
+            exclude: crate::input_config::default_discover_exclude(),
+            follow_symlinks: false,
             active: true,
         };
 

@@ -1,6 +1,10 @@
 use backscroll::input_config::InputConfig;
 use tempfile::tempdir;
 
+fn toml_path(path: &std::path::Path) -> String {
+    path.to_string_lossy().replace('\\', "\\\\")
+}
+
 fn minimal_manifest(id: &str, root: &str) -> String {
     format!(
         r#"version = 1
@@ -43,15 +47,19 @@ drop_empty = true
 #[test]
 fn loads_o02_manifests_from_star_inputs_and_inputs_dir() -> miette::Result<()> {
     let dir = tempdir().unwrap();
+    let claude_root = dir.path().join("claude-root");
+    let pi_root = dir.path().join("pi-root");
+    std::fs::create_dir_all(&claude_root).unwrap();
+    std::fs::create_dir_all(&pi_root).unwrap();
     std::fs::write(
         dir.path().join("claude.inputs.toml"),
-        minimal_manifest("claude", "/claude"),
+        minimal_manifest("claude", &toml_path(&claude_root)),
     )
     .unwrap();
     std::fs::create_dir(dir.path().join("backscroll.inputs.d")).unwrap();
     std::fs::write(
         dir.path().join("backscroll.inputs.d/02-pi.toml"),
-        minimal_manifest("pi", "/pi"),
+        minimal_manifest("pi", &toml_path(&pi_root)),
     )
     .unwrap();
 
@@ -60,10 +68,65 @@ fn loads_o02_manifests_from_star_inputs_and_inputs_dir() -> miette::Result<()> {
     let active = config.active_inputs();
     assert_eq!(active.len(), 2);
     assert_eq!(active[0].id, "claude");
-    assert_eq!(active[0].discover.roots, vec!["/claude"]);
+    assert_eq!(active[0].discover.roots, vec![toml_path(&claude_root)]);
     assert_eq!(active[1].id, "pi");
-    assert_eq!(active[1].discover.roots, vec!["/pi"]);
+    assert_eq!(active[1].discover.roots, vec![toml_path(&pi_root)]);
     Ok(())
+}
+
+#[test]
+fn resolves_relative_roots_against_manifest_location() -> miette::Result<()> {
+    let dir = tempdir().unwrap();
+    let root = dir.path().join("sessions");
+    std::fs::create_dir_all(&root).unwrap();
+    std::fs::write(
+        dir.path().join("claude.inputs.toml"),
+        minimal_manifest("claude", "sessions"),
+    )
+    .unwrap();
+
+    let config = InputConfig::load_from_dir(dir.path())?;
+
+    assert_eq!(
+        config.active_inputs()[0].discover.roots,
+        vec![toml_path(&root)]
+    );
+    Ok(())
+}
+
+#[test]
+fn rejects_missing_active_discover_root_with_clear_error() {
+    let dir = tempdir().unwrap();
+    std::fs::write(
+        dir.path().join("missing-root.inputs.toml"),
+        minimal_manifest("claude", "missing"),
+    )
+    .unwrap();
+
+    let err = InputConfig::load_from_dir(dir.path()).expect_err("missing root must fail");
+    let msg = err.to_string();
+    assert!(msg.contains("missing-root.inputs.toml"), "{msg}");
+    assert!(msg.contains("discover.roots"), "{msg}");
+    assert!(msg.contains("missing"), "{msg}");
+}
+
+#[test]
+fn rejects_invalid_active_discover_glob_with_clear_error() {
+    let dir = tempdir().unwrap();
+    let root = dir.path().join("sessions");
+    std::fs::create_dir_all(&root).unwrap();
+    std::fs::write(
+        dir.path().join("invalid-glob.inputs.toml"),
+        minimal_manifest("claude", &toml_path(&root))
+            .replace("include = [\"**/*.jsonl\"]", "include = [\"[\"]"),
+    )
+    .unwrap();
+
+    let err = InputConfig::load_from_dir(dir.path()).expect_err("invalid glob must fail");
+    let msg = err.to_string();
+    assert!(msg.contains("invalid-glob.inputs.toml"), "{msg}");
+    assert!(msg.contains("discover.include"), "{msg}");
+    assert!(msg.contains("["), "{msg}");
 }
 
 #[test]

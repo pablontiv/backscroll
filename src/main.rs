@@ -312,6 +312,13 @@ fn resolve_session_inputs(
                 paths: vec![path.clone()],
                 glob: None,
                 include_agents,
+                include: backscroll::input_config::default_discover_include(),
+                exclude: if include_agents {
+                    Vec::new()
+                } else {
+                    backscroll::input_config::default_discover_exclude()
+                },
+                follow_symlinks: false,
                 active: true,
             })
             .collect();
@@ -1018,6 +1025,9 @@ mod tests {
     }
 
     fn write_manifest(dir: &std::path::Path, id: &str, root: &str, active: bool) {
+        if active {
+            fs::create_dir_all(root).unwrap();
+        }
         fs::write(
             dir.join(format!("{id}.inputs.toml")),
             format!(
@@ -1087,7 +1097,8 @@ selector = "$.message.content"
     #[test]
     fn test_resolve_session_inputs_uses_o02_manifest_inputs() -> miette::Result<()> {
         let dir = tempdir().unwrap();
-        write_manifest(dir.path(), "pi", "/declarative/active", true);
+        let root = dir.path().join("declarative/active");
+        write_manifest(dir.path(), "pi", root.to_str().unwrap(), true);
         let input_config = InputConfig::load_from_dir(dir.path())?;
 
         let inputs = resolve_session_inputs(&[], &input_config, false);
@@ -1095,8 +1106,9 @@ selector = "$.message.content"
         assert_eq!(inputs.len(), 1);
         assert_eq!(inputs[0].source, "session");
         assert_eq!(inputs[0].parser, "pi");
-        assert_eq!(inputs[0].paths, vec!["/declarative/active".to_string()]);
-        assert!(!inputs[0].include_agents);
+        assert_eq!(inputs[0].paths, vec![root.to_string_lossy().to_string()]);
+        assert!(inputs[0].include_agents);
+        assert_eq!(inputs[0].exclude, vec!["**/subagents/**".to_string()]);
         Ok(())
     }
 

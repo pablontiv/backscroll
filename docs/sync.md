@@ -46,6 +46,7 @@ active = true
 roots = ["/home/user/.claude/projects"]
 include = ["**/*.jsonl"]
 exclude = ["**/subagents/**"]
+follow_symlinks = false
 
 [inputs.decode]
 format = "jsonl"
@@ -56,6 +57,8 @@ role = "$.message.role"
 [inputs.content]
 selector = "$.message.content"
 ```
+
+Discovery roots may be files or directories. `~` is expanded to the user's home directory, and relative roots are resolved relative to the manifest file that declares them. Include and exclude rules are generic `globset` patterns matched against candidate paths; Backscroll does not hardcode provider-specific exclusions such as `subagents`. `follow_symlinks` defaults to `false`, so symlinked directories are not traversed unless the manifest opts in.
 
 ## Session File Format
 

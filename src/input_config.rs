@@ -2,9 +2,10 @@ use figment::{
     Figment,
     providers::{Format, Toml},
 };
+use globset::Glob;
 use serde::{Deserialize, Deserializer, Serialize};
 use std::fs;
-use std::path::{Path, PathBuf};
+use std::path::{Component, Path, PathBuf};
 
 #[derive(Deserialize)]
 #[serde(untagged)]
@@ -47,6 +48,14 @@ fn default_join() -> String {
     "\n".to_string()
 }
 
+pub fn default_discover_include() -> Vec<String> {
+    vec!["**/*.{json,jsonl}".to_string()]
+}
+
+pub fn default_discover_exclude() -> Vec<String> {
+    vec!["**/subagents/**".to_string()]
+}
+
 #[derive(Debug, Serialize, Deserialize, Clone)]
 #[serde(default, deny_unknown_fields)]
 pub struct SessionInput {
@@ -59,6 +68,18 @@ pub struct SessionInput {
     pub glob: Option<String>,
     #[serde(default)]
     pub include_agents: bool,
+    #[serde(
+        default = "default_discover_include",
+        deserialize_with = "string_or_vec"
+    )]
+    pub include: Vec<String>,
+    #[serde(
+        default = "default_discover_exclude",
+        deserialize_with = "string_or_vec"
+    )]
+    pub exclude: Vec<String>,
+    #[serde(default)]
+    pub follow_symlinks: bool,
     #[serde(default = "default_true")]
     pub active: bool,
 }
@@ -79,6 +100,21 @@ impl SessionInput {
             self.parser.as_str()
         }
     }
+
+    pub fn discover_config(&self) -> DiscoverConfig {
+        let include = self
+            .glob
+            .as_ref()
+            .map_or_else(|| self.include.clone(), |glob| vec![glob.clone()]);
+        let exclude = self.exclude.clone();
+
+        DiscoverConfig {
+            roots: self.paths.clone(),
+            include,
+            exclude,
+            follow_symlinks: self.follow_symlinks,
+        }
+    }
 }
 
 impl Default for SessionInput {
@@ -89,6 +125,9 @@ impl Default for SessionInput {
             paths: Vec::new(),
             glob: None,
             include_agents: false,
+            include: default_discover_include(),
+            exclude: default_discover_exclude(),
+            follow_symlinks: false,
             active: true,
         }
     }
@@ -282,6 +321,76 @@ pub struct InputConfig {
     pub inputs: Vec<InputDefinition>,
 }
 
+fn normalize_path_lexically(path: &Path) -> PathBuf {
+    let mut normalized = PathBuf::new();
+
+    for component in path.components() {
+        match component {
+            Component::CurDir => {}
+            Component::ParentDir => {
+                if !normalized.pop() {
+                    normalized.push(component.as_os_str());
+                }
+            }
+            Component::Prefix(_) | Component::RootDir | Component::Normal(_) => {
+                normalized.push(component.as_os_str());
+            }
+        }
+    }
+
+    if normalized.as_os_str().is_empty() {
+        PathBuf::from(".")
+    } else {
+        normalized
+    }
+}
+
+fn expand_tilde(raw: &str) -> miette::Result<PathBuf> {
+    if raw == "~" || raw.starts_with("~/") || raw.starts_with("~\\") {
+        let home = dirs::home_dir().ok_or_else(|| {
+            miette::miette!("Cannot expand '~' in discover.roots: home directory is unknown")
+        })?;
+        if raw == "~" {
+            Ok(home)
+        } else {
+            Ok(home.join(&raw[2..]))
+        }
+    } else {
+        Ok(PathBuf::from(raw))
+    }
+}
+
+fn resolve_discovery_root(raw: &str, base_dir: &Path) -> miette::Result<PathBuf> {
+    let expanded = expand_tilde(raw)?;
+    let resolved = if expanded.is_absolute() {
+        expanded
+    } else {
+        base_dir.join(expanded)
+    };
+    Ok(normalize_path_lexically(&resolved))
+}
+
+fn validate_glob_patterns(
+    manifest_path: &Path,
+    input_id: &str,
+    field: &str,
+    patterns: &[String],
+) -> miette::Result<()> {
+    for pattern in patterns {
+        Glob::new(pattern).map_err(|err| {
+            miette::miette!(
+                "Active input '{}' in {} has invalid {} glob '{}': {}",
+                input_id,
+                manifest_path.display(),
+                field,
+                pattern,
+                err
+            )
+        })?;
+    }
+    Ok(())
+}
+
 impl InputConfig {
     pub fn load() -> miette::Result<Self> {
         Self::load_from_dir(Path::new("."))
@@ -292,7 +401,8 @@ impl InputConfig {
         let mut inputs = Vec::new();
 
         for path in Self::manifest_paths_from_dir(root)? {
-            let manifest = Self::read_manifest(&path)?;
+            let mut manifest = Self::read_manifest(&path)?;
+            Self::resolve_manifest_roots(&path, &mut manifest)?;
             Self::validate_manifest(&path, &manifest)?;
             inputs.extend(manifest.inputs.iter().cloned());
             manifests.push(LoadedInputManifest { path, manifest });
@@ -371,6 +481,20 @@ impl InputConfig {
             })
     }
 
+    fn resolve_manifest_roots(path: &Path, manifest: &mut InputManifest) -> miette::Result<()> {
+        let base_dir = path.parent().unwrap_or_else(|| Path::new("."));
+        for input in &mut manifest.inputs {
+            if !input.active {
+                continue;
+            }
+            for root in &mut input.discover.roots {
+                let resolved = resolve_discovery_root(root, base_dir)?;
+                *root = resolved.to_string_lossy().into_owned();
+            }
+        }
+        Ok(())
+    }
+
     fn validate_manifest(path: &Path, manifest: &InputManifest) -> miette::Result<()> {
         if manifest.version != 1 {
             return Err(miette::miette!(
@@ -423,6 +547,27 @@ impl InputDefinition {
                 path.display()
             ));
         }
+        for root in &self.discover.roots {
+            let root_path = Path::new(root);
+            if !root_path.exists() {
+                return Err(miette::miette!(
+                    "Active input '{}' in {} has missing discover.roots path '{}'",
+                    self.id,
+                    path.display(),
+                    root
+                ));
+            }
+            if !root_path.is_file() && !root_path.is_dir() {
+                return Err(miette::miette!(
+                    "Active input '{}' in {} has discover.roots path '{}' that is neither a file nor a directory",
+                    self.id,
+                    path.display(),
+                    root
+                ));
+            }
+        }
+        validate_glob_patterns(path, &self.id, "discover.include", &self.discover.include)?;
+        validate_glob_patterns(path, &self.id, "discover.exclude", &self.discover.exclude)?;
         Ok(())
     }
 
@@ -432,12 +577,28 @@ impl InputDefinition {
             parser: self.id.clone(),
             paths: self.discover.roots.clone(),
             glob: None,
-            include_agents: !self
-                .discover
-                .exclude
-                .iter()
-                .any(|pattern| pattern.contains("subagents")),
+            include_agents: true,
+            include: self.discover.include.clone(),
+            exclude: self.discover.exclude.clone(),
+            follow_symlinks: self.discover.follow_symlinks,
             active: self.active,
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn expands_tilde_roots_against_home_directory() -> miette::Result<()> {
+        let Some(home) = dirs::home_dir() else {
+            return Ok(());
+        };
+
+        let resolved = resolve_discovery_root("~/backscroll-test", Path::new("/base"))?;
+
+        assert_eq!(resolved, home.join("backscroll-test"));
+        Ok(())
     }
 }
