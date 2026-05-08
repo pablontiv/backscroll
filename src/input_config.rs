@@ -4,6 +4,7 @@ use figment::{
 };
 use globset::Glob;
 use serde::{Deserialize, Deserializer, Serialize};
+use serde_json_path::JsonPath;
 use std::fs;
 use std::path::{Component, Path, PathBuf};
 
@@ -391,6 +392,42 @@ fn validate_glob_patterns(
     Ok(())
 }
 
+fn validate_jsonpath_selector(
+    manifest_path: &Path,
+    input_id: &str,
+    field: &str,
+    selector: &str,
+) -> miette::Result<()> {
+    JsonPath::parse(selector).map_err(|err| {
+        miette::miette!(
+            "Active input '{}' in {} has invalid {} JSONPath selector '{}': {}",
+            input_id,
+            manifest_path.display(),
+            field,
+            selector,
+            err
+        )
+    })?;
+    Ok(())
+}
+
+fn validate_predicate_selectors(
+    manifest_path: &Path,
+    input_id: &str,
+    field: &str,
+    predicates: &[Predicate],
+) -> miette::Result<()> {
+    for (index, predicate) in predicates.iter().enumerate() {
+        validate_jsonpath_selector(
+            manifest_path,
+            input_id,
+            &format!("{field}[{index}].selector"),
+            &predicate.selector,
+        )?;
+    }
+    Ok(())
+}
+
 impl InputConfig {
     pub fn load() -> miette::Result<Self> {
         Self::load_from_dir(Path::new("."))
@@ -568,6 +605,73 @@ impl InputDefinition {
         }
         validate_glob_patterns(path, &self.id, "discover.include", &self.discover.include)?;
         validate_glob_patterns(path, &self.id, "discover.exclude", &self.discover.exclude)?;
+        if !matches!(
+            self.decode.encoding.to_ascii_lowercase().as_str(),
+            "utf-8" | "utf8"
+        ) {
+            return Err(miette::miette!(
+                "Active input '{}' in {} has unsupported decode.encoding '{}'; only utf-8 is supported",
+                self.id,
+                path.display(),
+                self.decode.encoding
+            ));
+        }
+        self.validate_selectors(path)?;
+        Ok(())
+    }
+
+    fn validate_selectors(&self, path: &Path) -> miette::Result<()> {
+        validate_jsonpath_selector(path, &self.id, "record.selector", &self.record.selector)?;
+        validate_predicate_selectors(
+            path,
+            &self.id,
+            "record.include_when",
+            &self.record.include_when,
+        )?;
+        validate_predicate_selectors(
+            path,
+            &self.id,
+            "record.exclude_when",
+            &self.record.exclude_when,
+        )?;
+
+        validate_jsonpath_selector(path, &self.id, "map.role", &self.mapping.role)?;
+        if let Some(selector) = &self.mapping.uuid {
+            validate_jsonpath_selector(path, &self.id, "map.uuid", selector)?;
+        }
+        if let Some(selector) = &self.mapping.timestamp {
+            validate_jsonpath_selector(path, &self.id, "map.timestamp", selector)?;
+        }
+        if let Some(selector) = &self.mapping.session_id {
+            validate_jsonpath_selector(path, &self.id, "map.session_id", selector)?;
+        }
+        if let Some(selector) = &self.mapping.project {
+            validate_jsonpath_selector(path, &self.id, "map.project", selector)?;
+        }
+
+        validate_jsonpath_selector(path, &self.id, "content.selector", &self.content.selector)?;
+        validate_jsonpath_selector(path, &self.id, "content.string", &self.content.string)?;
+        if let Some(selector) = &self.content.blocks {
+            validate_jsonpath_selector(path, &self.id, "content.blocks", selector)?;
+        }
+        if let Some(selector) = &self.content.block_text {
+            validate_jsonpath_selector(path, &self.id, "content.block_text", selector)?;
+        }
+        if let Some(selector) = &self.content.content_type {
+            validate_jsonpath_selector(path, &self.id, "content.content_type", selector)?;
+        }
+        validate_predicate_selectors(
+            path,
+            &self.id,
+            "content.include_when",
+            &self.content.include_when,
+        )?;
+        validate_predicate_selectors(
+            path,
+            &self.id,
+            "content.exclude_when",
+            &self.content.exclude_when,
+        )?;
         Ok(())
     }
 

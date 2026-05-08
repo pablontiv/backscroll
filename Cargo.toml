@@ -48,6 +48,7 @@ ort = { version = "=2.0.0-rc.10", default-features = false, features = ["load-dy
 tokenizers = { version = "0.21", default-features = false, features = ["fancy-regex"] }
 ndarray = "0.16"
 dirs = "6"
+serde_json_path = "0.7.2"
 
 [dev-dependencies]
 assert_cmd = "2.1.2"

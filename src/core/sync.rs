@@ -1,11 +1,12 @@
 use crate::core::models::{MessageContent, SessionRecord};
 use crate::core::session_inputs::claude;
 use crate::core::{ParsedFile, ParsedMessage};
-use crate::input_config::{DiscoverConfig, SessionInput};
+use crate::input_config::{DecodeFormat, DiscoverConfig, InputDefinition, SessionInput};
 use globset::{Glob, GlobSet, GlobSetBuilder};
 use miette::IntoDiagnostic;
 use regex::Regex;
 use serde_json::Value;
+use serde_json_path::JsonPath;
 use sha2::{Digest, Sha256};
 use std::collections::HashMap;
 use std::fs;
@@ -515,6 +516,368 @@ fn parse_pi_file(path: &Path, existing_hashes: &HashMap<String, String>) -> Opti
     })
 }
 
+fn parse_jsonpath(selector: &str, input_id: &str, field: &str) -> Option<JsonPath> {
+    match JsonPath::parse(selector) {
+        Ok(path) => Some(path),
+        Err(err) => {
+            tracing::warn!(
+                "Input '{}' has invalid {} JSONPath selector '{}': {}",
+                input_id,
+                field,
+                selector,
+                err
+            );
+            None
+        }
+    }
+}
+
+fn query_nodes<'a>(path: &JsonPath, value: &'a Value) -> Vec<&'a Value> {
+    path.query(value).all()
+}
+
+fn value_to_field_string(value: &Value) -> Option<String> {
+    match value {
+        Value::String(value) => Some(value.clone()),
+        Value::Number(value) => Some(value.to_string()),
+        Value::Bool(value) => Some(value.to_string()),
+        Value::Null | Value::Array(_) | Value::Object(_) => None,
+    }
+}
+
+fn select_first_string(
+    selector: &str,
+    value: &Value,
+    input_id: &str,
+    field: &str,
+) -> Option<String> {
+    let path = parse_jsonpath(selector, input_id, field)?;
+    query_nodes(&path, value)
+        .into_iter()
+        .find_map(value_to_field_string)
+}
+
+fn select_optional_string(
+    selector: Option<&String>,
+    value: &Value,
+    input_id: &str,
+    field: &str,
+) -> Option<String> {
+    selector.and_then(|selector| select_first_string(selector, value, input_id, field))
+}
+
+fn aggregate_content_type(types: &[String], default: &str) -> String {
+    if types.iter().any(|value| value == "code") {
+        return "code".to_string();
+    }
+    if types
+        .iter()
+        .any(|value| matches!(value.as_str(), "tool" | "tool_use" | "tool_result"))
+    {
+        return "tool".to_string();
+    }
+    types
+        .iter()
+        .find(|value| !value.trim().is_empty())
+        .cloned()
+        .unwrap_or_else(|| default.to_string())
+}
+
+fn selected_strings(path: &JsonPath, value: &Value) -> Vec<String> {
+    query_nodes(path, value)
+        .into_iter()
+        .filter_map(value_to_field_string)
+        .collect()
+}
+
+fn extract_content_from_record(
+    input: &InputDefinition,
+    record: &Value,
+) -> Option<(String, String)> {
+    let content_selector = parse_jsonpath(&input.content.selector, &input.id, "content.selector")?;
+    let content_nodes = query_nodes(&content_selector, record);
+    if content_nodes.is_empty() {
+        return None;
+    }
+
+    let mut parts = Vec::new();
+    let mut content_types = Vec::new();
+
+    if let Some(blocks_selector) = &input.content.blocks {
+        if let Some(blocks_path) = parse_jsonpath(blocks_selector, &input.id, "content.blocks") {
+            let block_nodes = query_nodes(&blocks_path, record);
+            if !block_nodes.is_empty() {
+                let block_text_path =
+                    input.content.block_text.as_ref().and_then(|selector| {
+                        parse_jsonpath(selector, &input.id, "content.block_text")
+                    });
+                let content_type_path = input.content.content_type.as_ref().and_then(|selector| {
+                    parse_jsonpath(selector, &input.id, "content.content_type")
+                });
+
+                for block in block_nodes {
+                    if let Some(path) = &block_text_path {
+                        parts.extend(selected_strings(path, block));
+                    } else if let Some(text) = value_to_field_string(block) {
+                        parts.push(text);
+                    }
+                    if let Some(path) = &content_type_path {
+                        content_types.extend(selected_strings(path, block));
+                    }
+                }
+
+                if !parts.is_empty() {
+                    let text = parts.join(&input.text.join);
+                    return Some((
+                        text,
+                        aggregate_content_type(&content_types, &input.content.default_content_type),
+                    ));
+                }
+            }
+        }
+    }
+
+    let string_path = parse_jsonpath(&input.content.string, &input.id, "content.string")?;
+    let content_type_path = input
+        .content
+        .content_type
+        .as_ref()
+        .and_then(|selector| parse_jsonpath(selector, &input.id, "content.content_type"));
+
+    for content in content_nodes {
+        parts.extend(selected_strings(&string_path, content));
+        if let Some(path) = &content_type_path {
+            content_types.extend(selected_strings(path, content));
+        }
+    }
+
+    if content_types.is_empty() {
+        if let Some(path) = &content_type_path {
+            content_types.extend(selected_strings(path, record));
+        }
+    }
+
+    Some((
+        parts.join(&input.text.join),
+        aggregate_content_type(&content_types, &input.content.default_content_type),
+    ))
+}
+
+fn normalize_extracted_text(_input: &InputDefinition, text: &str) -> Option<String> {
+    if text.is_empty() {
+        None
+    } else {
+        Some(text.to_string())
+    }
+}
+
+fn parsed_message_from_record(
+    input: &InputDefinition,
+    record: &Value,
+    ordinal: usize,
+) -> Option<ParsedMessage> {
+    let raw_role = select_first_string(&input.mapping.role, record, &input.id, "map.role")?;
+    let role = input
+        .mapping
+        .role_aliases
+        .get(&raw_role)
+        .cloned()
+        .unwrap_or(raw_role);
+    let (raw_text, content_type) = extract_content_from_record(input, record)?;
+    let text = normalize_extracted_text(input, &raw_text)?;
+
+    Some(ParsedMessage {
+        role,
+        text,
+        ordinal,
+        uuid: select_optional_string(input.mapping.uuid.as_ref(), record, &input.id, "map.uuid"),
+        timestamp: select_optional_string(
+            input.mapping.timestamp.as_ref(),
+            record,
+            &input.id,
+            "map.timestamp",
+        ),
+        content_type,
+    })
+}
+
+fn parse_records_from_value<'a>(
+    input: &InputDefinition,
+    value: &'a Value,
+    field: &str,
+) -> Option<Vec<&'a Value>> {
+    let record_path = parse_jsonpath(&input.record.selector, &input.id, field)?;
+    Some(query_nodes(&record_path, value))
+}
+
+fn parse_generic_jsonl_content(
+    input: &InputDefinition,
+    content: &str,
+) -> (Vec<ParsedMessage>, Option<String>, usize) {
+    let mut messages = Vec::new();
+    let mut project = None;
+    let mut data_errors = 0;
+
+    for (line_number, line) in content.lines().enumerate() {
+        if line.trim().is_empty() {
+            continue;
+        }
+        let value = match serde_json::from_str::<Value>(line) {
+            Ok(value) => value,
+            Err(err) => {
+                data_errors += 1;
+                tracing::warn!(
+                    "Skipping invalid JSONL line {} for input '{}': {}",
+                    line_number + 1,
+                    input.id,
+                    err
+                );
+                continue;
+            }
+        };
+        let Some(records) = parse_records_from_value(input, &value, "record.selector") else {
+            data_errors += 1;
+            continue;
+        };
+        for record in records {
+            if project.is_none() {
+                project = select_optional_string(
+                    input.mapping.project.as_ref(),
+                    record,
+                    &input.id,
+                    "map.project",
+                );
+            }
+            match parsed_message_from_record(input, record, line_number) {
+                Some(message) => messages.push(message),
+                None => data_errors += 1,
+            }
+        }
+    }
+
+    (messages, project, data_errors)
+}
+
+fn parse_generic_json_content(
+    input: &InputDefinition,
+    content: &str,
+) -> (Vec<ParsedMessage>, Option<String>, usize) {
+    let value = match serde_json::from_str::<Value>(content) {
+        Ok(value) => value,
+        Err(err) => {
+            tracing::warn!(
+                "Skipping invalid JSON file for input '{}': {}",
+                input.id,
+                err
+            );
+            return (Vec::new(), None, 1);
+        }
+    };
+    let Some(records) = parse_records_from_value(input, &value, "record.selector") else {
+        return (Vec::new(), None, 1);
+    };
+
+    let mut messages = Vec::new();
+    let mut project = None;
+    let mut data_errors = 0;
+    for (ordinal, record) in records.into_iter().enumerate() {
+        if project.is_none() {
+            project = select_optional_string(
+                input.mapping.project.as_ref(),
+                record,
+                &input.id,
+                "map.project",
+            );
+        }
+        match parsed_message_from_record(input, record, ordinal) {
+            Some(message) => messages.push(message),
+            None => data_errors += 1,
+        }
+    }
+
+    (messages, project, data_errors)
+}
+
+fn parse_generic_input_file(
+    input: &InputDefinition,
+    path: &Path,
+    existing_hashes: &HashMap<String, String>,
+) -> Option<ParsedFile> {
+    let path_str = path.to_string_lossy().to_string();
+    let hash = match compute_hash(path) {
+        Ok(hash) => hash,
+        Err(err) => {
+            tracing::warn!("Could not hash {}: {}", path_str, err);
+            return None;
+        }
+    };
+
+    if existing_hashes.get(&path_str) == Some(&hash) {
+        return None;
+    }
+
+    let content = match fs::read_to_string(path) {
+        Ok(content) => content,
+        Err(err) => {
+            tracing::warn!("Could not read {}: {}", path_str, err);
+            return None;
+        }
+    };
+
+    let (messages, project, data_errors) = match input.decode.format {
+        DecodeFormat::Jsonl => parse_generic_jsonl_content(input, &content),
+        DecodeFormat::Json => parse_generic_json_content(input, &content),
+    };
+
+    if data_errors > 0 {
+        tracing::warn!(
+            "Skipped {} invalid records while parsing {} for input '{}'",
+            data_errors,
+            path_str,
+            input.id
+        );
+    }
+
+    Some(ParsedFile {
+        source: input.source.clone(),
+        source_path: path_str,
+        hash,
+        project: project.or_else(|| Some("unknown".to_string())),
+        messages,
+    })
+}
+
+fn parse_generic_input_definition(
+    input: &InputDefinition,
+    existing_hashes: &HashMap<String, String>,
+) -> Vec<ParsedFile> {
+    if !input.active {
+        return Vec::new();
+    }
+
+    let mut entries = Vec::new();
+    for root in &input.discover.roots {
+        let mut single_root = input.discover.clone();
+        single_root.roots = vec![root.clone()];
+        match discover_candidate_files(&single_root) {
+            Ok(root_entries) => entries.extend(root_entries),
+            Err(err) => tracing::warn!(
+                "Could not discover files for input '{}' in {}: {}",
+                input.id,
+                root,
+                err
+            ),
+        }
+    }
+    entries.sort_by(|a, b| a.to_string_lossy().cmp(&b.to_string_lossy()));
+    entries.dedup();
+
+    entries
+        .into_iter()
+        .filter_map(|path| parse_generic_input_file(input, &path, existing_hashes))
+        .collect()
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct SessionInputParserIdentity {
     source: String,
@@ -686,6 +1049,19 @@ pub fn parse_session_inputs(
     parsed
 }
 
+pub fn parse_input_definitions(
+    inputs: &[InputDefinition],
+    existing_hashes: &HashMap<String, String>,
+) -> Vec<ParsedFile> {
+    let mut parsed = Vec::new();
+
+    for input in inputs {
+        parsed.extend(parse_generic_input_definition(input, existing_hashes));
+    }
+
+    parsed
+}
+
 #[tracing::instrument(skip(existing_hashes))]
 pub fn parse_sessions(
     session_dir: &str,
@@ -703,6 +1079,185 @@ pub fn parse_sessions(
 mod tests {
     use super::*;
     use tempfile::tempdir;
+
+    fn generic_input_definition(
+        id: &str,
+        root: &Path,
+        format: crate::input_config::DecodeFormat,
+        record_selector: &str,
+        content_string: &str,
+        content_blocks: Option<&str>,
+        content_type: Option<&str>,
+    ) -> crate::input_config::InputDefinition {
+        crate::input_config::InputDefinition {
+            id: id.into(),
+            source: "session".into(),
+            active: true,
+            discover: crate::input_config::DiscoverConfig {
+                roots: vec![root.to_string_lossy().into_owned()],
+                include: vec!["**/*.{json,jsonl}".into()],
+                exclude: Vec::new(),
+                follow_symlinks: false,
+            },
+            decode: crate::input_config::DecodeConfig {
+                format,
+                encoding: "utf-8".into(),
+            },
+            record: crate::input_config::RecordConfig {
+                selector: record_selector.into(),
+                include_when: Vec::new(),
+                exclude_when: Vec::new(),
+            },
+            mapping: crate::input_config::MapConfig {
+                role: "$.role".into(),
+                uuid: Some("$.uuid".into()),
+                timestamp: Some("$.timestamp".into()),
+                session_id: Some("$.session_id".into()),
+                project: Some("$.project".into()),
+                role_aliases: [("human".to_string(), "user".to_string())]
+                    .into_iter()
+                    .collect(),
+            },
+            content: crate::input_config::ContentConfig {
+                selector: "$.content".into(),
+                string: content_string.into(),
+                blocks: content_blocks.map(str::to_string),
+                block_text: Some("$.text".into()),
+                content_type: content_type.map(str::to_string),
+                include_when: Vec::new(),
+                exclude_when: Vec::new(),
+                default_content_type: "text".into(),
+            },
+            text: crate::input_config::TextConfig::default(),
+        }
+    }
+
+    #[test]
+    fn test_generic_jsonl_input_parses_string_content_role_aliases_and_defaults()
+    -> miette::Result<()> {
+        let dir = tempdir().into_diagnostic()?;
+        let file_path = dir.path().join("generic.jsonl");
+        fs::write(
+            &file_path,
+            r#"{"role":"human","uuid":"u1","timestamp":"2024-01-01T00:00:00Z","session_id":"s1","project":"project-a","content":" hello from jsonl "}
+not-json
+{"role":"assistant","uuid":"u2","timestamp":"2024-01-01T00:00:01Z","session_id":"s1","project":"project-a","content":"answer"}"#,
+        )
+        .into_diagnostic()?;
+
+        let input = generic_input_definition(
+            "generic-jsonl",
+            dir.path(),
+            crate::input_config::DecodeFormat::Jsonl,
+            "$",
+            "$",
+            None,
+            None,
+        );
+
+        let files = parse_input_definitions(&[input], &HashMap::new());
+
+        assert_eq!(files.len(), 1);
+        assert_eq!(files[0].source, "session");
+        assert_eq!(files[0].project.as_deref(), Some("project-a"));
+        assert_eq!(files[0].messages.len(), 2);
+        assert_eq!(files[0].messages[0].role, "user");
+        assert_eq!(files[0].messages[0].text, " hello from jsonl ");
+        assert_eq!(files[0].messages[0].uuid.as_deref(), Some("u1"));
+        assert_eq!(
+            files[0].messages[0].timestamp.as_deref(),
+            Some("2024-01-01T00:00:00Z")
+        );
+        assert_eq!(files[0].messages[0].content_type, "text");
+        assert_eq!(files[0].messages[1].role, "assistant");
+        assert_eq!(files[0].messages[1].ordinal, 2);
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_generic_jsonl_input_parses_object_and_array_content() -> miette::Result<()> {
+        let dir = tempdir().into_diagnostic()?;
+        fs::write(
+            dir.path().join("content-shapes.jsonl"),
+            r#"{"role":"assistant","uuid":"u1","content":{"text":"object text"}}
+{"role":"assistant","uuid":"u2","content":[{"type":"text","text":"array text"},{"type":"code","text":"fn main() {}"}]}"#,
+        )
+        .into_diagnostic()?;
+
+        let input = generic_input_definition(
+            "content-shapes",
+            dir.path(),
+            crate::input_config::DecodeFormat::Jsonl,
+            "$",
+            "$.text",
+            Some("$.content[*]"),
+            Some("$.type"),
+        );
+
+        let files = parse_input_definitions(&[input], &HashMap::new());
+
+        assert_eq!(files.len(), 1);
+        assert_eq!(files[0].messages.len(), 2);
+        assert_eq!(files[0].messages[0].text, "object text");
+        assert_eq!(files[0].messages[0].content_type, "text");
+        assert_eq!(files[0].messages[1].text, "array text\nfn main() {}");
+        assert_eq!(files[0].messages[1].content_type, "code");
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_generic_record_selector_no_match_yields_empty_file() -> miette::Result<()> {
+        let dir = tempdir().into_diagnostic()?;
+        fs::write(dir.path().join("records.json"), r#"{"records":[]}"#).into_diagnostic()?;
+
+        let input = generic_input_definition(
+            "generic-json-no-match",
+            dir.path(),
+            crate::input_config::DecodeFormat::Json,
+            "$.missing[*]",
+            "$",
+            None,
+            None,
+        );
+
+        let files = parse_input_definitions(&[input], &HashMap::new());
+
+        assert_eq!(files.len(), 1);
+        assert!(files[0].messages.is_empty());
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_generic_json_input_uses_record_selector() -> miette::Result<()> {
+        let dir = tempdir().into_diagnostic()?;
+        fs::write(
+            dir.path().join("records.json"),
+            r#"{"records":[{"role":"user","uuid":"u1","content":"from json"},{"role":"assistant","uuid":"u2","content":"json answer"}]}"#,
+        )
+        .into_diagnostic()?;
+
+        let input = generic_input_definition(
+            "generic-json",
+            dir.path(),
+            crate::input_config::DecodeFormat::Json,
+            "$.records[*]",
+            "$",
+            None,
+            None,
+        );
+
+        let files = parse_input_definitions(&[input], &HashMap::new());
+
+        assert_eq!(files.len(), 1);
+        assert_eq!(files[0].messages.len(), 2);
+        assert_eq!(files[0].messages[0].text, "from json");
+        assert_eq!(files[0].messages[1].text, "json answer");
+
+        Ok(())
+    }
 
     #[test]
     fn test_sync_workflow() -> miette::Result<()> {

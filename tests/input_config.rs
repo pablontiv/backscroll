@@ -111,6 +111,25 @@ fn rejects_missing_active_discover_root_with_clear_error() {
 }
 
 #[test]
+fn rejects_invalid_active_jsonpath_selector_with_clear_error() {
+    let dir = tempdir().unwrap();
+    let root = dir.path().join("sessions");
+    std::fs::create_dir_all(&root).unwrap();
+    std::fs::write(
+        dir.path().join("invalid-selector.inputs.toml"),
+        minimal_manifest("claude", &toml_path(&root))
+            .replace("selector = \"$.message.content\"", "selector = \"$[\""),
+    )
+    .unwrap();
+
+    let err = InputConfig::load_from_dir(dir.path()).expect_err("invalid selector must fail");
+    let msg = err.to_string();
+    assert!(msg.contains("invalid-selector.inputs.toml"), "{msg}");
+    assert!(msg.contains("content.selector"), "{msg}");
+    assert!(msg.contains("$["), "{msg}");
+}
+
+#[test]
 fn rejects_invalid_active_discover_glob_with_clear_error() {
     let dir = tempdir().unwrap();
     let root = dir.path().join("sessions");

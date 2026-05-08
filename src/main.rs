@@ -5,7 +5,7 @@ mod output;
 use crate::output::{OutputFormat, OutputOptions, format_results};
 use backscroll::config::Config;
 use backscroll::core::plans::parse_plan;
-use backscroll::core::sync::parse_session_inputs;
+use backscroll::core::sync::{parse_input_definitions, parse_session_inputs};
 use backscroll::core::{SearchEngine, SearchParams};
 use backscroll::input_config::{InputConfig, SessionInput};
 use backscroll::storage::sqlite::Database;
@@ -347,12 +347,17 @@ fn sync_session_inputs(
     input_config: &InputConfig,
     include_agents: bool,
 ) -> Result<()> {
-    let inputs = resolve_session_inputs(cli_paths, input_config, include_agents);
-    if inputs.is_empty() {
-        return Ok(());
-    }
     let hashes = engine.get_file_hashes()?;
-    let files = parse_session_inputs(&inputs, &hashes);
+    let files = if cli_paths.is_empty() && !input_config.active_inputs().is_empty() {
+        let inputs = input_config.active_inputs();
+        parse_input_definitions(&inputs, &hashes)
+    } else {
+        let inputs = resolve_session_inputs(cli_paths, input_config, include_agents);
+        if inputs.is_empty() {
+            return Ok(());
+        }
+        parse_session_inputs(&inputs, &hashes)
+    };
     if !files.is_empty() {
         engine.sync_files(files)?;
     }

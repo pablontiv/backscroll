@@ -1,5 +1,5 @@
 ---
-estado: Specified
+estado: Completed
 tipo: task
 ---
 # T004: Implement generic JSON/JSONL decoder and JSONPath selectors
