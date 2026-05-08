@@ -1,5 +1,5 @@
 ---
-estado: Pending
+estado: Completed
 tipo: outcome
 ---
 # O02: Generic agnostic input engine
