@@ -1596,6 +1596,69 @@ mod tests {
     }
 
     #[test]
+    fn test_sync_updates_indexed_files_by_source_path() -> miette::Result<()> {
+        let db = Database::open(":memory:")?;
+        db.setup_schema()?;
+
+        let first = ParsedFile {
+            source: "session".into(),
+            source_path: "/sessions/path-key.jsonl".to_string(),
+            hash: "hash-v1".to_string(),
+            project: None,
+            messages: vec![ParsedMessage {
+                role: "user".to_string(),
+                text: "first version".to_string(),
+                ordinal: 0,
+                uuid: None,
+                timestamp: None,
+                content_type: "text".into(),
+            }],
+        };
+        db.sync_files(vec![first])?;
+
+        let second = ParsedFile {
+            source: "session".into(),
+            source_path: "/sessions/path-key.jsonl".to_string(),
+            hash: "hash-v2".to_string(),
+            project: None,
+            messages: vec![ParsedMessage {
+                role: "user".to_string(),
+                text: "second version".to_string(),
+                ordinal: 0,
+                uuid: None,
+                timestamp: None,
+                content_type: "text".into(),
+            }],
+        };
+        db.sync_files(vec![second])?;
+
+        let hashes = db.get_file_hashes()?;
+        assert_eq!(hashes.len(), 1);
+        assert_eq!(
+            hashes.get("/sessions/path-key.jsonl"),
+            Some(&"hash-v2".to_string())
+        );
+
+        let indexed_count: i64 = db
+            .conn
+            .query_row("SELECT COUNT(*) FROM indexed_files", [], |row| row.get(0))
+            .into_diagnostic()?;
+        assert_eq!(indexed_count, 1);
+
+        let text: String = db
+            .conn
+            .query_row(
+                "SELECT text FROM search_items WHERE source_path = ?",
+                params!["/sessions/path-key.jsonl"],
+                |row| row.get(0),
+            )
+            .into_diagnostic()?;
+        assert_eq!(text, "second version");
+
+        Ok(())
+    }
+
+    #[test]
     fn test_search_source_filter_plans_only() -> miette::Result<()> {
         let db = Database::open(":memory:")?;
         db.setup_schema()?;

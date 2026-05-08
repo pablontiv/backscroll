@@ -286,6 +286,62 @@ fn test_sync_no_plans_flag() {
 }
 
 #[test]
+fn test_cli_sync_preserves_valid_content_after_noise_filter() {
+    let session_dir = tempdir().unwrap();
+    let db_dir = tempdir().unwrap();
+    let db_path = db_dir.path().join("noise_compat.db");
+    let session_file = session_dir.path().join("session.jsonl");
+
+    fs::write(
+        &session_file,
+        r#"{"type":"user","message":{"role":"user","content":"retained before<system-reminder>drop this</system-reminder> retained after"},"uuid":"noise1","timestamp":"100"}
+{"type":"user","message":{"role":"user","content":"<task-notification>drop entirely</task-notification>"},"uuid":"noise2","timestamp":"101"}"#,
+    )
+    .unwrap();
+
+    let fake_home = tempdir().unwrap();
+
+    Command::cargo_bin("backscroll")
+        .unwrap()
+        .arg("sync")
+        .arg("--path")
+        .arg(session_dir.path().to_str().unwrap())
+        .arg("--no-plans")
+        .env("BACKSCROLL_DATABASE_PATH", db_path.to_str().unwrap())
+        .env(
+            "BACKSCROLL_SESSION_DIR",
+            session_dir.path().to_str().unwrap(),
+        )
+        .env("HOME", fake_home.path().to_str().unwrap())
+        .assert()
+        .success();
+
+    let output = Command::cargo_bin("backscroll")
+        .unwrap()
+        .arg("search")
+        .arg("retained")
+        .arg("--all-projects")
+        .arg("--source")
+        .arg("sessions")
+        .env("BACKSCROLL_DATABASE_PATH", db_path.to_str().unwrap())
+        .env(
+            "BACKSCROLL_SESSION_DIR",
+            session_dir.path().to_str().unwrap(),
+        )
+        .env("HOME", fake_home.path().to_str().unwrap())
+        .output()
+        .unwrap();
+
+    assert!(output.status.success());
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    assert!(stdout.contains("before"), "{stdout}");
+    assert!(stdout.contains("after"), "{stdout}");
+    assert!(!stdout.contains("system-reminder"), "{stdout}");
+    assert!(!stdout.contains("drop this"), "{stdout}");
+    assert!(!stdout.contains("drop entirely"), "{stdout}");
+}
+
+#[test]
 fn test_resume_no_results_exit_code() {
     let session_dir = tempdir().unwrap();
     let db_dir = tempdir().unwrap();

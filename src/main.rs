@@ -296,8 +296,28 @@ fn resolve_session_inputs(
     config: &Config,
     include_agents: bool,
 ) -> Result<Vec<SessionInput>> {
+    resolve_session_inputs_with_discovery(
+        cli_paths,
+        config,
+        include_agents,
+        Config::discover_session_dirs,
+    )
+}
+
+fn resolve_session_inputs_with_discovery(
+    cli_paths: &[String],
+    config: &Config,
+    include_agents: bool,
+    discover_session_dirs: impl FnOnce() -> Vec<PathBuf>,
+) -> Result<Vec<SessionInput>> {
     // 1. CLI --path overrides everything
     if !cli_paths.is_empty() {
+        tracing::debug!(
+            resolution_source = "cli-path",
+            cli_path_count = cli_paths.len(),
+            include_agents,
+            "Resolved session inputs from CLI --path"
+        );
         return Ok(cli_paths
             .iter()
             .map(|path| SessionInput {
@@ -313,6 +333,12 @@ fn resolve_session_inputs(
 
     // 2. Explicit config session_dirs overrides legacy declared inputs
     if config.has_explicit_session_dirs() {
+        tracing::debug!(
+            resolution_source = "config-session-dirs",
+            session_dir_count = config.session_dirs.len(),
+            include_agents,
+            "Resolved session inputs from explicit config session_dirs"
+        );
         return Ok(config
             .session_dirs
             .iter()
@@ -330,12 +356,23 @@ fn resolve_session_inputs(
     // 3. Active declarative session inputs (loaded from backscroll.inputs.*)
     let declared_inputs = config.active_session_inputs();
     if !declared_inputs.is_empty() {
+        tracing::debug!(
+            resolution_source = "declarative-inputs",
+            input_count = declared_inputs.len(),
+            "Resolved session inputs from active declarative inputs"
+        );
         return Ok(declared_inputs);
     }
 
     // 4. Auto-discovery fallback
-    let discovered = Config::discover_session_dirs();
+    let discovered = discover_session_dirs();
     if !discovered.is_empty() {
+        tracing::debug!(
+            resolution_source = "claude-projects-discovery",
+            session_dir_count = discovered.len(),
+            include_agents,
+            "Resolved session inputs from Claude projects auto-discovery"
+        );
         return Ok(discovered
             .into_iter()
             .map(|path| SessionInput {
@@ -349,6 +386,10 @@ fn resolve_session_inputs(
             .collect());
     }
 
+    tracing::warn!(
+        resolution_source = "none",
+        "No session input paths resolved"
+    );
     // 5. No paths found
     Err(miette::miette!(
         "No session directories found. Use --path, configure session_dirs in backscroll.toml, or define active backscroll inputs."
@@ -981,13 +1022,92 @@ fn main() -> Result<()> {
 mod tests {
     use super::*;
     use std::fs;
-    use std::sync::{Mutex, MutexGuard};
+    use std::sync::{Arc, Mutex, MutexGuard};
     use tempfile::tempdir;
+    use tracing::field::{Field, Visit};
+    use tracing::{Event, Subscriber};
+    use tracing_subscriber::Layer;
+    use tracing_subscriber::layer::Context;
+    use tracing_subscriber::prelude::*;
 
     static FS_LOCK: Mutex<()> = Mutex::new(());
 
     fn lock_fs() -> MutexGuard<'static, ()> {
         FS_LOCK.lock().unwrap_or_else(|e| e.into_inner())
+    }
+
+    #[derive(Clone, Default)]
+    struct CapturedLogs {
+        messages: Arc<Mutex<Vec<String>>>,
+    }
+
+    impl CapturedLogs {
+        fn messages(&self) -> Vec<String> {
+            self.messages
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .clone()
+        }
+    }
+
+    impl<S> Layer<S> for CapturedLogs
+    where
+        S: Subscriber,
+    {
+        fn on_event(&self, event: &Event<'_>, _ctx: Context<'_, S>) {
+            let mut visitor = LogVisitor::default();
+            event.record(&mut visitor);
+            self.messages
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .push(visitor.fields.join(" "));
+        }
+    }
+
+    #[derive(Default)]
+    struct LogVisitor {
+        fields: Vec<String>,
+    }
+
+    impl Visit for LogVisitor {
+        fn record_str(&mut self, field: &Field, value: &str) {
+            self.fields.push(format!("{}={value}", field.name()));
+        }
+
+        fn record_debug(&mut self, field: &Field, value: &dyn std::fmt::Debug) {
+            self.fields.push(format!("{}={value:?}", field.name()));
+        }
+    }
+
+    #[test]
+    fn test_resolve_session_inputs_logs_selected_source() -> miette::Result<()> {
+        let logs = CapturedLogs::default();
+        let subscriber = tracing_subscriber::registry().with(logs.clone());
+        let config = Config {
+            session_dirs: vec!["/should/not/use".into()],
+            session_inputs: vec![SessionInput {
+                source: "session".into(),
+                parser: "pi".into(),
+                paths: vec!["/declarative/path".into()],
+                glob: None,
+                include_agents: false,
+                active: true,
+            }],
+            ..Config::default_with_paths()
+        };
+
+        tracing::subscriber::with_default(subscriber, || {
+            resolve_session_inputs(&["/cli/path".into()], &config, true)
+        })?;
+
+        let messages = logs.messages();
+        assert!(
+            messages
+                .iter()
+                .any(|message| message.contains("resolution_source=cli-path")),
+            "expected CLI resolution trace in {messages:?}"
+        );
+        Ok(())
     }
 
     #[test]
@@ -1102,6 +1222,26 @@ mod tests {
         assert_eq!(inputs[0].parser, "pi");
         assert_eq!(inputs[0].paths, vec!["/declarative/active".to_string()]);
         assert!(inputs[0].include_agents);
+        Ok(())
+    }
+
+    #[test]
+    fn test_resolve_session_inputs_uses_discovery_fallback() -> miette::Result<()> {
+        let config = Config::default_with_paths();
+        let discovered = vec![PathBuf::from("/home/test/.claude/projects/project-a")];
+
+        let inputs =
+            resolve_session_inputs_with_discovery(&[], &config, true, || discovered.clone())?;
+
+        assert_eq!(inputs.len(), 1);
+        assert_eq!(inputs[0].source, "session");
+        assert_eq!(inputs[0].parser, "claude");
+        assert_eq!(
+            inputs[0].paths,
+            vec!["/home/test/.claude/projects/project-a".to_string()]
+        );
+        assert!(inputs[0].include_agents);
+        assert!(inputs[0].active);
         Ok(())
     }
 }

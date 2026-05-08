@@ -775,39 +775,113 @@ mod tests {
     }
 
     #[test]
-    fn test_claude_input_parser_matches_parse_sessions() -> miette::Result<()> {
+    fn test_session_input_claude_compatibility_preserves_legacy_messages() -> miette::Result<()> {
         let dir = tempdir().into_diagnostic()?;
         let file_path = dir.path().join("session.jsonl");
+        fs::write(
+            dir.path().join("sessions-index.json"),
+            r#"{"session-compat":{"projectPath":"/workspace/compat-project"}}"#,
+        )
+        .into_diagnostic()?;
 
         fs::write(
             &file_path,
-            r#"{"uuid":"u1","timestamp":"2024-01-01T00:00:00Z","type":"user","message":{"role":"user","content":"hola"}}
-{"uuid":"u2","timestamp":"2024-01-01T00:00:01Z","type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"respuesta"}]}}"#,
+            r#"{"uuid":"session-compat","timestamp":"2024-01-01T00:00:00Z","type":"user","message":{"role":"user","content":"keep one<system-reminder>drop this</system-reminder> keep two"}}
+{"uuid":"ignored-progress","type":"progress"}
+{"uuid":"ignored-meta","timestamp":"2024-01-01T00:00:01Z","type":"user","isMeta":true,"message":{"role":"user","content":"meta should not index"}}
+{"uuid":"ignored-noise","timestamp":"2024-01-01T00:00:02Z","type":"user","message":{"role":"user","content":"<task-notification>drop entire message</task-notification>"}}
+{"uuid":"assistant-compatible","timestamp":"2024-01-01T00:00:03Z","type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"answer text"},{"type":"tool_use","text":"hidden tool"},{"type":"code","text":"fn main() {}"}]}}"#,
         )
         .into_diagnostic()?;
 
         let hashes = HashMap::new();
         let legacy = parse_sessions(dir.path().to_str().unwrap(), &hashes, false)?;
-        let native = crate::core::session_inputs::claude::parse_paths(
-            &[dir.path().to_string_lossy().to_string()],
-            false,
+        let declarative = parse_session_inputs(
+            &[SessionInput {
+                source: "session".into(),
+                parser: "claude".into(),
+                paths: vec![dir.path().to_string_lossy().into_owned()],
+                glob: None,
+                include_agents: false,
+                active: true,
+            }],
             &hashes,
         );
 
-        assert_eq!(native.len(), legacy.len());
-        assert_eq!(native[0].source, legacy[0].source);
-        assert_eq!(native[0].source_path, legacy[0].source_path);
-        assert_eq!(native[0].hash, legacy[0].hash);
-        assert_eq!(native[0].project, legacy[0].project);
-        assert_eq!(native[0].messages.len(), legacy[0].messages.len());
-        for (native_msg, legacy_msg) in native[0].messages.iter().zip(&legacy[0].messages) {
-            assert_eq!(native_msg.role, legacy_msg.role);
-            assert_eq!(native_msg.text, legacy_msg.text);
-            assert_eq!(native_msg.ordinal, legacy_msg.ordinal);
-            assert_eq!(native_msg.uuid, legacy_msg.uuid);
-            assert_eq!(native_msg.timestamp, legacy_msg.timestamp);
-            assert_eq!(native_msg.content_type, legacy_msg.content_type);
+        assert_eq!(declarative.len(), legacy.len());
+        assert_eq!(declarative[0].source, legacy[0].source);
+        assert_eq!(declarative[0].source, "session");
+        assert_eq!(declarative[0].source_path, legacy[0].source_path);
+        assert_eq!(declarative[0].hash, legacy[0].hash);
+        assert_eq!(declarative[0].project, legacy[0].project);
+        assert_eq!(declarative[0].project.as_deref(), Some("compat-project"));
+        assert_eq!(declarative[0].messages.len(), legacy[0].messages.len());
+        assert_eq!(declarative[0].messages.len(), 2);
+
+        for (declarative_msg, legacy_msg) in declarative[0].messages.iter().zip(&legacy[0].messages)
+        {
+            assert_eq!(declarative_msg.role, legacy_msg.role);
+            assert_eq!(declarative_msg.text, legacy_msg.text);
+            assert_eq!(declarative_msg.ordinal, legacy_msg.ordinal);
+            assert_eq!(declarative_msg.uuid, legacy_msg.uuid);
+            assert_eq!(declarative_msg.timestamp, legacy_msg.timestamp);
+            assert_eq!(declarative_msg.content_type, legacy_msg.content_type);
         }
+
+        assert_eq!(declarative[0].messages[0].text, "keep one keep two");
+        assert_eq!(declarative[0].messages[0].ordinal, 0);
+        assert_eq!(
+            declarative[0].messages[0].uuid.as_deref(),
+            Some("session-compat")
+        );
+        assert_eq!(declarative[0].messages[0].content_type, "text");
+        assert_eq!(declarative[0].messages[1].text, "answer text fn main() {}");
+        assert_eq!(declarative[0].messages[1].ordinal, 4);
+        assert_eq!(
+            declarative[0].messages[1].uuid.as_deref(),
+            Some("assistant-compatible")
+        );
+        assert_eq!(declarative[0].messages[1].content_type, "code");
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_session_input_deduplication_uses_source_path_and_hash() -> miette::Result<()> {
+        let dir = tempdir().into_diagnostic()?;
+        let file_path = dir.path().join("session.jsonl");
+
+        fs::write(
+            &file_path,
+            r#"{"uuid":"dedupe-source-path","timestamp":"2024-01-01T00:00:00Z","type":"user","message":{"role":"user","content":"dedupe stays path keyed"}}"#,
+        )
+        .into_diagnostic()?;
+
+        let input = SessionInput {
+            source: "session".into(),
+            parser: "claude".into(),
+            paths: vec![dir.path().to_string_lossy().into_owned()],
+            glob: None,
+            include_agents: false,
+            active: true,
+        };
+
+        let parsed = parse_session_inputs(std::slice::from_ref(&input), &HashMap::new());
+        assert_eq!(parsed.len(), 1);
+        assert_eq!(parsed[0].source, "session");
+
+        let mut existing_hashes = HashMap::new();
+        existing_hashes.insert(
+            "/different/source_path.jsonl".to_string(),
+            parsed[0].hash.clone(),
+        );
+        let same_hash_different_path =
+            parse_session_inputs(std::slice::from_ref(&input), &existing_hashes);
+        assert_eq!(same_hash_different_path.len(), 1);
+
+        existing_hashes.insert(parsed[0].source_path.clone(), parsed[0].hash.clone());
+        let same_hash_same_path = parse_session_inputs(&[input], &existing_hashes);
+        assert!(same_hash_same_path.is_empty());
 
         Ok(())
     }
