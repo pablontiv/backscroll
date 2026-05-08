@@ -112,6 +112,12 @@ drop_empty = true
     .unwrap();
 }
 
+fn fixture_path(relative: &str) -> std::path::PathBuf {
+    std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("tests/fixtures")
+        .join(relative)
+}
+
 #[test]
 fn test_cli_help() {
     let dir = tempdir().unwrap();
@@ -436,6 +442,110 @@ selector = "$.content"
 }
 
 #[test]
+fn test_cli_claude_fixture_manifest_excludes_subagents_and_indexes_session_source() {
+    let work_dir = fixture_path("claude-preset");
+    let db_dir = tempdir().unwrap();
+    let db_path = db_dir.path().join("claude_fixture_manifest.db");
+    let fake_home = tempdir().unwrap();
+
+    Command::cargo_bin("backscroll")
+        .unwrap()
+        .current_dir(&work_dir)
+        .arg("sync")
+        .arg("--no-plans")
+        .env("BACKSCROLL_DATABASE_PATH", db_path.to_str().unwrap())
+        .env("HOME", fake_home.path().to_str().unwrap())
+        .env_remove("BACKSCROLL_SESSION_DIR")
+        .env_remove("BACKSCROLL_SESSION_DIRS")
+        .assert()
+        .success();
+
+    Command::cargo_bin("backscroll")
+        .unwrap()
+        .current_dir(&work_dir)
+        .arg("search")
+        .arg("hello")
+        .arg("--source")
+        .arg("sessions")
+        .arg("--all-projects")
+        .env("BACKSCROLL_DATABASE_PATH", db_path.to_str().unwrap())
+        .env("HOME", fake_home.path().to_str().unwrap())
+        .env_remove("BACKSCROLL_SESSION_DIR")
+        .env_remove("BACKSCROLL_SESSION_DIRS")
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("world"));
+
+    Command::cargo_bin("backscroll")
+        .unwrap()
+        .current_dir(&work_dir)
+        .arg("search")
+        .arg("subagent")
+        .arg("--source")
+        .arg("sessions")
+        .arg("--all-projects")
+        .env("BACKSCROLL_DATABASE_PATH", db_path.to_str().unwrap())
+        .env("HOME", fake_home.path().to_str().unwrap())
+        .env_remove("BACKSCROLL_SESSION_DIR")
+        .env_remove("BACKSCROLL_SESSION_DIRS")
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("subagent should not index").not());
+}
+
+#[test]
+fn test_cli_pi_fixture_manifest_excludes_think_and_indexes_session_source() {
+    let work_dir = fixture_path("");
+    let db_dir = tempdir().unwrap();
+    let db_path = db_dir.path().join("pi_fixture_manifest.db");
+    let fake_home = tempdir().unwrap();
+
+    Command::cargo_bin("backscroll")
+        .unwrap()
+        .current_dir(&work_dir)
+        .arg("sync")
+        .arg("--no-plans")
+        .env("BACKSCROLL_DATABASE_PATH", db_path.to_str().unwrap())
+        .env("HOME", fake_home.path().to_str().unwrap())
+        .env_remove("BACKSCROLL_SESSION_DIR")
+        .env_remove("BACKSCROLL_SESSION_DIRS")
+        .assert()
+        .success();
+
+    Command::cargo_bin("backscroll")
+        .unwrap()
+        .current_dir(&work_dir)
+        .arg("search")
+        .arg("fixture")
+        .arg("--source")
+        .arg("sessions")
+        .arg("--all-projects")
+        .env("BACKSCROLL_DATABASE_PATH", db_path.to_str().unwrap())
+        .env("HOME", fake_home.path().to_str().unwrap())
+        .env_remove("BACKSCROLL_SESSION_DIR")
+        .env_remove("BACKSCROLL_SESSION_DIRS")
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("signal"));
+
+    Command::cargo_bin("backscroll")
+        .unwrap()
+        .current_dir(&work_dir)
+        .arg("search")
+        .arg("hidden")
+        .arg("--source")
+        .arg("sessions")
+        .arg("--all-projects")
+        .env("BACKSCROLL_DATABASE_PATH", db_path.to_str().unwrap())
+        .env("HOME", fake_home.path().to_str().unwrap())
+        .env_remove("BACKSCROLL_SESSION_DIR")
+        .env_remove("BACKSCROLL_SESSION_DIRS")
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("hidden reasoning should not index").not());
+}
+
+#[test]
 fn test_cli_sync_distinct_input_manifests_indexes_all_sessions() {
     let work_dir = tempdir().unwrap();
     let db_dir = tempdir().unwrap();
@@ -592,6 +702,56 @@ fn test_cli_sync_without_input_manifest_does_not_fallback_to_session_dir() {
 }
 
 #[test]
+fn test_cli_sync_without_input_manifest_does_not_fallback_to_app_config_session_dirs() {
+    let work_dir = tempdir().unwrap();
+    let session_dir = tempdir().unwrap();
+    let db_dir = tempdir().unwrap();
+    let db_path = db_dir.path().join("no_app_config_session_dirs_fallback.db");
+    let fake_home = tempdir().unwrap();
+
+    fs::write(
+        session_dir.path().join("session.jsonl"),
+        r#"{"type":"user","message":{"role":"user","content":"app config session dirs sentinel"},"uuid":"ac1","timestamp":"100"}"#,
+    )
+    .unwrap();
+    fs::write(
+        work_dir.path().join("backscroll.toml"),
+        format!(
+            r#"session_dirs = ["{}"]
+"#,
+            session_dir.path().display()
+        ),
+    )
+    .unwrap();
+
+    Command::cargo_bin("backscroll")
+        .unwrap()
+        .current_dir(work_dir.path())
+        .arg("sync")
+        .arg("--no-plans")
+        .env("BACKSCROLL_DATABASE_PATH", db_path.to_str().unwrap())
+        .env("HOME", fake_home.path().to_str().unwrap())
+        .env_remove("BACKSCROLL_SESSION_DIR")
+        .env_remove("BACKSCROLL_SESSION_DIRS")
+        .assert()
+        .success();
+
+    Command::cargo_bin("backscroll")
+        .unwrap()
+        .current_dir(work_dir.path())
+        .arg("search")
+        .arg("sentinel")
+        .arg("--all-projects")
+        .env("BACKSCROLL_DATABASE_PATH", db_path.to_str().unwrap())
+        .env("HOME", fake_home.path().to_str().unwrap())
+        .env_remove("BACKSCROLL_SESSION_DIR")
+        .env_remove("BACKSCROLL_SESSION_DIRS")
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("app config session dirs sentinel").not());
+}
+
+#[test]
 fn test_cli_sync_invalid_input_manifest_fails_cleanly() {
     let work_dir = tempdir().unwrap();
     let db_dir = tempdir().unwrap();
@@ -609,6 +769,46 @@ fn test_cli_sync_invalid_input_manifest_fails_cleanly() {
         .current_dir(work_dir.path())
         .arg("sync")
         .arg("--no-plans")
+        .env("BACKSCROLL_DATABASE_PATH", db_path.to_str().unwrap())
+        .env("HOME", fake_home.path().to_str().unwrap())
+        .env_remove("BACKSCROLL_SESSION_DIR")
+        .env_remove("BACKSCROLL_SESSION_DIRS")
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("Failed to parse input manifest"));
+}
+
+#[test]
+fn test_cli_autosync_and_read_invalid_input_manifest_fail_fast() {
+    let work_dir = tempdir().unwrap();
+    let data_dir = tempdir().unwrap();
+    let db_dir = tempdir().unwrap();
+    let db_path = db_dir.path().join("invalid_manifest_autosync_read.db");
+    let fake_home = tempdir().unwrap();
+    let read_file = data_dir.path().join("read.jsonl");
+
+    fs::write(work_dir.path().join("broken.inputs.toml"), "[[inputs]\n").unwrap();
+    fs::write(&read_file, r#"{"role":"assistant","content":"visible"}"#).unwrap();
+
+    Command::cargo_bin("backscroll")
+        .unwrap()
+        .current_dir(work_dir.path())
+        .arg("search")
+        .arg("visible")
+        .arg("--all-projects")
+        .env("BACKSCROLL_DATABASE_PATH", db_path.to_str().unwrap())
+        .env("HOME", fake_home.path().to_str().unwrap())
+        .env_remove("BACKSCROLL_SESSION_DIR")
+        .env_remove("BACKSCROLL_SESSION_DIRS")
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("Failed to parse input manifest"));
+
+    Command::cargo_bin("backscroll")
+        .unwrap()
+        .current_dir(work_dir.path())
+        .arg("read")
+        .arg(read_file.to_str().unwrap())
         .env("BACKSCROLL_DATABASE_PATH", db_path.to_str().unwrap())
         .env("HOME", fake_home.path().to_str().unwrap())
         .env_remove("BACKSCROLL_SESSION_DIR")
