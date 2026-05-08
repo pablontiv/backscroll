@@ -1,1 +1,2 @@
-{"role":"user","content":"pi manifest fixture signal","uuid":"pi-fixture-1","session_id":"pi-session-a","timestamp":"2024-02-03T04:05:06Z"}
+{"role":"human","content":"pi manifest fixture signal","uuid":"pi-fixture-1","session_id":"pi-session-a","timestamp":"2024-02-03T04:05:06Z"}
+{"role":"assistant","content":{"blocks":[{"type":"think","text":"hidden reasoning should not index"},{"type":"text","text":"pi visible answer"}]},"uuid":"pi-fixture-2","session_id":"pi-session-a","timestamp":"2024-02-03T04:05:07Z"}

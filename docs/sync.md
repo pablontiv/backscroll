@@ -95,11 +95,13 @@ This makes repeated syncs fast: the first run indexes everything, subsequent run
 
 ## Project Detection
 
-Each indexed file is assigned to a project. Resolution order:
+Each indexed file is assigned to a project. In the legacy explicit `--path` Claude parser, resolution order is:
 
 1. **sessions-index.json** — Claude maintains a `sessions-index.json` file mapping session UUIDs to project paths. If found, the project name is extracted from the last path component.
 2. **Directory structure fallback** — If no index entry exists, the project name is inferred from the parent directory structure (the directory above `sessions/` or `subagents/`).
 3. **Default** — If neither method resolves, the project is set to `"unknown"`.
+
+O02 canonical manifests only support project values that are present in the input record via `inputs.map.project`. The MVP contract does not yet express Claude `sessions-index.json` sidecar lookup, so manifest-driven Claude sync defaults to `"unknown"` unless a future contract revision adds sidecar/project inference.
 
 ## Subagent Sessions
 

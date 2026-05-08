@@ -368,6 +368,51 @@ selector = "$.content"
 }
 
 #[test]
+fn test_cli_sync_without_input_manifest_does_not_fallback_to_session_dir() {
+    let work_dir = tempdir().unwrap();
+    let session_dir = tempdir().unwrap();
+    let db_dir = tempdir().unwrap();
+    let db_path = db_dir.path().join("no_manifest_no_fallback.db");
+    let fake_home = tempdir().unwrap();
+
+    fs::write(
+        session_dir.path().join("session.jsonl"),
+        r#"{"type":"user","message":{"role":"user","content":"missing manifest sentinel"},"uuid":"mm1","timestamp":"100"}"#,
+    )
+    .unwrap();
+
+    Command::cargo_bin("backscroll")
+        .unwrap()
+        .current_dir(work_dir.path())
+        .arg("sync")
+        .arg("--no-plans")
+        .env("BACKSCROLL_DATABASE_PATH", db_path.to_str().unwrap())
+        .env(
+            "BACKSCROLL_SESSION_DIR",
+            session_dir.path().to_str().unwrap(),
+        )
+        .env("HOME", fake_home.path().to_str().unwrap())
+        .assert()
+        .success();
+
+    Command::cargo_bin("backscroll")
+        .unwrap()
+        .current_dir(work_dir.path())
+        .arg("search")
+        .arg("sentinel")
+        .arg("--all-projects")
+        .env("BACKSCROLL_DATABASE_PATH", db_path.to_str().unwrap())
+        .env(
+            "BACKSCROLL_SESSION_DIR",
+            session_dir.path().to_str().unwrap(),
+        )
+        .env("HOME", fake_home.path().to_str().unwrap())
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("missing manifest sentinel").not());
+}
+
+#[test]
 fn test_cli_sync_invalid_input_manifest_fails_cleanly() {
     let work_dir = tempdir().unwrap();
     let db_dir = tempdir().unwrap();

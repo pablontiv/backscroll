@@ -1,0 +1,45 @@
+version = 1
+
+[[inputs]]
+id = "pi"
+source = "session"
+active = true
+
+[inputs.discover]
+roots = ["."]
+include = ["pi-session.jsonl"]
+exclude = []
+
+[inputs.decode]
+format = "jsonl"
+
+[inputs.record]
+selector = "$"
+include_when = [
+  { selector = "$.role", op = "in", value = ["user", "assistant", "human"] },
+]
+
+[inputs.map]
+role = "$.role"
+uuid = "$.uuid"
+timestamp = "$.timestamp"
+session_id = "$.session_id"
+
+[inputs.map.role_aliases]
+human = "user"
+
+[inputs.content]
+selector = "$.content"
+string = "$"
+blocks = "$.content.blocks[*]"
+block_text = "$.text"
+content_type = "$.type"
+exclude_when = [
+  { selector = "$.type", op = "eq", value = "think" },
+]
+default_content_type = "text"
+
+[inputs.text]
+join = "\n"
+trim = true
+drop_empty = true

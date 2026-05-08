@@ -1,0 +1,1 @@
+{"uuid":"claude-agent","timestamp":"2024-01-02T03:04:09Z","sessionId":"claude-session-agent","type":"user","message":{"role":"user","content":"subagent should not index"}}

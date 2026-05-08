@@ -1,0 +1,60 @@
+version = 1
+
+[[inputs]]
+id = "claude"
+source = "session"
+active = true
+
+[inputs.discover]
+roots = ["projects"]
+include = ["**/*.jsonl"]
+exclude = ["**/subagents/**"]
+follow_symlinks = false
+
+[inputs.decode]
+format = "jsonl"
+
+[inputs.record]
+selector = "$"
+include_when = [
+  { selector = "$.type", op = "in", value = ["user", "assistant"] },
+]
+exclude_when = [
+  { selector = "$.isMeta", op = "eq", value = true },
+]
+
+[inputs.map]
+role = "$.message.role"
+uuid = "$.uuid"
+timestamp = "$.timestamp"
+session_id = "$.sessionId"
+
+[inputs.content]
+selector = "$.message.content"
+string = "$"
+blocks = "$.message.content[*]"
+block_text = "$.text"
+content_type = "$.type"
+include_when = [
+  { selector = "$.type", op = "eq", value = "text" },
+]
+default_content_type = "text"
+
+[inputs.text]
+join = "\n"
+trim = true
+drop_empty = true
+remove = [
+  { kind = "regex", pattern = "[\\s\\S]*Request interrupted[\\s\\S]*" },
+  { kind = "regex", pattern = "<system-reminder>[\\s\\S]*?</system-reminder>" },
+  { kind = "regex", pattern = "<task-notification>[\\s\\S]*?</task-notification>" },
+  { kind = "regex", pattern = "<caveat>[\\s\\S]*?</caveat>" },
+  { kind = "regex", pattern = "<local-command-caveat>[\\s\\S]*?</local-command-caveat>" },
+  { kind = "regex", pattern = "<command>[\\s\\S]*?</command>" },
+  { kind = "regex", pattern = "<local-command-stdout>[\\s\\S]*?</local-command-stdout>" },
+  { kind = "regex", pattern = "<command-name>[\\s\\S]*?</command-name>" },
+  { kind = "regex", pattern = "<command-message>[\\s\\S]*?</command-message>" },
+  { kind = "regex", pattern = "<command-args>[\\s\\S]*?</command-args>" },
+  { kind = "regex", pattern = "(?m)^Base directory:.*$" },
+  { kind = "regex", pattern = "(?m)^Caveat:.*$" },
+]

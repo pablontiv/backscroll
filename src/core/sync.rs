@@ -1530,6 +1530,46 @@ not-json
     }
 
     #[test]
+    fn test_pi_input_preset_indexes_fixture_through_generic_engine() -> miette::Result<()> {
+        let fixtures_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures");
+        let input_config = crate::input_config::InputConfig::load_from_dir(&fixtures_dir)?;
+        let inputs: Vec<_> = input_config
+            .active_inputs()
+            .into_iter()
+            .filter(|input| input.id == "pi")
+            .collect();
+
+        assert_eq!(
+            inputs.len(),
+            1,
+            "expected tests/fixtures/pi.inputs.toml to declare one active pi input"
+        );
+
+        let files = parse_input_definitions(&inputs, &HashMap::new());
+
+        assert_eq!(files.len(), 1);
+        assert_eq!(files[0].source, "session");
+        assert_eq!(files[0].messages.len(), 2);
+        assert_eq!(files[0].messages[0].role, "user");
+        assert_eq!(files[0].messages[0].text, "pi manifest fixture signal");
+        assert_eq!(files[0].messages[0].uuid.as_deref(), Some("pi-fixture-1"));
+        assert_eq!(
+            files[0].messages[0].timestamp.as_deref(),
+            Some("2024-02-03T04:05:06Z")
+        );
+        assert_eq!(files[0].messages[1].role, "assistant");
+        assert_eq!(files[0].messages[1].text, "pi visible answer");
+        assert!(!files[0].messages[1].text.contains("hidden reasoning"));
+        assert_eq!(files[0].messages[1].content_type, "text");
+        assert_eq!(files[0].messages[1].uuid.as_deref(), Some("pi-fixture-2"));
+        assert_eq!(
+            files[0].messages[1].timestamp.as_deref(),
+            Some("2024-02-03T04:05:07Z")
+        );
+        Ok(())
+    }
+
+    #[test]
     fn test_generic_text_normalization_applies_each_remove_kind_trim_and_drop_empty()
     -> miette::Result<()> {
         let dir = tempdir().into_diagnostic()?;

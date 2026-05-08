@@ -1,4 +1,6 @@
+use backscroll::core::sync::parse_input_definitions;
 use backscroll::input_config::InputConfig;
+use std::collections::HashMap;
 use tempfile::tempdir;
 
 fn toml_path(path: &std::path::Path) -> String {
@@ -168,6 +170,75 @@ active = true
     let msg = err.to_string();
     assert!(msg.contains("broken.inputs.toml"), "{msg}");
     assert!(msg.contains("discover"), "{msg}");
+}
+
+#[test]
+fn claude_preset_indexes_fixture_through_generic_input_engine() -> miette::Result<()> {
+    let fixture_dir =
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/claude-preset");
+    let manifest_path = fixture_dir.join("claude.inputs.toml");
+    let manifest = std::fs::read_to_string(&manifest_path).map_err(|err| {
+        miette::miette!(
+            "failed to read Claude preset fixture {}: {}",
+            manifest_path.display(),
+            err
+        )
+    })?;
+
+    assert!(manifest.contains("source = \"session\""));
+    assert!(manifest.contains("exclude = [\"**/subagents/**\"]"));
+    for noise in [
+        "<system-reminder>",
+        "<task-notification>",
+        "<caveat>",
+        "<local-command-caveat>",
+        "<command>",
+        "<local-command-stdout>",
+        "<command-name>",
+        "<command-message>",
+        "<command-args>",
+        "Base directory:",
+        "Caveat:",
+        "Request interrupted",
+    ] {
+        assert!(manifest.contains(noise), "missing noise pattern {noise}");
+    }
+
+    let input_config = InputConfig::load_from_dir(&fixture_dir)?;
+    let files = parse_input_definitions(&input_config.active_inputs(), &HashMap::new());
+
+    assert_eq!(files.len(), 1);
+    let file = &files[0];
+    assert_eq!(file.source, "session");
+    assert!(file.source_path.ends_with("session-main.jsonl"));
+    assert!(!file.source_path.contains("subagents"));
+    assert_eq!(file.messages.len(), 3);
+
+    assert_eq!(file.messages[0].role, "user");
+    assert_eq!(file.messages[0].text, "hello  world");
+    assert_eq!(file.messages[0].uuid.as_deref(), Some("claude-u-1"));
+    assert_eq!(
+        file.messages[0].timestamp.as_deref(),
+        Some("2024-01-02T03:04:05Z")
+    );
+
+    assert_eq!(file.messages[1].role, "assistant");
+    assert_eq!(file.messages[1].text, "assistant visible text");
+    assert_eq!(file.messages[1].uuid.as_deref(), Some("claude-a-1"));
+    assert_eq!(
+        file.messages[1].timestamp.as_deref(),
+        Some("2024-01-02T03:04:06Z")
+    );
+
+    assert_eq!(file.messages[2].role, "user");
+    assert_eq!(file.messages[2].text, "visible tail");
+    assert_eq!(file.messages[2].uuid.as_deref(), Some("claude-u-2"));
+    assert_eq!(
+        file.messages[2].timestamp.as_deref(),
+        Some("2024-01-02T03:04:07Z")
+    );
+
+    Ok(())
 }
 
 #[test]
