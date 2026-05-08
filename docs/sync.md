@@ -23,48 +23,39 @@ backscroll sync --path ~/.claude/sessions --include-agents  # Include subagent s
 
 ## Declarative Inputs
 
-Session files are resolved from `--path`, configured `session_dirs`, or current compatibility manifests in `backscroll.inputs.toml`/`backscroll.inputs.d/*.toml`.
+O01 allowed transitional ingestion through `--path`, `session_dir(s)`, and implicit Claude discovery. O02 makes TOML input manifests canonical: app settings stay in `backscroll.toml`, while session ingestion is declared in `*.inputs.toml` and/or `backscroll.inputs.d/*.toml`.
 
-The O02 generic input manifest contract for `*.inputs.toml` files is specified in
-[Generic input manifest contract](input-contract.md). That contract describes the
-provider-neutral `discover -> decode -> record -> map -> content -> text -> emit`
-pipeline and keeps Claude/Pi conversations normalized as `source = "session"`.
+The O02 generic input manifest contract is specified in [Generic input manifest contract](input-contract.md). It describes the provider-neutral `discover -> decode -> record -> map -> content -> text -> emit` pipeline and keeps Claude/Pi conversations normalized as `source = "session"`.
 
-Resolution precedence is:
+Canonical manifests are loaded from:
 
-1. CLI `--path` (highest; treated as Claude session paths)
-2. Non-default `session_dirs` from `backscroll.toml`, user config, or environment
-3. Active entries in `backscroll.inputs.toml`
-4. Active entries in `backscroll.inputs.d/*.toml` sorted by filename
-5. Claude project auto-discovery under `~/.claude/projects/`
+1. `./*.inputs.toml` sorted by filename
+2. `./backscroll.inputs.d/*.toml` sorted by filename
 
-If none of those produce paths, sync exits with an actionable error. If config loading falls back to built-in defaults, the same default marker and discovery path are used.
-
-Supported session input parsers:
-
-- `claude` (default): legacy Claude JSONL sessions
-- `pi`: parser for agentic event streams, using `paths` as JSONL files
-
-Inputs define `source`, `parser`, `paths`, and optional `include_agents` / `active` flags. For compatibility, session inputs emit `source = "session"`; select the adapter with `parser = "claude"` or `parser = "pi"`.
+`--path` remains only as an explicit legacy CLI migration path. `session_dir`, `session_dirs`, and implicit `~/.claude/projects` discovery are non-canonical O01 compatibility mechanisms and no longer silently feed the canonical O02 session path.
 
 ```toml
-# backscroll.inputs.toml
-[[session_inputs]]
+version = 1
+
+[[inputs]]
+id = "claude"
 source = "session"
-parser = "claude"
-paths = ["/home/user/.claude/projects"]
-include_agents = false
 active = true
 
-# backscroll.inputs.d/pi.toml can contain the same table shape.
-[[session_inputs]]
-source = "session"
-parser = "pi"
-paths = ["/path/to/pi-events.jsonl"]
-active = true
+[inputs.discover]
+roots = ["/home/user/.claude/projects"]
+include = ["**/*.jsonl"]
+exclude = ["**/subagents/**"]
+
+[inputs.decode]
+format = "jsonl"
+
+[inputs.map]
+role = "$.message.role"
+
+[inputs.content]
+selector = "$.message.content"
 ```
-
-Legacy `session_dir`/`session_dirs` in `backscroll.toml` remain supported and take precedence over declarative manifests when set to a non-default value.
 
 ## Session File Format
 

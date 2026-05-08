@@ -194,53 +194,66 @@ fn test_cli_sync_declared_pi_inputs_index_as_session_source() {
     let fixture =
         std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/pi-session.jsonl");
 
-    for source in ["session", "pi"] {
-        let work_dir = tempdir().unwrap();
-        let db_dir = tempdir().unwrap();
-        let db_path = db_dir.path().join(format!("pi_input_{source}.db"));
-        let fake_home = tempdir().unwrap();
+    let work_dir = tempdir().unwrap();
+    let db_dir = tempdir().unwrap();
+    let db_path = db_dir.path().join("pi_input_session.db");
+    let fake_home = tempdir().unwrap();
 
-        fs::write(
-            work_dir.path().join("backscroll.inputs.toml"),
-            format!(
-                r#"[[inputs]]
-source = "{source}"
-parser = "pi"
-paths = ["{}"]
+    fs::write(
+        work_dir.path().join("pi.inputs.toml"),
+        format!(
+            r#"version = 1
+
+[[inputs]]
+id = "pi"
+source = "session"
+active = true
+
+[inputs.discover]
+roots = ["{}"]
+include = ["**/*.jsonl"]
+
+[inputs.decode]
+format = "jsonl"
+
+[inputs.map]
+role = "$.role"
+
+[inputs.content]
+selector = "$.content"
 "#,
-                fixture.display()
-            ),
-        )
-        .unwrap();
+            fixture.display()
+        ),
+    )
+    .unwrap();
 
-        Command::cargo_bin("backscroll")
-            .unwrap()
-            .current_dir(work_dir.path())
-            .arg("sync")
-            .arg("--no-plans")
-            .env("BACKSCROLL_DATABASE_PATH", db_path.to_str().unwrap())
-            .env("HOME", fake_home.path().to_str().unwrap())
-            .env_remove("BACKSCROLL_SESSION_DIR")
-            .env_remove("BACKSCROLL_SESSION_DIRS")
-            .assert()
-            .success();
+    Command::cargo_bin("backscroll")
+        .unwrap()
+        .current_dir(work_dir.path())
+        .arg("sync")
+        .arg("--no-plans")
+        .env("BACKSCROLL_DATABASE_PATH", db_path.to_str().unwrap())
+        .env("HOME", fake_home.path().to_str().unwrap())
+        .env_remove("BACKSCROLL_SESSION_DIR")
+        .env_remove("BACKSCROLL_SESSION_DIRS")
+        .assert()
+        .success();
 
-        Command::cargo_bin("backscroll")
-            .unwrap()
-            .current_dir(work_dir.path())
-            .arg("search")
-            .arg("manifest")
-            .arg("--source")
-            .arg("sessions")
-            .arg("--all-projects")
-            .env("BACKSCROLL_DATABASE_PATH", db_path.to_str().unwrap())
-            .env("HOME", fake_home.path().to_str().unwrap())
-            .env_remove("BACKSCROLL_SESSION_DIR")
-            .env_remove("BACKSCROLL_SESSION_DIRS")
-            .assert()
-            .success()
-            .stdout(predicate::str::contains("fixture signal"));
-    }
+    Command::cargo_bin("backscroll")
+        .unwrap()
+        .current_dir(work_dir.path())
+        .arg("search")
+        .arg("manifest")
+        .arg("--source")
+        .arg("sessions")
+        .arg("--all-projects")
+        .env("BACKSCROLL_DATABASE_PATH", db_path.to_str().unwrap())
+        .env("HOME", fake_home.path().to_str().unwrap())
+        .env_remove("BACKSCROLL_SESSION_DIR")
+        .env_remove("BACKSCROLL_SESSION_DIRS")
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("fixture signal"));
 }
 
 #[test]
@@ -267,10 +280,26 @@ fn test_cli_sync_distinct_input_manifests_indexes_all_sessions() {
     fs::write(
         work_dir.path().join("backscroll.inputs.d/01-claude.toml"),
         format!(
-            r#"[[inputs]]
+            r#"version = 1
+
+[[inputs]]
+id = "claude"
 source = "session"
-parser = "claude"
-paths = ["{}"]
+active = true
+
+[inputs.discover]
+roots = ["{}"]
+include = ["**/*.jsonl"]
+exclude = ["**/subagents/**"]
+
+[inputs.decode]
+format = "jsonl"
+
+[inputs.map]
+role = "$.message.role"
+
+[inputs.content]
+selector = "$.message.content"
 "#,
             claude_dir.path().display()
         ),
@@ -279,10 +308,25 @@ paths = ["{}"]
     fs::write(
         work_dir.path().join("backscroll.inputs.d/02-pi.toml"),
         format!(
-            r#"[[inputs]]
+            r#"version = 1
+
+[[inputs]]
+id = "pi"
 source = "session"
-parser = "pi"
-paths = ["{}"]
+active = true
+
+[inputs.discover]
+roots = ["{}"]
+include = ["**/*.jsonl"]
+
+[inputs.decode]
+format = "jsonl"
+
+[inputs.map]
+role = "$.role"
+
+[inputs.content]
+selector = "$.content"
 "#,
             pi_dir.path().display()
         ),
@@ -347,7 +391,7 @@ fn test_cli_sync_invalid_input_manifest_fails_cleanly() {
         .env_remove("BACKSCROLL_SESSION_DIRS")
         .assert()
         .failure()
-        .stderr(predicate::str::contains("No session directories found"));
+        .stderr(predicate::str::contains("Failed to parse input manifest"));
 }
 
 #[test]

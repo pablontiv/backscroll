@@ -4,7 +4,6 @@ use figment::{
 };
 use serde::{Deserialize, Deserializer, Serialize};
 use std::fs;
-use std::path::Path;
 use std::path::PathBuf;
 
 #[derive(Deserialize)]
@@ -41,10 +40,6 @@ fn default_session_dirs() -> Vec<String> {
     vec![".".into()]
 }
 
-fn default_true() -> bool {
-    true
-}
-
 #[derive(Debug, Deserialize, Serialize, Clone)]
 #[serde(default)]
 pub struct EmbeddingConfig {
@@ -63,72 +58,6 @@ impl Default for EmbeddingConfig {
             similarity_threshold: 0.3,
             top_k: 50,
             rrf_k: 60,
-        }
-    }
-}
-
-#[derive(Debug, Serialize, Deserialize, Clone)]
-#[serde(default, deny_unknown_fields)]
-pub struct SessionInput {
-    pub source: String,
-    #[serde(default = "SessionInput::default_parser")]
-    pub parser: String,
-    #[serde(default, deserialize_with = "string_or_vec")]
-    pub paths: Vec<String>,
-    #[serde(default)]
-    pub glob: Option<String>,
-    #[serde(default)]
-    pub include_agents: bool,
-    #[serde(default = "default_true")]
-    pub active: bool,
-}
-
-impl SessionInput {
-    fn default_parser() -> String {
-        "claude".to_string()
-    }
-
-    pub fn is_active(&self) -> bool {
-        self.active
-    }
-
-    pub fn parser(&self) -> &str {
-        if self.parser.is_empty() {
-            "claude"
-        } else {
-            self.parser.as_str()
-        }
-    }
-}
-
-impl Default for SessionInput {
-    fn default() -> Self {
-        Self {
-            source: "session".to_string(),
-            parser: Self::default_parser(),
-            paths: Vec::new(),
-            glob: None,
-            include_agents: false,
-            active: true,
-        }
-    }
-}
-
-#[derive(Debug, Serialize, Deserialize, Clone)]
-#[serde(deny_unknown_fields)]
-struct InputsFile {
-    #[serde(default)]
-    pub inputs: Vec<SessionInput>,
-    #[serde(default)]
-    pub session_inputs: Vec<SessionInput>,
-}
-
-impl InputsFile {
-    fn all_inputs(&self) -> Vec<SessionInput> {
-        if !self.inputs.is_empty() {
-            self.inputs.clone()
-        } else {
-            self.session_inputs.clone()
         }
     }
 }
@@ -170,48 +99,11 @@ pub struct Config {
     pub embedding: EmbeddingConfig,
     #[serde(default)]
     pub sources: SourcesConfig,
-    #[serde(default)]
-    pub session_inputs: Vec<SessionInput>,
     #[serde(skip)]
     pub session_dirs_explicit: bool,
 }
 
 impl Config {
-    fn read_inputs_file(path: &Path) -> miette::Result<Vec<SessionInput>> {
-        let content = fs::read_to_string(path)
-            .map_err(|err| miette::miette!("Failed to read {}: {}", path.display(), err))?;
-        let file_inputs = Figment::new()
-            .merge(Toml::string(&content))
-            .extract::<InputsFile>()
-            .map_err(|err| miette::miette!("Failed to parse {}: {}", path.display(), err))?;
-        Ok(file_inputs.all_inputs())
-    }
-
-    fn collect_backscroll_inputs() -> miette::Result<Vec<SessionInput>> {
-        let mut inputs: Vec<SessionInput> = Vec::new();
-
-        let legacy_file = Path::new("backscroll.inputs.toml");
-        if legacy_file.is_file() {
-            inputs.extend(Self::read_inputs_file(legacy_file)?);
-        }
-
-        let dir = Path::new("backscroll.inputs.d");
-        if dir.is_dir() {
-            let mut entries: Vec<_> = fs::read_dir(dir)
-                .map_err(|err| miette::miette!("Failed to read {}: {}", dir.display(), err))?
-                .collect::<std::result::Result<Vec<_>, _>>()
-                .map_err(|err| miette::miette!("Failed to read {}: {}", dir.display(), err))?;
-
-            entries.retain(|entry| entry.path().extension().is_some_and(|ext| ext == "toml"));
-            entries.sort_by_key(|entry| entry.path());
-            for entry in entries {
-                inputs.extend(Self::read_inputs_file(&entry.path())?);
-            }
-        }
-
-        Ok(inputs)
-    }
-
     pub fn load() -> miette::Result<Self> {
         // Buscamos en:
         // 1. backscroll.toml (directorio actual)
@@ -237,8 +129,6 @@ impl Config {
         })?;
 
         cfg.session_dirs_explicit = session_dirs_explicit;
-        cfg.session_inputs
-            .extend(Self::collect_backscroll_inputs()?);
 
         Ok(cfg)
     }
@@ -293,22 +183,12 @@ impl Config {
             session_dirs: vec![".".into()],
             embedding: EmbeddingConfig::default(),
             sources: SourcesConfig::default(),
-            session_inputs: Vec::new(),
             session_dirs_explicit: false,
         }
     }
 
     pub fn has_explicit_session_dirs(&self) -> bool {
         self.session_dirs_explicit || self.session_dirs != default_session_dirs()
-    }
-
-    pub fn active_session_inputs(&self) -> Vec<SessionInput> {
-        self.session_inputs
-            .iter()
-            .filter(|i| i.is_active())
-            .filter(|i| i.source == "session" || i.source == "pi")
-            .cloned()
-            .collect()
     }
 }
 
@@ -350,69 +230,7 @@ mod tests {
     }
 
     #[test]
-    fn test_config_session_inputs_from_file() {
-        let _guard = lock_fs();
-        let dir = tempdir().unwrap();
-        let old_dir = std::env::current_dir().unwrap();
-        fs::write(
-            dir.path().join("backscroll.toml"),
-            "database_path = \"test.db\"\n",
-        )
-        .unwrap();
-
-        let inputs_toml = r#"
-        [[session_inputs]]
-        source = "session"
-        parser = "claude"
-        paths = ["/a", "/b"]
-        glob = "**/*.jsonl"
-        include_agents = true
-        active = true
-
-        [[session_inputs]]
-        source = "session"
-        parser = "pi"
-        paths = "/tmp/pi.jsonl"
-        active = false
-        "#;
-        fs::write(dir.path().join("backscroll.inputs.toml"), inputs_toml).unwrap();
-
-        std::env::set_current_dir(dir.path()).unwrap();
-        let config = Config::load().unwrap();
-        std::env::set_current_dir(old_dir).unwrap();
-
-        eprintln!("inputs={:?}", config.session_inputs);
-        assert_eq!(config.session_inputs.len(), 2);
-        assert!(config.session_inputs[0].is_active());
-        assert_eq!(config.session_inputs[0].paths.len(), 2);
-        assert_eq!(config.session_inputs[0].paths[0], "/a");
-        assert_eq!(config.session_inputs[0].glob.as_deref(), Some("**/*.jsonl"));
-        assert!(!config.session_inputs[1].is_active());
-    }
-
-    #[test]
-    fn test_invalid_inputs_file_returns_controlled_parse_error() {
-        let _guard = lock_fs();
-        let dir = tempdir().unwrap();
-        let old_dir = std::env::current_dir().unwrap();
-        fs::write(
-            dir.path().join("backscroll.toml"),
-            "database_path = \"test.db\"\n",
-        )
-        .unwrap();
-        fs::write(dir.path().join("backscroll.inputs.toml"), "[[inputs]\n").unwrap();
-
-        std::env::set_current_dir(dir.path()).unwrap();
-        let result = Config::load();
-        std::env::set_current_dir(old_dir).unwrap();
-
-        let err = result.expect_err("invalid input manifests must fail Config::load");
-        let msg = err.to_string();
-        assert!(msg.contains("backscroll.inputs.toml"), "{msg}");
-    }
-
-    #[test]
-    fn test_inputs_reject_unknown_fields() {
+    fn test_app_config_does_not_load_input_manifest_files() -> miette::Result<()> {
         let _guard = lock_fs();
         let dir = tempdir().unwrap();
         let old_dir = std::env::current_dir().unwrap();
@@ -422,61 +240,56 @@ mod tests {
         )
         .unwrap();
         fs::write(
-            dir.path().join("backscroll.inputs.toml"),
-            "[[inputs]]\nsource = \"session\"\npaths = [\"/a\"]\nunknown_key = true\n",
+            dir.path().join("claude.inputs.toml"),
+            r#"version = 1
+
+[[inputs]]
+id = "claude"
+source = "session"
+active = true
+
+[inputs.discover]
+roots = ["/a"]
+include = ["**/*.jsonl"]
+
+[inputs.decode]
+format = "jsonl"
+
+[inputs.map]
+role = "$.message.role"
+
+[inputs.content]
+selector = "$.message.content"
+"#,
         )
         .unwrap();
 
         std::env::set_current_dir(dir.path()).unwrap();
-        let result = Config::load();
+        let config = Config::load();
         std::env::set_current_dir(old_dir).unwrap();
+        let config = config?;
 
-        let err = result.expect_err("unknown input keys must be rejected");
-        let msg = err.to_string();
-        assert!(
-            msg.contains("unknown_key") || msg.contains("unknown"),
-            "{msg}"
-        );
+        assert_eq!(config.database_path, "test.db");
+        Ok(())
     }
 
     #[test]
-    fn test_config_session_inputs_from_dir() -> miette::Result<()> {
+    fn test_app_config_ignores_invalid_input_manifest_files() -> miette::Result<()> {
+        let _guard = lock_fs();
         let dir = tempdir().unwrap();
+        let old_dir = std::env::current_dir().unwrap();
         fs::write(
             dir.path().join("backscroll.toml"),
             "database_path = \"test.db\"\n",
         )
         .unwrap();
-        fs::create_dir(dir.path().join("backscroll.inputs.d")).unwrap();
+        fs::write(dir.path().join("broken.inputs.toml"), "[[inputs]\n").unwrap();
 
-        let file1 = dir.path().join("backscroll.inputs.d/01-one.toml");
-        let file2 = dir.path().join("backscroll.inputs.d/02-two.toml");
-
-        fs::write(
-            &file1,
-            "[[inputs]]\nsource = \"session\"\nparser = \"claude\"\npaths = [\"/one\"]\n",
-        )
-        .unwrap();
-        fs::write(
-            &file2,
-            "[[inputs]]\nsource = \"session\"\nparser = \"pi\"\npaths = [\"/two\"]\n",
-        )
-        .unwrap();
-
-        let _guard = lock_fs();
-        let original_dir = std::env::current_dir().unwrap();
         std::env::set_current_dir(dir.path()).unwrap();
+        let config = Config::load();
+        std::env::set_current_dir(old_dir).unwrap();
 
-        let config = Config::load().unwrap();
-        assert_eq!(config.session_inputs.len(), 2);
-        let active_paths: Vec<_> = config
-            .active_session_inputs()
-            .into_iter()
-            .map(|input| input.paths[0].clone())
-            .collect();
-        assert_eq!(active_paths, vec!["/one", "/two"]);
-
-        std::env::set_current_dir(original_dir).unwrap();
+        assert_eq!(config?.database_path, "test.db");
         Ok(())
     }
 

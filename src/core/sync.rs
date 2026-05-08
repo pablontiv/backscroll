@@ -1,7 +1,7 @@
-use crate::config::SessionInput;
 use crate::core::models::{MessageContent, SessionRecord};
 use crate::core::session_inputs::claude;
 use crate::core::{ParsedFile, ParsedMessage};
+use crate::input_config::SessionInput;
 use miette::IntoDiagnostic;
 use regex::Regex;
 use serde_json::Value;

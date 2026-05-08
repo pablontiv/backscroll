@@ -8,7 +8,11 @@ conversation records into the stable ingestion boundary:
 - `ParsedMessage { role, text, ordinal, uuid, timestamp, content_type }`
 
 The manifest carries provider-specific details in data, while Backscroll keeps a
-provider-neutral pipeline:
+provider-neutral pipeline. O02 loaders discover manifests from `*.inputs.toml`
+in the working directory and `backscroll.inputs.d/*.toml`; `backscroll.toml`
+remains application configuration and is not the canonical source of ingestion
+routes.
+
 
 ```text
 discover -> decode -> record -> map -> content -> text -> emit

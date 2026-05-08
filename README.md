@@ -192,48 +192,50 @@ All output is deterministic and machine-parseable. No ANSI escape codes in `--js
 
 ## Configuration
 
-Backscroll resolves its configuration automatically. By default, it creates an index at `~/.backscroll.db` and uses the legacy session path fallback unless declarative inputs are provided.
+Backscroll separates application configuration from O02 ingestion input manifests. By default, app config creates an index at `~/.backscroll.db`.
 
-Override defaults by creating `~/.config/backscroll/config.toml` or `backscroll.toml` in the current directory. Existing `session_dir`/`session_dirs` configuration remains compatible:
+Override app settings by creating `~/.config/backscroll/config.toml` or `backscroll.toml` in the current directory:
 
 ```toml
 database_path = "/home/user/.backscroll.db"
-session_dirs = ["/home/user/.claude/sessions"]
 
-[[session_inputs]]
-source = "session"
-parser = "claude"
-paths = ["/home/user/.claude/sessions"]
-include_agents = false
-active = true
+[embedding]
+model_name = "all-MiniLM-L6-v2"
+similarity_threshold = 0.3
 ```
 
 Environment variables are also supported:
 
 ```bash
 export BACKSCROLL_DATABASE_PATH="/tmp/custom.db"
-export BACKSCROLL_SESSION_DIRS="/path/to/sessions,/path/to/other"
 ```
 
-Declarative files can additionally be loaded from `backscroll.inputs.toml` and
-`backscroll.inputs.d/*.toml`:
+Canonical ingestion inputs live in separate O02 manifests named `*.inputs.toml` or `backscroll.inputs.d/*.toml`:
 
 ```toml
-# backscroll.inputs.toml
-[[session_inputs]]
+version = 1
+
+[[inputs]]
+id = "claude"
 source = "session"
-parser = "claude"
-paths = ["/home/user/.claude/sessions"]
 active = true
 
-[[session_inputs]]
-source = "session"
-parser = "pi"
-paths = ["/home/user/.local/share/agentic/pi-events.jsonl"]
-active = true
+[inputs.discover]
+roots = ["/home/user/.claude/projects"]
+include = ["**/*.jsonl"]
+exclude = ["**/subagents/**"]
+
+[inputs.decode]
+format = "jsonl"
+
+[inputs.map]
+role = "$.message.role"
+
+[inputs.content]
+selector = "$.message.content"
 ```
 
-Session input precedence is: CLI `--path`, non-default `session_dirs` from config or env, active entries from `backscroll.inputs.toml`/`backscroll.inputs.d`, then Claude project auto-discovery. If normal config loading fails, Backscroll falls back to built-in database/session defaults and keeps the same legacy route.
+O01 `session_dir(s)` and implicit Claude discovery were transitional compatibility mechanisms. In O02 they are non-canonical and no longer silently feed the canonical manifest-driven session path; `sync --path` remains only as an explicit legacy CLI migration path.
 
 See [Configuration docs](docs/configuration.md) for the full resolution order and all options.
 

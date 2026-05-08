@@ -1,34 +1,39 @@
-# Ejemplo de configuración para Backscroll
-# Renombra este archivo a backscroll.toml o ponlo en ~/.config/backscroll/config.toml
+# Backscroll application configuration example
+# Rename to backscroll.toml or place at ~/.config/backscroll/config.toml.
 
-# Ruta donde se guardará el índice de búsqueda
+# Application/database settings belong here.
 database_path = "backscroll.db"
 
-# Directorio(s) legacy donde se encuentran sesiones (compatibilidad).
-# Puede ser string o array de strings. La clave singular `session_dir` sigue aceptada.
-# Una ruta legacy no-default tiene precedencia sobre inputs declarativos.
-session_dirs = ["."]
-# session_dir = "."
+[embedding]
+model_name = "all-MiniLM-L6-v2"
+similarity_threshold = 0.3
+top_k = 50
+rrf_k = 60
 
-# Inputs declarativos opcionales para parsing de sesiones.
-# Pueden vivir aquí, en backscroll.inputs.toml o en backscroll.inputs.d/*.toml.
-# La precedencia de paths es: --path > session_dirs no-default > inputs activos > discovery.
-# Los manifiestos externos se evalúan en orden: backscroll.inputs.toml y luego
-# backscroll.inputs.d/*.toml ordenados por nombre; entradas desconocidas fallan rápido.
-[[session_inputs]]
-source = "session"
-parser = "claude"
-paths = ["."]
-# Campo reservado para selección declarativa de archivos en el contrato.
-glob = "**/*.{json,jsonl}"
-include_agents = false
-active = true
-
-# Ejemplo opcional de segundo parser (pi). Mantiene source="session" para
-# compatibilidad de ingestión; parser selecciona el adapter técnico.
-# [[session_inputs]]
+# O02 ingestion routes do NOT live in backscroll.toml.
+# Put canonical input manifests in files like claude.inputs.toml,
+# pi.inputs.toml, or backscroll.inputs.d/*.toml:
+#
+# version = 1
+#
+# [[inputs]]
+# id = "claude"
 # source = "session"
-# parser = "pi"
-# paths = ["/path/to/pi-events.jsonl"]
-# include_agents = false
-# active = false
+# active = true
+#
+# [inputs.discover]
+# roots = ["~/.claude/projects"]
+# include = ["**/*.jsonl"]
+# exclude = ["**/subagents/**"]
+#
+# [inputs.decode]
+# format = "jsonl"
+#
+# [inputs.map]
+# role = "$.message.role"
+#
+# [inputs.content]
+# selector = "$.message.content"
+
+# Legacy migration note: older O01 configs may contain session_dir/session_dirs.
+# Those keys are non-canonical in O02 and are not silent canonical input routes.
