@@ -1,5 +1,5 @@
 ---
-estado: Specified
+estado: Completed
 tipo: task
 ---
 # T005: Implementar parser `source="session"` desde manifiestos

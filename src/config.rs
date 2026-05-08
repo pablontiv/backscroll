@@ -306,7 +306,7 @@ impl Config {
         self.session_inputs
             .iter()
             .filter(|i| i.is_active())
-            .filter(|i| i.source == "session")
+            .filter(|i| i.source == "session" || i.source == "pi")
             .cloned()
             .collect()
     }

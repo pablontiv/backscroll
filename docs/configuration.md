@@ -18,9 +18,14 @@ Configuration is resolved top-down. Higher priority sources override lower ones:
 | 3 | Environment variables | `BACKSCROLL_DATABASE_PATH`, `BACKSCROLL_SESSION_DIRS` (`BACKSCROLL_SESSION_DIR` legacy alias) |
 | 4 (lowest) | Built-in defaults | `~/.backscroll.db`, default session marker `.` |
 
-Declarative inputs are loaded from:
+Current compatibility inputs are loaded from:
 - `./backscroll.inputs.toml`
 - `./backscroll.inputs.d/*.toml`
+
+The O02 generic input manifest contract for `*.inputs.toml` files is specified in
+[Generic input manifest contract](input-contract.md). It defines the future
+provider-neutral `[[inputs]]` schema with `discover`, `decode`, `record`, `map`,
+`content`, and `text` sections.
 
 Input files are merged in deterministic order: `backscroll.inputs.toml` first,
 then `backscroll.inputs.d/*.toml` sorted by filename. Invalid TOML, unknown
@@ -70,17 +75,17 @@ paths = ["/path/to/dir"]
 
 # backscroll.inputs.d/pi.toml
 [[inputs]]
-source = "session"
+source = "pi"
 parser = "pi"
 paths = ["/path/to/pi.jsonl"]
 ```
 
 
-`inputs` is also accepted as an alias of `session_inputs` for compatibility with staged examples. For session ingestion, keep `source = "session"`; use `parser` to select `claude` or `pi`. Each input entry supports:
+`inputs` is also accepted as an alias of `session_inputs` for compatibility with staged examples. For session ingestion, use `source = "session"` with `parser = "claude"` or `parser = "pi"`; `source = "pi"` with `parser = "pi"` is also accepted for native Pi logs and still emits Backscroll's internal `source = "session"` records. Each input entry supports:
 
 | Field | Type | Default | Description |
 |-------|------|---------|-------------|
-| `source` | string | `session` | Semantic source emitted to ingestion; session inputs use `session` for compatibility |
+| `source` | string | `session` | Input family selector (`session`, or `pi` for native Pi logs); Pi inputs are normalized to internal session records |
 | `parser` | string | `claude` | Native parser adapter (`claude`, `pi`) |
 | `paths` | string or array | `[]` | Files or directories to inspect |
 | `glob` | string | unset | Reserved declarative file selector for the input contract |

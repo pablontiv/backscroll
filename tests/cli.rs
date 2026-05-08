@@ -190,6 +190,56 @@ fn test_resume_robot_output() {
 }
 
 #[test]
+fn test_cli_sync_declared_pi_inputs_index_as_session_source() {
+    let fixture =
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/pi-session.jsonl");
+
+    for source in ["session", "pi"] {
+        let work_dir = tempdir().unwrap();
+        let db_dir = tempdir().unwrap();
+        let db_path = db_dir.path().join(format!("pi_input_{source}.db"));
+        let fake_home = tempdir().unwrap();
+
+        fs::write(
+            work_dir.path().join("backscroll.inputs.toml"),
+            format!(
+                r#"[[inputs]]
+source = "{source}"
+parser = "pi"
+paths = ["{}"]
+"#,
+                fixture.display()
+            ),
+        )
+        .unwrap();
+
+        Command::cargo_bin("backscroll")
+            .unwrap()
+            .current_dir(work_dir.path())
+            .arg("sync")
+            .arg("--no-plans")
+            .env("BACKSCROLL_DATABASE_PATH", db_path.to_str().unwrap())
+            .env("HOME", fake_home.path().to_str().unwrap())
+            .assert()
+            .success();
+
+        Command::cargo_bin("backscroll")
+            .unwrap()
+            .current_dir(work_dir.path())
+            .arg("search")
+            .arg("manifest")
+            .arg("--source")
+            .arg("sessions")
+            .arg("--all-projects")
+            .env("BACKSCROLL_DATABASE_PATH", db_path.to_str().unwrap())
+            .env("HOME", fake_home.path().to_str().unwrap())
+            .assert()
+            .success()
+            .stdout(predicate::str::contains("fixture signal"));
+    }
+}
+
+#[test]
 fn test_search_source_flag_cli() {
     let session_dir = tempdir().unwrap();
     let db_dir = tempdir().unwrap();

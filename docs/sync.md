@@ -23,7 +23,12 @@ backscroll sync --path ~/.claude/sessions --include-agents  # Include subagent s
 
 ## Declarative Inputs
 
-Session files are resolved from `--path`, configured `session_dirs`, or declarative manifests in `backscroll.inputs.toml`/`backscroll.inputs.d/*.toml`.
+Session files are resolved from `--path`, configured `session_dirs`, or current compatibility manifests in `backscroll.inputs.toml`/`backscroll.inputs.d/*.toml`.
+
+The O02 generic input manifest contract for `*.inputs.toml` files is specified in
+[Generic input manifest contract](input-contract.md). That contract describes the
+provider-neutral `discover -> decode -> record -> map -> content -> text -> emit`
+pipeline and keeps Claude/Pi conversations normalized as `source = "session"`.
 
 Resolution precedence is:
 

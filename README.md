@@ -247,6 +247,7 @@ See [Configuration docs](docs/configuration.md) for the full resolution order an
 | [Search Engine](docs/search.md) | BM25 ranking, output formats, token limiting |
 | [Read](docs/read.md) | Direct session reading with noise filtering |
 | [Configuration](docs/configuration.md) | Config resolution, TOML format, environment variables |
+| [Generic Input Contract](docs/input-contract.md) | O02 `*.inputs.toml` contract for provider-neutral ingestion |
 | [Session Search Research](docs/research/backscroll-session-search-cli.md) | Feasibility study: axioms, evidence tables, capabilities matrix |
 | [Rust Architecture](docs/research/backscroll-rust-architecture-2026.md) | Stack decision: why Rust over Go, risk resolution, design patterns |
 

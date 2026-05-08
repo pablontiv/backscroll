@@ -497,7 +497,13 @@ impl SessionInputParserIdentity {
     }
 
     fn from_input(input: &SessionInput) -> Self {
-        Self::new(&input.source, input.parser())
+        let parser = input.parser();
+        let source = if input.source == "pi" && parser == "pi" {
+            "session"
+        } else {
+            input.source.as_str()
+        };
+        Self::new(source, parser)
     }
 }
 
@@ -573,7 +579,12 @@ impl SessionInputParser for ClaudeInputParser {
         input: &SessionInput,
         existing_hashes: &HashMap<String, String>,
     ) -> Vec<ParsedFile> {
-        claude::parse_paths(&input.paths, input.include_agents, existing_hashes)
+        claude::parse_paths_with_glob(
+            &input.paths,
+            input.glob.as_deref(),
+            input.include_agents,
+            existing_hashes,
+        )
     }
 }
 
@@ -842,6 +853,174 @@ mod tests {
             Some("assistant-compatible")
         );
         assert_eq!(declarative[0].messages[1].content_type, "code");
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_session_input_claude_glob_filters_candidate_files() -> miette::Result<()> {
+        let dir = tempdir().into_diagnostic()?;
+        fs::write(
+            dir.path().join("keep-session.jsonl"),
+            r#"{"type":"user","message":{"role":"user","content":"keep me"}}"#,
+        )
+        .into_diagnostic()?;
+        fs::write(
+            dir.path().join("skip-session.jsonl"),
+            r#"{"type":"user","message":{"role":"user","content":"skip me"}}"#,
+        )
+        .into_diagnostic()?;
+
+        let input = SessionInput {
+            source: "session".into(),
+            parser: "claude".into(),
+            paths: vec![dir.path().to_string_lossy().into_owned()],
+            glob: Some("keep-*.jsonl".into()),
+            include_agents: false,
+            active: true,
+        };
+
+        let files = parse_session_inputs(&[input], &HashMap::new());
+
+        assert_eq!(files.len(), 1);
+        assert_eq!(files[0].messages[0].text, "keep me");
+        assert!(files[0].source_path.ends_with("keep-session.jsonl"));
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_session_input_claude_glob_supports_extension_alternatives() -> miette::Result<()> {
+        let dir = tempdir().into_diagnostic()?;
+        fs::write(
+            dir.path().join("keep-json.json"),
+            r#"{"type":"user","message":{"role":"user","content":"json kept"}}"#,
+        )
+        .into_diagnostic()?;
+        fs::write(
+            dir.path().join("keep-jsonl.jsonl"),
+            r#"{"type":"user","message":{"role":"user","content":"jsonl kept"}}"#,
+        )
+        .into_diagnostic()?;
+        fs::write(
+            dir.path().join("skip.txt"),
+            r#"{"type":"user","message":{"role":"user","content":"txt skipped"}}"#,
+        )
+        .into_diagnostic()?;
+
+        let input = SessionInput {
+            source: "session".into(),
+            parser: "claude".into(),
+            paths: vec![dir.path().to_string_lossy().into_owned()],
+            glob: Some("*.{json,jsonl}".into()),
+            include_agents: false,
+            active: true,
+        };
+
+        let mut texts: Vec<_> = parse_session_inputs(&[input], &HashMap::new())
+            .into_iter()
+            .flat_map(|file| file.messages.into_iter().map(|message| message.text))
+            .collect();
+        texts.sort_unstable();
+
+        assert_eq!(texts, vec!["json kept", "jsonl kept"]);
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_session_input_inactive_inputs_are_skipped() -> miette::Result<()> {
+        let dir = tempdir().into_diagnostic()?;
+        fs::write(
+            dir.path().join("inactive.jsonl"),
+            r#"{"type":"user","message":{"role":"user","content":"do not parse"}}"#,
+        )
+        .into_diagnostic()?;
+
+        let input = SessionInput {
+            source: "session".into(),
+            parser: "claude".into(),
+            paths: vec![dir.path().to_string_lossy().into_owned()],
+            glob: None,
+            include_agents: false,
+            active: false,
+        };
+
+        assert!(parse_session_inputs(&[input], &HashMap::new()).is_empty());
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_session_input_include_agents_controls_subagent_paths() -> miette::Result<()> {
+        let dir = tempdir().into_diagnostic()?;
+        let subagents_dir = dir.path().join("subagents");
+        fs::create_dir(&subagents_dir).into_diagnostic()?;
+        fs::write(
+            dir.path().join("main.jsonl"),
+            r#"{"type":"user","message":{"role":"user","content":"main session"}}"#,
+        )
+        .into_diagnostic()?;
+        fs::write(
+            subagents_dir.join("agent.jsonl"),
+            r#"{"type":"user","message":{"role":"user","content":"agent session"}}"#,
+        )
+        .into_diagnostic()?;
+
+        let without_agents = SessionInput {
+            source: "session".into(),
+            parser: "claude".into(),
+            paths: vec![dir.path().to_string_lossy().into_owned()],
+            glob: None,
+            include_agents: false,
+            active: true,
+        };
+        let with_agents = SessionInput {
+            include_agents: true,
+            ..without_agents.clone()
+        };
+
+        let without = parse_session_inputs(&[without_agents], &HashMap::new());
+        let with = parse_session_inputs(&[with_agents], &HashMap::new());
+        let mut with_texts: Vec<_> = with
+            .iter()
+            .flat_map(|file| file.messages.iter().map(|message| message.text.as_str()))
+            .collect();
+        with_texts.sort_unstable();
+
+        assert_eq!(without.len(), 1);
+        assert_eq!(without[0].messages[0].text, "main session");
+        assert_eq!(with.len(), 2);
+        assert_eq!(with_texts, vec!["agent session", "main session"]);
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_session_input_missing_path_does_not_abort_batch() -> miette::Result<()> {
+        let dir = tempdir().into_diagnostic()?;
+        fs::write(
+            dir.path().join("valid.jsonl"),
+            r#"{"type":"user","message":{"role":"user","content":"still parsed after missing path"}}"#,
+        )
+        .into_diagnostic()?;
+
+        let input = SessionInput {
+            source: "session".into(),
+            parser: "claude".into(),
+            paths: vec![
+                dir.path().join("missing").to_string_lossy().into_owned(),
+                dir.path().to_string_lossy().into_owned(),
+            ],
+            glob: None,
+            include_agents: false,
+            active: true,
+        };
+
+        let files = parse_session_inputs(&[input], &HashMap::new());
+
+        assert_eq!(files.len(), 1);
+        assert_eq!(files[0].messages[0].text, "still parsed after missing path");
 
         Ok(())
     }
