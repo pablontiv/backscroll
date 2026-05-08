@@ -4,6 +4,23 @@
 # Ruta donde se guardará el índice de búsqueda
 database_path = "backscroll.db"
 
-# Directorio donde Claude Code guarda sus sesiones
-# En Linux suele ser ~/.claude/sessions
-session_dir = "."
+# Directorio(es) donde se encuentran sesiones legacy (compatibilidad).
+# Puede ser string o array de strings.
+session_dirs = ["."]
+
+# Inputs declarativos opcionales para parsing de sesiones.
+# Soportan backscroll.inputs.toml y backscroll.inputs.d/*.toml.
+[[session_inputs]]
+source = "session"
+parser = "claude"
+paths = ["."]
+include_agents = false
+active = true
+
+# Ejemplo opcional de segundo parser (pi)
+# [[session_inputs]]
+# source = "session"
+# parser = "pi"
+# paths = ["/path/to/pi-events.jsonl"]
+# include_agents = false
+# active = false

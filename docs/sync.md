@@ -3,7 +3,7 @@ estado: Completed
 ---
 # Sync & Indexing
 
-`backscroll sync` reads Claude Code session files, extracts the conversation, strips noise, and indexes everything into a local SQLite database for fast full-text search.
+`backscroll sync` reads session inputs (Claude and other supported sources), extracts the conversation, strips noise, and indexes everything into a local SQLite database for fast full-text search.
 
 ## CLI Usage
 
@@ -16,8 +16,21 @@ backscroll sync --path ~/.claude/sessions --include-agents  # Include subagent s
 
 | Flag | Description |
 |------|-------------|
-| `--path <DIR>` | Directory containing session files (default: configured `session_dir`) |
+| `--path <DIR>` | Directory containing session files (default: configured `session_dirs`) |
 | `--include-agents` | Include subagent sessions (excluded by default) |
+| `--no-plans` | Skip parsing markdown plans (`~/.claude/plans/`) |
+| `--optimize` | Run FTS5 optimization after sync |
+
+## Declarative Inputs
+
+Session files are resolved from `--path`, configured `session_dirs`, or declarative manifests in `backscroll.inputs.toml`/`backscroll.inputs.d/*.toml`.
+
+Supported session input parsers:
+
+- `claude` (default): legacy Claude JSONL sessions
+- `pi`: parser for future agentic event streams, using `paths` as JSONL files
+
+Inputs define `source`, `parser`, `paths`, and optional `include_agents` / `active` flags.
 
 ## Session File Format
 

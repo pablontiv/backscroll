@@ -198,14 +198,39 @@ Override defaults by creating `~/.config/backscroll/config.toml` or `backscroll.
 
 ```toml
 database_path = "/home/user/.backscroll.db"
-session_dir = "/home/user/.claude/sessions"
+session_dirs = ["/home/user/.claude/sessions"]
+
+[[session_inputs]]
+source = "session"
+parser = "claude"
+paths = ["/home/user/.claude/sessions"]
+include_agents = false
+active = true
 ```
 
 Environment variables are also supported:
 
 ```bash
 export BACKSCROLL_DATABASE_PATH="/tmp/custom.db"
-export BACKSCROLL_SESSION_DIR="/path/to/sessions"
+export BACKSCROLL_SESSION_DIRS="/path/to/sessions,/path/to/other"
+```
+
+Declarative files can additionally be loaded from `backscroll.inputs.toml` and
+`backscroll.inputs.d/*.toml`:
+
+```toml
+# backscroll.inputs.toml
+[[session_inputs]]
+source = "session"
+parser = "claude"
+paths = ["/home/user/.claude/sessions"]
+active = true
+
+[[session_inputs]]
+source = "pi"
+parser = "pi"
+paths = ["/home/user/.local/share/agentic/pi-events.jsonl"]
+active = true
 ```
 
 See [Configuration docs](docs/configuration.md) for the full resolution order and all options.
