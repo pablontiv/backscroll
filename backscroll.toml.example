@@ -4,13 +4,16 @@
 # Ruta donde se guardará el índice de búsqueda
 database_path = "backscroll.db"
 
-# Directorio(es) donde se encuentran sesiones legacy (compatibilidad).
-# Puede ser string o array de strings.
+# Directorio(s) legacy donde se encuentran sesiones (compatibilidad).
+# Puede ser string o array de strings. La clave singular `session_dir` sigue aceptada.
+# Una ruta legacy no-default tiene precedencia sobre inputs declarativos.
 session_dirs = ["."]
+# session_dir = "."
 
 # Inputs declarativos opcionales para parsing de sesiones.
-# Soportan backscroll.inputs.toml y backscroll.inputs.d/*.toml.
-# Los manifiestos se evalúan en orden: backscroll.inputs.toml y luego
+# Pueden vivir aquí, en backscroll.inputs.toml o en backscroll.inputs.d/*.toml.
+# La precedencia de paths es: --path > session_dirs no-default > inputs activos > discovery.
+# Los manifiestos externos se evalúan en orden: backscroll.inputs.toml y luego
 # backscroll.inputs.d/*.toml ordenados por nombre; entradas desconocidas fallan rápido.
 [[session_inputs]]
 source = "session"
@@ -21,7 +24,8 @@ glob = "**/*.{json,jsonl}"
 include_agents = false
 active = true
 
-# Ejemplo opcional de segundo parser (pi)
+# Ejemplo opcional de segundo parser (pi). Mantiene source="session" para
+# compatibilidad de ingestión; parser selecciona el adapter técnico.
 # [[session_inputs]]
 # source = "session"
 # parser = "pi"

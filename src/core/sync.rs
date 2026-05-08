@@ -482,8 +482,28 @@ fn parse_pi_file(
     })
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct SessionInputParserIdentity {
+    source: String,
+    parser: String,
+}
+
+impl SessionInputParserIdentity {
+    pub fn new(source: &str, parser: &str) -> Self {
+        Self {
+            source: source.to_lowercase(),
+            parser: parser.to_lowercase(),
+        }
+    }
+
+    fn from_input(input: &SessionInput) -> Self {
+        Self::new(&input.source, input.parser())
+    }
+}
+
 pub trait SessionInputParser {
-    fn name(&self) -> &'static str;
+    fn source(&self) -> &'static str;
+    fn parser(&self) -> &'static str;
     fn parse(
         &self,
         input: &SessionInput,
@@ -492,35 +512,42 @@ pub trait SessionInputParser {
 }
 
 pub struct SessionInputParserRegistry {
-    parsers: HashMap<String, Box<dyn SessionInputParser>>,
+    parsers: HashMap<SessionInputParserIdentity, Box<dyn SessionInputParser>>,
 }
 
 impl Default for SessionInputParserRegistry {
     fn default() -> Self {
-        let mut parsers = HashMap::new();
-        parsers.insert(
-            "claude".into(),
-            Box::new(ClaudeInputParser) as Box<dyn SessionInputParser>,
-        );
-        parsers.insert(
-            "pi".into(),
-            Box::new(PiInputParser) as Box<dyn SessionInputParser>,
-        );
-        Self { parsers }
+        let mut registry = Self::new();
+        registry.register(Box::new(ClaudeInputParser));
+        registry.register(Box::new(PiInputParser));
+        registry
     }
 }
 
 impl SessionInputParserRegistry {
+    pub fn new() -> Self {
+        Self {
+            parsers: HashMap::new(),
+        }
+    }
+
+    pub fn register(&mut self, parser: Box<dyn SessionInputParser>) {
+        let identity = SessionInputParserIdentity::new(parser.source(), parser.parser());
+        self.parsers.insert(identity, parser);
+    }
+
     pub fn parse_input(
         &self,
         input: &SessionInput,
         existing_hashes: &HashMap<String, String>,
     ) -> Vec<ParsedFile> {
-        match self.parsers.get(&input.parser().to_lowercase()) {
+        let identity = SessionInputParserIdentity::from_input(input);
+        match self.parsers.get(&identity) {
             Some(parser) => parser.parse(input, existing_hashes),
             None => {
                 tracing::warn!(
-                    "No parser registered for '{}'. Skipping input in {:?}",
+                    "No parser registered for source='{}' parser='{}'. Skipping input in {:?}",
+                    input.source,
                     input.parser(),
                     input.paths
                 );
@@ -533,7 +560,11 @@ impl SessionInputParserRegistry {
 struct ClaudeInputParser;
 
 impl SessionInputParser for ClaudeInputParser {
-    fn name(&self) -> &'static str {
+    fn source(&self) -> &'static str {
+        "session"
+    }
+
+    fn parser(&self) -> &'static str {
         "claude"
     }
 
@@ -549,7 +580,11 @@ impl SessionInputParser for ClaudeInputParser {
 struct PiInputParser;
 
 impl SessionInputParser for PiInputParser {
-    fn name(&self) -> &'static str {
+    fn source(&self) -> &'static str {
+        "session"
+    }
+
+    fn parser(&self) -> &'static str {
         "pi"
     }
 
@@ -670,6 +705,71 @@ mod tests {
         assert_eq!(files[0].source, "session");
         assert_eq!(files[0].messages.len(), 1);
         assert_eq!(files[0].messages[0].text, "pi content");
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_session_input_parser_selection_uses_source_and_parser() -> miette::Result<()> {
+        let dir = tempdir().into_diagnostic()?;
+        let file_path = dir.path().join("session.jsonl");
+
+        fs::write(
+            &file_path,
+            r#"{"type":"user","message":{"role":"user","content":"selected"}}"#,
+        )
+        .into_diagnostic()?;
+
+        let matching_input = SessionInput {
+            source: "session".into(),
+            parser: "claude".into(),
+            paths: vec![dir.path().to_str().unwrap().into()],
+            glob: None,
+            include_agents: false,
+            active: true,
+        };
+        let wrong_source_input = SessionInput {
+            source: "unknown".into(),
+            parser: "claude".into(),
+            paths: vec![dir.path().to_str().unwrap().into()],
+            glob: None,
+            include_agents: false,
+            active: true,
+        };
+
+        let files = parse_session_inputs(&[matching_input, wrong_source_input], &HashMap::new());
+
+        assert_eq!(files.len(), 1);
+        assert_eq!(files[0].messages.len(), 1);
+        assert_eq!(files[0].messages[0].text, "selected");
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_session_input_invalid_file_does_not_break_batch() -> miette::Result<()> {
+        let dir = tempdir().into_diagnostic()?;
+        fs::write(dir.path().join("invalid.jsonl"), b"\xFF\xFE\xFD").into_diagnostic()?;
+        fs::write(
+            dir.path().join("valid.jsonl"),
+            r#"{"type":"user","message":{"role":"user","content":"still parsed"}}"#,
+        )
+        .into_diagnostic()?;
+
+        let input = SessionInput {
+            source: "session".into(),
+            parser: "claude".into(),
+            paths: vec![dir.path().to_str().unwrap().into()],
+            glob: None,
+            include_agents: false,
+            active: true,
+        };
+
+        let files = parse_session_inputs(&[input], &HashMap::new());
+
+        assert_eq!(files.len(), 1);
+        assert_eq!(files[0].messages.len(), 1);
+        assert_eq!(files[0].messages[0].text, "still parsed");
 
         Ok(())
     }

@@ -7,20 +7,33 @@ use std::fs;
 use std::path::Path;
 use std::path::PathBuf;
 
+#[derive(Deserialize)]
+#[serde(untagged)]
+enum StringOrVec {
+    String(String),
+    Vec(Vec<String>),
+}
+
 fn string_or_vec<'de, D>(deserializer: D) -> std::result::Result<Vec<String>, D::Error>
 where
     D: Deserializer<'de>,
 {
-    #[derive(Deserialize)]
-    #[serde(untagged)]
-    enum StringOrVec {
-        String(String),
-        Vec(Vec<String>),
-    }
-
     match StringOrVec::deserialize(deserializer)? {
         StringOrVec::String(s) => Ok(vec![s]),
         StringOrVec::Vec(v) => Ok(v),
+    }
+}
+
+fn optional_string_or_vec<'de, D>(
+    deserializer: D,
+) -> std::result::Result<Option<Vec<String>>, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    match Option::<StringOrVec>::deserialize(deserializer)? {
+        Some(StringOrVec::String(s)) => Ok(Some(vec![s])),
+        Some(StringOrVec::Vec(v)) => Ok(Some(v)),
+        None => Ok(None),
     }
 }
 
@@ -137,6 +150,13 @@ pub struct SourcesConfig {
     pub backlog: Vec<String>,
 }
 
+#[derive(Deserialize, Default)]
+#[serde(default)]
+struct ConfigPresence {
+    #[serde(alias = "session_dir", deserialize_with = "optional_string_or_vec")]
+    session_dirs: Option<Vec<String>>,
+}
+
 #[derive(Deserialize, Serialize, Debug)]
 pub struct Config {
     pub database_path: String,
@@ -152,6 +172,8 @@ pub struct Config {
     pub sources: SourcesConfig,
     #[serde(default)]
     pub session_inputs: Vec<SessionInput>,
+    #[serde(skip)]
+    pub session_dirs_explicit: bool,
 }
 
 impl Config {
@@ -199,18 +221,22 @@ impl Config {
         let mut home_config = PathBuf::from(std::env::var("HOME").unwrap_or_else(|_| ".".into()));
         home_config.push(".config/backscroll/config.toml");
 
-        let mut cfg: Self = Figment::new()
+        let figment = Figment::new()
             .merge(Toml::file("backscroll.toml"))
             .merge(Toml::file(home_config))
-            .merge(Env::prefixed("BACKSCROLL_"))
-            .extract()
-            .map_err(|e| {
-                miette::miette!(
-                    "Error al cargar configuración: {}. Crea un 'backscroll.toml' o configura BACKSCROLL_DATABASE_PATH.",
-                    e,
-                )
-            })?;
+            .merge(Env::prefixed("BACKSCROLL_"));
+        let session_dirs_explicit = figment
+            .extract::<ConfigPresence>()
+            .is_ok_and(|presence| presence.session_dirs.is_some());
 
+        let mut cfg: Self = figment.extract().map_err(|e| {
+            miette::miette!(
+                "Error al cargar configuración: {}. Crea un 'backscroll.toml' o configura BACKSCROLL_DATABASE_PATH.",
+                e,
+            )
+        })?;
+
+        cfg.session_dirs_explicit = session_dirs_explicit;
         cfg.session_inputs
             .extend(Self::collect_backscroll_inputs()?);
 
@@ -268,7 +294,12 @@ impl Config {
             embedding: EmbeddingConfig::default(),
             sources: SourcesConfig::default(),
             session_inputs: Vec::new(),
+            session_dirs_explicit: false,
         }
+    }
+
+    pub fn has_explicit_session_dirs(&self) -> bool {
+        self.session_dirs_explicit || self.session_dirs != default_session_dirs()
     }
 
     pub fn active_session_inputs(&self) -> Vec<SessionInput> {

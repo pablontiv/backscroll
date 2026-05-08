@@ -192,9 +192,9 @@ All output is deterministic and machine-parseable. No ANSI escape codes in `--js
 
 ## Configuration
 
-Backscroll resolves its configuration automatically. By default, it creates an index at `~/.backscroll.db` and searches for sessions in the current directory.
+Backscroll resolves its configuration automatically. By default, it creates an index at `~/.backscroll.db` and uses the legacy session path fallback unless declarative inputs are provided.
 
-Override defaults by creating `~/.config/backscroll/config.toml` or `backscroll.toml` in the current directory:
+Override defaults by creating `~/.config/backscroll/config.toml` or `backscroll.toml` in the current directory. Existing `session_dir`/`session_dirs` configuration remains compatible:
 
 ```toml
 database_path = "/home/user/.backscroll.db"
@@ -227,11 +227,13 @@ paths = ["/home/user/.claude/sessions"]
 active = true
 
 [[session_inputs]]
-source = "pi"
+source = "session"
 parser = "pi"
 paths = ["/home/user/.local/share/agentic/pi-events.jsonl"]
 active = true
 ```
+
+Session input precedence is: CLI `--path`, non-default `session_dirs` from config or env, active entries from `backscroll.inputs.toml`/`backscroll.inputs.d`, then Claude project auto-discovery. If normal config loading fails, Backscroll falls back to built-in database/session defaults and keeps the same legacy route.
 
 See [Configuration docs](docs/configuration.md) for the full resolution order and all options.
 

@@ -25,12 +25,41 @@ backscroll sync --path ~/.claude/sessions --include-agents  # Include subagent s
 
 Session files are resolved from `--path`, configured `session_dirs`, or declarative manifests in `backscroll.inputs.toml`/`backscroll.inputs.d/*.toml`.
 
+Resolution precedence is:
+
+1. CLI `--path` (highest; treated as Claude session paths)
+2. Non-default `session_dirs` from `backscroll.toml`, user config, or environment
+3. Active entries in `backscroll.inputs.toml`
+4. Active entries in `backscroll.inputs.d/*.toml` sorted by filename
+5. Claude project auto-discovery under `~/.claude/projects/`
+
+If none of those produce paths, sync exits with an actionable error. If config loading falls back to built-in defaults, the same default marker and discovery path are used.
+
 Supported session input parsers:
 
 - `claude` (default): legacy Claude JSONL sessions
-- `pi`: parser for future agentic event streams, using `paths` as JSONL files
+- `pi`: parser for agentic event streams, using `paths` as JSONL files
 
-Inputs define `source`, `parser`, `paths`, and optional `include_agents` / `active` flags.
+Inputs define `source`, `parser`, `paths`, and optional `include_agents` / `active` flags. For compatibility, session inputs emit `source = "session"`; select the adapter with `parser = "claude"` or `parser = "pi"`.
+
+```toml
+# backscroll.inputs.toml
+[[session_inputs]]
+source = "session"
+parser = "claude"
+paths = ["/home/user/.claude/projects"]
+include_agents = false
+active = true
+
+# backscroll.inputs.d/pi.toml can contain the same table shape.
+[[session_inputs]]
+source = "session"
+parser = "pi"
+paths = ["/path/to/pi-events.jsonl"]
+active = true
+```
+
+Legacy `session_dir`/`session_dirs` in `backscroll.toml` remain supported and take precedence over declarative manifests when set to a non-default value.
 
 ## Session File Format
 

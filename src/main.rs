@@ -311,8 +311,8 @@ fn resolve_session_inputs(
             .collect());
     }
 
-    // 2. Non-default config session_dirs overrides legacy declared inputs
-    if config.session_dirs != vec!["."] {
+    // 2. Explicit config session_dirs overrides legacy declared inputs
+    if config.has_explicit_session_dirs() {
         return Ok(config
             .session_dirs
             .iter()
@@ -980,6 +980,15 @@ fn main() -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::fs;
+    use std::sync::{Mutex, MutexGuard};
+    use tempfile::tempdir;
+
+    static FS_LOCK: Mutex<()> = Mutex::new(());
+
+    fn lock_fs() -> MutexGuard<'static, ()> {
+        FS_LOCK.lock().unwrap_or_else(|e| e.into_inner())
+    }
 
     #[test]
     fn test_resolve_session_inputs_prefers_cli_paths() -> miette::Result<()> {
@@ -1031,6 +1040,34 @@ mod tests {
         assert_eq!(inputs[0].paths, vec!["/session/one".to_string()]);
         assert_eq!(inputs[0].parser, "claude");
         assert_eq!(inputs[1].paths, vec!["/session/two".to_string()]);
+        Ok(())
+    }
+
+    #[test]
+    fn test_resolve_session_inputs_prefers_explicit_default_session_dirs() -> miette::Result<()> {
+        let _guard = lock_fs();
+        let dir = tempdir().unwrap();
+        let original_dir = std::env::current_dir().unwrap();
+        fs::write(
+            dir.path().join("backscroll.toml"),
+            "database_path = \"test.db\"\nsession_dirs = [\".\"]\n",
+        )
+        .unwrap();
+        fs::write(
+            dir.path().join("backscroll.inputs.toml"),
+            "[[inputs]]\nsource = \"session\"\npaths = [\"/declarative/path\"]\n",
+        )
+        .unwrap();
+
+        std::env::set_current_dir(dir.path()).unwrap();
+        let config = Config::load();
+        std::env::set_current_dir(original_dir).unwrap();
+        let config = config?;
+
+        let inputs = resolve_session_inputs(&[], &config, false)?;
+        assert_eq!(inputs.len(), 1);
+        assert_eq!(inputs[0].paths, vec![".".to_string()]);
+        assert_eq!(inputs[0].parser, "claude");
         Ok(())
     }
 

@@ -1,5 +1,5 @@
 ---
-estado: Specified
+estado: Completed
 tipo: task
 ---
 # T004: Diseñar trait/registry de `SessionInputParser`
