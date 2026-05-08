@@ -3,6 +3,8 @@ use figment::{
     providers::{Env, Format, Toml},
 };
 use serde::{Deserialize, Deserializer, Serialize};
+use std::fs;
+use std::path::Path;
 use std::path::PathBuf;
 
 fn string_or_vec<'de, D>(deserializer: D) -> std::result::Result<Vec<String>, D::Error>
@@ -20,6 +22,14 @@ where
         StringOrVec::String(s) => Ok(vec![s]),
         StringOrVec::Vec(v) => Ok(v),
     }
+}
+
+fn default_session_dirs() -> Vec<String> {
+    vec![".".into()]
+}
+
+fn default_true() -> bool {
+    true
 }
 
 #[derive(Debug, Deserialize, Serialize, Clone)]
@@ -40,6 +50,68 @@ impl Default for EmbeddingConfig {
             similarity_threshold: 0.3,
             top_k: 50,
             rrf_k: 60,
+        }
+    }
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+#[serde(default)]
+pub struct SessionInput {
+    pub source: String,
+    #[serde(default = "SessionInput::default_parser")]
+    pub parser: String,
+    #[serde(default, deserialize_with = "string_or_vec")]
+    pub paths: Vec<String>,
+    #[serde(default)]
+    pub include_agents: bool,
+    #[serde(default = "default_true")]
+    pub active: bool,
+}
+
+impl SessionInput {
+    fn default_parser() -> String {
+        "claude".to_string()
+    }
+
+    pub fn is_active(&self) -> bool {
+        self.active
+    }
+
+    pub fn parser(&self) -> &str {
+        if self.parser.is_empty() {
+            "claude"
+        } else {
+            self.parser.as_str()
+        }
+    }
+}
+
+impl Default for SessionInput {
+    fn default() -> Self {
+        Self {
+            source: "session".to_string(),
+            parser: Self::default_parser(),
+            paths: Vec::new(),
+            include_agents: false,
+            active: true,
+        }
+    }
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+struct InputsFile {
+    #[serde(default)]
+    pub inputs: Vec<SessionInput>,
+    #[serde(default)]
+    pub session_inputs: Vec<SessionInput>,
+}
+
+impl InputsFile {
+    fn all_inputs(&self) -> Vec<SessionInput> {
+        if !self.inputs.is_empty() {
+            self.inputs.clone()
+        } else {
+            self.session_inputs.clone()
         }
     }
 }
@@ -74,13 +146,67 @@ pub struct Config {
     pub embedding: EmbeddingConfig,
     #[serde(default)]
     pub sources: SourcesConfig,
-}
-
-fn default_session_dirs() -> Vec<String> {
-    vec![".".into()]
+    #[serde(default)]
+    pub session_inputs: Vec<SessionInput>,
 }
 
 impl Config {
+    fn collect_backscroll_inputs() -> Vec<SessionInput> {
+        let mut inputs: Vec<SessionInput> = Vec::new();
+
+        let legacy_file = Path::new("backscroll.inputs.toml");
+        if legacy_file.is_file() {
+            if let Ok(content) = fs::read_to_string(legacy_file) {
+                match Figment::new()
+                    .merge(Toml::string(&content))
+                    .extract::<InputsFile>()
+                {
+                    Ok(file_inputs) => inputs.extend(file_inputs.all_inputs()),
+                    Err(err) => {
+                        tracing::warn!(
+                            "Failed to parse {}: {}. This file was ignored.",
+                            legacy_file.display(),
+                            err
+                        );
+                    }
+                }
+            }
+        }
+
+        let dir = Path::new("backscroll.inputs.d");
+        if dir.is_dir() {
+            let mut entries: Vec<_> = fs::read_dir(dir)
+                .ok()
+                .into_iter()
+                .flat_map(|it| it.filter_map(Result::ok))
+                .filter(|entry| entry.path().extension().is_some_and(|ext| ext == "toml"))
+                .collect();
+
+            entries.sort_by_key(|entry| entry.path());
+            for entry in entries {
+                if let Ok(content) = fs::read_to_string(entry.path()) {
+                    match Figment::new()
+                        .merge(Toml::string(&content))
+                        .extract::<InputsFile>()
+                    {
+                        Ok(file_inputs) => {
+                            inputs.extend(file_inputs.all_inputs());
+                        }
+                        Err(err) => {
+                            tracing::warn!(
+                                "Failed to parse {}: {}. This file was ignored.",
+                                entry.path().display(),
+                                err
+                            );
+                        }
+                    }
+                }
+            }
+        }
+
+        inputs
+    }
+
     pub fn load() -> miette::Result<Self> {
         // Buscamos en:
         // 1. backscroll.toml (directorio actual)
@@ -90,12 +216,21 @@ impl Config {
         let mut home_config = PathBuf::from(std::env::var("HOME").unwrap_or_else(|_| ".".into()));
         home_config.push(".config/backscroll/config.toml");
 
-        Figment::new()
+        let mut cfg: Self = Figment::new()
             .merge(Toml::file("backscroll.toml"))
             .merge(Toml::file(home_config))
             .merge(Env::prefixed("BACKSCROLL_"))
             .extract()
-            .map_err(|e| miette::miette!("Error al cargar configuración: {}. Crea un 'backscroll.toml' o configura BACKSCROLL_DATABASE_PATH.", e))
+            .map_err(|e| {
+                miette::miette!(
+                    "Error al cargar configuración: {}. Crea un 'backscroll.toml' o configura BACKSCROLL_DATABASE_PATH.",
+                    e,
+                )
+            })?;
+
+        cfg.session_inputs.extend(Self::collect_backscroll_inputs());
+
+        Ok(cfg)
     }
 
     pub fn discover_session_dirs() -> Vec<PathBuf> {
@@ -113,7 +248,7 @@ impl Config {
             return Vec::new();
         }
 
-        let dirs: Vec<PathBuf> = std::fs::read_dir(projects_dir)
+        let dirs: Vec<PathBuf> = fs::read_dir(projects_dir)
             .into_iter()
             .flatten()
             .filter_map(|entry| entry.ok())
@@ -148,7 +283,17 @@ impl Config {
             session_dirs: vec![".".into()],
             embedding: EmbeddingConfig::default(),
             sources: SourcesConfig::default(),
+            session_inputs: Vec::new(),
         }
+    }
+
+    pub fn active_session_inputs(&self) -> Vec<SessionInput> {
+        self.session_inputs
+            .iter()
+            .filter(|i| i.is_active())
+            .filter(|i| i.source == "session")
+            .cloned()
+            .collect()
     }
 }
 
@@ -156,16 +301,25 @@ impl Config {
 mod tests {
     use super::*;
     use std::fs;
+    use std::sync::{Mutex, MutexGuard};
     use tempfile::tempdir;
+
+    static FS_LOCK: Mutex<()> = Mutex::new(());
+
+    fn lock_fs() -> MutexGuard<'static, ()> {
+        FS_LOCK.lock().unwrap_or_else(|e| e.into_inner())
+    }
 
     #[test]
     fn test_config_load_error_if_missing() {
+        let _guard = lock_fs();
         let config = Config::load();
         assert!(config.is_err());
     }
 
     #[test]
     fn test_config_with_file() -> miette::Result<()> {
+        let _guard = lock_fs();
         let toml_content = r#"
             database_path = "test.db"
             session_dir = "/tmp"
@@ -177,6 +331,80 @@ mod tests {
         assert_eq!(config.session_dirs, vec!["/tmp"]);
 
         fs::remove_file("backscroll.toml").unwrap();
+        Ok(())
+    }
+
+    #[test]
+    fn test_config_session_inputs_from_file() {
+        let _guard = lock_fs();
+        let dir = tempdir().unwrap();
+        let old_dir = std::env::current_dir().unwrap();
+        fs::write(
+            dir.path().join("backscroll.toml"),
+            "database_path = \"test.db\"\n",
+        )
+        .unwrap();
+
+        let inputs_toml = r#"
+        [[session_inputs]]
+        source = "session"
+        parser = "claude"
+        paths = ["/a", "/b"]
+        include_agents = true
+        active = true
+
+        [[session_inputs]]
+        source = "session"
+        parser = "pi"
+        paths = "/tmp/pi.jsonl"
+        active = false
+        "#;
+        fs::write(dir.path().join("backscroll.inputs.toml"), inputs_toml).unwrap();
+
+        std::env::set_current_dir(dir.path()).unwrap();
+        let config = Config::load().unwrap();
+        std::env::set_current_dir(old_dir).unwrap();
+
+        eprintln!("inputs={:?}", config.session_inputs);
+        assert_eq!(config.session_inputs.len(), 2);
+        assert!(config.session_inputs[0].is_active());
+        assert_eq!(config.session_inputs[0].paths.len(), 2);
+        assert_eq!(config.session_inputs[0].paths[0], "/a");
+        assert!(!config.session_inputs[1].is_active());
+    }
+
+    #[test]
+    fn test_config_session_inputs_from_dir() -> miette::Result<()> {
+        let dir = tempdir().unwrap();
+        fs::write(
+            dir.path().join("backscroll.toml"),
+            "database_path = \"test.db\"\n",
+        )
+        .unwrap();
+        fs::create_dir(dir.path().join("backscroll.inputs.d")).unwrap();
+
+        let file1 = dir.path().join("backscroll.inputs.d/01-one.toml");
+        let file2 = dir.path().join("backscroll.inputs.d/02-two.toml");
+
+        fs::write(
+            &file1,
+            "[[inputs]]\nsource = \"session\"\nparser = \"claude\"\npaths = [\"/one\"]\n",
+        )
+        .unwrap();
+        fs::write(
+            &file2,
+            "[[inputs]]\nsource = \"session\"\nparser = \"pi\"\npaths = [\"/two\"]\n",
+        )
+        .unwrap();
+
+        let _guard = lock_fs();
+        let original_dir = std::env::current_dir().unwrap();
+        std::env::set_current_dir(dir.path()).unwrap();
+
+        let config = Config::load().unwrap();
+        assert_eq!(config.session_inputs.len(), 2);
+
+        std::env::set_current_dir(original_dir).unwrap();
         Ok(())
     }
 

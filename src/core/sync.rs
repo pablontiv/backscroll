@@ -1,7 +1,9 @@
+use crate::config::SessionInput;
 use crate::core::models::{MessageContent, SessionRecord};
 use crate::core::{ParsedFile, ParsedMessage};
 use miette::IntoDiagnostic;
 use regex::Regex;
+use serde_json::Value;
 use sha2::{Digest, Sha256};
 use std::collections::HashMap;
 use std::fs;
@@ -86,154 +88,573 @@ pub fn compute_hash(path: impl AsRef<Path>) -> miette::Result<String> {
     Ok(hex::encode(hasher.finalize()))
 }
 
+fn infer_project(
+    entry: &walkdir::DirEntry,
+    file_uuid: Option<&String>,
+    index_map: &HashMap<String, String>,
+) -> String {
+    if let Some(uuid) = file_uuid {
+        if let Some(p) = index_map.get(uuid) {
+            return p.clone();
+        }
+    }
+
+    if let Some(parent) = entry.path().parent() {
+        if parent.ends_with("sessions") || parent.ends_with("subagents") {
+            if let Some(proj_dir) = parent.parent() {
+                if let Some(slug) = proj_dir.file_name() {
+                    return slug.to_string_lossy().to_string();
+                }
+            }
+        } else if let Some(slug) = parent.file_name() {
+            return slug.to_string_lossy().to_string();
+        }
+    }
+
+    "unknown".to_string()
+}
+
+fn discover_candidate_files(session_dir: &Path, include_agents: bool) -> Vec<walkdir::DirEntry> {
+    if !session_dir.exists() {
+        return Vec::new();
+    }
+
+    let target_extensions = |path: &Path| {
+        path.extension()
+            .is_some_and(|ext| ext == "json" || ext == "jsonl")
+    };
+
+    if session_dir.is_file() {
+        if !target_extensions(session_dir) {
+            return Vec::new();
+        }
+
+        return WalkDir::new(session_dir)
+            .into_iter()
+            .filter_map(|e| e.ok())
+            .filter(|entry| entry.file_type().is_file())
+            .filter(|entry| {
+                include_agents || !entry.path().to_string_lossy().contains("/subagents/")
+            })
+            .collect();
+    }
+
+    WalkDir::new(session_dir)
+        .into_iter()
+        .filter_map(|e| e.ok())
+        .filter(|e| {
+            if !e.file_type().is_file() {
+                return false;
+            }
+            let is_target_ext = target_extensions(e.path());
+            if !is_target_ext {
+                return false;
+            }
+            if !include_agents && e.path().to_string_lossy().contains("/subagents/") {
+                return false;
+            }
+            true
+        })
+        .collect()
+}
+
+fn parse_claude_message_lines(
+    content: &str,
+    file_uuid: &mut Option<String>,
+) -> Vec<(
+    String,
+    String,
+    String,
+    usize,
+    Option<String>,
+    Option<String>,
+)> {
+    let mut out = Vec::new();
+
+    for (ordinal, raw_line) in content.lines().enumerate() {
+        match serde_json::from_str::<SessionRecord>(raw_line) {
+            Ok(record) => {
+                if file_uuid.is_none() && record.uuid.is_some() {
+                    file_uuid.clone_from(&record.uuid);
+                }
+
+                if record.is_meta == Some(true) {
+                    continue;
+                }
+
+                if record.record_type != "user" && record.record_type != "assistant" {
+                    continue;
+                }
+
+                if let Some(msg) = record.message {
+                    let (text_content, content_type) = match &msg.content {
+                        MessageContent::Text(t) => (t.clone(), "text".to_string()),
+                        MessageContent::Blocks(blocks) => {
+                            let mut has_code = false;
+                            let mut has_tool = false;
+                            let parts: Vec<String> = blocks
+                                .iter()
+                                .filter(|b| {
+                                    b.block_type != "tool_use" && b.block_type != "tool_result"
+                                })
+                                .filter_map(|b| {
+                                    if b.block_type == "code" {
+                                        has_code = true;
+                                    }
+                                    if b.block_type == "tool_use" || b.block_type == "tool_result" {
+                                        has_tool = true;
+                                    }
+                                    b.text.clone()
+                                })
+                                .collect();
+
+                            let ct = if has_code {
+                                "code"
+                            } else if has_tool {
+                                "tool"
+                            } else {
+                                "text"
+                            };
+                            (parts.join(" "), ct.to_string())
+                        }
+                    };
+
+                    out.push((
+                        msg.role,
+                        text_content,
+                        content_type,
+                        ordinal,
+                        record.uuid,
+                        record.timestamp,
+                    ));
+                }
+            }
+            Err(_) => {
+                tracing::warn!("Could not parse line {} in {}", ordinal, "session file");
+            }
+        }
+    }
+
+    out
+}
+
+fn parse_session_file_claude(
+    entry: walkdir::DirEntry,
+    existing_hashes: &HashMap<String, String>,
+    include_agents: bool,
+) -> Option<ParsedFile> {
+    let path_str = entry.path().to_string_lossy().to_string();
+
+    if !include_agents && path_str.contains("/subagents/") {
+        return None;
+    }
+
+    let hash = match compute_hash(entry.path()) {
+        Ok(hash) => hash,
+        Err(err) => {
+            tracing::warn!("Could not hash {}: {}", path_str, err);
+            return None;
+        }
+    };
+
+    if existing_hashes.get(&path_str) == Some(&hash) {
+        return None;
+    }
+
+    let content = match fs::read_to_string(entry.path()) {
+        Ok(c) => c,
+        Err(err) => {
+            tracing::warn!("Could not read {}: {}", path_str, err);
+            return None;
+        }
+    };
+
+    let mut messages = Vec::new();
+    let mut file_uuid = None;
+
+    for (role, text_content, content_type, ordinal, uuid, timestamp) in
+        parse_claude_message_lines(&content, &mut file_uuid)
+    {
+        let cleaned_text = filter_noise(&text_content);
+        if let Some(text) = cleaned_text {
+            if !text.is_empty() {
+                messages.push(ParsedMessage {
+                    role,
+                    text,
+                    ordinal,
+                    uuid,
+                    timestamp,
+                    content_type,
+                });
+            }
+        }
+    }
+
+    let index_map = load_session_index(entry.path().parent().unwrap_or_else(|| Path::new(".")));
+    let project = infer_project(&entry, file_uuid.as_ref(), &index_map);
+
+    Some(ParsedFile {
+        source: "session".into(),
+        source_path: path_str,
+        hash,
+        project: Some(project),
+        messages,
+    })
+}
+
+fn parse_claude_directory(
+    session_dir: &str,
+    existing_hashes: &HashMap<String, String>,
+    include_agents: bool,
+) -> Vec<ParsedFile> {
+    let mut parsed_files = Vec::new();
+    let mut files_processed = 0;
+    let mut files_skipped = 0;
+
+    let entries = discover_candidate_files(Path::new(session_dir), include_agents);
+    for entry in entries {
+        match parse_session_file_claude(entry, existing_hashes, include_agents) {
+            Some(file) => {
+                parsed_files.push(file);
+                files_processed += 1;
+            }
+            None => files_skipped += 1,
+        }
+    }
+
+    tracing::info!(
+        "Processed {} files, skipped {} files",
+        files_processed,
+        files_skipped
+    );
+    parsed_files
+}
+
+fn parse_pi_value(value: &Value) -> Option<(String, String)> {
+    let content = match value {
+        Value::String(s) => return Some((s.clone(), "text".into())),
+        Value::Array(arr) => {
+            let mut has_code = false;
+            let mut has_tool = false;
+            let mut parts = Vec::new();
+
+            for item in arr {
+                if let Value::Object(obj) = item {
+                    if let Some(block_type) = obj.get("type").and_then(Value::as_str) {
+                        if block_type == "code" {
+                            has_code = true;
+                        }
+                        if block_type == "tool_use" || block_type == "tool_result" {
+                            has_tool = true;
+                        }
+                    }
+                    if let Some(text) = obj.get("text").and_then(Value::as_str) {
+                        parts.push(text.to_string());
+                    }
+                }
+            }
+
+            let ct = if has_code {
+                "code"
+            } else if has_tool {
+                "tool"
+            } else {
+                "text"
+            };
+            (parts.join(" "), ct.to_string())
+        }
+        Value::Object(obj) => {
+            if let Some(text) = obj.get("text").and_then(Value::as_str) {
+                return Some((text.to_string(), "text".into()));
+            }
+            let blocks: Vec<String> = obj
+                .get("blocks")
+                .and_then(Value::as_array)
+                .into_iter()
+                .flat_map(|arr| {
+                    arr.iter().filter_map(|item| {
+                        let t = item.get("type").and_then(Value::as_str)?;
+                        let _ = t;
+                        item.get("text").and_then(Value::as_str).map(str::to_owned)
+                    })
+                })
+                .collect();
+            if blocks.is_empty() {
+                ("".to_string(), "text".to_string())
+            } else {
+                (blocks.join(" "), "text".to_string())
+            }
+        }
+        _ => return None,
+    };
+
+    Some(content)
+}
+
+fn parse_pi_file(
+    entry: walkdir::DirEntry,
+    existing_hashes: &HashMap<String, String>,
+    _include_agents: bool,
+) -> Option<ParsedFile> {
+    let path_str = entry.path().to_string_lossy().to_string();
+    let hash = match compute_hash(entry.path()) {
+        Ok(hash) => hash,
+        Err(err) => {
+            tracing::warn!("Could not hash {}: {}", path_str, err);
+            return None;
+        }
+    };
+
+    if existing_hashes.get(&path_str) == Some(&hash) {
+        return None;
+    }
+
+    let content = match fs::read_to_string(entry.path()) {
+        Ok(c) => c,
+        Err(err) => {
+            tracing::warn!("Could not read {}: {}", path_str, err);
+            return None;
+        }
+    };
+
+    let mut messages = Vec::new();
+    let mut file_uuid: Option<String> = None;
+
+    for (ordinal, line) in content.lines().enumerate() {
+        if line.trim().is_empty() {
+            continue;
+        }
+
+        let value: Value = match serde_json::from_str(line) {
+            Ok(v) => v,
+            Err(_) => Value::String(line.to_string()),
+        };
+
+        let role = value
+            .get("role")
+            .and_then(Value::as_str)
+            .or_else(|| {
+                value
+                    .get("message")
+                    .and_then(|m| m.get("role"))
+                    .and_then(Value::as_str)
+            })
+            .unwrap_or("assistant")
+            .to_string();
+
+        if file_uuid.is_none() {
+            if let Some(u) = value.get("uuid").and_then(Value::as_str) {
+                file_uuid = Some(u.to_string());
+            }
+            if let Some(u) = value.get("session_id").and_then(Value::as_str) {
+                file_uuid = Some(u.to_string());
+            }
+        }
+
+        let raw_content = value
+            .get("message")
+            .and_then(|m| m.get("content"))
+            .or_else(|| value.get("content"));
+
+        let (text_content, ct) = if let Some(raw) = raw_content {
+            parse_pi_value(raw).unwrap_or_else(|| (raw.to_string(), "text".to_string()))
+        } else if let Value::String(s) = &value {
+            (s.clone(), "text".to_string())
+        } else {
+            (String::new(), "text".to_string())
+        };
+
+        if let Some(cleaned) = filter_noise(&text_content) {
+            if cleaned.is_empty() {
+                continue;
+            }
+            let timestamp = value
+                .get("timestamp")
+                .and_then(Value::as_str)
+                .map(std::string::ToString::to_string);
+
+            let uuid = value
+                .get("uuid")
+                .and_then(Value::as_str)
+                .map(std::string::ToString::to_string);
+
+            messages.push(ParsedMessage {
+                role,
+                text: cleaned,
+                ordinal,
+                uuid,
+                timestamp,
+                content_type: ct,
+            });
+        }
+    }
+
+    let project = infer_project(
+        &entry,
+        file_uuid.as_ref(),
+        &load_session_index(entry.path().parent().unwrap_or_else(|| Path::new("."))),
+    );
+
+    Some(ParsedFile {
+        source: "session".into(),
+        source_path: path_str,
+        hash,
+        project: Some(project),
+        messages,
+    })
+}
+
+pub trait SessionInputParser {
+    fn name(&self) -> &'static str;
+    fn parse(
+        &self,
+        input: &SessionInput,
+        existing_hashes: &HashMap<String, String>,
+    ) -> Vec<ParsedFile>;
+}
+
+pub struct SessionInputParserRegistry {
+    parsers: HashMap<String, Box<dyn SessionInputParser>>,
+}
+
+impl Default for SessionInputParserRegistry {
+    fn default() -> Self {
+        let mut parsers = HashMap::new();
+        parsers.insert(
+            "claude".into(),
+            Box::new(ClaudeInputParser) as Box<dyn SessionInputParser>,
+        );
+        parsers.insert(
+            "pi".into(),
+            Box::new(PiInputParser) as Box<dyn SessionInputParser>,
+        );
+        Self { parsers }
+    }
+}
+
+impl SessionInputParserRegistry {
+    pub fn parse_input(
+        &self,
+        input: &SessionInput,
+        existing_hashes: &HashMap<String, String>,
+    ) -> Vec<ParsedFile> {
+        match self.parsers.get(&input.parser().to_lowercase()) {
+            Some(parser) => parser.parse(input, existing_hashes),
+            None => {
+                tracing::warn!(
+                    "No parser registered for '{}'. Skipping input in {:?}",
+                    input.parser(),
+                    input.paths
+                );
+                Vec::new()
+            }
+        }
+    }
+}
+
+struct ClaudeInputParser;
+
+impl SessionInputParser for ClaudeInputParser {
+    fn name(&self) -> &'static str {
+        "claude"
+    }
+
+    fn parse(
+        &self,
+        input: &SessionInput,
+        existing_hashes: &HashMap<String, String>,
+    ) -> Vec<ParsedFile> {
+        let mut parsed = Vec::new();
+
+        if input.paths.is_empty() {
+            tracing::warn!("Input {:?} has no paths; skipping", input);
+            return parsed;
+        }
+
+        for path in &input.paths {
+            let entries = discover_candidate_files(Path::new(path), input.include_agents);
+            if entries.is_empty() {
+                tracing::warn!("No files found for input path: {}", path);
+                continue;
+            }
+            for entry in entries {
+                if let Some(file) =
+                    parse_session_file_claude(entry, existing_hashes, input.include_agents)
+                {
+                    parsed.push(file);
+                }
+            }
+        }
+
+        parsed
+    }
+}
+
+struct PiInputParser;
+
+impl SessionInputParser for PiInputParser {
+    fn name(&self) -> &'static str {
+        "pi"
+    }
+
+    fn parse(
+        &self,
+        input: &SessionInput,
+        existing_hashes: &HashMap<String, String>,
+    ) -> Vec<ParsedFile> {
+        let mut parsed = Vec::new();
+
+        if input.paths.is_empty() {
+            tracing::warn!("Input {:?} has no paths; skipping", input);
+            return parsed;
+        }
+
+        for path in &input.paths {
+            let mut any_found = false;
+            let entries = discover_candidate_files(Path::new(path), input.include_agents);
+            for entry in entries {
+                if let Some(file) = parse_pi_file(entry, existing_hashes, input.include_agents) {
+                    parsed.push(file);
+                    any_found = true;
+                }
+            }
+            if !any_found {
+                tracing::warn!("No files found for input path: {}", path);
+            }
+        }
+
+        parsed
+    }
+}
+
+pub fn parse_session_inputs(
+    inputs: &[SessionInput],
+    existing_hashes: &HashMap<String, String>,
+) -> Vec<ParsedFile> {
+    let registry = SessionInputParserRegistry::default();
+    let mut parsed = Vec::new();
+
+    for input in inputs {
+        if !input.is_active() {
+            continue;
+        }
+        parsed.extend(registry.parse_input(input, existing_hashes));
+    }
+
+    parsed
+}
+
 #[tracing::instrument(skip(existing_hashes))]
 pub fn parse_sessions(
     session_dir: &str,
     existing_hashes: &HashMap<String, String>,
     include_agents: bool,
 ) -> miette::Result<Vec<ParsedFile>> {
-    let mut parsed_files = Vec::new();
-    let mut files_processed = 0;
-    let mut files_skipped = 0;
-
-    let index_map = load_session_index(Path::new(session_dir));
-
-    for entry in WalkDir::new(session_dir)
-        .into_iter()
-        .filter_map(|e| e.ok())
-        .filter(|e| {
-            e.file_type().is_file()
-                && e.path()
-                    .extension()
-                    .is_some_and(|ext| ext == "json" || ext == "jsonl")
-        })
-    {
-        let path_str = entry.path().to_string_lossy().to_string();
-
-        if !include_agents && path_str.contains("/subagents/") {
-            files_skipped += 1;
-            continue;
-        }
-        let hash = compute_hash(entry.path())?;
-
-        let is_changed = existing_hashes.get(&path_str) != Some(&hash);
-
-        if is_changed {
-            files_processed += 1;
-            let content = fs::read_to_string(entry.path()).into_diagnostic()?;
-            let mut messages = Vec::new();
-
-            let mut file_uuid = None;
-
-            for (ordinal, line) in content.lines().enumerate() {
-                if let Ok(record) = serde_json::from_str::<SessionRecord>(line) {
-                    if file_uuid.is_none() && record.uuid.is_some() {
-                        file_uuid = record.uuid.clone();
-                    }
-
-                    if record.is_meta == Some(true) {
-                        continue;
-                    }
-
-                    if record.record_type != "user" && record.record_type != "assistant" {
-                        continue;
-                    }
-
-                    if let Some(msg) = record.message {
-                        let (text_content, content_type) = match &msg.content {
-                            MessageContent::Text(t) => (t.clone(), "text".to_string()),
-                            MessageContent::Blocks(blocks) => {
-                                let mut has_code = false;
-                                let mut has_tool = false;
-                                let parts: Vec<String> = blocks
-                                    .iter()
-                                    .filter(|b| {
-                                        b.block_type != "tool_use" && b.block_type != "tool_result"
-                                    })
-                                    .filter_map(|b| {
-                                        if b.block_type == "code" {
-                                            has_code = true;
-                                        }
-                                        b.text.clone()
-                                    })
-                                    .collect();
-                                for b in blocks {
-                                    if b.block_type == "tool_use" || b.block_type == "tool_result" {
-                                        has_tool = true;
-                                    }
-                                }
-                                let ct = if has_code {
-                                    "code"
-                                } else if has_tool {
-                                    "tool"
-                                } else {
-                                    "text"
-                                };
-                                (parts.join(" "), ct.to_string())
-                            }
-                        };
-
-                        let cleaned_text = filter_noise(&text_content);
-
-                        if let Some(text) = cleaned_text {
-                            if !text.is_empty() {
-                                messages.push(ParsedMessage {
-                                    role: msg.role,
-                                    text,
-                                    ordinal,
-                                    uuid: record.uuid,
-                                    timestamp: record.timestamp,
-                                    content_type,
-                                });
-                            }
-                        }
-                    }
-                } else {
-                    tracing::warn!("Could not parse line {} in {}", ordinal, path_str);
-                }
-            }
-
-            let mut project = None;
-            if let Some(uuid) = file_uuid {
-                if let Some(p) = index_map.get(&uuid) {
-                    project = Some(p.clone());
-                }
-            }
-            if project.is_none() {
-                // Fallback: derive from path
-                // Look for a parent directory of the file, maybe up 2 levels if it's in `sessions`
-                if let Some(parent) = entry.path().parent() {
-                    if parent.ends_with("sessions") || parent.ends_with("subagents") {
-                        if let Some(proj_dir) = parent.parent() {
-                            if let Some(slug) = proj_dir.file_name() {
-                                project = Some(slug.to_string_lossy().to_string());
-                            }
-                        }
-                    } else if let Some(slug) = parent.file_name() {
-                        project = Some(slug.to_string_lossy().to_string());
-                    }
-                }
-            }
-
-            let project_final = project.unwrap_or_else(|| "unknown".to_string());
-
-            parsed_files.push(ParsedFile {
-                source: "session".into(),
-                source_path: path_str,
-                hash,
-                project: Some(project_final),
-                messages,
-            });
-        } else {
-            files_skipped += 1;
-        }
-    }
-    tracing::info!(
-        "Processed {} files, skipped {} files",
-        files_processed,
-        files_skipped
-    );
-    Ok(parsed_files)
+    Ok(parse_claude_directory(
+        session_dir,
+        existing_hashes,
+        include_agents,
+    ))
 }
 
 #[cfg(test)]
@@ -264,6 +685,34 @@ mod tests {
         existing_hashes.insert(files[0].source_path.clone(), files[0].hash.clone());
         let files2 = parse_sessions(dir.path().to_str().unwrap(), &existing_hashes, false)?;
         assert_eq!(files2.len(), 0);
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_parse_session_inputs_pi() -> miette::Result<()> {
+        let dir = tempdir().into_diagnostic()?;
+        let file_path = dir.path().join("pi.jsonl");
+
+        fs::write(
+            &file_path,
+            r#"{"role":"assistant","content":"pi content","uuid":"u1","timestamp":"2024-01-01T00:00:00Z"}"#,
+        )
+        .into_diagnostic()?;
+
+        let input = SessionInput {
+            source: "session".into(),
+            parser: "pi".into(),
+            paths: vec![dir.path().to_str().unwrap().into()],
+            include_agents: false,
+            active: true,
+        };
+
+        let files = parse_session_inputs(&[input], &HashMap::new());
+        assert_eq!(files.len(), 1);
+        assert_eq!(files[0].source, "session");
+        assert_eq!(files[0].messages.len(), 1);
+        assert_eq!(files[0].messages[0].text, "pi content");
 
         Ok(())
     }

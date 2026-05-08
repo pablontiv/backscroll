@@ -3,9 +3,9 @@
 mod output;
 
 use crate::output::{OutputFormat, OutputOptions, format_results};
-use backscroll::config::Config;
+use backscroll::config::{Config, SessionInput};
 use backscroll::core::plans::parse_plan;
-use backscroll::core::sync::parse_sessions;
+use backscroll::core::sync::parse_session_inputs;
 use backscroll::core::{SearchEngine, SearchParams};
 use backscroll::storage::sqlite::Database;
 use clap::{Parser, Subcommand};
@@ -291,30 +291,80 @@ fn create_engine(config: &Config) -> Result<Box<dyn SearchEngine>> {
     Ok(Box::new(db))
 }
 
-fn resolve_session_paths(cli_paths: &[String], config: &Config) -> Result<Vec<String>> {
+fn resolve_session_inputs(
+    cli_paths: &[String],
+    config: &Config,
+    include_agents: bool,
+) -> Result<Vec<SessionInput>> {
     // 1. CLI --path overrides everything
     if !cli_paths.is_empty() {
-        return Ok(cli_paths.to_vec());
+        return Ok(cli_paths
+            .iter()
+            .map(|path| SessionInput {
+                source: "session".into(),
+                parser: "claude".into(),
+                paths: vec![path.clone()],
+                include_agents,
+                active: true,
+            })
+            .collect());
     }
 
-    // 2. Non-default config takes precedence
+    // 2. Non-default config session_dirs overrides legacy declared inputs
     if config.session_dirs != vec!["."] {
-        return Ok(config.session_dirs.clone());
+        return Ok(config
+            .session_dirs
+            .iter()
+            .map(|path| SessionInput {
+                source: "session".into(),
+                parser: "claude".into(),
+                paths: vec![path.clone()],
+                include_agents,
+                active: true,
+            })
+            .collect());
     }
 
-    // 3. Auto-discovery fallback
+    // 3. Active declarative session inputs (loaded from backscroll.inputs.*)
+    let declared_inputs = config.active_session_inputs();
+    if !declared_inputs.is_empty() {
+        return Ok(declared_inputs);
+    }
+
+    // 4. Auto-discovery fallback
     let discovered = Config::discover_session_dirs();
     if !discovered.is_empty() {
         return Ok(discovered
             .into_iter()
-            .map(|p| p.to_string_lossy().into_owned())
+            .map(|path| SessionInput {
+                source: "session".into(),
+                parser: "claude".into(),
+                paths: vec![path.to_string_lossy().into_owned()],
+                include_agents,
+                active: true,
+            })
             .collect());
     }
 
-    // 4. No paths found
+    // 5. No paths found
     Err(miette::miette!(
-        "No session directories found. Use --path, configure session_dirs in backscroll.toml, or ensure ~/.claude/projects/ exists."
+        "No session directories found. Use --path, configure session_dirs in backscroll.toml, or define active backscroll inputs."
     ))
+}
+
+fn sync_session_inputs(
+    engine: &dyn SearchEngine,
+    cli_paths: &[String],
+    config: &Config,
+    include_agents: bool,
+) -> Result<()> {
+    let inputs = resolve_session_inputs(cli_paths, config, include_agents)?;
+    let hashes = engine.get_file_hashes()?;
+    let files = parse_session_inputs(&inputs, &hashes);
+    if !files.is_empty() {
+        engine.sync_files(files)?;
+    }
+    Ok(())
 }
 
 use tracing_subscriber::EnvFilter;
@@ -337,14 +387,8 @@ fn main() -> Result<()> {
             optimize,
             no_embeddings: _,
         } => {
-            let paths = resolve_session_paths(path, &config)?;
             let engine = create_engine(&config)?;
-            for p in &paths {
-                println!("Sincronizando sesiones desde: {}", p);
-                let hashes = engine.get_file_hashes()?;
-                let files = parse_sessions(p, &hashes, *include_agents)?;
-                engine.sync_files(files)?;
-            }
+            sync_session_inputs(engine.as_ref(), path, &config, *include_agents)?;
             if !no_plans {
                 let hashes = engine.get_file_hashes()?;
                 sync_plans(engine.as_ref(), &hashes)?;
@@ -386,15 +430,7 @@ fn main() -> Result<()> {
             let engine = create_engine(&config)?;
 
             // Auto-sync: indexar sesiones nuevas antes de buscar (incremental, rápido)
-            if let Ok(paths) = resolve_session_paths(&[], &config) {
-                for p in &paths {
-                    let hashes = engine.get_file_hashes()?;
-                    let files = parse_sessions(p, &hashes, false)?;
-                    if !files.is_empty() {
-                        engine.sync_files(files)?;
-                    }
-                }
-            }
+            sync_session_inputs(engine.as_ref(), &Vec::new(), &config, false)?;
             // Auto-sync plans
             if let Ok(hashes) = engine.get_file_hashes() {
                 let _ = sync_plans(engine.as_ref(), &hashes);
@@ -511,15 +547,7 @@ fn main() -> Result<()> {
             let engine = create_engine(&config)?;
 
             // Auto-sync before resume search
-            if let Ok(paths) = resolve_session_paths(&[], &config) {
-                for p in &paths {
-                    let hashes = engine.get_file_hashes()?;
-                    let files = parse_sessions(p, &hashes, false)?;
-                    if !files.is_empty() {
-                        engine.sync_files(files)?;
-                    }
-                }
-            }
+            sync_session_inputs(engine.as_ref(), &Vec::new(), &config, false)?;
             if let Ok(hashes) = engine.get_file_hashes() {
                 let _ = sync_plans(engine.as_ref(), &hashes);
             }
@@ -574,15 +602,7 @@ fn main() -> Result<()> {
             let engine = create_engine(&config)?;
 
             // Auto-sync before list
-            if let Ok(paths) = resolve_session_paths(&[], &config) {
-                for p in &paths {
-                    let hashes = engine.get_file_hashes()?;
-                    let files = parse_sessions(p, &hashes, false)?;
-                    if !files.is_empty() {
-                        engine.sync_files(files)?;
-                    }
-                }
-            }
+            sync_session_inputs(engine.as_ref(), &Vec::new(), &config, false)?;
 
             let effective_project = if *all_projects {
                 None
@@ -654,15 +674,7 @@ fn main() -> Result<()> {
             let engine = create_engine(&config)?;
 
             // Auto-sync before topics
-            if let Ok(paths) = resolve_session_paths(&[], &config) {
-                for p in &paths {
-                    let hashes = engine.get_file_hashes()?;
-                    let files = parse_sessions(p, &hashes, false)?;
-                    if !files.is_empty() {
-                        engine.sync_files(files)?;
-                    }
-                }
-            }
+            sync_session_inputs(engine.as_ref(), &Vec::new(), &config, false)?;
 
             let effective_project = if *all_projects {
                 None
@@ -717,16 +729,10 @@ fn main() -> Result<()> {
             no_plans,
             no_embeddings: _,
         } => {
-            let paths = resolve_session_paths(path, &config)?;
             let engine = create_engine(&config)?;
             println!("Clearing index hashes for full re-sync...");
             engine.clear_hashes()?;
-            for p in &paths {
-                println!("Re-indexing sessions from: {}", p);
-                let hashes = engine.get_file_hashes()?;
-                let files = parse_sessions(p, &hashes, *include_agents)?;
-                engine.sync_files(files)?;
-            }
+            sync_session_inputs(engine.as_ref(), path, &config, *include_agents)?;
             if !no_plans {
                 let hashes = engine.get_file_hashes()?;
                 sync_plans(engine.as_ref(), &hashes)?;
@@ -771,15 +777,7 @@ fn main() -> Result<()> {
             let engine = create_engine(&config)?;
 
             // Auto-sync before insights
-            if let Ok(paths) = resolve_session_paths(&[], &config) {
-                for p in &paths {
-                    let hashes = engine.get_file_hashes()?;
-                    let files = parse_sessions(p, &hashes, false)?;
-                    if !files.is_empty() {
-                        engine.sync_files(files)?;
-                    }
-                }
-            }
+            sync_session_inputs(engine.as_ref(), &Vec::new(), &config, false)?;
 
             let effective_project = if *all_projects {
                 None
@@ -843,15 +841,7 @@ fn main() -> Result<()> {
             let engine = create_engine(&config)?;
 
             // Auto-sync
-            if let Ok(paths) = resolve_session_paths(&[], &config) {
-                for p in &paths {
-                    let hashes = engine.get_file_hashes()?;
-                    let files = parse_sessions(p, &hashes, false)?;
-                    if !files.is_empty() {
-                        engine.sync_files(files)?;
-                    }
-                }
-            }
+            sync_session_inputs(engine.as_ref(), &Vec::new(), &config, false)?;
 
             let effective_project = if *all_projects {
                 None
@@ -928,17 +918,7 @@ fn main() -> Result<()> {
 
             if let Ok(engine) = create_engine(&config) {
                 // Auto-sync antes de mostrar stats
-                if let Ok(paths) = resolve_session_paths(&[], &config) {
-                    for p in &paths {
-                        if let Ok(hashes) = engine.get_file_hashes() {
-                            if let Ok(files) = parse_sessions(p, &hashes, false) {
-                                if !files.is_empty() {
-                                    let _ = engine.sync_files(files);
-                                }
-                            }
-                        }
-                    }
-                }
+                let _ = sync_session_inputs(engine.as_ref(), &Vec::new(), &config, false);
 
                 if let Ok(stats) = engine.get_stats() {
                     println!("\nBackscroll Index Status");
@@ -992,4 +972,92 @@ fn main() -> Result<()> {
     }
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_resolve_session_inputs_prefers_cli_paths() -> miette::Result<()> {
+        let config = Config {
+            session_dirs: vec!["/should/not/use".into()],
+            session_inputs: vec![SessionInput {
+                source: "session".into(),
+                parser: "pi".into(),
+                paths: vec!["/declarative/path".into()],
+                include_agents: false,
+                active: true,
+            }],
+            ..Config::default_with_paths()
+        };
+        let inputs = resolve_session_inputs(
+            &["/cli/path/one".into(), "/cli/path/two".into()],
+            &config,
+            true,
+        )?;
+
+        assert_eq!(inputs.len(), 2);
+        assert_eq!(inputs[0].source, "session");
+        assert_eq!(inputs[0].parser, "claude");
+        assert_eq!(inputs[0].paths[0], "/cli/path/one");
+        assert_eq!(inputs[0].include_agents, true);
+        assert_eq!(inputs[1].paths[0], "/cli/path/two");
+        assert_eq!(inputs[0].active, true);
+        Ok(())
+    }
+
+    #[test]
+    fn test_resolve_session_inputs_prefers_session_dirs() -> miette::Result<()> {
+        let config = Config {
+            session_dirs: vec!["/session/one".into(), "/session/two".into()],
+            session_inputs: vec![SessionInput {
+                source: "session".into(),
+                parser: "pi".into(),
+                paths: vec!["/declarative/path".into()],
+                include_agents: false,
+                active: true,
+            }],
+            ..Config::default_with_paths()
+        };
+        let inputs = resolve_session_inputs(&[], &config, false)?;
+
+        assert_eq!(inputs.len(), 2);
+        assert_eq!(inputs[0].paths, vec!["/session/one".to_string()]);
+        assert_eq!(inputs[0].parser, "claude");
+        assert_eq!(inputs[1].paths, vec!["/session/two".to_string()]);
+        Ok(())
+    }
+
+    #[test]
+    fn test_resolve_session_inputs_uses_active_declarative_inputs() -> miette::Result<()> {
+        let config = Config {
+            session_dirs: vec![".".into()],
+            session_inputs: vec![
+                SessionInput {
+                    source: "session".into(),
+                    parser: "pi".into(),
+                    paths: vec!["/declarative/inactive".into()],
+                    include_agents: false,
+                    active: false,
+                },
+                SessionInput {
+                    source: "session".into(),
+                    parser: "pi".into(),
+                    paths: vec!["/declarative/active".into()],
+                    include_agents: true,
+                    active: true,
+                },
+            ],
+            ..Config::default_with_paths()
+        };
+        let inputs = resolve_session_inputs(&[], &config, false)?;
+
+        assert_eq!(inputs.len(), 1);
+        assert_eq!(inputs[0].source, "session");
+        assert_eq!(inputs[0].parser, "pi");
+        assert_eq!(inputs[0].paths, vec!["/declarative/active".to_string()]);
+        assert_eq!(inputs[0].include_agents, true);
+        Ok(())
+    }
 }
