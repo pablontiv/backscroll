@@ -55,13 +55,15 @@ impl Default for EmbeddingConfig {
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
-#[serde(default)]
+#[serde(default, deny_unknown_fields)]
 pub struct SessionInput {
     pub source: String,
     #[serde(default = "SessionInput::default_parser")]
     pub parser: String,
     #[serde(default, deserialize_with = "string_or_vec")]
     pub paths: Vec<String>,
+    #[serde(default)]
+    pub glob: Option<String>,
     #[serde(default)]
     pub include_agents: bool,
     #[serde(default = "default_true")]
@@ -92,6 +94,7 @@ impl Default for SessionInput {
             source: "session".to_string(),
             parser: Self::default_parser(),
             paths: Vec::new(),
+            glob: None,
             include_agents: false,
             active: true,
         }
@@ -99,6 +102,7 @@ impl Default for SessionInput {
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
+#[serde(deny_unknown_fields)]
 struct InputsFile {
     #[serde(default)]
     pub inputs: Vec<SessionInput>,
@@ -151,60 +155,39 @@ pub struct Config {
 }
 
 impl Config {
-    fn collect_backscroll_inputs() -> Vec<SessionInput> {
+    fn read_inputs_file(path: &Path) -> miette::Result<Vec<SessionInput>> {
+        let content = fs::read_to_string(path)
+            .map_err(|err| miette::miette!("Failed to read {}: {}", path.display(), err))?;
+        let file_inputs = Figment::new()
+            .merge(Toml::string(&content))
+            .extract::<InputsFile>()
+            .map_err(|err| miette::miette!("Failed to parse {}: {}", path.display(), err))?;
+        Ok(file_inputs.all_inputs())
+    }
+
+    fn collect_backscroll_inputs() -> miette::Result<Vec<SessionInput>> {
         let mut inputs: Vec<SessionInput> = Vec::new();
 
         let legacy_file = Path::new("backscroll.inputs.toml");
         if legacy_file.is_file() {
-            if let Ok(content) = fs::read_to_string(legacy_file) {
-                match Figment::new()
-                    .merge(Toml::string(&content))
-                    .extract::<InputsFile>()
-                {
-                    Ok(file_inputs) => inputs.extend(file_inputs.all_inputs()),
-                    Err(err) => {
-                        tracing::warn!(
-                            "Failed to parse {}: {}. This file was ignored.",
-                            legacy_file.display(),
-                            err
-                        );
-                    }
-                }
-            }
+            inputs.extend(Self::read_inputs_file(legacy_file)?);
         }
 
         let dir = Path::new("backscroll.inputs.d");
         if dir.is_dir() {
             let mut entries: Vec<_> = fs::read_dir(dir)
-                .ok()
-                .into_iter()
-                .flat_map(|it| it.filter_map(Result::ok))
-                .filter(|entry| entry.path().extension().is_some_and(|ext| ext == "toml"))
-                .collect();
+                .map_err(|err| miette::miette!("Failed to read {}: {}", dir.display(), err))?
+                .collect::<std::result::Result<Vec<_>, _>>()
+                .map_err(|err| miette::miette!("Failed to read {}: {}", dir.display(), err))?;
 
+            entries.retain(|entry| entry.path().extension().is_some_and(|ext| ext == "toml"));
             entries.sort_by_key(|entry| entry.path());
             for entry in entries {
-                if let Ok(content) = fs::read_to_string(entry.path()) {
-                    match Figment::new()
-                        .merge(Toml::string(&content))
-                        .extract::<InputsFile>()
-                    {
-                        Ok(file_inputs) => {
-                            inputs.extend(file_inputs.all_inputs());
-                        }
-                        Err(err) => {
-                            tracing::warn!(
-                                "Failed to parse {}: {}. This file was ignored.",
-                                entry.path().display(),
-                                err
-                            );
-                        }
-                    }
-                }
+                inputs.extend(Self::read_inputs_file(&entry.path())?);
             }
         }
 
-        inputs
+        Ok(inputs)
     }
 
     pub fn load() -> miette::Result<Self> {
@@ -228,7 +211,8 @@ impl Config {
                 )
             })?;
 
-        cfg.session_inputs.extend(Self::collect_backscroll_inputs());
+        cfg.session_inputs
+            .extend(Self::collect_backscroll_inputs()?);
 
         Ok(cfg)
     }
@@ -350,6 +334,7 @@ mod tests {
         source = "session"
         parser = "claude"
         paths = ["/a", "/b"]
+        glob = "**/*.jsonl"
         include_agents = true
         active = true
 
@@ -370,7 +355,57 @@ mod tests {
         assert!(config.session_inputs[0].is_active());
         assert_eq!(config.session_inputs[0].paths.len(), 2);
         assert_eq!(config.session_inputs[0].paths[0], "/a");
+        assert_eq!(config.session_inputs[0].glob.as_deref(), Some("**/*.jsonl"));
         assert!(!config.session_inputs[1].is_active());
+    }
+
+    #[test]
+    fn test_invalid_inputs_file_returns_controlled_parse_error() {
+        let _guard = lock_fs();
+        let dir = tempdir().unwrap();
+        let old_dir = std::env::current_dir().unwrap();
+        fs::write(
+            dir.path().join("backscroll.toml"),
+            "database_path = \"test.db\"\n",
+        )
+        .unwrap();
+        fs::write(dir.path().join("backscroll.inputs.toml"), "[[inputs]\n").unwrap();
+
+        std::env::set_current_dir(dir.path()).unwrap();
+        let result = Config::load();
+        std::env::set_current_dir(old_dir).unwrap();
+
+        let err = result.expect_err("invalid input manifests must fail Config::load");
+        let msg = err.to_string();
+        assert!(msg.contains("backscroll.inputs.toml"), "{msg}");
+    }
+
+    #[test]
+    fn test_inputs_reject_unknown_fields() {
+        let _guard = lock_fs();
+        let dir = tempdir().unwrap();
+        let old_dir = std::env::current_dir().unwrap();
+        fs::write(
+            dir.path().join("backscroll.toml"),
+            "database_path = \"test.db\"\n",
+        )
+        .unwrap();
+        fs::write(
+            dir.path().join("backscroll.inputs.toml"),
+            "[[inputs]]\nsource = \"session\"\npaths = [\"/a\"]\nunknown_key = true\n",
+        )
+        .unwrap();
+
+        std::env::set_current_dir(dir.path()).unwrap();
+        let result = Config::load();
+        std::env::set_current_dir(old_dir).unwrap();
+
+        let err = result.expect_err("unknown input keys must be rejected");
+        let msg = err.to_string();
+        assert!(
+            msg.contains("unknown_key") || msg.contains("unknown"),
+            "{msg}"
+        );
     }
 
     #[test]
@@ -403,6 +438,12 @@ mod tests {
 
         let config = Config::load().unwrap();
         assert_eq!(config.session_inputs.len(), 2);
+        let active_paths: Vec<_> = config
+            .active_session_inputs()
+            .into_iter()
+            .map(|input| input.paths[0].clone())
+            .collect();
+        assert_eq!(active_paths, vec!["/one", "/two"]);
 
         std::env::set_current_dir(original_dir).unwrap();
         Ok(())

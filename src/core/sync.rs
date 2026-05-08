@@ -1,5 +1,6 @@
 use crate::config::SessionInput;
 use crate::core::models::{MessageContent, SessionRecord};
+use crate::core::session_inputs::claude;
 use crate::core::{ParsedFile, ParsedMessage};
 use miette::IntoDiagnostic;
 use regex::Regex;
@@ -114,7 +115,10 @@ fn infer_project(
     "unknown".to_string()
 }
 
-fn discover_candidate_files(session_dir: &Path, include_agents: bool) -> Vec<walkdir::DirEntry> {
+pub(crate) fn discover_candidate_files(
+    session_dir: &Path,
+    include_agents: bool,
+) -> Vec<walkdir::DirEntry> {
     if !session_dir.exists() {
         return Vec::new();
     }
@@ -158,17 +162,19 @@ fn discover_candidate_files(session_dir: &Path, include_agents: bool) -> Vec<wal
         .collect()
 }
 
-fn parse_claude_message_lines(
-    content: &str,
-    file_uuid: &mut Option<String>,
-) -> Vec<(
+type ClaudeMessageLine = (
     String,
     String,
     String,
     usize,
     Option<String>,
     Option<String>,
-)> {
+);
+
+fn parse_claude_message_lines(
+    content: &str,
+    file_uuid: &mut Option<String>,
+) -> Vec<ClaudeMessageLine> {
     let mut out = Vec::new();
 
     for (ordinal, raw_line) in content.lines().enumerate() {
@@ -238,7 +244,7 @@ fn parse_claude_message_lines(
     out
 }
 
-fn parse_session_file_claude(
+pub(crate) fn parse_session_file_claude(
     entry: walkdir::DirEntry,
     existing_hashes: &HashMap<String, String>,
     include_agents: bool,
@@ -300,34 +306,6 @@ fn parse_session_file_claude(
         project: Some(project),
         messages,
     })
-}
-
-fn parse_claude_directory(
-    session_dir: &str,
-    existing_hashes: &HashMap<String, String>,
-    include_agents: bool,
-) -> Vec<ParsedFile> {
-    let mut parsed_files = Vec::new();
-    let mut files_processed = 0;
-    let mut files_skipped = 0;
-
-    let entries = discover_candidate_files(Path::new(session_dir), include_agents);
-    for entry in entries {
-        match parse_session_file_claude(entry, existing_hashes, include_agents) {
-            Some(file) => {
-                parsed_files.push(file);
-                files_processed += 1;
-            }
-            None => files_skipped += 1,
-        }
-    }
-
-    tracing::info!(
-        "Processed {} files, skipped {} files",
-        files_processed,
-        files_skipped
-    );
-    parsed_files
 }
 
 fn parse_pi_value(value: &Value) -> Option<(String, String)> {
@@ -564,29 +542,7 @@ impl SessionInputParser for ClaudeInputParser {
         input: &SessionInput,
         existing_hashes: &HashMap<String, String>,
     ) -> Vec<ParsedFile> {
-        let mut parsed = Vec::new();
-
-        if input.paths.is_empty() {
-            tracing::warn!("Input {:?} has no paths; skipping", input);
-            return parsed;
-        }
-
-        for path in &input.paths {
-            let entries = discover_candidate_files(Path::new(path), input.include_agents);
-            if entries.is_empty() {
-                tracing::warn!("No files found for input path: {}", path);
-                continue;
-            }
-            for entry in entries {
-                if let Some(file) =
-                    parse_session_file_claude(entry, existing_hashes, input.include_agents)
-                {
-                    parsed.push(file);
-                }
-            }
-        }
-
-        parsed
+        claude::parse_paths(&input.paths, input.include_agents, existing_hashes)
     }
 }
 
@@ -650,10 +606,10 @@ pub fn parse_sessions(
     existing_hashes: &HashMap<String, String>,
     include_agents: bool,
 ) -> miette::Result<Vec<ParsedFile>> {
-    Ok(parse_claude_directory(
-        session_dir,
-        existing_hashes,
+    Ok(claude::parse_paths(
+        &[session_dir.to_string()],
         include_agents,
+        existing_hashes,
     ))
 }
 
@@ -704,6 +660,7 @@ mod tests {
             source: "session".into(),
             parser: "pi".into(),
             paths: vec![dir.path().to_str().unwrap().into()],
+            glob: None,
             include_agents: false,
             active: true,
         };
@@ -713,6 +670,44 @@ mod tests {
         assert_eq!(files[0].source, "session");
         assert_eq!(files[0].messages.len(), 1);
         assert_eq!(files[0].messages[0].text, "pi content");
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_claude_input_parser_matches_parse_sessions() -> miette::Result<()> {
+        let dir = tempdir().into_diagnostic()?;
+        let file_path = dir.path().join("session.jsonl");
+
+        fs::write(
+            &file_path,
+            r#"{"uuid":"u1","timestamp":"2024-01-01T00:00:00Z","type":"user","message":{"role":"user","content":"hola"}}
+{"uuid":"u2","timestamp":"2024-01-01T00:00:01Z","type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"respuesta"}]}}"#,
+        )
+        .into_diagnostic()?;
+
+        let hashes = HashMap::new();
+        let legacy = parse_sessions(dir.path().to_str().unwrap(), &hashes, false)?;
+        let native = crate::core::session_inputs::claude::parse_paths(
+            &[dir.path().to_string_lossy().to_string()],
+            false,
+            &hashes,
+        );
+
+        assert_eq!(native.len(), legacy.len());
+        assert_eq!(native[0].source, legacy[0].source);
+        assert_eq!(native[0].source_path, legacy[0].source_path);
+        assert_eq!(native[0].hash, legacy[0].hash);
+        assert_eq!(native[0].project, legacy[0].project);
+        assert_eq!(native[0].messages.len(), legacy[0].messages.len());
+        for (native_msg, legacy_msg) in native[0].messages.iter().zip(&legacy[0].messages) {
+            assert_eq!(native_msg.role, legacy_msg.role);
+            assert_eq!(native_msg.text, legacy_msg.text);
+            assert_eq!(native_msg.ordinal, legacy_msg.ordinal);
+            assert_eq!(native_msg.uuid, legacy_msg.uuid);
+            assert_eq!(native_msg.timestamp, legacy_msg.timestamp);
+            assert_eq!(native_msg.content_type, legacy_msg.content_type);
+        }
 
         Ok(())
     }

@@ -304,6 +304,7 @@ fn resolve_session_inputs(
                 source: "session".into(),
                 parser: "claude".into(),
                 paths: vec![path.clone()],
+                glob: None,
                 include_agents,
                 active: true,
             })
@@ -319,6 +320,7 @@ fn resolve_session_inputs(
                 source: "session".into(),
                 parser: "claude".into(),
                 paths: vec![path.clone()],
+                glob: None,
                 include_agents,
                 active: true,
             })
@@ -340,6 +342,7 @@ fn resolve_session_inputs(
                 source: "session".into(),
                 parser: "claude".into(),
                 paths: vec![path.to_string_lossy().into_owned()],
+                glob: None,
                 include_agents,
                 active: true,
             })
@@ -986,6 +989,7 @@ mod tests {
                 source: "session".into(),
                 parser: "pi".into(),
                 paths: vec!["/declarative/path".into()],
+                glob: None,
                 include_agents: false,
                 active: true,
             }],
@@ -1001,9 +1005,9 @@ mod tests {
         assert_eq!(inputs[0].source, "session");
         assert_eq!(inputs[0].parser, "claude");
         assert_eq!(inputs[0].paths[0], "/cli/path/one");
-        assert_eq!(inputs[0].include_agents, true);
+        assert!(inputs[0].include_agents);
         assert_eq!(inputs[1].paths[0], "/cli/path/two");
-        assert_eq!(inputs[0].active, true);
+        assert!(inputs[0].active);
         Ok(())
     }
 
@@ -1015,6 +1019,7 @@ mod tests {
                 source: "session".into(),
                 parser: "pi".into(),
                 paths: vec!["/declarative/path".into()],
+                glob: None,
                 include_agents: false,
                 active: true,
             }],
@@ -1038,6 +1043,7 @@ mod tests {
                     source: "session".into(),
                     parser: "pi".into(),
                     paths: vec!["/declarative/inactive".into()],
+                    glob: None,
                     include_agents: false,
                     active: false,
                 },
@@ -1045,6 +1051,7 @@ mod tests {
                     source: "session".into(),
                     parser: "pi".into(),
                     paths: vec!["/declarative/active".into()],
+                    glob: None,
                     include_agents: true,
                     active: true,
                 },
@@ -1057,7 +1064,7 @@ mod tests {
         assert_eq!(inputs[0].source, "session");
         assert_eq!(inputs[0].parser, "pi");
         assert_eq!(inputs[0].paths, vec!["/declarative/active".to_string()]);
-        assert_eq!(inputs[0].include_agents, true);
+        assert!(inputs[0].include_agents);
         Ok(())
     }
 }

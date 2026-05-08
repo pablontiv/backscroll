@@ -1127,7 +1127,7 @@ impl SearchEngine for Database {
                     }
                 }
 
-                results.sort_by(|a, b| b.sessions.cmp(&a.sessions));
+                results.sort_by_key(|entry| std::cmp::Reverse(entry.sessions));
                 results.truncate(limit);
                 Ok(results)
             }

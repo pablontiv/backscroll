@@ -1,5 +1,5 @@
 ---
-estado: Specified
+estado: Completed
 tipo: task
 ---
 # T001: Definir contrato TOML para inputs externos

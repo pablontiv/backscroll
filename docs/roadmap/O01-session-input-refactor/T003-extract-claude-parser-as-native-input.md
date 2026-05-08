@@ -1,5 +1,5 @@
 ---
-estado: Specified
+estado: Completed
 tipo: task
 ---
 # T003: Extraer parser existente en adapter nativo `claude`

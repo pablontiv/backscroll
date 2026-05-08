@@ -4,6 +4,7 @@ pub(crate) mod hybrid;
 pub mod models;
 pub mod plans;
 pub mod reader;
+pub mod session_inputs;
 pub mod sources;
 pub mod sync;
 pub mod tagging;

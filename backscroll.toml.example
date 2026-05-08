@@ -10,10 +10,14 @@ session_dirs = ["."]
 
 # Inputs declarativos opcionales para parsing de sesiones.
 # Soportan backscroll.inputs.toml y backscroll.inputs.d/*.toml.
+# Los manifiestos se evalúan en orden: backscroll.inputs.toml y luego
+# backscroll.inputs.d/*.toml ordenados por nombre; entradas desconocidas fallan rápido.
 [[session_inputs]]
 source = "session"
 parser = "claude"
 paths = ["."]
+# Campo reservado para selección declarativa de archivos en el contrato.
+glob = "**/*.{json,jsonl}"
 include_agents = false
 active = true
 
