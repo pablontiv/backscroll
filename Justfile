@@ -14,9 +14,9 @@ check:
 fmt:
     cargo fmt --all
 
-# Run tests
+# Run tests with isolated input config so user manifests in ~/.config/backscroll/inputs do not affect the suite.
 test:
-    cargo test --all-features
+    config_dir="$(mktemp -d)" && trap 'rm -rf "$config_dir"' EXIT && echo "BACKSCROLL_CONFIG_DIR=$config_dir" && BACKSCROLL_CONFIG_DIR="$config_dir" cargo test --all-features
 
 # Build in release mode
 build:
