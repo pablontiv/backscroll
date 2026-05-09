@@ -1,38 +1,72 @@
-# Backscroll --context Mode Reference
+# Backscroll Context Mode
 
-Requiere rootline y context-save. Verificar disponibilidad:
+Use this only for `/skill:backscroll --context`. Produce a recovery brief with: Backscroll evidence, optional Rootline live state, and gaps.
+
+## Required Backscroll Retrieval
+
 ```bash
-command -v rootline 2>/dev/null
+backscroll inputs validate
+backscroll status
+backscroll list --recent 10 --all-projects --robot
 ```
 
-Si rootline está disponible y `.claude/session-state/` existe con un schema `.stem`:
+If the user supplied a query, search for it. Otherwise use the directory name plus context terms:
 
 ```bash
-# Contextos de sesión guardados para este proyecto
-rootline query .claude/session-state/ --where "proyecto == '$(basename $(pwd))'" --output table
-
-# Contexto más reciente
-rootline query .claude/session-state/ --where "proyecto == '$(basename $(pwd))'" --output table --limit 1
+PROJECT_SLUG="$(basename "$PWD")"
+backscroll search "$PROJECT_SLUG context decisions handoff blockers" --all-projects --robot --max-tokens 4000
 ```
 
-Mostrar también el estado actual de artefactos R&D y planificación:
+If this returns no useful results, run one broader session search:
 
 ```bash
-# Líneas de investigación activas
-rootline query lines/ --where 'tipo == "question"' --output table 2>/dev/null
+backscroll search "$PROJECT_SLUG" --source sessions --all-projects --robot --max-tokens 4000
+```
 
-# Investigaciones activas
-rootline query . --where 'metodo == "hypothesize"' --output table 2>/dev/null
+## Optional Rootline State
 
-# Progreso del roadmap (si configurado)
-if [ -f .claude/roadmap.local.md ]; then
-  ROADMAP_ROOT=$(grep 'roadmap-root:' .claude/roadmap.local.md | awk '{print $2}')
-  rootline stats "$ROADMAP_ROOT" --output table 2>/dev/null
-  rootline tree "$ROADMAP_ROOT" --output table 2>/dev/null
+Run Rootline commands only when `rootline` exists and the target directory exists. Do not assume field names; inspect the schema first.
+
+### Session-state records
+
+```bash
+if command -v rootline >/dev/null 2>&1 && [ -d .claude/session-state ] && find .claude/session-state -name .stem -print -quit | grep -q .; then
+  rootline validate --all .claude/session-state -o json
+  rootline describe .claude/session-state -o json
+  rootline query .claude/session-state -o table --limit 10
 fi
-
-# Teorías
-rootline query theories/ --output table 2>/dev/null
 ```
 
-Presentar datos de session-state junto con datos live de rootline para una imagen completa de recuperación: qué se discutió (session-state) y dónde está el proyecto ahora (rootline live).
+If validation fails, report the validation output and do not rely on session-state query results.
+
+### Roadmap state
+
+```bash
+if command -v rootline >/dev/null 2>&1 && [ -f .claude/roadmap.local.md ]; then
+  ROADMAP_ROOT="$(awk -F': *' '/^roadmap-root:/ {print $2; exit}' .claude/roadmap.local.md)"
+  if [ -n "$ROADMAP_ROOT" ] && [ -d "$ROADMAP_ROOT" ]; then
+    rootline stats "$ROADMAP_ROOT" -o table
+    rootline tree "$ROADMAP_ROOT" -o table
+  fi
+fi
+```
+
+### Other Rootline directories
+
+```bash
+if command -v rootline >/dev/null 2>&1; then
+  for dir in lines theories; do
+    if [ -d "$dir" ]; then
+      rootline query "$dir" -o table --limit 10
+    fi
+  done
+fi
+```
+
+## Output
+
+Report exactly three sections:
+
+1. `Backscroll`: relevant sessions/documents and paths.
+2. `Rootline`: live records found, or `not available` with the skipped gate.
+3. `Gaps`: missing manifests, empty index, absent session-state, or schema/validation errors.
