@@ -2,7 +2,6 @@ pub(crate) mod chunking;
 pub mod embedding;
 pub(crate) mod hybrid;
 pub mod plans;
-pub mod reader;
 pub mod sources;
 pub mod sync;
 pub mod tagging;
@@ -126,6 +125,7 @@ pub struct InsightData {
 pub struct SearchParams {
     pub project: Option<String>,
     pub source: Option<String>,
+    pub source_path: Option<String>,
     pub after: Option<String>,
     pub before: Option<String>,
     pub role: Option<String>,
@@ -145,6 +145,7 @@ impl Default for SearchParams {
         Self {
             project: None,
             source: None,
+            source_path: None,
             after: None,
             before: None,
             role: None,

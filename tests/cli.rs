@@ -136,17 +136,30 @@ fn fixture_path(relative: &str) -> std::path::PathBuf {
 }
 
 #[test]
-fn test_cli_help() {
+fn test_cli_help_hides_read_command_and_search_exposes_source_path() {
     let dir = tempdir().unwrap();
     let db_path = dir.path().join("help.db");
 
-    let mut cmd = Command::cargo_bin("backscroll").unwrap();
-    cmd.arg("--help")
+    Command::cargo_bin("backscroll")
+        .unwrap()
+        .arg("--help")
         .env("BACKSCROLL_DATABASE_PATH", db_path.to_str().unwrap())
         .env("BACKSCROLL_SESSION_DIR", dir.path().to_str().unwrap())
         .assert()
         .success()
-        .stdout(predicate::str::contains("Tier 2 search"));
+        .stdout(predicate::str::contains("Tier 2 search"))
+        .stdout(predicate::str::contains(" read").not())
+        .stdout(predicate::str::contains("Leer una sesión").not());
+
+    Command::cargo_bin("backscroll")
+        .unwrap()
+        .arg("search")
+        .arg("--help")
+        .env("BACKSCROLL_DATABASE_PATH", db_path.to_str().unwrap())
+        .env("BACKSCROLL_SESSION_DIR", dir.path().to_str().unwrap())
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("--source-path"));
 }
 
 #[test]
@@ -181,86 +194,100 @@ fn test_cli_sync_rejects_legacy_path_flag() {
 }
 
 #[test]
-fn test_cli_read_requires_matching_input_manifest() {
-    let work_dir = tempdir().unwrap();
-    let data_dir = tempdir().unwrap();
-    let db_dir = tempdir().unwrap();
-    let db_path = db_dir.path().join("read_requires_manifest.db");
-    let session_file = data_dir.path().join("session.jsonl");
-
-    fs::write(
-        &session_file,
-        r#"{"role":"assistant","content":"read should not fallback"}"#,
-    )
-    .unwrap();
+fn test_cli_read_command_is_not_public() {
+    let dir = tempdir().unwrap();
+    let db_path = dir.path().join("read_not_public.db");
 
     Command::cargo_bin("backscroll")
         .unwrap()
-        .current_dir(work_dir.path())
+        .current_dir(dir.path())
         .arg("read")
-        .arg(session_file.to_str().unwrap())
+        .arg("session.jsonl")
         .env("BACKSCROLL_DATABASE_PATH", db_path.to_str().unwrap())
         .assert()
         .failure()
-        .stderr(predicate::str::contains("No active input manifest"));
+        .stderr(predicate::str::contains("unrecognized subcommand 'read'"));
 }
 
 #[test]
-fn test_cli_read_uses_input_manifest_for_pi_jsonl() {
+fn test_search_source_path_filter_exact_path_cli() {
     let work_dir = tempdir().unwrap();
     let data_dir = tempdir().unwrap();
     let db_dir = tempdir().unwrap();
-    let db_path = db_dir.path().join("read_pi.db");
-    let session_file = data_dir.path().join("pi.jsonl");
+    let db_path = db_dir.path().join("source_path_exact.db");
+    let target_file = data_dir.path().join("target.jsonl");
+    let other_file = data_dir.path().join("other.jsonl");
 
     fs::write(
-        &session_file,
-        r#"{"role":"assistant","content":{"blocks":[{"type":"think","text":"hidden chain"},{"type":"text","text":"visible manifest read"}]},"uuid":"pi-read","timestamp":"100"}"#,
+        &target_file,
+        r#"{"type":"user","message":{"role":"user","content":"shared lookup target text"},"uuid":"target-msg","timestamp":"100"}"#,
     )
     .unwrap();
-    write_pi_input_manifest(work_dir.path(), data_dir.path());
+    fs::write(
+        &other_file,
+        r#"{"type":"user","message":{"role":"user","content":"shared lookup other text"},"uuid":"other-msg","timestamp":"100"}"#,
+    )
+    .unwrap();
+    write_claude_input_manifest(work_dir.path(), data_dir.path());
 
     Command::cargo_bin("backscroll")
         .unwrap()
         .current_dir(work_dir.path())
-        .arg("read")
-        .arg(session_file.to_str().unwrap())
+        .arg("search")
+        .arg("lookup")
+        .arg("--all-projects")
+        .arg("--robot")
+        .arg("--source-path")
+        .arg(target_file.to_str().unwrap())
         .env("BACKSCROLL_DATABASE_PATH", db_path.to_str().unwrap())
         .env("BACKSCROLL_CONFIG_DIR", work_dir.path().to_str().unwrap())
         .assert()
         .success()
-        .stdout(predicate::str::contains("visible manifest read"))
-        .stdout(predicate::str::contains("hidden chain").not());
+        .stdout(predicate::str::contains(target_file.to_str().unwrap()))
+        .stdout(predicate::str::contains("target text"))
+        .stdout(predicate::str::contains(other_file.to_str().unwrap()).not())
+        .stdout(predicate::str::contains("other text").not());
 }
 
 #[test]
-fn test_cli_read_skips_missing_discovery_root_when_valid_root_matches() {
+fn test_search_source_path_filter_glob_pattern_cli() {
     let work_dir = tempdir().unwrap();
     let data_dir = tempdir().unwrap();
     let db_dir = tempdir().unwrap();
-    let db_path = db_dir.path().join("read_mixed_roots.db");
-    let fake_home = tempdir().unwrap();
-    let session_file = data_dir.path().join("session.jsonl");
-    let missing_root = work_dir.path().join("missing-root");
+    let db_path = db_dir.path().join("source_path_pattern.db");
+    let session_uuid = "019e0d38-c437-7565-ba11-5dd57d516744";
+    let target_file = data_dir.path().join(format!("{session_uuid}.jsonl"));
+    let other_file = data_dir.path().join("other.jsonl");
 
     fs::write(
-        &session_file,
-        r#"{"type":"assistant","message":{"role":"assistant","content":"read survives missing root"},"uuid":"read-mixed","timestamp":"100"}"#,
+        &target_file,
+        r#"{"type":"user","message":{"role":"user","content":"uuid pattern lookup target text"},"uuid":"target-msg","timestamp":"100"}"#,
     )
     .unwrap();
-    write_claude_input_manifest_roots(work_dir.path(), &[&missing_root, data_dir.path()]);
+    fs::write(
+        &other_file,
+        r#"{"type":"user","message":{"role":"user","content":"uuid pattern lookup other text"},"uuid":"other-msg","timestamp":"100"}"#,
+    )
+    .unwrap();
+    write_claude_input_manifest(work_dir.path(), data_dir.path());
 
     Command::cargo_bin("backscroll")
         .unwrap()
         .current_dir(work_dir.path())
-        .arg("read")
-        .arg(session_file.to_str().unwrap())
+        .arg("search")
+        .arg("lookup")
+        .arg("--all-projects")
+        .arg("--robot")
+        .arg("--source-path")
+        .arg(format!("*{session_uuid}*"))
         .env("BACKSCROLL_DATABASE_PATH", db_path.to_str().unwrap())
         .env("BACKSCROLL_CONFIG_DIR", work_dir.path().to_str().unwrap())
-        .env("HOME", fake_home.path().to_str().unwrap())
         .assert()
         .success()
-        .stdout(predicate::str::contains("read survives missing root"));
+        .stdout(predicate::str::contains(target_file.to_str().unwrap()))
+        .stdout(predicate::str::contains("target text"))
+        .stdout(predicate::str::contains(other_file.to_str().unwrap()).not())
+        .stdout(predicate::str::contains("other text").not());
 }
 
 #[test]
@@ -942,20 +969,17 @@ fn test_cli_sync_invalid_input_manifest_fails_cleanly() {
 }
 
 #[test]
-fn test_cli_autosync_and_read_invalid_input_manifest_fail_fast() {
+fn test_cli_autosync_invalid_input_manifest_fails_fast() {
     let work_dir = tempdir().unwrap();
-    let data_dir = tempdir().unwrap();
     let db_dir = tempdir().unwrap();
-    let db_path = db_dir.path().join("invalid_manifest_autosync_read.db");
+    let db_path = db_dir.path().join("invalid_manifest_autosync.db");
     let fake_home = tempdir().unwrap();
-    let read_file = data_dir.path().join("read.jsonl");
 
     write_manifest_file(
         work_dir.path(),
         "broken.inputs.toml",
         "[[inputs]\n".to_string(),
     );
-    fs::write(&read_file, r#"{"role":"assistant","content":"visible"}"#).unwrap();
 
     Command::cargo_bin("backscroll")
         .unwrap()
@@ -963,20 +987,6 @@ fn test_cli_autosync_and_read_invalid_input_manifest_fail_fast() {
         .arg("search")
         .arg("visible")
         .arg("--all-projects")
-        .env("BACKSCROLL_DATABASE_PATH", db_path.to_str().unwrap())
-        .env("BACKSCROLL_CONFIG_DIR", work_dir.path().to_str().unwrap())
-        .env("HOME", fake_home.path().to_str().unwrap())
-        .env_remove("BACKSCROLL_SESSION_DIR")
-        .env_remove("BACKSCROLL_SESSION_DIRS")
-        .assert()
-        .failure()
-        .stderr(predicate::str::contains("Failed to parse input manifest"));
-
-    Command::cargo_bin("backscroll")
-        .unwrap()
-        .current_dir(work_dir.path())
-        .arg("read")
-        .arg(read_file.to_str().unwrap())
         .env("BACKSCROLL_DATABASE_PATH", db_path.to_str().unwrap())
         .env("BACKSCROLL_CONFIG_DIR", work_dir.path().to_str().unwrap())
         .env("HOME", fake_home.path().to_str().unwrap())
@@ -1216,7 +1226,7 @@ fn test_cli_inputs_test_dry_run_outputs_normalized_messages_without_db_write() {
 }
 
 #[test]
-fn test_cli_ignores_local_poison_manifests_for_validate_sync_autosync_and_read() {
+fn test_cli_ignores_local_poison_manifests_for_validate_sync_and_autosync() {
     let work_dir = tempdir().unwrap();
     let config_dir = tempdir().unwrap();
     let data_dir = tempdir().unwrap();
@@ -1268,20 +1278,6 @@ fn test_cli_ignores_local_poison_manifests_for_validate_sync_autosync_and_read()
         .assert()
         .success()
         .stdout(predicate::str::contains("local poison"));
-
-    Command::cargo_bin("backscroll")
-        .unwrap()
-        .current_dir(work_dir.path())
-        .arg("read")
-        .arg(sample.to_str().unwrap())
-        .env("BACKSCROLL_DATABASE_PATH", sync_db.to_str().unwrap())
-        .env("BACKSCROLL_CONFIG_DIR", config_dir.path().to_str().unwrap())
-        .env("HOME", fake_home.path().to_str().unwrap())
-        .assert()
-        .success()
-        .stdout(predicate::str::contains(
-            "global manifest survives local poison",
-        ));
 }
 
 #[test]

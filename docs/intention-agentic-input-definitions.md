@@ -30,7 +30,7 @@ Backscroll interpreta sesiones y documentos mediante **definiciones externas en 
 
 ### A. Usuario/CLI
 
-1. Los comandos (`search`, `read`, `resume`, `list`, `topics`, `insights`, `export`, `status`, `sync`) siguen disponibles.
+1. Los comandos públicos (`search`, `resume`, `list`, `topics`, `insights`, `export`, `status`, `sync`) siguen disponibles; path lookup se hace con `search --source-path`.
 2. El autosync previo a comandos se conserva.
 3. `source = "session"` permanece como valor estable para conversaciones de Claude/Pi.
 4. `backscroll inputs validate/list/test` son el punto de diagnóstico para manifests.
@@ -68,4 +68,4 @@ Backscroll interpreta sesiones y documentos mediante **definiciones externas en 
 - Backscroll indexa inputs definidos por TOML global sin recompilar.
 - Claude y Pi están cubiertos por presets shipped instalables en user scope.
 - App config e input config están claramente separadas.
-- Validación, dry-run, sync, read y autosync usan el mismo modelo de input manifests.
+- Validación, dry-run, sync y autosync usan el mismo modelo de input manifests; lectura pública usa resultados indexados vía SQLite.

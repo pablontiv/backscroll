@@ -1,131 +1,133 @@
 ---
 name: backscroll
-description: |
-  Use when the user asks about previous Claude/Pi sessions, prior decisions, old context, forgotten discussions, recurring bugs, project history, indexed notes/plans/knowledge, or wants to search/list/read/export Backscroll data. Also use proactively before re-investigating topics that may already exist in prior sessions.
+description: Use when the user asks for previous Claude/Pi sessions, forgotten discussions, recurring bugs, project history, or indexed Backscroll sessions/plans/notes. Use this before reinvesting context already covered by AI sessions.
 user-invocable: true
 allowed-tools:
   - Bash
 ---
 
-# Skill: Backscroll
+# Backscroll Recipe
 
-Backscroll is the local indexed memory/search tool for sessions and declared knowledge inputs. It indexes only active global TOML manifests from `<config_dir>/backscroll/inputs/*.inputs.toml`; there is no implicit Claude/Pi fallback.
+Backscroll is the retrieval binary for indexed AI history and declared inputs. Always run Backscroll commands before inspecting raw `session.jsonl` files.
 
-## Gate Check
+## 1) Preflight (required)
 
 ```bash
 command -v backscroll >/dev/null 2>&1
-```
-
-If missing:
-```bash
-cargo install --git https://github.com/pablontiv/backscroll.git
-```
-
-## Input Config Location
-
-Runtime input manifests are user-scoped:
-
-| OS | Manifest directory |
-|---|---|
-| Linux | `${XDG_CONFIG_HOME:-$HOME/.config}/backscroll/inputs/` |
-| macOS | `$HOME/Library/Application Support/backscroll/inputs/` |
-| Windows | `%APPDATA%\backscroll\inputs\` |
-| Override | `$BACKSCROLL_CONFIG_DIR/backscroll/inputs/` |
-
-Shipped presets are `inputs/claude.inputs.toml` and `inputs/pi.inputs.toml`. The install scripts install them into the global input directory and skip existing files by default; source checkouts can copy them manually. Preserve existing manifest files by default so user edits are not overwritten.
-
-## First Check in Any Project
-
-```bash
 backscroll inputs validate
-backscroll inputs list
+backscroll inputs list --json
 backscroll status
 ```
 
-If validation fails or no manifests are listed, explain that current ingestion requires active manifests such as `claude.inputs.toml` or `pi.inputs.toml` in the global input config directory.
+If `backscroll` is missing:
 
-## Main Uses
+```bash
+# Installer installs binary + presets into input dir
+curl -fsSL https://raw.githubusercontent.com/pablontiv/backscroll/master/install.sh | bash
+# Alternative source install: install binary, then copy shipped presets
+cargo install --git https://github.com/pablontiv/backscroll.git
+config_dir="${BACKSCROLL_CONFIG_DIR:-${XDG_CONFIG_HOME:-$HOME/.config}}"
+mkdir -p "$config_dir/backscroll/inputs"
+cp -n inputs/claude.inputs.toml inputs/pi.inputs.toml "$config_dir/backscroll/inputs/"
+```
 
-| Need | Command |
+## 2) Canonical input location
+
+Manifests are loaded only from:
+
+```
+<config_dir>/backscroll/inputs/*.inputs.toml
+```
+
+where `<config_dir>` is OS config directory, or `BACKSCROLL_CONFIG_DIR`.
+
+`backscroll.toml` is app config only (DB/embedding), not the ingestion source.
+
+## 3) Invocation-to-command mapping
+
+When invoked as `/skill:backscroll`:
+
+| Invocation | Commands |
 |---|---|
-| Search current project | `backscroll search "QUERY" --robot --max-tokens 4000` |
-| Search all projects | `backscroll search "QUERY" --all-projects --robot --max-tokens 4000` |
-| Recent sessions | `backscroll list --recent 10 --robot` |
-| Read one matched input file | `backscroll read PATH` |
-| Resume target | `backscroll resume "QUERY" --all-projects --robot` |
-| Topics | `backscroll topics --all-projects --robot` |
-| Insights | `backscroll insights --all-projects --robot` |
-| Export results | `backscroll export "QUERY" --format markdown --all-projects` |
-| Validate DB | `backscroll validate` |
+| `/skill:backscroll` | Preflight + `backscroll status` + `backscroll list --recent 10 --robot` |
+| `/skill:backscroll QUERY` | Search indexed sessions; if `QUERY` matches UUID pattern, use `search --source-path '*UUID*'` |
+| `/skill:backscroll --topics` | `backscroll topics --all-projects --robot` |
+| `/skill:backscroll --recent N` | `backscroll list --recent N --all-projects --robot` |
+| `/skill:backscroll --inputs` | `backscroll inputs validate` then `backscroll inputs list --json` |
+| `/skill:backscroll --context` | `Backscroll` context retrieval first, then optional `ref-context-mode.md` Rootline steps |
 
-Prefer `--robot` for LLM-readable tab-separated output. Use `--json` when machine-readable output is needed.
+### 3.1) UUID/session-id path lookup
 
-## Inputs / Dry Run
+If the argument looks like UUID (`xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx`), use a DB-backed `source_path` lookup instead of direct file reading.
+
+```bash
+UUID='019e0d38-c437-7565-ba11-5dd57d516744'
+backscroll search "$UUID" --source sessions --source-path "*$UUID*" --all-projects --robot --max-tokens 4000
+```
+
+If the UUID is only present in the filename and not in message text, retry with nearby remembered terms as the query while keeping `--source-path "*$UUID*"`.
+
+## 4) Non-UUID search routing (deterministic)
+
+```bash
+# Session search in current project
+backscroll search "QUERY" --source sessions --robot --max-tokens 4000
+
+# Session search across all projects
+backscroll search "QUERY" --source sessions --all-projects --robot --max-tokens 4000
+
+# Plan/notes sources
+backscroll search "QUERY" --source SOURCE --all-projects --robot --max-tokens 4000
+# SOURCE in: plan, ke, decision, memory, rule, spec, backlog
+
+# Prior conversation decisions (fallback when decision source is not conversational)
+backscroll search "QUERY" --source decision --all-projects --robot --max-tokens 4000
+# Resume only sessions
+backscroll resume "QUERY" --source sessions --all-projects --robot
+
+# Narrow retrieval to an explicit indexed file/path fragment
+backscroll search "QUERY" --source-path "PATH_OR_*PATTERN*" --all-projects --robot --max-tokens 4000
+
+# Metadata surfaces
+backscroll list --recent 10 --all-projects --robot
+backscroll topics --all-projects --robot
+backscroll insights --all-projects --robot
+backscroll export "QUERY" --all-projects --format markdown
+```
+
+## 5) Command validity (hard constraints)
+
+- `--robot` applies to: `search`, `list`, `topics`, `insights`, `resume`.
+- `--json` applies to: `search`, `list`, `inputs list`, `inputs validate`.
+- Do not add these flags to `status`, `validate`, `sync`, `reindex`, `export`.
+
+## 6) Source and role behavior
+
+- `--source sessions` (plural alias) maps to indexed sessions.
+- `--source plans` (plural alias) maps to `source = plan`.
+- For others use singular exact values: `plan`, `ke`, `decision`, `memory`, `rule`, `spec`, `backlog`.
+- `--role human` is accepted as alias for `user`; other roles and `--content-type` values are exact.
+
+## 7) “No results” and ingestion troubleshooting
+
+Use this order:
 
 ```bash
 backscroll inputs validate
 backscroll inputs list --json
+backscroll status
+```
+
+Then validate one real sample from the expected path:
+
+```bash
+# INPUT_ID comes from backscroll inputs list --json
+test -f PATH
 backscroll inputs test --input INPUT_ID --file PATH --json
 ```
 
-Use `inputs test` before blaming search: it shows normalized messages, dropped records/blocks, and drop reasons without writing SQLite.
-
-## Sync / Reindex
-
-```bash
-backscroll sync
-backscroll reindex
-```
-
-`sync` is incremental by file hash. `reindex` clears hashes and reprocesses active global input manifests. `--no-plans` is legacy/no-op for canonical ingestion; plans are indexed only when declared as inputs.
-
-## Search Filters
-
-Backscroll supports generic sources and filters:
-
-```bash
-backscroll search "QUERY" --source sessions --role human --content-type text
-backscroll search "QUERY" --source ke --all-projects
-backscroll search "QUERY" --source decision --after 2026-03-01 --before 2026-04-01
-backscroll search "QUERY" --lexical-only
-```
-
-Notes:
-- `--source sessions` maps to `source = "session"`; `plans` maps to `plan`.
-- Other sources are exact: `plan`, `ke`, `decision`, `memory`, `rule`, `spec`, `backlog`, etc.
-- `--role human` is a query alias for `user`; other roles pass through exactly.
-- `--content-type` is exact and generic, not Claude-only.
-
-## Canonical Input Model
-
-Current canonical ingestion is TOML-only:
-
-- Claude/Pi conversations emit `source = "session"`.
-- Claude subagents are excluded by TOML discovery globs in the installed Claude preset.
-- Claude noise removal lives in `[inputs.text].remove`.
-- Pi non-text blocks are excluded by TOML content predicates.
-- Plans and markdown knowledge sources use `decode.format = "markdown"` or `"markdown_sections"`.
-- App config (`backscroll.toml`) does not provide canonical ingestion paths.
-
-## Slash Command Modes
-
-| Invocation | Action |
-|---|---|
-| `/backscroll` | `inputs validate`, `status`, recent sessions |
-| `/backscroll QUERY` | Search current project, retry all-projects if empty |
-| `/backscroll --topics` | Topic distribution, then optionally search a topic |
-| `/backscroll --recent N` | Recent session list |
-| `/backscroll --inputs` | Validate/list global manifests |
-| `/backscroll --context` | Use `ref-context-mode.md` rootline/context-save workflow |
-
-## Context Mode
-
-For `/backscroll --context`, read [ref-context-mode.md](ref-context-mode.md). It combines Backscroll with Rootline/context-save session-state queries.
-
-## Common Mistakes
-
-- Do not assume Claude/Pi sessions are indexed without an active global manifest.
-- Do not use app config session route keys or per-command path flags as canonical ingestion.
-- If search is empty, check `backscroll inputs validate`, then run `inputs test` on a sample file.
-- Use `--all-projects` when looking for cross-project history.
+Interpretation:
+- `inputs test` checks parse + normalization only.
+- Discovery is validated by manifests (`roots/include/exclude`), not by `inputs test` alone.
+- If valid manifest + passing sample + proper discovery, run:
+  `backscroll sync` then retry the exact search.

@@ -13,6 +13,7 @@ backscroll search "error handling" --project "backscroll"
 backscroll search "architecture" --json
 backscroll search "deployment" --robot --max-tokens 2000
 backscroll search "refactor" --fields full
+backscroll search "handoff" --source-path "*/session.jsonl" --robot
 ```
 
 ### Flags
@@ -24,6 +25,7 @@ backscroll search "refactor" --fields full
 | `--robot` | Output as compact tab-separated format |
 | `--fields minimal\|full` | Field set to include (default: `minimal`) |
 | `--max-tokens <N>` | Approximate token limit for total output |
+| `--source-path <PATH_OR_PATTERN>` | Filter by indexed `source_path`; exact paths or `*`/SQL `LIKE` patterns |
 
 ## Output Formats
 

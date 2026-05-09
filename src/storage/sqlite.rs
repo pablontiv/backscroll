@@ -533,6 +533,14 @@ impl Database {
         }
     }
 
+    fn source_path_filter(path: &str) -> (&'static str, String) {
+        if path.contains('*') || path.contains('%') {
+            ("si.source_path LIKE ?", path.replace('*', "%"))
+        } else {
+            ("si.source_path = ?", path.to_string())
+        }
+    }
+
     fn append_search_item_filters(
         conditions: &mut Vec<&'static str>,
         param_values: &mut Vec<Box<dyn rusqlite::types::ToSql>>,
@@ -549,6 +557,11 @@ impl Database {
         {
             conditions.push("si.source = ?");
             param_values.push(Box::new(source));
+        }
+        if let Some(path) = &params.source_path {
+            let (condition, value) = Database::source_path_filter(path);
+            conditions.push(condition);
+            param_values.push(Box::new(value));
         }
         if let Some(a) = &params.after {
             conditions.push("si.timestamp IS NOT NULL AND si.timestamp >= ?");
@@ -1552,6 +1565,83 @@ mod tests {
 
         let id = db.get_session_id("/sessions/my-session.jsonl")?;
         assert_eq!(id, Some("my-session".to_string()));
+        Ok(())
+    }
+
+    #[test]
+    fn test_search_source_path_filter_exact_path() -> miette::Result<()> {
+        let db = Database::open(":memory:")?;
+        db.setup_schema()?;
+
+        db.sync_files(vec![
+            single_message_file(
+                "session",
+                "/sessions/target_path.jsonl",
+                "user",
+                "source path lookup sentinel target",
+                "text",
+            ),
+            single_message_file(
+                "session",
+                "/sessions/other_path.jsonl",
+                "user",
+                "source path lookup sentinel other",
+                "text",
+            ),
+        ])?;
+
+        let results = db.search(
+            "sentinel",
+            &SearchParams {
+                source_path: Some("/sessions/target_path.jsonl".into()),
+                limit: 20,
+                hybrid: false,
+                ..Default::default()
+            },
+        )?;
+
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0].source_path, "/sessions/target_path.jsonl");
+        Ok(())
+    }
+
+    #[test]
+    fn test_search_source_path_filter_glob_pattern() -> miette::Result<()> {
+        let db = Database::open(":memory:")?;
+        db.setup_schema()?;
+
+        db.sync_files(vec![
+            single_message_file(
+                "session",
+                "/sessions/019e0d38-c437-7565-ba11-5dd57d516744.jsonl",
+                "user",
+                "source path pattern sentinel target",
+                "text",
+            ),
+            single_message_file(
+                "session",
+                "/sessions/other.jsonl",
+                "user",
+                "source path pattern sentinel other",
+                "text",
+            ),
+        ])?;
+
+        let results = db.search(
+            "sentinel",
+            &SearchParams {
+                source_path: Some("*019e0d38-c437-7565-ba11-5dd57d516744*".into()),
+                limit: 20,
+                hybrid: false,
+                ..Default::default()
+            },
+        )?;
+
+        assert_eq!(results.len(), 1);
+        assert_eq!(
+            results[0].source_path,
+            "/sessions/019e0d38-c437-7565-ba11-5dd57d516744.jsonl"
+        );
         Ok(())
     }
 

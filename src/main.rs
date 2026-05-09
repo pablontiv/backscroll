@@ -60,6 +60,9 @@ enum Commands {
         /// Filter by source type: session, plan, ke, decision, memory, rule, spec, backlog
         #[arg(long, default_value = "all")]
         source: String,
+        /// Filter by indexed source path (exact path, SQL LIKE pattern, or * glob pattern)
+        #[arg(long)]
+        source_path: Option<String>,
         /// Solo resultados después de esta fecha (ISO 8601, ej: 2026-03-01)
         #[arg(long)]
         after: Option<String>,
@@ -87,11 +90,6 @@ enum Commands {
         /// Minimum similarity threshold for vector results (0.0-1.0)
         #[arg(long, default_value = "0.3")]
         similarity_threshold: f32,
-    },
-    /// Leer una sesión individual filtrada
-    Read {
-        /// Ruta al archivo JSONL de la sesión
-        path: std::path::PathBuf,
     },
     /// Buscar y retornar la sesión más reciente para --resume
     Resume {
@@ -494,6 +492,7 @@ fn main() -> Result<()> {
             fields,
             max_tokens,
             source,
+            source_path,
             after,
             before,
             role,
@@ -533,6 +532,7 @@ fn main() -> Result<()> {
             let params = SearchParams {
                 project: effective_project,
                 source: source_filter,
+                source_path: source_path.clone(),
                 after: after.clone(),
                 before: before.clone(),
                 role: role.clone(),
@@ -563,14 +563,6 @@ fn main() -> Result<()> {
                 };
 
                 format_results(&results, &options);
-            }
-        }
-        Commands::Read { path } => {
-            let messages = backscroll::core::reader::read_input_file(path, &input_config)?;
-            for msg in messages {
-                println!("[{}]", msg.role);
-                println!("{}", msg.text);
-                println!();
             }
         }
         Commands::Resume {

@@ -8,7 +8,7 @@ A **full-text search engine** for Claude Code sessions.
 
 Backscroll treats your local AI sessions as a searchable archive: it indexes conversation logs incrementally, strips machine-generated noise, and provides instant full-text search with relevance ranking.
 
-> **Status**: All CLI commands functional — sync, search, read, and status.
+> **Status**: Core CLI commands functional — sync, search, inputs, and status.
 
 ---
 
@@ -127,8 +127,8 @@ backscroll search "migration plan"
 # 4. Search by project — limit results to a specific project
 backscroll search "error handling" --project "backscroll"
 
-# 5. Read — view one file matched by an active input manifest
-backscroll read ~/.claude/projects/example/session.jsonl
+# 5. Path lookup — narrow search to an indexed source path
+backscroll search "migration" --source-path "*/session.jsonl" --robot
 
 # 6. Status — check index health
 backscroll status
@@ -181,8 +181,7 @@ backscroll sync                                        # Index files declared by
 backscroll status                                      # Show index health and metrics
 
 # Retrieval
-backscroll search <QUERY> [--project] [--json|--robot] [--fields] [--max-tokens]
-backscroll read <PATH>                                 # Read a file through a matching active input
+backscroll search <QUERY> [--project] [--json|--robot] [--fields] [--max-tokens] [--source-path <PATH_OR_PATTERN>]
 ```
 
 ### Output Formats
@@ -202,9 +201,9 @@ backscroll search "query terms" --robot --max-tokens 2000
 
 The `--fields` flag controls field density (`minimal` or `full`), and `--max-tokens` caps output by approximate token count. See [Search docs](docs/search.md) for output shapes and flag reference.
 
-### Read
+### Indexed path lookup
 
-`backscroll read` displays a single session file with all noise stripped, showing only the human ↔ assistant dialogue. See [Read docs](docs/read.md).
+Use `backscroll search ... --source-path <PATH_OR_PATTERN>` to retrieve messages from an already indexed file path through SQLite. Patterns may use `*` globs, so UUID-like session filenames can be found with `--source-path '*019e0d38-c437-7565-ba11-5dd57d516744*'`. See [Path lookup docs](docs/read.md).
 
 ### Status
 
@@ -293,7 +292,7 @@ See [Configuration docs](docs/configuration.md) for the full resolution order an
 |-------|-------------|
 | [Sync & Indexing](docs/sync.md) | Incremental sync, noise filtering, project detection |
 | [Search Engine](docs/search.md) | BM25 ranking, output formats, token limiting |
-| [Read](docs/read.md) | Direct session reading with noise filtering |
+| [Indexed Path Lookup](docs/read.md) | DB-backed lookup using `search_items.source_path` |
 | [Configuration](docs/configuration.md) | Config resolution, TOML format, environment variables |
 | [Generic Input Contract](docs/input-contract.md) | Global `*.inputs.toml` contract for provider-neutral ingestion |
 | [Session Search Research](docs/research/backscroll-session-search-cli.md) | Feasibility study: axioms, evidence tables, capabilities matrix |

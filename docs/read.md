@@ -1,42 +1,42 @@
 ---
 estado: Completed
 ---
-# Read
+# Indexed Path Lookup
 
-`backscroll read` displays one file through the active input-manifest pipeline, showing normalized human ↔ assistant dialogue with configured noise removed.
+Backscroll no longer exposes a public direct-file `read` workflow. User-visible retrieval should come from the SQLite index populated by `backscroll sync` or search autosync.
+
+Use `backscroll search` with `--source-path` when you already know an indexed path, filename fragment, or session UUID embedded in the path.
 
 ## CLI Usage
 
 ```bash
 backscroll inputs validate
-backscroll read ~/.claude/projects/example/session.jsonl
+backscroll sync
+
+# Exact indexed path
+backscroll search "query terms" --source-path "/home/user/.claude/projects/example/session.jsonl" --robot
+
+# Glob-style path pattern
+backscroll search "query terms" --source-path "*/example/*.jsonl" --robot
+
+# UUID/session-id fragment in an indexed source_path
+backscroll search "query terms" --source sessions --source-path "*019e0d38-c437-7565-ba11-5dd57d516744*" --all-projects --robot
 ```
 
-The file must match at least one active input manifest under `<config_dir>/backscroll/inputs/*.inputs.toml`. Set `BACKSCROLL_CONFIG_DIR` to override `<config_dir>` for tests or custom installations.
+The search query still controls the full-text match. `--source-path` narrows those matches to rows whose indexed `search_items.source_path` equals the provided path or matches the provided `*`/SQL `LIKE` pattern.
 
 ## How It Works
 
-Read applies the same manifest-driven extraction and text normalization as `sync`, but outputs directly to the terminal instead of indexing. This is useful for reviewing a specific session without searching.
+- `sync` ingests files declared by active manifests under `<config_dir>/backscroll/inputs/*.inputs.toml`.
+- Each indexed message stores its original `source_path` in SQLite.
+- `search --source-path` filters over that indexed `source_path`; it does not parse arbitrary files directly.
+- Search output includes `source_path` in text, JSON, and robot formats.
 
-The output shows each message with its role:
-
-```text
-[user]
-How should we structure the database schema?
-
-[assistant]
-I'd recommend starting with three tables...
-```
-
-Messages appear in file order. Records, content blocks, and text fragments are included or dropped according to the matching manifest's `record`, `content`, and `text` sections.
-
-## Noise Filtering
-
-Read uses the same `[inputs.text].remove` rules as sync. See [Sync & Indexing](sync.md) for more detail.
+This preserves the database as the source of truth and avoids stale direct-file reads.
 
 ## Exit Codes
 
 | Code | Meaning |
 |------|---------|
-| `0` | File read successfully |
-| `1` | Error (file not found, no matching active input, parse failure) |
+| `0` | Search completed (results may be empty) |
+| `1` | Error (invalid input manifests, database/query failure) |
