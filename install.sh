@@ -3,6 +3,7 @@ set -euo pipefail
 
 REPO="pablontiv/backscroll"
 INSTALL_DIR="${BACKSCROLL_INSTALL_DIR:-${HOME}/.local/bin}"
+INPUT_PRESETS=("claude.inputs.toml" "pi.inputs.toml")
 
 main() {
     local os arch asset_name
@@ -51,6 +52,8 @@ main() {
     echo ""
     echo "Installed backscroll to ${INSTALL_DIR}/backscroll"
 
+    install_input_presets "${tag_name}"
+
     if command -v backscroll &>/dev/null; then
         echo "Version: $(backscroll --version)"
     else
@@ -58,6 +61,62 @@ main() {
         echo "Add ${INSTALL_DIR} to your PATH:"
         echo "  export PATH=\"${INSTALL_DIR}:\${PATH}\""
     fi
+}
+
+get_config_dir() {
+    if [ -n "${BACKSCROLL_CONFIG_DIR:-}" ]; then
+        echo "${BACKSCROLL_CONFIG_DIR}"
+        return
+    fi
+
+    case "$(uname -s)" in
+        Darwin) echo "${HOME}/Library/Application Support" ;;
+        *) echo "${XDG_CONFIG_HOME:-${HOME}/.config}" ;;
+    esac
+}
+
+get_local_inputs_dir() {
+    if [ -n "${BACKSCROLL_INPUTS_SOURCE_DIR:-}" ]; then
+        echo "${BACKSCROLL_INPUTS_SOURCE_DIR}"
+        return
+    fi
+
+    local script_dir
+    script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" 2>/dev/null && pwd)"
+    if [ -n "${script_dir}" ]; then
+        echo "${script_dir}/inputs"
+    fi
+}
+
+install_input_presets() {
+    local version="${1:-main}"
+    local config_dir inputs_dir local_inputs_dir preset dest tmp raw_url
+
+    config_dir="$(get_config_dir)"
+    inputs_dir="${config_dir}/backscroll/inputs"
+    local_inputs_dir="$(get_local_inputs_dir)"
+    mkdir -p "${inputs_dir}"
+
+    echo ""
+    echo "Installing input presets to ${inputs_dir}"
+
+    for preset in "${INPUT_PRESETS[@]}"; do
+        dest="${inputs_dir}/${preset}"
+        if [ -e "${dest}" ] && [ "${BACKSCROLL_FORCE_INPUTS:-0}" != "1" ]; then
+            echo "${dest} exists, skipping"
+            continue
+        fi
+
+        if [ -n "${local_inputs_dir}" ] && [ -f "${local_inputs_dir}/${preset}" ]; then
+            cp "${local_inputs_dir}/${preset}" "${dest}"
+        else
+            tmp="${dest}.tmp"
+            raw_url="https://raw.githubusercontent.com/${REPO}/${version}/inputs/${preset}"
+            curl -fsSL "${raw_url}" -o "${tmp}"
+            mv "${tmp}" "${dest}"
+        fi
+        echo "Installed ${preset}"
+    done
 }
 
 error() {

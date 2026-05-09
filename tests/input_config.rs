@@ -52,6 +52,15 @@ fn toml_path(path: &std::path::Path) -> String {
 }
 
 fn minimal_manifest(id: &str, root: &str) -> String {
+    minimal_manifest_with_roots(id, &[root])
+}
+
+fn minimal_manifest_with_roots(id: &str, roots: &[&str]) -> String {
+    let roots = roots
+        .iter()
+        .map(|root| format!("\"{root}\""))
+        .collect::<Vec<_>>()
+        .join(", ");
     format!(
         r#"version = 1
 
@@ -61,7 +70,7 @@ source = "session"
 active = true
 
 [inputs.discover]
-roots = ["{root}"]
+roots = [{roots}]
 include = ["**/*.jsonl"]
 exclude = ["**/subagents/**"]
 
@@ -171,20 +180,70 @@ fn resolves_relative_roots_against_manifest_location() -> miette::Result<()> {
 }
 
 #[test]
-fn rejects_missing_active_discover_root_with_clear_error() {
+fn allows_missing_active_discover_root_at_load_time() -> miette::Result<()> {
     let config_dir = tempdir().unwrap();
     let _env = ConfigDirEnv::set(config_dir.path());
+    let missing_root = input_dir(config_dir.path()).join("missing");
     write_input_manifest(
         config_dir.path(),
         "missing-root.inputs.toml",
         minimal_manifest("claude", "missing"),
     );
 
-    let err = InputConfig::load().expect_err("missing root must fail");
-    let msg = err.to_string();
-    assert!(msg.contains("missing-root.inputs.toml"), "{msg}");
-    assert!(msg.contains("discover.roots"), "{msg}");
-    assert!(msg.contains("missing"), "{msg}");
+    let config = InputConfig::load()?;
+
+    assert_eq!(config.active_inputs().len(), 1);
+    assert_eq!(
+        config.active_inputs()[0].discover.roots,
+        vec![toml_path(&missing_root)]
+    );
+    Ok(())
+}
+
+#[test]
+fn input_sync_skips_missing_only_discovery_roots() -> miette::Result<()> {
+    let config_dir = tempdir().unwrap();
+    let _env = ConfigDirEnv::set(config_dir.path());
+    write_input_manifest(
+        config_dir.path(),
+        "missing-only.inputs.toml",
+        minimal_manifest("claude", "missing"),
+    );
+
+    let config = InputConfig::load()?;
+    let files = parse_input_definitions(&config.active_inputs(), &HashMap::new());
+
+    assert!(files.is_empty());
+    Ok(())
+}
+
+#[test]
+fn input_sync_skips_missing_roots_and_indexes_existing_roots() -> miette::Result<()> {
+    let config_dir = tempdir().unwrap();
+    let _env = ConfigDirEnv::set(config_dir.path());
+    let existing_root = config_dir.path().join("sessions");
+    std::fs::create_dir_all(&existing_root).unwrap();
+    std::fs::write(
+        existing_root.join("session.jsonl"),
+        r#"{"type":"user","message":{"role":"user","content":"mixed roots survive"},"uuid":"mr1","timestamp":"100"}"#,
+    )
+    .unwrap();
+    let missing_root = input_dir(config_dir.path()).join("missing");
+    let missing_root = toml_path(&missing_root);
+    let existing_root = toml_path(&existing_root);
+    write_input_manifest(
+        config_dir.path(),
+        "mixed-roots.inputs.toml",
+        minimal_manifest_with_roots("claude", &[&missing_root, &existing_root]),
+    );
+
+    let config = InputConfig::load()?;
+    let files = parse_input_definitions(&config.active_inputs(), &HashMap::new());
+
+    assert_eq!(files.len(), 1);
+    assert_eq!(files[0].messages.len(), 1);
+    assert_eq!(files[0].messages[0].text, "mixed roots survive");
+    Ok(())
 }
 
 #[test]
@@ -205,6 +264,26 @@ fn rejects_invalid_active_jsonpath_selector_with_clear_error() {
     assert!(msg.contains("invalid-selector.inputs.toml"), "{msg}");
     assert!(msg.contains("content.selector"), "{msg}");
     assert!(msg.contains("$["), "{msg}");
+}
+
+#[test]
+fn rejects_invalid_active_encoding_even_when_discover_root_is_missing() {
+    let config_dir = tempdir().unwrap();
+    let _env = ConfigDirEnv::set(config_dir.path());
+    write_input_manifest(
+        config_dir.path(),
+        "invalid-encoding.inputs.toml",
+        minimal_manifest("claude", "missing").replace(
+            "format = \"jsonl\"",
+            "format = \"jsonl\"\nencoding = \"latin-1\"",
+        ),
+    );
+
+    let err = InputConfig::load().expect_err("invalid encoding must fail");
+    let msg = err.to_string();
+    assert!(msg.contains("invalid-encoding.inputs.toml"), "{msg}");
+    assert!(msg.contains("decode.encoding"), "{msg}");
+    assert!(msg.contains("latin-1"), "{msg}");
 }
 
 #[test]

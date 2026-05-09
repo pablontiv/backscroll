@@ -29,7 +29,7 @@ Backscroll treats your local AI sessions as a searchable archive: it indexes con
 
 ## Installation
 
-Backscroll ships as a **single static binary** with no external dependencies.
+Backscroll ships as a **single static binary** with no external dependencies. Runtime input manifests are separate user configuration files loaded from `<config_dir>/backscroll/inputs/*.inputs.toml`.
 
 ### Install Script (Recommended)
 
@@ -37,7 +37,7 @@ Backscroll ships as a **single static binary** with no external dependencies.
 curl -fsSL https://raw.githubusercontent.com/pablontiv/backscroll/master/install.sh | bash
 ```
 
-Detects your platform (Linux x86_64 / macOS aarch64) and installs to `~/.local/bin/`.
+Detects your platform (Linux x86_64 / macOS aarch64), installs the binary to `~/.local/bin/`, and installs the shipped Claude/Pi input presets into the user input config directory without overwriting existing manifests.
 
 **Windows (PowerShell):**
 
@@ -45,7 +45,43 @@ Detects your platform (Linux x86_64 / macOS aarch64) and installs to `~/.local/b
 irm https://raw.githubusercontent.com/pablontiv/backscroll/master/install.ps1 | iex
 ```
 
-Installs to `%LOCALAPPDATA%\backscroll\bin\` and adds it to your PATH. Compatible with Windows PowerShell 5.1+.
+Installs the binary to `%LOCALAPPDATA%\backscroll\bin\`, adds it to your PATH, and installs the shipped Claude/Pi input presets into `%APPDATA%\backscroll\inputs\` without overwriting existing manifests. Compatible with Windows PowerShell 5.1+.
+
+### Install input presets
+
+Backscroll ships Claude and Pi input presets at `inputs/claude.inputs.toml` and `inputs/pi.inputs.toml`. The install scripts copy those files into the user input config directory and skip existing manifests by default; set `BACKSCROLL_FORCE_INPUTS=1` only when you intentionally want to replace edited presets.
+
+Default input config directories:
+
+| OS | Input manifest directory |
+|---|---|
+| Linux | `${XDG_CONFIG_HOME:-$HOME/.config}/backscroll/inputs/` |
+| macOS | `$HOME/Library/Application Support/backscroll/inputs/` |
+| Windows | `%APPDATA%\backscroll\inputs\` |
+
+Set `BACKSCROLL_CONFIG_DIR` to override the `<config_dir>` base; manifests are then read from `$BACKSCROLL_CONFIG_DIR/backscroll/inputs/`.
+
+If you install from a source checkout, copy presets without clobbering existing files:
+
+```bash
+config_dir="${BACKSCROLL_CONFIG_DIR:-${XDG_CONFIG_HOME:-$HOME/.config}}"
+mkdir -p "$config_dir/backscroll/inputs"
+cp -n inputs/claude.inputs.toml inputs/pi.inputs.toml "$config_dir/backscroll/inputs/"
+backscroll inputs validate
+backscroll inputs list
+```
+
+```powershell
+$configDir = if ($env:BACKSCROLL_CONFIG_DIR) { $env:BACKSCROLL_CONFIG_DIR } else { $env:APPDATA }
+$inputsDir = Join-Path $configDir "backscroll\inputs"
+New-Item -ItemType Directory -Force $inputsDir | Out-Null
+foreach ($name in "claude.inputs.toml", "pi.inputs.toml") {
+  $dest = Join-Path $inputsDir $name
+  if (-not (Test-Path $dest)) { Copy-Item (Join-Path "inputs" $name) $dest }
+}
+backscroll inputs validate
+backscroll inputs list
+```
 
 ### Download Binary
 
@@ -78,19 +114,23 @@ cargo install --git https://github.com/pablontiv/backscroll.git
 ## Quick Start
 
 ```bash
-# 1. Sync — index your Claude Code sessions
-backscroll sync --path ~/.claude/sessions
+# 1. Confirm global input manifests are installed and valid
+backscroll inputs validate
+backscroll inputs list
 
-# 2. Search — find past conversations by keyword
+# 2. Sync — index files declared in <config_dir>/backscroll/inputs/*.inputs.toml
+backscroll sync
+
+# 3. Search — find past conversations by keyword
 backscroll search "migration plan"
 
-# 3. Search by project — limit results to a specific project
+# 4. Search by project — limit results to a specific project
 backscroll search "error handling" --project "backscroll"
 
-# 4. Read — view a single session with noise stripped
-backscroll read ~/.claude/projects/abcd/sessions/session.jsonl
+# 5. Read — view one file matched by an active input manifest
+backscroll read ~/.claude/projects/example/session.jsonl
 
-# 5. Status — check index health
+# 6. Status — check index health
 backscroll status
 ```
 
@@ -120,26 +160,29 @@ Backscroll reads these files and extracts the **conversation**: user and assista
 Backscroll computes a SHA-256 hash for each session file. On subsequent syncs, only files whose content has changed are re-processed — syncing thousands of sessions takes seconds after the initial run.
 
 ```bash
-backscroll sync --path ~/.claude/sessions              # Index all sessions
-backscroll sync --path ~/.claude/sessions --include-agents  # Include subagent sessions
+backscroll inputs validate
+backscroll sync
 ```
 
-Subagent sessions are excluded by default. Project assignment is resolved automatically from Claude's `sessions-index.json` or inferred from the directory structure.
+Subagent handling is controlled by the active input manifest. The shipped Claude preset excludes `subagents` paths with a discovery glob, and you can edit your installed preset if you intentionally want a different corpus.
 
-See [Sync & Indexing docs](docs/sync.md) for the full list of noise patterns, project detection logic, and subagent handling.
+See [Sync & Indexing docs](docs/sync.md) for input manifests, noise filtering, and project metadata behavior.
 
 ---
 
 ## CLI
 
 ```bash
-# Indexing
-backscroll sync [--path <DIR>] [--include-agents]     # Index session files
+# Input config and indexing
+backscroll inputs validate                             # Validate global input manifests
+backscroll inputs list                                 # List loaded manifests and inputs
+backscroll inputs test --input claude --file <PATH>    # Dry-run one file without writing SQLite
+backscroll sync                                        # Index files declared by active inputs
 backscroll status                                      # Show index health and metrics
 
 # Retrieval
 backscroll search <QUERY> [--project] [--json|--robot] [--fields] [--max-tokens]
-backscroll read <PATH>                                 # Read a single session file
+backscroll read <PATH>                                 # Read a file through a matching active input
 ```
 
 ### Output Formats
@@ -192,7 +235,10 @@ All output is deterministic and machine-parseable. No ANSI escape codes in `--js
 
 ## Configuration
 
-Backscroll separates application configuration from O02 ingestion input manifests. By default, app config creates an index at `~/.backscroll.db`.
+Backscroll separates application configuration from input configuration.
+
+- **Application config** (`backscroll.toml`) controls database and embedding settings. By default, Backscroll creates an index at `~/.backscroll.db`.
+- **Input config** (`*.inputs.toml`) controls what files are ingested. The canonical runtime location is `<config_dir>/backscroll/inputs/*.inputs.toml`, where `<config_dir>` is the OS config directory or `BACKSCROLL_CONFIG_DIR` when set.
 
 Override app settings by creating `~/.config/backscroll/config.toml` or `backscroll.toml` in the current directory:
 
@@ -210,7 +256,7 @@ Environment variables are also supported:
 export BACKSCROLL_DATABASE_PATH="/tmp/custom.db"
 ```
 
-Canonical ingestion inputs live in separate O02 manifests named `*.inputs.toml` or `backscroll.inputs.d/*.toml`:
+Canonical ingestion inputs live in global user-scoped manifests:
 
 ```toml
 version = 1
@@ -235,7 +281,7 @@ role = "$.message.role"
 selector = "$.message.content"
 ```
 
-O01 `session_dir(s)` and implicit Claude discovery were transitional compatibility mechanisms. In O02 they are non-canonical and no longer silently feed the canonical manifest-driven session path; `sync --path` remains only as an explicit legacy CLI migration path.
+The repository presets are examples to install into the global input directory; Backscroll does not read the repository `inputs/` directory at runtime. Historical app-config ingestion keys such as `session_dir`/`session_dirs` are not canonical input config and do not silently feed sync.
 
 See [Configuration docs](docs/configuration.md) for the full resolution order and all options.
 
@@ -249,7 +295,7 @@ See [Configuration docs](docs/configuration.md) for the full resolution order an
 | [Search Engine](docs/search.md) | BM25 ranking, output formats, token limiting |
 | [Read](docs/read.md) | Direct session reading with noise filtering |
 | [Configuration](docs/configuration.md) | Config resolution, TOML format, environment variables |
-| [Generic Input Contract](docs/input-contract.md) | O02 `*.inputs.toml` contract for provider-neutral ingestion |
+| [Generic Input Contract](docs/input-contract.md) | Global `*.inputs.toml` contract for provider-neutral ingestion |
 | [Session Search Research](docs/research/backscroll-session-search-cli.md) | Feasibility study: axioms, evidence tables, capabilities matrix |
 | [Rust Architecture](docs/research/backscroll-rust-architecture-2026.md) | Stack decision: why Rust over Go, risk resolution, design patterns |
 

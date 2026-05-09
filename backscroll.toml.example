@@ -10,9 +10,20 @@ similarity_threshold = 0.3
 top_k = 50
 rrf_k = 60
 
-# O02 ingestion routes do NOT live in backscroll.toml.
-# Put canonical input manifests in files like claude.inputs.toml,
-# pi.inputs.toml, or backscroll.inputs.d/*.toml:
+# Input manifests do NOT live in backscroll.toml.
+# Canonical ingestion config is global/user-scoped:
+#   <config_dir>/backscroll/inputs/*.inputs.toml
+# where <config_dir> is:
+#   Linux:  ${XDG_CONFIG_HOME:-$HOME/.config}
+#   macOS:  $HOME/Library/Application Support
+#   Windows: %APPDATA%
+# or BACKSCROLL_CONFIG_DIR when set.
+#
+# Copy shipped presets such as inputs/claude.inputs.toml and
+# inputs/pi.inputs.toml into that directory, preserving existing files
+# by default so local edits are not overwritten.
+#
+# Example input manifest content (in <config_dir>/backscroll/inputs/claude.inputs.toml):
 #
 # version = 1
 #
@@ -35,5 +46,6 @@ rrf_k = 60
 # [inputs.content]
 # selector = "$.message.content"
 
-# Legacy migration note: older O01 configs may contain session_dir/session_dirs.
-# Those keys are non-canonical in O02 and are not silent canonical input routes.
+# Legacy migration note: older app configs may contain session_dir/session_dirs
+# or [sources] route settings. Those keys are historical compatibility config,
+# not canonical input routes.

@@ -1,6 +1,6 @@
 # Generic input manifest contract
 
-This is the O02 MVP contract for `*.inputs.toml` files. A file such as
+This is the MVP contract for Backscroll `*.inputs.toml` files. A file such as
 `claude.inputs.toml` or `pi.inputs.toml` declares how Backscroll turns agent
 conversation records into the stable ingestion boundary:
 
@@ -14,6 +14,17 @@ user config directory at `<config_dir>/backscroll/inputs/*.inputs.toml`; set
 `backscroll.toml` remains application configuration and is not the canonical
 source of ingestion routes.
 
+| OS | Manifest directory |
+|---|---|
+| Linux | `${XDG_CONFIG_HOME:-$HOME/.config}/backscroll/inputs/` |
+| macOS | `$HOME/Library/Application Support/backscroll/inputs/` |
+| Windows | `%APPDATA%\\backscroll\\inputs\\` |
+| Override | `$BACKSCROLL_CONFIG_DIR/backscroll/inputs/` |
+
+Backscroll ships Claude and Pi preset manifests in the repository `inputs/`
+directory. Those are source presets; install or copy them into the user input
+config directory before running `backscroll sync`. Preset installation should
+skip existing manifest files by default so user edits are not overwritten.
 
 ```text
 discover -> decode -> record -> map -> content -> text -> emit

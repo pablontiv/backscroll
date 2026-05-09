@@ -9,7 +9,7 @@ allowed-tools:
 
 # Skill: Backscroll
 
-Backscroll is the local indexed memory/search tool for sessions and declared knowledge inputs. It indexes only active TOML manifests (`*.inputs.toml` or `backscroll.inputs.d/*.toml`); there is no implicit Claude/Pi fallback.
+Backscroll is the local indexed memory/search tool for sessions and declared knowledge inputs. It indexes only active global TOML manifests from `<config_dir>/backscroll/inputs/*.inputs.toml`; there is no implicit Claude/Pi fallback.
 
 ## Gate Check
 
@@ -22,6 +22,19 @@ If missing:
 cargo install --git https://github.com/pablontiv/backscroll.git
 ```
 
+## Input Config Location
+
+Runtime input manifests are user-scoped:
+
+| OS | Manifest directory |
+|---|---|
+| Linux | `${XDG_CONFIG_HOME:-$HOME/.config}/backscroll/inputs/` |
+| macOS | `$HOME/Library/Application Support/backscroll/inputs/` |
+| Windows | `%APPDATA%\backscroll\inputs\` |
+| Override | `$BACKSCROLL_CONFIG_DIR/backscroll/inputs/` |
+
+Shipped presets are `inputs/claude.inputs.toml` and `inputs/pi.inputs.toml`. The install scripts install them into the global input directory and skip existing files by default; source checkouts can copy them manually. Preserve existing manifest files by default so user edits are not overwritten.
+
 ## First Check in Any Project
 
 ```bash
@@ -30,7 +43,7 @@ backscroll inputs list
 backscroll status
 ```
 
-If validation fails or no manifests are listed, explain that current ingestion requires manifests such as `claude.inputs.toml`, `pi.inputs.toml`, or files under `backscroll.inputs.d/*.toml`.
+If validation fails or no manifests are listed, explain that current ingestion requires active manifests such as `claude.inputs.toml` or `pi.inputs.toml` in the global input config directory.
 
 ## Main Uses
 
@@ -39,7 +52,7 @@ If validation fails or no manifests are listed, explain that current ingestion r
 | Search current project | `backscroll search "QUERY" --robot --max-tokens 4000` |
 | Search all projects | `backscroll search "QUERY" --all-projects --robot --max-tokens 4000` |
 | Recent sessions | `backscroll list --recent 10 --robot` |
-| Read one indexed input file | `backscroll read PATH` |
+| Read one matched input file | `backscroll read PATH` |
 | Resume target | `backscroll resume "QUERY" --all-projects --robot` |
 | Topics | `backscroll topics --all-projects --robot` |
 | Insights | `backscroll insights --all-projects --robot` |
@@ -65,11 +78,11 @@ backscroll sync
 backscroll reindex
 ```
 
-`sync` is incremental by file hash. `reindex` clears hashes and reprocesses manifest-declared inputs. `--no-plans` is legacy/no-op for canonical ingestion; plans are indexed only when declared as inputs.
+`sync` is incremental by file hash. `reindex` clears hashes and reprocesses active global input manifests. `--no-plans` is legacy/no-op for canonical ingestion; plans are indexed only when declared as inputs.
 
 ## Search Filters
 
-Backscroll now supports generic sources and filters:
+Backscroll supports generic sources and filters:
 
 ```bash
 backscroll search "QUERY" --source sessions --role human --content-type text
@@ -83,16 +96,15 @@ Notes:
 - Other sources are exact: `plan`, `ke`, `decision`, `memory`, `rule`, `spec`, `backlog`, etc.
 - `--role human` is a query alias for `user`; other roles pass through exactly.
 - `--content-type` is exact and generic, not Claude-only.
-- BM25 and hybrid/vector paths apply filters consistently.
 
 ## Canonical Input Model
 
 Current canonical ingestion is TOML-only:
 
 - Claude/Pi conversations emit `source = "session"`.
-- Claude subagents are excluded by TOML discovery globs.
+- Claude subagents are excluded by TOML discovery globs in the installed Claude preset.
 - Claude noise removal lives in `[inputs.text].remove`.
-- Pi `think` blocks are excluded by TOML `content.exclude_when`.
+- Pi non-text blocks are excluded by TOML content predicates.
 - Plans and markdown knowledge sources use `decode.format = "markdown"` or `"markdown_sections"`.
 - App config (`backscroll.toml`) does not provide canonical ingestion paths.
 
@@ -104,7 +116,7 @@ Current canonical ingestion is TOML-only:
 | `/backscroll QUERY` | Search current project, retry all-projects if empty |
 | `/backscroll --topics` | Topic distribution, then optionally search a topic |
 | `/backscroll --recent N` | Recent session list |
-| `/backscroll --inputs` | Validate/list manifests |
+| `/backscroll --inputs` | Validate/list global manifests |
 | `/backscroll --context` | Use `ref-context-mode.md` rootline/context-save workflow |
 
 ## Context Mode
@@ -113,7 +125,7 @@ For `/backscroll --context`, read [ref-context-mode.md](ref-context-mode.md). It
 
 ## Common Mistakes
 
-- Do not assume Claude/Pi sessions are indexed without an active manifest.
-- Do not use `session_dirs`, `BACKSCROLL_SESSION_DIR`, or `--path` as canonical ingestion.
+- Do not assume Claude/Pi sessions are indexed without an active global manifest.
+- Do not use app config session route keys or per-command path flags as canonical ingestion.
 - If search is empty, check `backscroll inputs validate`, then run `inputs test` on a sample file.
 - Use `--all-projects` when looking for cross-project history.

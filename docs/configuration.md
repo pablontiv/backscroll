@@ -3,9 +3,12 @@ estado: Completed
 ---
 # Configuration
 
-Backscroll now separates application configuration from O02 ingestion input configuration.
+Backscroll has two separate configuration surfaces:
 
-O01 was transitional: `--path`, `session_dir`, `session_dirs`, and implicit Claude project discovery could feed session ingestion. In O02, the canonical ingestion flow is TOML manifest driven: `backscroll.toml` is app config, while ingestion routes live in `*.inputs.toml` files and/or `backscroll.inputs.d/*.toml` manifests that follow [the generic input contract](input-contract.md).
+- **Application config** controls Backscroll runtime settings such as the SQLite database path and embedding options.
+- **Input config** controls ingestion. It is loaded from global, user-scoped `*.inputs.toml` manifests under `<config_dir>/backscroll/inputs/`.
+
+`backscroll.toml` is application config only. It is not the canonical place to declare sessions, plans, Claude/Pi roots, or markdown knowledge sources.
 
 ## Application config: `backscroll.toml`
 
@@ -30,16 +33,29 @@ top_k = 50
 rrf_k = 60
 ```
 
-Legacy `session_dir`, `session_dirs`, and source-directory keys may still deserialize for migration compatibility, but they are not the canonical O02 input source and do not silently feed the canonical sync path. Plans and external documents (`ke`, `decision`, `memory`, `rule`, `spec`, `backlog`) are declared as inputs, not `[sources]` app config.
+Historical `session_dir`, `session_dirs`, and `[sources]` keys may still appear in older configs, but they are not canonical ingestion config. Declare ingestion routes as input manifests instead.
 
-## Input config: `*.inputs.toml` and `backscroll.inputs.d/*.toml`
+## Input config: global `*.inputs.toml`
 
-Canonical O02 ingestion manifests are loaded separately from app config:
+Canonical input manifests are loaded from exactly this runtime directory:
 
-- `./*.inputs.toml` (for example `claude.inputs.toml` or `pi.inputs.toml`)
-- `./backscroll.inputs.d/*.toml` sorted by filename
+```text
+<config_dir>/backscroll/inputs/*.inputs.toml
+```
 
-Every manifest uses the contract shape:
+`<config_dir>` is resolved as:
+
+| OS | Default `<config_dir>` | Manifest directory |
+|---|---|---|
+| Linux | `${XDG_CONFIG_HOME:-$HOME/.config}` | `${XDG_CONFIG_HOME:-$HOME/.config}/backscroll/inputs/` |
+| macOS | `$HOME/Library/Application Support` | `$HOME/Library/Application Support/backscroll/inputs/` |
+| Windows | `%APPDATA%` | `%APPDATA%\backscroll\inputs\` |
+
+Set `BACKSCROLL_CONFIG_DIR` to override the base directory. For example, `BACKSCROLL_CONFIG_DIR=/tmp/bs-cfg` makes Backscroll read `/tmp/bs-cfg/backscroll/inputs/*.inputs.toml`.
+
+The repository ships preset manifests at `inputs/claude.inputs.toml` and `inputs/pi.inputs.toml`. Those files are source presets; Backscroll reads them only after they are copied into the user input config directory. When installing or refreshing presets, keep existing files by default so user edits are not overwritten.
+
+A minimal installed manifest looks like:
 
 ```toml
 version = 1
@@ -72,6 +88,7 @@ version = 1
 [[inputs]]
 id = "plans"
 source = "plan"
+active = true
 
 [inputs.discover]
 roots = ["~/.claude/plans"]
@@ -83,6 +100,7 @@ format = "markdown_sections"
 [[inputs]]
 id = "knowledge"
 source = "ke"
+active = true
 
 [inputs.discover]
 roots = ["docs/knowledge"]
@@ -92,10 +110,15 @@ include = ["**/*.md"]
 format = "markdown"
 ```
 
-Invalid TOML, unknown fields, unsupported versions, or invalid active manifests fail with an error that includes the manifest path. Full selector/filter execution belongs to later O02 tasks; T002 establishes the separate canonical manifest loader and removes silent legacy fallback from the canonical path.
+Invalid TOML, unknown fields, unsupported versions, invalid selectors/globs/regexes, or invalid active manifests fail with an error that includes the manifest path. Missing discovery roots are skipped so shipped Claude/Pi presets can coexist on machines that only have one tool installed.
 
-## Legacy compatibility
+## Common commands
 
-`backscroll sync --path <dir>` remains an explicit legacy migration path for Claude sessions. Because it is explicit on the command line, it is not treated as the canonical O02 manifest flow.
+```bash
+backscroll inputs validate
+backscroll inputs list
+backscroll inputs test --input claude --file ~/.claude/projects/example/session.jsonl --json
+backscroll sync
+```
 
-`session_dir`, `session_dirs`, and implicit `~/.claude/projects` discovery were O01 compatibility mechanisms. In O02 they are documented as non-canonical and are not used as silent fallbacks for canonical session ingestion.
+See [the generic input contract](input-contract.md) for the full manifest schema.

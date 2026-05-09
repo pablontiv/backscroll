@@ -1,69 +1,71 @@
-# Intención de Refactor: Backscroll agnóstico de CLI agentic
+# Intención: Backscroll agnóstico de CLI agentic
 
 ## 1) Propósito
-Transformar Backscroll de un parser específico de Claude a un sistema agnóstico de CLI agentic, moviendo la interpretación de sesiones desde código Rust hardcodeado hacia **definiciones externas en TOML** (`backscroll.inputs.toml` / `backscroll.inputs.d/*.toml`), para poder agregar soporte de nuevos agentes **sin recompilar**.
 
-## 2) Alcance (MVP)
+Backscroll interpreta sesiones y documentos mediante **definiciones externas en TOML** para poder agregar soporte de nuevos agentes sin recompilar. La ubicación canónica runtime es global y user-scoped:
 
-- Fase 1: soporte externo de inputs para sesiones con `source = "session"`.
-- Incluir desde el inicio:
-  - `claude` (migración desde parser actual)
-  - `pi` (nuevo mapper externo)
-- Mantener compatibilidad completa con comportamiento actual mientras se agrega la capa declarativa.
-- **Regla absoluta:** no habrá soporte de `command` adapters ejecutables ni scripts externos de integración en esta fase.
+```text
+<config_dir>/backscroll/inputs/*.inputs.toml
+```
 
-## 3) Principios del refactor
+`<config_dir>` es el directorio de configuración del sistema operativo, o `BACKSCROLL_CONFIG_DIR` cuando se define.
 
-1. **Sin recompilar para agregar inputs:** agregar/modificar TOML es suficiente.
-2. **Agnóstico por diseño:** Backscroll no debe depender de la semántica concreta de cada CLI.
-3. **Compatibilidad hacia atrás primero:** soportar flujo actual de usuarios/config existente.
-4. **Contrato interno estable:** seguir normalizando a estructuras actuales (`ParsedFile`, `ParsedMessage`).
-5. **Incremental y riesgo acotado:** no tocar almacenamiento/semántica de búsqueda salvo lo necesario para resolver paths/inputs.
+## 2) Alcance MVP vigente
+
+- Inputs externos para sesiones con `source = "session"`.
+- Presets shipped para Claude y Pi en `inputs/claude.inputs.toml` y `inputs/pi.inputs.toml`, instalables en el config dir del usuario.
+- Manifests data-only: discovery, decode, selectors, predicates, mapping y normalización de texto.
+- App config (`backscroll.toml`) separada de input config.
+- **Regla absoluta:** no hay soporte de adapters ejecutables, scripts externos ni JMESPath en este MVP.
+
+## 3) Principios
+
+1. **Sin recompilar para agregar inputs:** agregar/modificar TOML instalado en el config dir global es suficiente.
+2. **Agnóstico por diseño:** Backscroll no debe depender de semántica hardcodeada de cada CLI.
+3. **Config separada:** `backscroll.toml` configura la app; `*.inputs.toml` configura ingesta.
+4. **Contrato interno estable:** normalizar a `ParsedFile` y `ParsedMessage`.
+5. **Incremental y riesgo acotado:** conservar deduplicación por hash/path y salida de búsqueda estable.
 
 ## 4) Invariantes a preservar
 
-### A. Invariantes funcionales de usuario/CLI
-1. Los comandos (`search`, `read`, `resume`, `list`, `topics`, `insights`, `export`, `status`, `sync`) siguen disponibles y con comportamiento estable.
+### A. Usuario/CLI
+
+1. Los comandos (`search`, `read`, `resume`, `list`, `topics`, `insights`, `export`, `status`, `sync`) siguen disponibles.
 2. El autosync previo a comandos se conserva.
-3. Precedencia de paths: `--path` mantiene prioridad máxima.
-4. `source = "session"` permanece como valor estable para sesiones.
-5. No degradar resultados existentes para flujos actuales de sesión cuando no haya cambios deliberados.
+3. `source = "session"` permanece como valor estable para conversaciones de Claude/Pi.
+4. `backscroll inputs validate/list/test` son el punto de diagnóstico para manifests.
 
-### B. Invariantes de configuración
-6. `database_path` por defecto sigue en `~/.backscroll.db`.
-7. Soporte legado de configuración se conserva:
-   - `session_dir` (alias)
-   - `session_dirs` (string o arreglo)
-8. Orden base actual de config se conserva (`backscroll.toml` → `~/.config/backscroll/config.toml` → `BACKSCROLL_*`), extendiéndolo con inputs de forma ordenada.
-9. Fallback actual de descubrimiento de sesiones se mantiene, con precedencia explícita para nuevos manifiestos.
+### B. Configuración
 
-### C. Invariantes de ingestión y datos
-10. `ParsedFile` y `ParsedMessage` siguen siendo la frontera interna de ingestión.
-11. Deduplicación incremental por hash/path sigue vigente.
-12. `uuid` y `source_path` siguen siendo la identidad operativa en esta fase.
-13. Parseo tolerante: fallos puntuales de registros no deben romper toda la sync.
-14. Semántica de mensajes relevantes de sesión se conserva inicialmente.
+5. `database_path` por defecto sigue en `~/.backscroll.db`.
+6. El loader canónico lee solo manifests globales bajo `<config_dir>/backscroll/inputs/`.
+7. `BACKSCROLL_CONFIG_DIR` permite pruebas e instalaciones personalizadas.
+8. Presets instalados no deben sobrescribir manifests existentes por defecto.
 
-### D. Invariantes de calidad y pruebas
-15. Tests existentes continúan pasando.
-16. Se agregan pruebas de precedencia (`--path` > config > inputs > fallback) y compatibilidad.
-17. Docs se actualizan y alinean (`README`, `docs/configuration.md`, `docs/sync.md`, `backscroll.toml.example`).
+### C. Ingestión y datos
 
-### E. Invariantes de deuda conocida (no resueltas en esta fase)
-18. El estado actual de filtros por `--source` para fuentes externas (`ke`, `decision`, `memory`, etc.) permanece como deuda técnica y no se resuelve aquí.
-19. `source_metadata` y extensiones de metadatos quedan fuera de alcance de esta fase.
+9. `ParsedFile` y `ParsedMessage` siguen siendo la frontera interna de ingestión.
+10. Deduplicación incremental por hash/path sigue vigente.
+11. `uuid` y `source_path` siguen siendo identidad operativa.
+12. Fallos puntuales de registros no deben romper toda la sync cuando el manifest en sí es válido.
 
-## 5) No-goals (esta fase)
+### D. Calidad y pruebas
 
-- No introducir adapters/executables `command`.
-- No cambiar esquema SQLite.
-- No reescribir por completo `parse_sessions` antes de definir la capa de inputs.
-- No rediseñar el CLI ni la UX.
+13. Tests de loader global prueban que manifests locales no se leen como fuente canónica.
+14. Tests de CLI usan `BACKSCROLL_CONFIG_DIR` para fixtures.
+15. Docs y skill se mantienen alineadas con la ruta global de inputs.
 
-## 6) Criterios de éxito del MVP
+## 5) No-goals del MVP
 
-- Backscroll indexa nuevos inputs definidos por TOML sin recompilar (inicialmente Claude + Pi).
-- `claude.toml` y `pi.toml` quedan cubiertos como casos de configuración.
-- `session_dir` / `session_dirs` heredado sigue funcionando.
-- `--path` conserva precedencia máxima.
-- Pruebas de regresión y documentación actualizada pasan y quedan alineadas.
+- No introducir adapters ejecutables ni scripts de integración.
+- No introducir JMESPath ni plugins.
+- No mezclar rutas de ingesta en `backscroll.toml`.
+- No cambiar esquema SQLite salvo tareas explícitas.
+- No rediseñar el CLI ni la UX de búsqueda.
+
+## 6) Criterios de éxito
+
+- Backscroll indexa inputs definidos por TOML global sin recompilar.
+- Claude y Pi están cubiertos por presets shipped instalables en user scope.
+- App config e input config están claramente separadas.
+- Validación, dry-run, sync, read y autosync usan el mismo modelo de input manifests.

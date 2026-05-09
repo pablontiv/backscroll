@@ -612,15 +612,7 @@ impl InputDefinition {
         }
         for root in &self.discover.roots {
             let root_path = Path::new(root);
-            if !root_path.exists() {
-                return Err(miette::miette!(
-                    "Active input '{}' in {} has missing discover.roots path '{}'",
-                    self.id,
-                    path.display(),
-                    root
-                ));
-            }
-            if !root_path.is_file() && !root_path.is_dir() {
+            if root_path.exists() && !root_path.is_file() && !root_path.is_dir() {
                 return Err(miette::miette!(
                     "Active input '{}' in {} has discover.roots path '{}' that is neither a file nor a directory",
                     self.id,

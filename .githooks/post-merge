@@ -5,6 +5,29 @@
 
 REPO_ROOT="$(git rev-parse --show-toplevel)"
 
+install_input_presets() {
+  local config_dir inputs_dest preset dest
+  if [ -n "${BACKSCROLL_CONFIG_DIR:-}" ]; then
+    config_dir="$BACKSCROLL_CONFIG_DIR"
+  elif [ "$(uname -s)" = "Darwin" ]; then
+    config_dir="$HOME/Library/Application Support"
+  else
+    config_dir="${XDG_CONFIG_HOME:-$HOME/.config}"
+  fi
+
+  inputs_dest="$config_dir/backscroll/inputs"
+  mkdir -p "$inputs_dest"
+  for preset in claude.inputs.toml pi.inputs.toml; do
+    dest="$inputs_dest/$preset"
+    if [ -e "$dest" ] && [ "${BACKSCROLL_FORCE_INPUTS:-0}" != "1" ]; then
+      echo "backscroll: $dest exists, skipping"
+      continue
+    fi
+    cp "$REPO_ROOT/inputs/$preset" "$dest"
+    echo "backscroll: installed input preset → $dest"
+  done
+}
+
 # Install project skills to the Claude user scope.
 # Pi is configured by .pi/settings.json to discover ~/.claude/skills.
 SKILLS_DEST="$HOME/.claude/skills"
@@ -14,6 +37,7 @@ for skill in backscroll; do
   cp -r "$REPO_ROOT/.claude/skills/$skill" "$SKILLS_DEST/$skill"
   echo "backscroll: installed $skill skill → $SKILLS_DEST/$skill"
 done
+install_input_presets
 
 USER_BIN_DIR="${XDG_BIN_HOME:-$HOME/.local/bin}"
 echo "Rebuilding backscroll..."

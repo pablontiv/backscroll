@@ -3,12 +3,13 @@ estado: Completed
 ---
 # Sync & Indexing
 
-`backscroll sync` reads session inputs (Claude and other supported sources), extracts the conversation, strips noise, and indexes everything into a local SQLite database for fast full-text search.
+`backscroll sync` reads active global input manifests, extracts records into Backscroll's normalized message model, strips configured noise, and indexes everything into a local SQLite database for search.
 
 ## CLI Usage
 
 ```bash
-backscroll sync                                      # Index files declared in *.inputs.toml
+backscroll inputs validate
+backscroll sync
 ```
 
 ### Flags
@@ -17,19 +18,29 @@ backscroll sync                                      # Index files declared in *
 |------|-------------|
 | `--no-plans` | Deprecated compatibility flag; plans are indexed only when declared as inputs |
 | `--optimize` | Run FTS5 optimization after sync |
+| `--no-embeddings` | Skip embedding generation during sync |
 
 ## Declarative Inputs
 
-O01 allowed transitional ingestion through `--path`, `session_dir(s)`, implicit Claude discovery, hardcoded `~/.claude/plans`, and `[sources]` directory config. O02 makes TOML input manifests canonical: app settings stay in `backscroll.toml`, while sessions, plans, and external markdown documents are declared in `*.inputs.toml` and/or `backscroll.inputs.d/*.toml`.
+Canonical ingestion is configured with user-scoped manifests:
 
-The O02 generic input manifest contract is specified in [Generic input manifest contract](input-contract.md). It describes the provider-neutral `discover -> decode -> record -> map -> content -> text -> emit` pipeline and keeps Claude/Pi conversations normalized as `source = "session"`. Markdown document inputs use `decode.format = "markdown"` for whole documents or `decode.format = "markdown_sections"` to split on `## ` headers.
+```text
+<config_dir>/backscroll/inputs/*.inputs.toml
+```
 
-Canonical manifests are loaded from:
+`<config_dir>` is the OS config directory, or `BACKSCROLL_CONFIG_DIR` when set:
 
-1. `./*.inputs.toml` sorted by filename
-2. `./backscroll.inputs.d/*.toml` sorted by filename
+| OS | Manifest directory |
+|---|---|
+| Linux | `${XDG_CONFIG_HOME:-$HOME/.config}/backscroll/inputs/` |
+| macOS | `$HOME/Library/Application Support/backscroll/inputs/` |
+| Windows | `%APPDATA%\backscroll\inputs\` |
 
-`--path` remains only as an explicit legacy CLI migration path. `session_dir`, `session_dirs`, and implicit `~/.claude/projects` discovery are non-canonical O01 compatibility mechanisms and no longer silently feed the canonical O02 session path.
+Backscroll does not inspect project-local input manifests at runtime. Application config (`backscroll.toml`) remains separate from input config and does not provide canonical ingestion routes.
+
+The generic input contract is specified in [Generic input manifest contract](input-contract.md). It describes the provider-neutral `discover -> decode -> record -> map -> content -> text -> emit` pipeline and keeps Claude/Pi conversations normalized as `source = "session"`. Markdown document inputs use `decode.format = "markdown"` for whole documents or `decode.format = "markdown_sections"` to split on `## ` headers.
+
+A session input example:
 
 ```toml
 version = 1
@@ -55,7 +66,7 @@ role = "$.message.role"
 selector = "$.message.content"
 ```
 
-Plans are no longer discovered from a hardcoded Claude path. Declare them explicitly:
+Plans and external markdown documents are declared explicitly as inputs:
 
 ```toml
 version = 1
@@ -63,6 +74,7 @@ version = 1
 [[inputs]]
 id = "plans"
 source = "plan"
+active = true
 
 [inputs.discover]
 roots = ["~/.claude/plans"]
@@ -70,25 +82,11 @@ include = ["**/*.md", "**/*.markdown"]
 
 [inputs.decode]
 format = "markdown_sections"
-```
-
-External document sources are also inputs. The `source` value is stored unchanged, so `ke`, `decision`, `memory`, `rule`, `spec`, and `backlog` remain searchable and filterable by source:
-
-```toml
-[[inputs]]
-id = "specs"
-source = "spec"
-
-[inputs.discover]
-roots = ["docs/specs"]
-include = ["**/*.md"]
-
-[inputs.decode]
-format = "markdown_sections"
 
 [[inputs]]
 id = "decisions"
 source = "decision"
+active = true
 
 [inputs.discover]
 roots = ["docs/decisions"]
@@ -98,19 +96,17 @@ include = ["**/*.md"]
 format = "markdown"
 ```
 
-Discovery roots may be files or directories. `~` is expanded to the user's home directory, and relative roots are resolved relative to the manifest file that declares them. Include and exclude rules are generic `globset` patterns matched against candidate paths; Backscroll does not hardcode provider-specific exclusions such as `subagents`. `follow_symlinks` defaults to `false`, so symlinked directories are not traversed unless the manifest opts in.
+Discovery roots may be files or directories. `~` is expanded to the user's home directory, and relative roots are resolved relative to the manifest file that declares them. Include and exclude rules are generic `globset` patterns matched against candidate paths. `follow_symlinks` defaults to `false`, so symlinked directories are not traversed unless the manifest opts in.
+
+Missing discovery roots are skipped. This lets the shipped Claude and Pi presets both be active even when only one tool is installed on a machine.
 
 ## Session File Format
 
-Claude Code stores each conversation as a JSONL file — one JSON record per line. Each record has a `type` field (`user`, `assistant`, `summary`, etc.) and a `message` object containing the actual content.
-
-Backscroll extracts only `user` and `assistant` records. Everything else — summaries, metadata, tool calls, tool results — is skipped.
+Claude and Pi presets both decode JSONL files. Each decoded record is filtered and mapped by the installed manifest, not by hardcoded provider-specific CLI flags. The shipped Claude preset keeps `user` and `assistant` records and removes Claude noise tags. The shipped Pi preset keeps message records whose role is `user` or `assistant` and text content blocks.
 
 ## Noise Filtering
 
-Raw session messages contain machine-generated content injected by the system. Backscroll strips all of this before indexing, producing a clean corpus of human ↔ assistant dialogue.
-
-Filtered patterns:
+Raw session messages can contain machine-generated content injected by agents or tools. Backscroll strips noise according to `[inputs.text].remove` rules in the active manifest. The shipped Claude preset removes patterns such as:
 
 | Pattern | Description |
 |---------|-------------|
@@ -123,35 +119,34 @@ Filtered patterns:
 | `<command-args>...</command-args>` | Command argument tags |
 | `Caveat: ...` (line prefix) | Caveat prefix lines |
 | `Base directory: ...` (line prefix) | Base directory lines |
-| `Request interrupted` | Partial responses (entire message dropped) |
+| `Request interrupted` | Partial responses |
 
-After filtering, if a message is empty, it is discarded entirely.
+After filtering, if a message is empty, it is discarded entirely when `drop_empty = true`.
 
 ## Incremental Sync
 
-Backscroll computes a SHA-256 hash for each session file and stores it in the database alongside the indexed content. On subsequent syncs, the hash is compared — only files whose content has changed are re-processed.
+Backscroll computes a SHA-256 hash for each input file and stores it in the database alongside the indexed content. On subsequent syncs, the hash is compared and only files whose content has changed are re-processed.
 
 This makes repeated syncs fast: the first run indexes everything, subsequent runs skip unchanged files.
 
 ## Project Detection
 
-Each indexed file is assigned to a project. In the legacy explicit `--path` Claude parser, resolution order is:
+Manifest-driven inputs can map a project value from the record with `inputs.map.project`. If the active manifest does not map a project value, indexed messages default to `"unknown"`.
 
-1. **sessions-index.json** — Claude maintains a `sessions-index.json` file mapping session UUIDs to project paths. If found, the project name is extracted from the last path component.
-2. **Directory structure fallback** — If no index entry exists, the project name is inferred from the parent directory structure (the directory above `sessions/` or `subagents/`).
-3. **Default** — If neither method resolves, the project is set to `"unknown"`.
-
-O02 canonical manifests only support project values that are present in the input record via `inputs.map.project`. The MVP contract does not yet express Claude `sessions-index.json` sidecar lookup, so manifest-driven Claude sync defaults to `"unknown"` unless a future contract revision adds sidecar/project inference.
+The current MVP contract does not express provider-specific sidecar lookup such as Claude `sessions-index.json` project inference. If you need project-scoped search, prefer manifests whose records include a project field or organize sources with explicit metadata in a future-compatible way.
 
 ## Subagent Sessions
 
-Claude Code spawns subagent sessions in `/subagents/` subdirectories. These are nested conversations that tend to be noisy and implementation-focused. They are excluded by default to keep the index focused on primary conversations.
+Subagent inclusion/exclusion is data in the manifest. The shipped Claude preset excludes paths matching `**/subagents/**` in `[inputs.discover].exclude`. To index a different corpus, edit the installed user manifest and validate it with:
 
-Use `--include-agents` to index them alongside primary sessions.
+```bash
+backscroll inputs validate
+backscroll inputs test --input claude --file <PATH> --json
+```
 
 ## Exit Codes
 
 | Code | Meaning |
 |------|---------|
 | `0` | Sync completed successfully |
-| `1` | Error (missing directory, permission denied, parse failure) |
+| `1` | Error (permission denied, invalid manifest, parse failure) |

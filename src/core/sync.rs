@@ -178,10 +178,11 @@ pub(crate) fn discover_candidate_files(discover: &DiscoverConfig) -> miette::Res
     for raw_root in &discover.roots {
         let root = Path::new(raw_root);
         if !root.exists() {
-            return Err(miette::miette!(
-                "Discovery root does not exist in discover.roots: {}",
+            tracing::warn!(
+                "Skipping missing discovery root in discover.roots: {}",
                 root.display()
-            ));
+            );
+            continue;
         }
 
         for entry in WalkDir::new(root)
@@ -2613,6 +2614,42 @@ format = "markdown_sections"
             discovered,
             vec![direct, root.join("a.jsonl"), root.join("b.jsonl")]
         );
+        Ok(())
+    }
+
+    #[test]
+    fn test_discovery_skips_missing_roots_and_keeps_existing_roots() -> miette::Result<()> {
+        let dir = tempdir().into_diagnostic()?;
+        let root = dir.path().join("root");
+        fs::create_dir_all(&root).into_diagnostic()?;
+        fs::write(root.join("session.jsonl"), "{}").into_diagnostic()?;
+
+        let discovered = discover_candidate_files(&crate::input_config::DiscoverConfig {
+            roots: vec![
+                dir.path().join("missing").to_string_lossy().into_owned(),
+                root.to_string_lossy().into_owned(),
+            ],
+            include: vec!["**/*.jsonl".into()],
+            exclude: Vec::new(),
+            follow_symlinks: false,
+        })?;
+
+        assert_eq!(discovered, vec![root.join("session.jsonl")]);
+        Ok(())
+    }
+
+    #[test]
+    fn test_discovery_skips_missing_only_roots() -> miette::Result<()> {
+        let dir = tempdir().into_diagnostic()?;
+
+        let discovered = discover_candidate_files(&crate::input_config::DiscoverConfig {
+            roots: vec![dir.path().join("missing").to_string_lossy().into_owned()],
+            include: vec!["**/*.jsonl".into()],
+            exclude: Vec::new(),
+            follow_symlinks: false,
+        })?;
+
+        assert!(discovered.is_empty());
         Ok(())
     }
 

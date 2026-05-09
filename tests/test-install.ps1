@@ -6,6 +6,8 @@
 BeforeAll {
     $ScriptPath = Join-Path (Join-Path $PSScriptRoot "..") "install.ps1"
     $ScriptContent = Get-Content $ScriptPath -Raw
+    $RepoRoot = Join-Path $PSScriptRoot ".."
+    $InputsSource = Join-Path $RepoRoot "inputs"
 
     # Remove the final "Main" call so we can dot-source without executing
     $SafeContent = $ScriptContent -replace '(?m)^Main\s*$', ''
@@ -39,6 +41,13 @@ Describe "Install-Binary parameters" -Tag "Static" {
     }
 }
 
+Describe "Input preset functions" -Tag "Static" {
+    It "defines config dir and input preset installation functions" {
+        Get-Command Get-ConfigDir | Should -Not -BeNullOrEmpty
+        Get-Command Install-InputPresets | Should -Not -BeNullOrEmpty
+    }
+}
+
 Describe "Get-Arch" -Tag "Runtime" {
     It "returns x86_64 on AMD64" {
         if ($env:PROCESSOR_ARCHITECTURE -eq "AMD64") {
@@ -58,7 +67,7 @@ Describe "Get-InstallDir" -Tag "Runtime" {
                 $result = Get-InstallDir
                 $result | Should -Be $customDir
             } finally {
-                Remove-Item Env:\BACKSCROLL_INSTALL_DIR
+                Remove-Item Env:\BACKSCROLL_INSTALL_DIR -ErrorAction SilentlyContinue
             }
         }
 
@@ -70,33 +79,112 @@ Describe "Get-InstallDir" -Tag "Runtime" {
                 $result | Should -BeOfType [string]
                 @($result).Count | Should -Be 1
             } finally {
-                Remove-Item Env:\BACKSCROLL_INSTALL_DIR
+                Remove-Item Env:\BACKSCROLL_INSTALL_DIR -ErrorAction SilentlyContinue
             }
         }
     }
 
     Context "with default path" {
         It "returns a path ending in backscroll\bin" {
-            $originalEnv = $env:BACKSCROLL_INSTALL_DIR
+            $originalInstallDir = $env:BACKSCROLL_INSTALL_DIR
+            $originalLocalAppData = $env:LOCALAPPDATA
             $env:BACKSCROLL_INSTALL_DIR = ""
+            $env:LOCALAPPDATA = Join-Path $TestDrive "local-app-data"
             try {
                 $result = Get-InstallDir
                 $result | Should -Match "backscroll[/\\]bin$"
             } finally {
-                $env:BACKSCROLL_INSTALL_DIR = $originalEnv
+                $env:BACKSCROLL_INSTALL_DIR = $originalInstallDir
+                $env:LOCALAPPDATA = $originalLocalAppData
             }
         }
 
         It "returns exactly one string (PS 5.1 Join-Path compat)" {
-            $originalEnv = $env:BACKSCROLL_INSTALL_DIR
+            $originalInstallDir = $env:BACKSCROLL_INSTALL_DIR
+            $originalLocalAppData = $env:LOCALAPPDATA
             $env:BACKSCROLL_INSTALL_DIR = ""
+            $env:LOCALAPPDATA = Join-Path $TestDrive "local-app-data-single"
             try {
                 $result = Get-InstallDir
                 @($result).Count | Should -Be 1
                 $result | Should -BeOfType [string]
             } finally {
-                $env:BACKSCROLL_INSTALL_DIR = $originalEnv
+                $env:BACKSCROLL_INSTALL_DIR = $originalInstallDir
+                $env:LOCALAPPDATA = $originalLocalAppData
             }
+        }
+    }
+}
+
+Describe "Get-ConfigDir" -Tag "Runtime" {
+    It "uses BACKSCROLL_CONFIG_DIR when set" {
+        $customDir = Join-Path $TestDrive "custom-config"
+        $env:BACKSCROLL_CONFIG_DIR = $customDir
+        try {
+            Get-ConfigDir | Should -Be $customDir
+        } finally {
+            Remove-Item Env:\BACKSCROLL_CONFIG_DIR -ErrorAction SilentlyContinue
+        }
+    }
+
+    It "uses APPDATA by default" {
+        $originalConfigDir = $env:BACKSCROLL_CONFIG_DIR
+        $originalAppData = $env:APPDATA
+        $appData = Join-Path $TestDrive "appdata"
+        $env:BACKSCROLL_CONFIG_DIR = ""
+        $env:APPDATA = $appData
+        try {
+            Get-ConfigDir | Should -Be $appData
+        } finally {
+            $env:BACKSCROLL_CONFIG_DIR = $originalConfigDir
+            $env:APPDATA = $originalAppData
+        }
+    }
+}
+
+Describe "Install-InputPresets" -Tag "Runtime" {
+    It "copies presets to BACKSCROLL_CONFIG_DIR\backscroll\inputs" {
+        $configDir = Join-Path $TestDrive "config-copy"
+        $env:BACKSCROLL_CONFIG_DIR = $configDir
+        try {
+            Install-InputPresets -Version "v0.2.3" -SourceDir $InputsSource
+            Test-Path (Join-Path (Join-Path $configDir "backscroll") "inputs") | Should -BeTrue
+            Test-Path (Join-Path (Join-Path (Join-Path $configDir "backscroll") "inputs") "claude.inputs.toml") | Should -BeTrue
+            Test-Path (Join-Path (Join-Path (Join-Path $configDir "backscroll") "inputs") "pi.inputs.toml") | Should -BeTrue
+        } finally {
+            Remove-Item Env:\BACKSCROLL_CONFIG_DIR -ErrorAction SilentlyContinue
+        }
+    }
+
+    It "does not overwrite existing presets by default" {
+        $configDir = Join-Path $TestDrive "config-skip"
+        $inputsDir = Join-Path (Join-Path $configDir "backscroll") "inputs"
+        New-Item -ItemType Directory -Path $inputsDir -Force | Out-Null
+        $claudePreset = Join-Path $inputsDir "claude.inputs.toml"
+        Set-Content -Path $claudePreset -Value "user edit"
+        $env:BACKSCROLL_CONFIG_DIR = $configDir
+        try {
+            Install-InputPresets -Version "v0.2.3" -SourceDir $InputsSource
+            Get-Content $claudePreset -Raw | Should -Match "user edit"
+        } finally {
+            Remove-Item Env:\BACKSCROLL_CONFIG_DIR -ErrorAction SilentlyContinue
+        }
+    }
+
+    It "overwrites existing presets with BACKSCROLL_FORCE_INPUTS=1" {
+        $configDir = Join-Path $TestDrive "config-force"
+        $inputsDir = Join-Path (Join-Path $configDir "backscroll") "inputs"
+        New-Item -ItemType Directory -Path $inputsDir -Force | Out-Null
+        $claudePreset = Join-Path $inputsDir "claude.inputs.toml"
+        Set-Content -Path $claudePreset -Value "user edit"
+        $env:BACKSCROLL_CONFIG_DIR = $configDir
+        $env:BACKSCROLL_FORCE_INPUTS = "1"
+        try {
+            Install-InputPresets -Version "v0.2.3" -SourceDir $InputsSource
+            Get-Content $claudePreset -Raw | Should -Match 'id = "claude"'
+        } finally {
+            Remove-Item Env:\BACKSCROLL_CONFIG_DIR -ErrorAction SilentlyContinue
+            Remove-Item Env:\BACKSCROLL_FORCE_INPUTS -ErrorAction SilentlyContinue
         }
     }
 }

@@ -15,6 +15,15 @@ fn write_manifest_file(config_dir: &std::path::Path, name: &str, content: String
 }
 
 fn write_claude_input_manifest(config_dir: &std::path::Path, root: &std::path::Path) {
+    write_claude_input_manifest_roots(config_dir, &[root]);
+}
+
+fn write_claude_input_manifest_roots(config_dir: &std::path::Path, roots: &[&std::path::Path]) {
+    let roots = roots
+        .iter()
+        .map(|root| format!("\"{}\"", root.display()))
+        .collect::<Vec<_>>()
+        .join(", ");
     write_manifest_file(
         config_dir,
         "claude.inputs.toml",
@@ -27,7 +36,7 @@ source = "session"
 active = true
 
 [inputs.discover]
-roots = ["{}"]
+roots = [{roots}]
 include = ["**/*.jsonl"]
 exclude = ["**/subagents/**"]
 
@@ -67,8 +76,7 @@ remove = [
   {{ kind = "regex", pattern = "<system-reminder>[\\s\\S]*?</system-reminder>" }},
   {{ kind = "regex", pattern = "<task-notification>[\\s\\S]*?</task-notification>" }},
 ]
-"#,
-            root.display()
+"#
         ),
     );
 }
@@ -224,6 +232,100 @@ fn test_cli_read_uses_input_manifest_for_pi_jsonl() {
         .success()
         .stdout(predicate::str::contains("visible manifest read"))
         .stdout(predicate::str::contains("hidden chain").not());
+}
+
+#[test]
+fn test_cli_read_skips_missing_discovery_root_when_valid_root_matches() {
+    let work_dir = tempdir().unwrap();
+    let data_dir = tempdir().unwrap();
+    let db_dir = tempdir().unwrap();
+    let db_path = db_dir.path().join("read_mixed_roots.db");
+    let fake_home = tempdir().unwrap();
+    let session_file = data_dir.path().join("session.jsonl");
+    let missing_root = work_dir.path().join("missing-root");
+
+    fs::write(
+        &session_file,
+        r#"{"type":"assistant","message":{"role":"assistant","content":"read survives missing root"},"uuid":"read-mixed","timestamp":"100"}"#,
+    )
+    .unwrap();
+    write_claude_input_manifest_roots(work_dir.path(), &[&missing_root, data_dir.path()]);
+
+    Command::cargo_bin("backscroll")
+        .unwrap()
+        .current_dir(work_dir.path())
+        .arg("read")
+        .arg(session_file.to_str().unwrap())
+        .env("BACKSCROLL_DATABASE_PATH", db_path.to_str().unwrap())
+        .env("BACKSCROLL_CONFIG_DIR", work_dir.path().to_str().unwrap())
+        .env("HOME", fake_home.path().to_str().unwrap())
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("read survives missing root"));
+}
+
+#[test]
+fn test_cli_sync_skips_missing_discovery_root_and_indexes_existing_root() {
+    let work_dir = tempdir().unwrap();
+    let data_dir = tempdir().unwrap();
+    let db_dir = tempdir().unwrap();
+    let db_path = db_dir.path().join("sync_mixed_roots.db");
+    let fake_home = tempdir().unwrap();
+    let missing_root = work_dir.path().join("missing-root");
+
+    fs::write(
+        data_dir.path().join("session.jsonl"),
+        r#"{"type":"user","message":{"role":"user","content":"sync survives missing root"},"uuid":"sync-mixed","timestamp":"100"}"#,
+    )
+    .unwrap();
+    write_claude_input_manifest_roots(work_dir.path(), &[&missing_root, data_dir.path()]);
+
+    Command::cargo_bin("backscroll")
+        .unwrap()
+        .current_dir(work_dir.path())
+        .arg("sync")
+        .arg("--no-plans")
+        .env("BACKSCROLL_DATABASE_PATH", db_path.to_str().unwrap())
+        .env("BACKSCROLL_CONFIG_DIR", work_dir.path().to_str().unwrap())
+        .env("HOME", fake_home.path().to_str().unwrap())
+        .env_remove("BACKSCROLL_SESSION_DIR")
+        .env_remove("BACKSCROLL_SESSION_DIRS")
+        .assert()
+        .success();
+
+    Command::cargo_bin("backscroll")
+        .unwrap()
+        .current_dir(work_dir.path())
+        .arg("search")
+        .arg("survives")
+        .arg("--source")
+        .arg("sessions")
+        .arg("--all-projects")
+        .env("BACKSCROLL_DATABASE_PATH", db_path.to_str().unwrap())
+        .env("BACKSCROLL_CONFIG_DIR", work_dir.path().to_str().unwrap())
+        .env("HOME", fake_home.path().to_str().unwrap())
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("missing root"));
+}
+
+#[test]
+fn test_cli_inputs_validate_allows_missing_discovery_roots() {
+    let work_dir = tempdir().unwrap();
+    let fake_home = tempdir().unwrap();
+    let missing_root = work_dir.path().join("missing-root");
+    write_claude_input_manifest(work_dir.path(), &missing_root);
+
+    Command::cargo_bin("backscroll")
+        .unwrap()
+        .current_dir(work_dir.path())
+        .arg("inputs")
+        .arg("validate")
+        .env("BACKSCROLL_CONFIG_DIR", work_dir.path().to_str().unwrap())
+        .env("HOME", fake_home.path().to_str().unwrap())
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("Input manifests valid"));
 }
 
 #[test]
