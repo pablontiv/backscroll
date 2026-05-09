@@ -8,10 +8,11 @@ conversation records into the stable ingestion boundary:
 - `ParsedMessage { role, text, ordinal, uuid, timestamp, content_type }`
 
 The manifest carries provider-specific details in data, while Backscroll keeps a
-provider-neutral pipeline. O02 loaders discover manifests from `*.inputs.toml`
-in the working directory and `backscroll.inputs.d/*.toml`; `backscroll.toml`
-remains application configuration and is not the canonical source of ingestion
-routes.
+provider-neutral pipeline. Runtime loaders discover manifests from the OS-aware
+user config directory at `<config_dir>/backscroll/inputs/*.inputs.toml`; set
+`BACKSCROLL_CONFIG_DIR` to override `<config_dir>` in tests or custom installs.
+`backscroll.toml` remains application configuration and is not the canonical
+source of ingestion routes.
 
 
 ```text
@@ -170,21 +171,21 @@ Selects text-bearing values and optional content blocks. Required for `jsonl` an
 | `exclude_when` | array of predicates | `[]` | Predicates that drop a block when matched. |
 | `default_content_type` | string | `text` | Content type used when no selector yields a value. |
 
-Pi `think` block exclusion is expressed here as data:
+Pi non-text block filtering is expressed here as data:
 
 ```toml
 [inputs.content]
-selector = "$.content"
-blocks = "$.content.blocks[*]"
+selector = "$.message.content"
+blocks = "$.message.content[*]"
 block_text = "$.text"
 content_type = "$.type"
-exclude_when = [
-  { selector = "$.type", op = "eq", value = "think" },
+include_when = [
+  { selector = "$.type", op = "eq", value = "text" },
 ]
 ```
 
 The core only evaluates the generic predicate; it does not need Pi-specific
-knowledge of `think`.
+knowledge of `thinking` or `toolCall` blocks.
 
 ## `text`
 
@@ -270,7 +271,7 @@ source = "session"
 active = true
 
 [inputs.discover]
-roots = ["~/.local/share/pi"]
+roots = ["~/.pi/agent/sessions"]
 include = ["**/*.jsonl"]
 exclude = []
 
@@ -280,26 +281,23 @@ format = "jsonl"
 [inputs.record]
 selector = "$"
 include_when = [
-  { selector = "$.role", op = "in", value = ["user", "assistant", "human"] },
+  { selector = "$.type", op = "eq", value = "message" },
+  { selector = "$.message.role", op = "in", value = ["user", "assistant"] },
 ]
 
 [inputs.map]
-role = "$.role"
-uuid = "$.uuid"
+role = "$.message.role"
+uuid = "$.id"
 timestamp = "$.timestamp"
-session_id = "$.session_id"
-
-[inputs.map.role_aliases]
-human = "user"
 
 [inputs.content]
-selector = "$.content"
+selector = "$.message.content"
 string = "$"
-blocks = "$.content.blocks[*]"
+blocks = "$.message.content[*]"
 block_text = "$.text"
 content_type = "$.type"
-exclude_when = [
-  { selector = "$.type", op = "eq", value = "think" },
+include_when = [
+  { selector = "$.type", op = "eq", value = "text" },
 ]
 default_content_type = "text"
 

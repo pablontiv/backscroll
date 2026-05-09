@@ -8,7 +8,45 @@ use backscroll::storage::sqlite::Database;
 use std::collections::HashMap;
 use std::fs;
 use std::path::PathBuf;
+use std::sync::{Mutex, MutexGuard};
 use tempfile::tempdir;
+
+static ENV_LOCK: Mutex<()> = Mutex::new(());
+
+struct ConfigDirEnv {
+    _guard: MutexGuard<'static, ()>,
+    previous: Option<std::ffi::OsString>,
+}
+
+impl ConfigDirEnv {
+    fn set(path: &std::path::Path) -> Self {
+        let guard = ENV_LOCK.lock().unwrap();
+        let previous = std::env::var_os("BACKSCROLL_CONFIG_DIR");
+        unsafe {
+            std::env::set_var("BACKSCROLL_CONFIG_DIR", path);
+        }
+        Self {
+            _guard: guard,
+            previous,
+        }
+    }
+}
+
+impl Drop for ConfigDirEnv {
+    fn drop(&mut self) {
+        unsafe {
+            if let Some(previous) = &self.previous {
+                std::env::set_var("BACKSCROLL_CONFIG_DIR", previous);
+            } else {
+                std::env::remove_var("BACKSCROLL_CONFIG_DIR");
+            }
+        }
+    }
+}
+
+fn input_dir(config_dir: &std::path::Path) -> std::path::PathBuf {
+    config_dir.join("backscroll").join("inputs")
+}
 
 #[test]
 fn test_library_parse_sync_search_pipeline() {
@@ -21,8 +59,11 @@ fn test_library_parse_sync_search_pipeline() {
 {"type":"assistant","message":{"role":"assistant","content":"The authentication bug is caused by an expired token. You need to refresh the OAuth token before making the API call."},"timestamp":"2026-03-01T10:01:00Z","session_id":"test-session-1"}"#;
 
     fs::write(session_dir.path().join("session.jsonl"), session_content).unwrap();
+    let config_dir = tempdir().unwrap();
+    let _env = ConfigDirEnv::set(config_dir.path());
+    fs::create_dir_all(input_dir(config_dir.path())).unwrap();
     fs::write(
-        session_dir.path().join("claude.inputs.toml"),
+        input_dir(config_dir.path()).join("claude.inputs.toml"),
         format!(
             r#"version = 1
 
@@ -67,12 +108,11 @@ string = "$"
 
     // Step 2: Load manifests and parse through the generic input engine.
     let hashes: HashMap<String, String> = db.get_file_hashes().unwrap();
-    let input_config = InputConfig::load_from_dir(session_dir.path()).unwrap();
+    let input_config = InputConfig::load().unwrap();
     let files: Vec<ParsedFile> = parse_input_definitions(&input_config.active_inputs(), &hashes);
     assert!(!files.is_empty(), "Should parse at least one file");
 
-    let empty_manifest_dir = tempdir().unwrap();
-    let empty_input_config = InputConfig::load_from_dir(empty_manifest_dir.path()).unwrap();
+    let empty_input_config = InputConfig::default();
     assert!(
         parse_input_definitions(&empty_input_config.active_inputs(), &hashes).is_empty(),
         "library parsing must not fall back to Claude sessions without an active manifest"

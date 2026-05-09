@@ -1,2 +1,4 @@
-{"role":"human","content":"pi manifest fixture signal","uuid":"pi-fixture-1","session_id":"pi-session-a","timestamp":"2024-02-03T04:05:06Z"}
-{"role":"assistant","content":{"blocks":[{"type":"think","text":"hidden reasoning should not index"},{"type":"text","text":"pi visible answer"}]},"uuid":"pi-fixture-2","session_id":"pi-session-a","timestamp":"2024-02-03T04:05:07Z"}
+{"type":"session","id":"pi-session-a","timestamp":"2024-02-03T04:05:05Z","cwd":"/workspace/pi"}
+{"type":"message","id":"pi-fixture-1","parentId":"pi-session-a","timestamp":"2024-02-03T04:05:06Z","message":{"role":"user","content":[{"type":"text","text":"pi manifest fixture signal"}]}}
+{"type":"message","id":"pi-fixture-2","parentId":"pi-fixture-1","timestamp":"2024-02-03T04:05:07Z","message":{"role":"assistant","content":[{"type":"thinking","thinking":"hidden reasoning should not index"},{"type":"text","text":"pi visible answer"},{"type":"toolCall","name":"read","arguments":{"path":"secret"}}]}}
+{"type":"message","id":"pi-fixture-3","parentId":"pi-fixture-2","timestamp":"2024-02-03T04:05:08Z","message":{"role":"toolResult","content":[{"type":"text","text":"tool result should not index"}]}}

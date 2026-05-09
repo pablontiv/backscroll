@@ -25,7 +25,7 @@ pub fn read_input_file(
     let inputs = input_config.active_inputs();
     if inputs.is_empty() {
         return Err(miette::miette!(
-            "No active input manifest found; read requires a matching *.inputs.toml or backscroll.inputs.d/*.toml manifest"
+            "No active input manifest found; read requires a matching manifest in <config_dir>/backscroll/inputs/*.inputs.toml (set BACKSCROLL_CONFIG_DIR to override)"
         ));
     }
 

@@ -1937,7 +1937,8 @@ not-json
     #[test]
     fn test_pi_input_preset_indexes_fixture_through_generic_engine() -> miette::Result<()> {
         let fixtures_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures");
-        let input_config = crate::input_config::InputConfig::load_from_dir(&fixtures_dir)?;
+        let input_config =
+            crate::input_config::InputConfig::load_from_inputs_dir_for_tests(&fixtures_dir)?;
         let inputs: Vec<_> = input_config
             .active_inputs()
             .into_iter()
@@ -1971,6 +1972,76 @@ not-json
             files[0].messages[1].timestamp.as_deref(),
             Some("2024-02-03T04:05:07Z")
         );
+        Ok(())
+    }
+
+    fn write_shipped_manifest_with_root(
+        dir: &Path,
+        filename: &str,
+        manifest: &str,
+        shipped_root: &str,
+        test_root: &Path,
+    ) -> miette::Result<()> {
+        let test_root = test_root.to_string_lossy().replace('\\', "\\\\");
+        let manifest = manifest.replace(shipped_root, &test_root);
+        fs::write(dir.join(filename), manifest).into_diagnostic()
+    }
+
+    #[test]
+    fn test_shipped_claude_and_pi_presets_emit_session_source() -> miette::Result<()> {
+        let dir = tempdir().into_diagnostic()?;
+        let fixtures_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures");
+        let claude_root = fixtures_dir.join("claude-preset/projects");
+        let pi_root = dir.path().join("pi-sessions");
+        fs::create_dir(&pi_root).into_diagnostic()?;
+        fs::copy(
+            fixtures_dir.join("pi-session.jsonl"),
+            pi_root.join("pi-session.jsonl"),
+        )
+        .into_diagnostic()?;
+
+        write_shipped_manifest_with_root(
+            dir.path(),
+            "claude.inputs.toml",
+            include_str!(concat!(
+                env!("CARGO_MANIFEST_DIR"),
+                "/inputs/claude.inputs.toml"
+            )),
+            "~/.claude/projects",
+            &claude_root,
+        )?;
+        write_shipped_manifest_with_root(
+            dir.path(),
+            "pi.inputs.toml",
+            include_str!(concat!(
+                env!("CARGO_MANIFEST_DIR"),
+                "/inputs/pi.inputs.toml"
+            )),
+            "~/.pi/agent/sessions",
+            &pi_root,
+        )?;
+
+        let input_config =
+            crate::input_config::InputConfig::load_from_inputs_dir_for_tests(dir.path())?;
+
+        for input_id in ["claude", "pi"] {
+            let inputs: Vec<_> = input_config
+                .active_inputs()
+                .into_iter()
+                .filter(|input| input.id == input_id)
+                .collect();
+            assert_eq!(inputs.len(), 1, "expected shipped {input_id} preset");
+            assert_eq!(inputs[0].source, "session");
+
+            let files = parse_input_definitions(&inputs, &HashMap::new());
+            assert_eq!(files.len(), 1, "expected {input_id} fixture file");
+            assert_eq!(files[0].source, "session");
+            assert!(
+                !files[0].messages.is_empty(),
+                "expected {input_id} preset to emit messages"
+            );
+        }
+
         Ok(())
     }
 
@@ -2072,7 +2143,8 @@ remove = [
         )
         .into_diagnostic()?;
 
-        let input_config = crate::input_config::InputConfig::load_from_dir(dir.path())?;
+        let input_config =
+            crate::input_config::InputConfig::load_from_inputs_dir_for_tests(dir.path())?;
         let files = parse_input_definitions(&input_config.active_inputs(), &HashMap::new());
 
         assert_eq!(files.len(), 1);
@@ -2164,7 +2236,8 @@ format = "markdown"
         )
         .into_diagnostic()?;
 
-        let input_config = crate::input_config::InputConfig::load_from_dir(dir.path())?;
+        let input_config =
+            crate::input_config::InputConfig::load_from_inputs_dir_for_tests(dir.path())?;
         let files = parse_input_definitions(&input_config.active_inputs(), &HashMap::new());
 
         assert_eq!(files.len(), 1);
@@ -2207,7 +2280,8 @@ format = "markdown_sections"
         )
         .into_diagnostic()?;
 
-        let input_config = crate::input_config::InputConfig::load_from_dir(dir.path())?;
+        let input_config =
+            crate::input_config::InputConfig::load_from_inputs_dir_for_tests(dir.path())?;
         let files = parse_input_definitions(&input_config.active_inputs(), &HashMap::new());
 
         assert_eq!(files.len(), 1);

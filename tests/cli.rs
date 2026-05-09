@@ -4,9 +4,20 @@ use predicates::prelude::*;
 use std::fs;
 use tempfile::tempdir;
 
-fn write_claude_input_manifest(work_dir: &std::path::Path, root: &std::path::Path) {
-    fs::write(
-        work_dir.join("claude.inputs.toml"),
+fn input_manifest_dir(config_dir: &std::path::Path) -> std::path::PathBuf {
+    config_dir.join("backscroll").join("inputs")
+}
+
+fn write_manifest_file(config_dir: &std::path::Path, name: &str, content: String) {
+    let dir = input_manifest_dir(config_dir);
+    fs::create_dir_all(&dir).unwrap();
+    fs::write(dir.join(name), content).unwrap();
+}
+
+fn write_claude_input_manifest(config_dir: &std::path::Path, root: &std::path::Path) {
+    write_manifest_file(
+        config_dir,
+        "claude.inputs.toml",
         format!(
             r#"version = 1
 
@@ -59,13 +70,13 @@ remove = [
 "#,
             root.display()
         ),
-    )
-    .unwrap();
+    );
 }
 
-fn write_pi_input_manifest(work_dir: &std::path::Path, root: &std::path::Path) {
-    fs::write(
-        work_dir.join("pi.inputs.toml"),
+fn write_pi_input_manifest(config_dir: &std::path::Path, root: &std::path::Path) {
+    write_manifest_file(
+        config_dir,
+        "pi.inputs.toml",
         format!(
             r#"version = 1
 
@@ -108,8 +119,7 @@ drop_empty = true
 "#,
             root.display()
         ),
-    )
-    .unwrap();
+    );
 }
 
 fn fixture_path(relative: &str) -> std::path::PathBuf {
@@ -209,6 +219,7 @@ fn test_cli_read_uses_input_manifest_for_pi_jsonl() {
         .arg("read")
         .arg(session_file.to_str().unwrap())
         .env("BACKSCROLL_DATABASE_PATH", db_path.to_str().unwrap())
+        .env("BACKSCROLL_CONFIG_DIR", work_dir.path().to_str().unwrap())
         .assert()
         .success()
         .stdout(predicate::str::contains("visible manifest read"))
@@ -235,6 +246,10 @@ fn test_cli_sync_and_search() {
         .current_dir(session_dir.path())
         .arg("sync")
         .env("BACKSCROLL_DATABASE_PATH", db_path.to_str().unwrap())
+        .env(
+            "BACKSCROLL_CONFIG_DIR",
+            session_dir.path().to_str().unwrap(),
+        )
         .env_remove("BACKSCROLL_SESSION_DIR")
         .env_remove("BACKSCROLL_SESSION_DIRS")
         .assert()
@@ -276,6 +291,10 @@ fn test_parse_real_jsonl() {
         .current_dir(session_dir.path())
         .arg("sync")
         .env("BACKSCROLL_DATABASE_PATH", db_path.to_str().unwrap())
+        .env(
+            "BACKSCROLL_CONFIG_DIR",
+            session_dir.path().to_str().unwrap(),
+        )
         .env_remove("BACKSCROLL_SESSION_DIR")
         .env_remove("BACKSCROLL_SESSION_DIRS")
         .assert()
@@ -315,6 +334,7 @@ fn sync_fixture(session_dir: &std::path::Path, db_path: &std::path::Path) {
         .current_dir(session_dir)
         .arg("sync")
         .env("BACKSCROLL_DATABASE_PATH", db_path.to_str().unwrap())
+        .env("BACKSCROLL_CONFIG_DIR", session_dir.to_str().unwrap())
         .env_remove("BACKSCROLL_SESSION_DIR")
         .env_remove("BACKSCROLL_SESSION_DIRS")
         .assert()
@@ -384,8 +404,9 @@ fn test_cli_sync_declared_pi_inputs_index_as_session_source() {
     let db_path = db_dir.path().join("pi_input_session.db");
     let fake_home = tempdir().unwrap();
 
-    fs::write(
-        work_dir.path().join("pi.inputs.toml"),
+    write_manifest_file(
+        work_dir.path(),
+        "pi.inputs.toml",
         format!(
             r#"version = 1
 
@@ -401,16 +422,31 @@ include = ["**/*.jsonl"]
 [inputs.decode]
 format = "jsonl"
 
+[inputs.record]
+selector = "$"
+include_when = [
+  {{ selector = "$.type", op = "eq", value = "message" }},
+  {{ selector = "$.message.role", op = "in", value = ["user", "assistant"] }},
+]
+
 [inputs.map]
-role = "$.role"
+role = "$.message.role"
+uuid = "$.id"
+timestamp = "$.timestamp"
 
 [inputs.content]
-selector = "$.content"
+selector = "$.message.content"
+string = "$"
+blocks = "$.message.content[*]"
+block_text = "$.text"
+content_type = "$.type"
+include_when = [
+  {{ selector = "$.type", op = "eq", value = "text" }},
+]
 "#,
             fixture.display()
         ),
-    )
-    .unwrap();
+    );
 
     Command::cargo_bin("backscroll")
         .unwrap()
@@ -418,6 +454,7 @@ selector = "$.content"
         .arg("sync")
         .arg("--no-plans")
         .env("BACKSCROLL_DATABASE_PATH", db_path.to_str().unwrap())
+        .env("BACKSCROLL_CONFIG_DIR", work_dir.path().to_str().unwrap())
         .env("HOME", fake_home.path().to_str().unwrap())
         .env_remove("BACKSCROLL_SESSION_DIR")
         .env_remove("BACKSCROLL_SESSION_DIRS")
@@ -433,6 +470,7 @@ selector = "$.content"
         .arg("sessions")
         .arg("--all-projects")
         .env("BACKSCROLL_DATABASE_PATH", db_path.to_str().unwrap())
+        .env("BACKSCROLL_CONFIG_DIR", work_dir.path().to_str().unwrap())
         .env("HOME", fake_home.path().to_str().unwrap())
         .env_remove("BACKSCROLL_SESSION_DIR")
         .env_remove("BACKSCROLL_SESSION_DIRS")
@@ -447,6 +485,14 @@ fn test_cli_claude_fixture_manifest_excludes_subagents_and_indexes_session_sourc
     let db_dir = tempdir().unwrap();
     let db_path = db_dir.path().join("claude_fixture_manifest.db");
     let fake_home = tempdir().unwrap();
+    let config_dir = tempdir().unwrap();
+    let manifest = fs::read_to_string(work_dir.join("claude.inputs.toml"))
+        .unwrap()
+        .replace(
+            "roots = [\"projects\"]",
+            &format!("roots = [\"{}\"]", work_dir.join("projects").display()),
+        );
+    write_manifest_file(config_dir.path(), "claude.inputs.toml", manifest);
 
     Command::cargo_bin("backscroll")
         .unwrap()
@@ -454,6 +500,7 @@ fn test_cli_claude_fixture_manifest_excludes_subagents_and_indexes_session_sourc
         .arg("sync")
         .arg("--no-plans")
         .env("BACKSCROLL_DATABASE_PATH", db_path.to_str().unwrap())
+        .env("BACKSCROLL_CONFIG_DIR", config_dir.path().to_str().unwrap())
         .env("HOME", fake_home.path().to_str().unwrap())
         .env_remove("BACKSCROLL_SESSION_DIR")
         .env_remove("BACKSCROLL_SESSION_DIRS")
@@ -469,6 +516,7 @@ fn test_cli_claude_fixture_manifest_excludes_subagents_and_indexes_session_sourc
         .arg("sessions")
         .arg("--all-projects")
         .env("BACKSCROLL_DATABASE_PATH", db_path.to_str().unwrap())
+        .env("BACKSCROLL_CONFIG_DIR", config_dir.path().to_str().unwrap())
         .env("HOME", fake_home.path().to_str().unwrap())
         .env_remove("BACKSCROLL_SESSION_DIR")
         .env_remove("BACKSCROLL_SESSION_DIRS")
@@ -485,6 +533,7 @@ fn test_cli_claude_fixture_manifest_excludes_subagents_and_indexes_session_sourc
         .arg("sessions")
         .arg("--all-projects")
         .env("BACKSCROLL_DATABASE_PATH", db_path.to_str().unwrap())
+        .env("BACKSCROLL_CONFIG_DIR", config_dir.path().to_str().unwrap())
         .env("HOME", fake_home.path().to_str().unwrap())
         .env_remove("BACKSCROLL_SESSION_DIR")
         .env_remove("BACKSCROLL_SESSION_DIRS")
@@ -499,6 +548,14 @@ fn test_cli_pi_fixture_manifest_excludes_think_and_indexes_session_source() {
     let db_dir = tempdir().unwrap();
     let db_path = db_dir.path().join("pi_fixture_manifest.db");
     let fake_home = tempdir().unwrap();
+    let config_dir = tempdir().unwrap();
+    let manifest = fs::read_to_string(work_dir.join("pi.inputs.toml"))
+        .unwrap()
+        .replace(
+            "roots = [\".\"]",
+            &format!("roots = [\"{}\"]", work_dir.display()),
+        );
+    write_manifest_file(config_dir.path(), "pi.inputs.toml", manifest);
 
     Command::cargo_bin("backscroll")
         .unwrap()
@@ -506,6 +563,7 @@ fn test_cli_pi_fixture_manifest_excludes_think_and_indexes_session_source() {
         .arg("sync")
         .arg("--no-plans")
         .env("BACKSCROLL_DATABASE_PATH", db_path.to_str().unwrap())
+        .env("BACKSCROLL_CONFIG_DIR", config_dir.path().to_str().unwrap())
         .env("HOME", fake_home.path().to_str().unwrap())
         .env_remove("BACKSCROLL_SESSION_DIR")
         .env_remove("BACKSCROLL_SESSION_DIRS")
@@ -521,6 +579,7 @@ fn test_cli_pi_fixture_manifest_excludes_think_and_indexes_session_source() {
         .arg("sessions")
         .arg("--all-projects")
         .env("BACKSCROLL_DATABASE_PATH", db_path.to_str().unwrap())
+        .env("BACKSCROLL_CONFIG_DIR", config_dir.path().to_str().unwrap())
         .env("HOME", fake_home.path().to_str().unwrap())
         .env_remove("BACKSCROLL_SESSION_DIR")
         .env_remove("BACKSCROLL_SESSION_DIRS")
@@ -537,6 +596,7 @@ fn test_cli_pi_fixture_manifest_excludes_think_and_indexes_session_source() {
         .arg("sessions")
         .arg("--all-projects")
         .env("BACKSCROLL_DATABASE_PATH", db_path.to_str().unwrap())
+        .env("BACKSCROLL_CONFIG_DIR", config_dir.path().to_str().unwrap())
         .env("HOME", fake_home.path().to_str().unwrap())
         .env_remove("BACKSCROLL_SESSION_DIR")
         .env_remove("BACKSCROLL_SESSION_DIRS")
@@ -565,9 +625,9 @@ fn test_cli_sync_distinct_input_manifests_indexes_all_sessions() {
     )
     .unwrap();
 
-    fs::create_dir(work_dir.path().join("backscroll.inputs.d")).unwrap();
-    fs::write(
-        work_dir.path().join("backscroll.inputs.d/01-claude.toml"),
+    write_manifest_file(
+        work_dir.path(),
+        "01-claude.inputs.toml",
         format!(
             r#"version = 1
 
@@ -592,10 +652,10 @@ selector = "$.message.content"
 "#,
             claude_dir.path().display()
         ),
-    )
-    .unwrap();
-    fs::write(
-        work_dir.path().join("backscroll.inputs.d/02-pi.toml"),
+    );
+    write_manifest_file(
+        work_dir.path(),
+        "02-pi.inputs.toml",
         format!(
             r#"version = 1
 
@@ -619,8 +679,7 @@ selector = "$.content"
 "#,
             pi_dir.path().display()
         ),
-    )
-    .unwrap();
+    );
 
     Command::cargo_bin("backscroll")
         .unwrap()
@@ -628,6 +687,7 @@ selector = "$.content"
         .arg("sync")
         .arg("--no-plans")
         .env("BACKSCROLL_DATABASE_PATH", db_path.to_str().unwrap())
+        .env("BACKSCROLL_CONFIG_DIR", work_dir.path().to_str().unwrap())
         .env("HOME", fake_home.path().to_str().unwrap())
         .env_remove("BACKSCROLL_SESSION_DIR")
         .env_remove("BACKSCROLL_SESSION_DIRS")
@@ -647,6 +707,7 @@ selector = "$.content"
             .arg("sessions")
             .arg("--all-projects")
             .env("BACKSCROLL_DATABASE_PATH", db_path.to_str().unwrap())
+            .env("BACKSCROLL_CONFIG_DIR", work_dir.path().to_str().unwrap())
             .env("HOME", fake_home.path().to_str().unwrap())
             .env_remove("BACKSCROLL_SESSION_DIR")
             .env_remove("BACKSCROLL_SESSION_DIRS")
@@ -758,11 +819,11 @@ fn test_cli_sync_invalid_input_manifest_fails_cleanly() {
     let db_path = db_dir.path().join("invalid_manifest.db");
     let fake_home = tempdir().unwrap();
 
-    fs::write(
-        work_dir.path().join("backscroll.inputs.toml"),
-        "[[inputs]\n",
-    )
-    .unwrap();
+    write_manifest_file(
+        work_dir.path(),
+        "broken.inputs.toml",
+        "[[inputs]\n".to_string(),
+    );
 
     Command::cargo_bin("backscroll")
         .unwrap()
@@ -770,6 +831,7 @@ fn test_cli_sync_invalid_input_manifest_fails_cleanly() {
         .arg("sync")
         .arg("--no-plans")
         .env("BACKSCROLL_DATABASE_PATH", db_path.to_str().unwrap())
+        .env("BACKSCROLL_CONFIG_DIR", work_dir.path().to_str().unwrap())
         .env("HOME", fake_home.path().to_str().unwrap())
         .env_remove("BACKSCROLL_SESSION_DIR")
         .env_remove("BACKSCROLL_SESSION_DIRS")
@@ -787,7 +849,11 @@ fn test_cli_autosync_and_read_invalid_input_manifest_fail_fast() {
     let fake_home = tempdir().unwrap();
     let read_file = data_dir.path().join("read.jsonl");
 
-    fs::write(work_dir.path().join("broken.inputs.toml"), "[[inputs]\n").unwrap();
+    write_manifest_file(
+        work_dir.path(),
+        "broken.inputs.toml",
+        "[[inputs]\n".to_string(),
+    );
     fs::write(&read_file, r#"{"role":"assistant","content":"visible"}"#).unwrap();
 
     Command::cargo_bin("backscroll")
@@ -797,6 +863,7 @@ fn test_cli_autosync_and_read_invalid_input_manifest_fail_fast() {
         .arg("visible")
         .arg("--all-projects")
         .env("BACKSCROLL_DATABASE_PATH", db_path.to_str().unwrap())
+        .env("BACKSCROLL_CONFIG_DIR", work_dir.path().to_str().unwrap())
         .env("HOME", fake_home.path().to_str().unwrap())
         .env_remove("BACKSCROLL_SESSION_DIR")
         .env_remove("BACKSCROLL_SESSION_DIRS")
@@ -810,6 +877,7 @@ fn test_cli_autosync_and_read_invalid_input_manifest_fail_fast() {
         .arg("read")
         .arg(read_file.to_str().unwrap())
         .env("BACKSCROLL_DATABASE_PATH", db_path.to_str().unwrap())
+        .env("BACKSCROLL_CONFIG_DIR", work_dir.path().to_str().unwrap())
         .env("HOME", fake_home.path().to_str().unwrap())
         .env_remove("BACKSCROLL_SESSION_DIR")
         .env_remove("BACKSCROLL_SESSION_DIRS")
@@ -818,9 +886,10 @@ fn test_cli_autosync_and_read_invalid_input_manifest_fail_fast() {
         .stderr(predicate::str::contains("Failed to parse input manifest"));
 }
 
-fn write_cli_input_manifest(work_dir: &std::path::Path, root: &std::path::Path, extra: &str) {
-    fs::write(
-        work_dir.join("pi.inputs.toml"),
+fn write_cli_input_manifest(config_dir: &std::path::Path, root: &std::path::Path, extra: &str) {
+    write_manifest_file(
+        config_dir,
+        "pi.inputs.toml",
         format!(
             r#"version = 1
 
@@ -861,8 +930,7 @@ trim = true
 "#,
             root.display()
         ),
-    )
-    .unwrap();
+    );
 }
 
 #[test]
@@ -879,6 +947,7 @@ fn test_cli_inputs_list_and_validate_json() {
         .arg("inputs")
         .arg("validate")
         .arg("--json")
+        .env("BACKSCROLL_CONFIG_DIR", work_dir.path().to_str().unwrap())
         .env("HOME", fake_home.path().to_str().unwrap())
         .assert()
         .success()
@@ -891,6 +960,7 @@ fn test_cli_inputs_list_and_validate_json() {
         .arg("inputs")
         .arg("list")
         .arg("--json")
+        .env("BACKSCROLL_CONFIG_DIR", work_dir.path().to_str().unwrap())
         .env("HOME", fake_home.path().to_str().unwrap())
         .assert()
         .success()
@@ -905,9 +975,10 @@ fn test_cli_inputs_validate_reports_invalid_selector() {
     let fake_home = tempdir().unwrap();
     fs::write(data_dir.path().join("session.jsonl"), "{}\n").unwrap();
     write_cli_input_manifest(work_dir.path(), data_dir.path(), "");
-    let manifest = fs::read_to_string(work_dir.path().join("pi.inputs.toml")).unwrap();
+    let manifest_path = input_manifest_dir(work_dir.path()).join("pi.inputs.toml");
+    let manifest = fs::read_to_string(&manifest_path).unwrap();
     fs::write(
-        work_dir.path().join("pi.inputs.toml"),
+        &manifest_path,
         manifest.replace("role = \"$.role\"", "role = \"$[\""),
     )
     .unwrap();
@@ -917,6 +988,7 @@ fn test_cli_inputs_validate_reports_invalid_selector() {
         .current_dir(work_dir.path())
         .arg("inputs")
         .arg("validate")
+        .env("BACKSCROLL_CONFIG_DIR", work_dir.path().to_str().unwrap())
         .env("HOME", fake_home.path().to_str().unwrap())
         .assert()
         .failure()
@@ -941,6 +1013,7 @@ fn test_cli_inputs_validate_reports_invalid_regex() {
         .current_dir(work_dir.path())
         .arg("inputs")
         .arg("validate")
+        .env("BACKSCROLL_CONFIG_DIR", work_dir.path().to_str().unwrap())
         .env("HOME", fake_home.path().to_str().unwrap())
         .assert()
         .failure()
@@ -965,6 +1038,7 @@ fn test_cli_inputs_validate_reports_unknown_field() {
         .current_dir(work_dir.path())
         .arg("inputs")
         .arg("validate")
+        .env("BACKSCROLL_CONFIG_DIR", work_dir.path().to_str().unwrap())
         .env("HOME", fake_home.path().to_str().unwrap())
         .assert()
         .failure()
@@ -979,9 +1053,10 @@ fn test_cli_inputs_validate_reports_invalid_operator() {
     let fake_home = tempdir().unwrap();
     fs::write(data_dir.path().join("session.jsonl"), "{}\n").unwrap();
     write_cli_input_manifest(work_dir.path(), data_dir.path(), "");
-    let manifest = fs::read_to_string(work_dir.path().join("pi.inputs.toml")).unwrap();
+    let manifest_path = input_manifest_dir(work_dir.path()).join("pi.inputs.toml");
+    let manifest = fs::read_to_string(&manifest_path).unwrap();
     fs::write(
-        work_dir.path().join("pi.inputs.toml"),
+        &manifest_path,
         manifest.replace("op = \"in\"", "op = \"contains\""),
     )
     .unwrap();
@@ -991,6 +1066,7 @@ fn test_cli_inputs_validate_reports_invalid_operator() {
         .current_dir(work_dir.path())
         .arg("inputs")
         .arg("validate")
+        .env("BACKSCROLL_CONFIG_DIR", work_dir.path().to_str().unwrap())
         .env("HOME", fake_home.path().to_str().unwrap())
         .assert()
         .failure()
@@ -1026,6 +1102,7 @@ fn test_cli_inputs_test_dry_run_outputs_normalized_messages_without_db_write() {
         .arg(sample.to_str().unwrap())
         .arg("--json")
         .env("BACKSCROLL_DATABASE_PATH", db_path.to_str().unwrap())
+        .env("BACKSCROLL_CONFIG_DIR", work_dir.path().to_str().unwrap())
         .env("HOME", fake_home.path().to_str().unwrap())
         .assert()
         .success()
@@ -1035,6 +1112,75 @@ fn test_cli_inputs_test_dry_run_outputs_normalized_messages_without_db_write() {
         .stdout(predicate::str::contains("dry run visible"));
 
     assert!(!db_path.exists(), "inputs test must not create a SQLite DB");
+}
+
+#[test]
+fn test_cli_ignores_local_poison_manifests_for_validate_sync_autosync_and_read() {
+    let work_dir = tempdir().unwrap();
+    let config_dir = tempdir().unwrap();
+    let data_dir = tempdir().unwrap();
+    let fake_home = tempdir().unwrap();
+    let db_dir = tempdir().unwrap();
+    let sync_db = db_dir.path().join("local_poison_sync.db");
+    let autosync_db = db_dir.path().join("local_poison_autosync.db");
+    let sample = data_dir.path().join("session.jsonl");
+
+    fs::write(work_dir.path().join("poison.inputs.toml"), "[[inputs]\n").unwrap();
+    fs::create_dir(work_dir.path().join("backscroll.inputs.d")).unwrap();
+    fs::write(work_dir.path().join("backscroll.inputs.d/poison.toml"), "[").unwrap();
+    fs::write(
+        &sample,
+        r#"{"role":"assistant","content":"global manifest survives local poison","uuid":"lp1","timestamp":"100"}"#,
+    )
+    .unwrap();
+    write_pi_input_manifest(config_dir.path(), data_dir.path());
+
+    Command::cargo_bin("backscroll")
+        .unwrap()
+        .current_dir(work_dir.path())
+        .arg("inputs")
+        .arg("validate")
+        .env("BACKSCROLL_CONFIG_DIR", config_dir.path().to_str().unwrap())
+        .env("HOME", fake_home.path().to_str().unwrap())
+        .assert()
+        .success();
+
+    Command::cargo_bin("backscroll")
+        .unwrap()
+        .current_dir(work_dir.path())
+        .arg("sync")
+        .env("BACKSCROLL_DATABASE_PATH", sync_db.to_str().unwrap())
+        .env("BACKSCROLL_CONFIG_DIR", config_dir.path().to_str().unwrap())
+        .env("HOME", fake_home.path().to_str().unwrap())
+        .assert()
+        .success();
+
+    Command::cargo_bin("backscroll")
+        .unwrap()
+        .current_dir(work_dir.path())
+        .arg("search")
+        .arg("survives")
+        .arg("--all-projects")
+        .env("BACKSCROLL_DATABASE_PATH", autosync_db.to_str().unwrap())
+        .env("BACKSCROLL_CONFIG_DIR", config_dir.path().to_str().unwrap())
+        .env("HOME", fake_home.path().to_str().unwrap())
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("local poison"));
+
+    Command::cargo_bin("backscroll")
+        .unwrap()
+        .current_dir(work_dir.path())
+        .arg("read")
+        .arg(sample.to_str().unwrap())
+        .env("BACKSCROLL_DATABASE_PATH", sync_db.to_str().unwrap())
+        .env("BACKSCROLL_CONFIG_DIR", config_dir.path().to_str().unwrap())
+        .env("HOME", fake_home.path().to_str().unwrap())
+        .assert()
+        .success()
+        .stdout(predicate::str::contains(
+            "global manifest survives local poison",
+        ));
 }
 
 #[test]
@@ -1058,6 +1204,10 @@ fn test_cli_sync_skips_invalid_session_file_and_indexes_valid_neighbor() {
         .arg("sync")
         .arg("--no-plans")
         .env("BACKSCROLL_DATABASE_PATH", db_path.to_str().unwrap())
+        .env(
+            "BACKSCROLL_CONFIG_DIR",
+            session_dir.path().to_str().unwrap(),
+        )
         .env("HOME", fake_home.path().to_str().unwrap())
         .assert()
         .success();
@@ -1070,6 +1220,10 @@ fn test_cli_sync_skips_invalid_session_file_and_indexes_valid_neighbor() {
         .arg("sessions")
         .arg("--all-projects")
         .env("BACKSCROLL_DATABASE_PATH", db_path.to_str().unwrap())
+        .env(
+            "BACKSCROLL_CONFIG_DIR",
+            session_dir.path().to_str().unwrap(),
+        )
         .env(
             "BACKSCROLL_SESSION_DIR",
             session_dir.path().to_str().unwrap(),
@@ -1104,6 +1258,10 @@ fn test_search_source_flag_cli() {
         .arg("--no-plans")
         .env("BACKSCROLL_DATABASE_PATH", db_path.to_str().unwrap())
         .env(
+            "BACKSCROLL_CONFIG_DIR",
+            session_dir.path().to_str().unwrap(),
+        )
+        .env(
             "BACKSCROLL_SESSION_DIR",
             session_dir.path().to_str().unwrap(),
         )
@@ -1120,6 +1278,10 @@ fn test_search_source_flag_cli() {
         .arg("sessions")
         .arg("--all-projects")
         .env("BACKSCROLL_DATABASE_PATH", db_path.to_str().unwrap())
+        .env(
+            "BACKSCROLL_CONFIG_DIR",
+            session_dir.path().to_str().unwrap(),
+        )
         .env(
             "BACKSCROLL_SESSION_DIR",
             session_dir.path().to_str().unwrap(),
@@ -1138,6 +1300,10 @@ fn test_search_source_flag_cli() {
         .arg("plans")
         .arg("--all-projects")
         .env("BACKSCROLL_DATABASE_PATH", db_path.to_str().unwrap())
+        .env(
+            "BACKSCROLL_CONFIG_DIR",
+            session_dir.path().to_str().unwrap(),
+        )
         .env(
             "BACKSCROLL_SESSION_DIR",
             session_dir.path().to_str().unwrap(),
@@ -1158,8 +1324,9 @@ fn test_cli_sync_indexes_plan_from_declarative_markdown_sections_input() {
         "# Roadmap\n\nIntro\n\n## Declarative Plan Section\n\nunique-plan-input-sentinel",
     )
     .unwrap();
-    fs::write(
-        work_dir.path().join("plans.inputs.toml"),
+    write_manifest_file(
+        work_dir.path(),
+        "plans.inputs.toml",
         format!(
             r#"version = 1
 
@@ -1177,8 +1344,7 @@ format = "markdown_sections"
 "#,
             plans_dir.display()
         ),
-    )
-    .unwrap();
+    );
 
     let db_dir = tempdir().unwrap();
     let db_path = db_dir.path().join("declared_plan.db");
@@ -1189,6 +1355,7 @@ format = "markdown_sections"
         .current_dir(work_dir.path())
         .arg("sync")
         .env("BACKSCROLL_DATABASE_PATH", db_path.to_str().unwrap())
+        .env("BACKSCROLL_CONFIG_DIR", work_dir.path().to_str().unwrap())
         .env("HOME", fake_home.path().to_str().unwrap())
         .assert()
         .success();
@@ -1202,6 +1369,7 @@ format = "markdown_sections"
         .arg("plans")
         .arg("--all-projects")
         .env("BACKSCROLL_DATABASE_PATH", db_path.to_str().unwrap())
+        .env("BACKSCROLL_CONFIG_DIR", work_dir.path().to_str().unwrap())
         .env("HOME", fake_home.path().to_str().unwrap())
         .assert()
         .success()
@@ -1218,8 +1386,9 @@ fn test_cli_sync_indexes_external_source_from_declarative_markdown_input() {
         "# KE\n\nunique-ke-input-sentinel from declarative input",
     )
     .unwrap();
-    fs::write(
-        work_dir.path().join("ke.inputs.toml"),
+    write_manifest_file(
+        work_dir.path(),
+        "ke.inputs.toml",
         format!(
             r#"version = 1
 
@@ -1237,8 +1406,7 @@ format = "markdown"
 "#,
             docs_dir.display()
         ),
-    )
-    .unwrap();
+    );
 
     let db_dir = tempdir().unwrap();
     let db_path = db_dir.path().join("declared_ke.db");
@@ -1249,6 +1417,7 @@ format = "markdown"
         .current_dir(work_dir.path())
         .arg("sync")
         .env("BACKSCROLL_DATABASE_PATH", db_path.to_str().unwrap())
+        .env("BACKSCROLL_CONFIG_DIR", work_dir.path().to_str().unwrap())
         .env("HOME", fake_home.path().to_str().unwrap())
         .assert()
         .success();
@@ -1262,6 +1431,7 @@ format = "markdown"
         .arg("ke")
         .arg("--all-projects")
         .env("BACKSCROLL_DATABASE_PATH", db_path.to_str().unwrap())
+        .env("BACKSCROLL_CONFIG_DIR", work_dir.path().to_str().unwrap())
         .env("HOME", fake_home.path().to_str().unwrap())
         .assert()
         .success()
@@ -1373,8 +1543,9 @@ fn test_search_source_flag_cli_filters_external_source() {
         "# Decision\n\ngenericcli external source decoy",
     )
     .unwrap();
-    fs::write(
-        work_dir.path().join("docs.inputs.toml"),
+    write_manifest_file(
+        work_dir.path(),
+        "docs.inputs.toml",
         format!(
             r#"version = 1
 
@@ -1405,8 +1576,7 @@ format = "markdown"
             ke_dir.path().display(),
             decision_dir.path().display()
         ),
-    )
-    .unwrap();
+    );
 
     let output = Command::cargo_bin("backscroll")
         .unwrap()
@@ -1417,6 +1587,7 @@ format = "markdown"
         .arg("ke")
         .arg("--all-projects")
         .env("BACKSCROLL_DATABASE_PATH", db_path.to_str().unwrap())
+        .env("BACKSCROLL_CONFIG_DIR", work_dir.path().to_str().unwrap())
         .env("HOME", fake_home.path().to_str().unwrap())
         .env_remove("BACKSCROLL_SESSION_DIR")
         .env_remove("BACKSCROLL_SESSION_DIRS")
@@ -1481,6 +1652,10 @@ fn test_cli_sync_preserves_valid_content_after_noise_filter() {
         .arg("--no-plans")
         .env("BACKSCROLL_DATABASE_PATH", db_path.to_str().unwrap())
         .env(
+            "BACKSCROLL_CONFIG_DIR",
+            session_dir.path().to_str().unwrap(),
+        )
+        .env(
             "BACKSCROLL_SESSION_DIR",
             session_dir.path().to_str().unwrap(),
         )
@@ -1496,6 +1671,10 @@ fn test_cli_sync_preserves_valid_content_after_noise_filter() {
         .arg("--source")
         .arg("sessions")
         .env("BACKSCROLL_DATABASE_PATH", db_path.to_str().unwrap())
+        .env(
+            "BACKSCROLL_CONFIG_DIR",
+            session_dir.path().to_str().unwrap(),
+        )
         .env(
             "BACKSCROLL_SESSION_DIR",
             session_dir.path().to_str().unwrap(),
@@ -1711,6 +1890,7 @@ fn sync_date_fixture(session_dir: &std::path::Path, db_path: &std::path::Path) {
         .arg("sync")
         .arg("--no-plans")
         .env("BACKSCROLL_DATABASE_PATH", db_path.to_str().unwrap())
+        .env("BACKSCROLL_CONFIG_DIR", session_dir.to_str().unwrap())
         .env_remove("BACKSCROLL_SESSION_DIR")
         .env_remove("BACKSCROLL_SESSION_DIRS")
         .assert()
@@ -1871,6 +2051,7 @@ fn sync_role_fixture(session_dir: &std::path::Path, db_path: &std::path::Path) {
         .arg("sync")
         .arg("--no-plans")
         .env("BACKSCROLL_DATABASE_PATH", db_path.to_str().unwrap())
+        .env("BACKSCROLL_CONFIG_DIR", session_dir.to_str().unwrap())
         .env_remove("BACKSCROLL_SESSION_DIR")
         .env_remove("BACKSCROLL_SESSION_DIRS")
         .assert()
@@ -1989,6 +2170,7 @@ fn sync_pagination_fixture(session_dir: &std::path::Path, db_path: &std::path::P
         .arg("sync")
         .arg("--no-plans")
         .env("BACKSCROLL_DATABASE_PATH", db_path.to_str().unwrap())
+        .env("BACKSCROLL_CONFIG_DIR", session_dir.to_str().unwrap())
         .env_remove("BACKSCROLL_SESSION_DIR")
         .env_remove("BACKSCROLL_SESSION_DIRS")
         .assert()
@@ -2357,6 +2539,10 @@ fn test_porter_stemmer_search() {
         .arg("--no-plans")
         .env("BACKSCROLL_DATABASE_PATH", db_path.to_str().unwrap())
         .env(
+            "BACKSCROLL_CONFIG_DIR",
+            session_dir.path().to_str().unwrap(),
+        )
+        .env(
             "BACKSCROLL_SESSION_DIR",
             session_dir.path().to_str().unwrap(),
         )
@@ -2371,6 +2557,10 @@ fn test_porter_stemmer_search() {
         .arg("run")
         .arg("--all-projects")
         .env("BACKSCROLL_DATABASE_PATH", db_path.to_str().unwrap())
+        .env(
+            "BACKSCROLL_CONFIG_DIR",
+            session_dir.path().to_str().unwrap(),
+        )
         .env(
             "BACKSCROLL_SESSION_DIR",
             session_dir.path().to_str().unwrap(),

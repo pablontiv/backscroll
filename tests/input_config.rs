@@ -1,7 +1,51 @@
 use backscroll::core::sync::parse_input_definitions;
 use backscroll::input_config::InputConfig;
 use std::collections::HashMap;
+use std::sync::{Mutex, MutexGuard};
 use tempfile::tempdir;
+
+static ENV_LOCK: Mutex<()> = Mutex::new(());
+
+struct ConfigDirEnv {
+    _guard: MutexGuard<'static, ()>,
+    previous: Option<std::ffi::OsString>,
+}
+
+impl ConfigDirEnv {
+    fn set(path: &std::path::Path) -> Self {
+        let guard = ENV_LOCK.lock().unwrap();
+        let previous = std::env::var_os("BACKSCROLL_CONFIG_DIR");
+        unsafe {
+            std::env::set_var("BACKSCROLL_CONFIG_DIR", path);
+        }
+        Self {
+            _guard: guard,
+            previous,
+        }
+    }
+}
+
+impl Drop for ConfigDirEnv {
+    fn drop(&mut self) {
+        unsafe {
+            if let Some(previous) = &self.previous {
+                std::env::set_var("BACKSCROLL_CONFIG_DIR", previous);
+            } else {
+                std::env::remove_var("BACKSCROLL_CONFIG_DIR");
+            }
+        }
+    }
+}
+
+fn input_dir(config_dir: &std::path::Path) -> std::path::PathBuf {
+    config_dir.join("backscroll").join("inputs")
+}
+
+fn write_input_manifest(config_dir: &std::path::Path, name: &str, manifest: String) {
+    let dir = input_dir(config_dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(dir.join(name), manifest).unwrap();
+}
 
 fn toml_path(path: &std::path::Path) -> String {
     path.to_string_lossy().replace('\\', "\\\\")
@@ -47,25 +91,42 @@ drop_empty = true
 }
 
 #[test]
-fn loads_o02_manifests_from_star_inputs_and_inputs_dir() -> miette::Result<()> {
-    let dir = tempdir().unwrap();
-    let claude_root = dir.path().join("claude-root");
-    let pi_root = dir.path().join("pi-root");
+fn loads_global_inputs_from_config_dir_only() -> miette::Result<()> {
+    let config_dir = tempdir().unwrap();
+    let cwd = tempdir().unwrap();
+    let _env = ConfigDirEnv::set(config_dir.path());
+    let claude_root = config_dir.path().join("claude-root");
+    let pi_root = config_dir.path().join("pi-root");
     std::fs::create_dir_all(&claude_root).unwrap();
     std::fs::create_dir_all(&pi_root).unwrap();
-    std::fs::write(
-        dir.path().join("claude.inputs.toml"),
+    write_input_manifest(
+        config_dir.path(),
+        "01-claude.inputs.toml",
         minimal_manifest("claude", &toml_path(&claude_root)),
-    )
-    .unwrap();
-    std::fs::create_dir(dir.path().join("backscroll.inputs.d")).unwrap();
-    std::fs::write(
-        dir.path().join("backscroll.inputs.d/02-pi.toml"),
+    );
+    write_input_manifest(
+        config_dir.path(),
+        "02-pi.inputs.toml",
         minimal_manifest("pi", &toml_path(&pi_root)),
+    );
+    std::fs::write(
+        input_dir(config_dir.path()).join("03-ignored.toml"),
+        minimal_manifest("ignored", &toml_path(&pi_root)),
     )
     .unwrap();
+    std::fs::write(
+        cwd.path().join("poison.inputs.toml"),
+        "this is not valid toml",
+    )
+    .unwrap();
+    std::fs::create_dir(cwd.path().join("backscroll.inputs.d")).unwrap();
+    std::fs::write(cwd.path().join("backscroll.inputs.d/poison.toml"), "[").unwrap();
 
-    let config = InputConfig::load_from_dir(dir.path())?;
+    let old_cwd = std::env::current_dir().unwrap();
+    std::env::set_current_dir(cwd.path()).unwrap();
+    let config = InputConfig::load();
+    std::env::set_current_dir(old_cwd).unwrap();
+    let config = config?;
 
     let active = config.active_inputs();
     assert_eq!(active.len(), 2);
@@ -77,17 +138,30 @@ fn loads_o02_manifests_from_star_inputs_and_inputs_dir() -> miette::Result<()> {
 }
 
 #[test]
-fn resolves_relative_roots_against_manifest_location() -> miette::Result<()> {
-    let dir = tempdir().unwrap();
-    let root = dir.path().join("sessions");
-    std::fs::create_dir_all(&root).unwrap();
-    std::fs::write(
-        dir.path().join("claude.inputs.toml"),
-        minimal_manifest("claude", "sessions"),
-    )
-    .unwrap();
+fn missing_global_inputs_dir_returns_empty_config() -> miette::Result<()> {
+    let config_dir = tempdir().unwrap();
+    let _env = ConfigDirEnv::set(config_dir.path());
 
-    let config = InputConfig::load_from_dir(dir.path())?;
+    let config = InputConfig::load()?;
+
+    assert!(config.manifests.is_empty());
+    assert!(config.inputs.is_empty());
+    Ok(())
+}
+
+#[test]
+fn resolves_relative_roots_against_manifest_location() -> miette::Result<()> {
+    let config_dir = tempdir().unwrap();
+    let _env = ConfigDirEnv::set(config_dir.path());
+    let root = input_dir(config_dir.path()).join("sessions");
+    std::fs::create_dir_all(&root).unwrap();
+    write_input_manifest(
+        config_dir.path(),
+        "claude.inputs.toml",
+        minimal_manifest("claude", "sessions"),
+    );
+
+    let config = InputConfig::load()?;
 
     assert_eq!(
         config.active_inputs()[0].discover.roots,
@@ -98,14 +172,15 @@ fn resolves_relative_roots_against_manifest_location() -> miette::Result<()> {
 
 #[test]
 fn rejects_missing_active_discover_root_with_clear_error() {
-    let dir = tempdir().unwrap();
-    std::fs::write(
-        dir.path().join("missing-root.inputs.toml"),
+    let config_dir = tempdir().unwrap();
+    let _env = ConfigDirEnv::set(config_dir.path());
+    write_input_manifest(
+        config_dir.path(),
+        "missing-root.inputs.toml",
         minimal_manifest("claude", "missing"),
-    )
-    .unwrap();
+    );
 
-    let err = InputConfig::load_from_dir(dir.path()).expect_err("missing root must fail");
+    let err = InputConfig::load().expect_err("missing root must fail");
     let msg = err.to_string();
     assert!(msg.contains("missing-root.inputs.toml"), "{msg}");
     assert!(msg.contains("discover.roots"), "{msg}");
@@ -114,17 +189,18 @@ fn rejects_missing_active_discover_root_with_clear_error() {
 
 #[test]
 fn rejects_invalid_active_jsonpath_selector_with_clear_error() {
-    let dir = tempdir().unwrap();
-    let root = dir.path().join("sessions");
+    let config_dir = tempdir().unwrap();
+    let _env = ConfigDirEnv::set(config_dir.path());
+    let root = config_dir.path().join("sessions");
     std::fs::create_dir_all(&root).unwrap();
-    std::fs::write(
-        dir.path().join("invalid-selector.inputs.toml"),
+    write_input_manifest(
+        config_dir.path(),
+        "invalid-selector.inputs.toml",
         minimal_manifest("claude", &toml_path(&root))
             .replace("selector = \"$.message.content\"", "selector = \"$[\""),
-    )
-    .unwrap();
+    );
 
-    let err = InputConfig::load_from_dir(dir.path()).expect_err("invalid selector must fail");
+    let err = InputConfig::load().expect_err("invalid selector must fail");
     let msg = err.to_string();
     assert!(msg.contains("invalid-selector.inputs.toml"), "{msg}");
     assert!(msg.contains("content.selector"), "{msg}");
@@ -133,17 +209,18 @@ fn rejects_invalid_active_jsonpath_selector_with_clear_error() {
 
 #[test]
 fn rejects_invalid_active_discover_glob_with_clear_error() {
-    let dir = tempdir().unwrap();
-    let root = dir.path().join("sessions");
+    let config_dir = tempdir().unwrap();
+    let _env = ConfigDirEnv::set(config_dir.path());
+    let root = config_dir.path().join("sessions");
     std::fs::create_dir_all(&root).unwrap();
-    std::fs::write(
-        dir.path().join("invalid-glob.inputs.toml"),
+    write_input_manifest(
+        config_dir.path(),
+        "invalid-glob.inputs.toml",
         minimal_manifest("claude", &toml_path(&root))
             .replace("include = [\"**/*.jsonl\"]", "include = [\"[\"]"),
-    )
-    .unwrap();
+    );
 
-    let err = InputConfig::load_from_dir(dir.path()).expect_err("invalid glob must fail");
+    let err = InputConfig::load().expect_err("invalid glob must fail");
     let msg = err.to_string();
     assert!(msg.contains("invalid-glob.inputs.toml"), "{msg}");
     assert!(msg.contains("discover.include"), "{msg}");
@@ -152,21 +229,22 @@ fn rejects_invalid_active_discover_glob_with_clear_error() {
 
 #[test]
 fn rejects_invalid_active_manifest_with_clear_path_error() {
-    let dir = tempdir().unwrap();
-    std::fs::write(
-        dir.path().join("broken.inputs.toml"),
+    let config_dir = tempdir().unwrap();
+    let _env = ConfigDirEnv::set(config_dir.path());
+    write_input_manifest(
+        config_dir.path(),
+        "broken.inputs.toml",
         r#"version = 1
 
 [[inputs]]
 id = "claude"
 source = "session"
 active = true
-"#,
-    )
-    .unwrap();
+"#
+        .to_string(),
+    );
 
-    let err =
-        InputConfig::load_from_dir(dir.path()).expect_err("invalid active manifest must fail");
+    let err = InputConfig::load().expect_err("invalid active manifest must fail");
     let msg = err.to_string();
     assert!(msg.contains("broken.inputs.toml"), "{msg}");
     assert!(msg.contains("discover"), "{msg}");
@@ -204,7 +282,15 @@ fn claude_preset_indexes_fixture_through_generic_input_engine() -> miette::Resul
         assert!(manifest.contains(noise), "missing noise pattern {noise}");
     }
 
-    let input_config = InputConfig::load_from_dir(&fixture_dir)?;
+    let config_dir = tempdir().unwrap();
+    let _env = ConfigDirEnv::set(config_dir.path());
+    let manifest = manifest.replace(
+        "roots = [\"projects\"]",
+        &format!("roots = [\"{}\"]", toml_path(&fixture_dir.join("projects"))),
+    );
+    write_input_manifest(config_dir.path(), "claude.inputs.toml", manifest);
+
+    let input_config = InputConfig::load()?;
     let files = parse_input_definitions(&input_config.active_inputs(), &HashMap::new());
 
     assert_eq!(files.len(), 1);
@@ -243,9 +329,11 @@ fn claude_preset_indexes_fixture_through_generic_input_engine() -> miette::Resul
 
 #[test]
 fn backscroll_toml_does_not_contribute_canonical_inputs() -> miette::Result<()> {
-    let dir = tempdir().unwrap();
+    let config_dir = tempdir().unwrap();
+    let cwd = tempdir().unwrap();
+    let _env = ConfigDirEnv::set(config_dir.path());
     std::fs::write(
-        dir.path().join("backscroll.toml"),
+        cwd.path().join("backscroll.toml"),
         r#"database_path = "legacy.db"
 session_dirs = ["/legacy"]
 
@@ -257,7 +345,12 @@ paths = ["/legacy-input"]
     )
     .unwrap();
 
-    let config = InputConfig::load_from_dir(dir.path())?;
+    let old_cwd = std::env::current_dir().unwrap();
+    std::env::set_current_dir(cwd.path()).unwrap();
+    let config = InputConfig::load();
+    std::env::set_current_dir(old_cwd).unwrap();
+    let config = config?;
+
     assert!(config.inputs.is_empty());
     Ok(())
 }

@@ -1,3 +1,7 @@
+# Shipped Pi input preset.
+# Backscroll does not read files from this repository inputs/ directory at runtime;
+# copy this file into <config_dir>/backscroll/inputs/ (or set BACKSCROLL_CONFIG_DIR)
+# and edit as needed.
 version = 1
 
 [[inputs]]
@@ -6,8 +10,8 @@ source = "session"
 active = true
 
 [inputs.discover]
-roots = ["."]
-include = ["pi-session.jsonl"]
+roots = ["~/.pi/agent/sessions"]
+include = ["**/*.jsonl"]
 exclude = []
 follow_symlinks = false
 

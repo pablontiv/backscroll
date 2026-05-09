@@ -433,14 +433,38 @@ fn validate_predicate_selectors(
 
 impl InputConfig {
     pub fn load() -> miette::Result<Self> {
-        Self::load_from_dir(Path::new("."))
+        let config_dir = Self::global_config_dir()?;
+        let inputs_dir = config_dir.join("backscroll").join("inputs");
+        Self::load_from_inputs_dir(&inputs_dir)
     }
 
-    pub fn load_from_dir(root: &Path) -> miette::Result<Self> {
+    fn global_config_dir() -> miette::Result<PathBuf> {
+        if let Some(dir) = std::env::var_os("BACKSCROLL_CONFIG_DIR") {
+            if dir.is_empty() {
+                return Err(miette::miette!(
+                    "BACKSCROLL_CONFIG_DIR is set but empty; unset it or point it at a config directory"
+                ));
+            }
+            return Ok(PathBuf::from(dir));
+        }
+
+        dirs::config_dir().ok_or_else(|| {
+            miette::miette!(
+                "Could not determine OS config directory for input manifests; set BACKSCROLL_CONFIG_DIR to override"
+            )
+        })
+    }
+
+    #[cfg(test)]
+    pub(crate) fn load_from_inputs_dir_for_tests(inputs_dir: &Path) -> miette::Result<Self> {
+        Self::load_from_inputs_dir(inputs_dir)
+    }
+
+    fn load_from_inputs_dir(inputs_dir: &Path) -> miette::Result<Self> {
         let mut manifests = Vec::new();
         let mut inputs = Vec::new();
 
-        for path in Self::manifest_paths_from_dir(root)? {
+        for path in Self::manifest_paths_from_inputs_dir(inputs_dir)? {
             let mut manifest = Self::read_manifest(&path)?;
             Self::resolve_manifest_roots(&path, &mut manifest)?;
             Self::validate_manifest(&path, &manifest)?;
@@ -467,46 +491,45 @@ impl InputConfig {
             .collect()
     }
 
-    fn manifest_paths_from_dir(root: &Path) -> miette::Result<Vec<PathBuf>> {
-        let mut paths = Vec::new();
-
-        if root.is_dir() {
-            let mut entries = fs::read_dir(root)
-                .map_err(|err| miette::miette!("Failed to read {}: {}", root.display(), err))?
-                .collect::<std::result::Result<Vec<_>, _>>()
-                .map_err(|err| miette::miette!("Failed to read {}: {}", root.display(), err))?;
-            entries.sort_by_key(|entry| entry.path());
-            paths.extend(
-                entries
-                    .into_iter()
-                    .map(|entry| entry.path())
-                    .filter(|path| {
-                        path.is_file()
-                            && path.file_name().is_some_and(|name| {
-                                name.to_string_lossy().ends_with(".inputs.toml")
-                            })
-                    }),
-            );
+    fn manifest_paths_from_inputs_dir(inputs_dir: &Path) -> miette::Result<Vec<PathBuf>> {
+        if !inputs_dir.exists() {
+            return Ok(Vec::new());
+        }
+        if !inputs_dir.is_dir() {
+            return Err(miette::miette!(
+                "Input manifest path {} is not a directory; expected manifests in <config_dir>/backscroll/inputs/*.inputs.toml (set BACKSCROLL_CONFIG_DIR to override)",
+                inputs_dir.display()
+            ));
         }
 
-        let dir = root.join("backscroll.inputs.d");
-        if dir.is_dir() {
-            let mut entries = fs::read_dir(&dir)
-                .map_err(|err| miette::miette!("Failed to read {}: {}", dir.display(), err))?
-                .collect::<std::result::Result<Vec<_>, _>>()
-                .map_err(|err| miette::miette!("Failed to read {}: {}", dir.display(), err))?;
-            entries.sort_by_key(|entry| entry.path());
-            paths.extend(
-                entries
-                    .into_iter()
-                    .map(|entry| entry.path())
-                    .filter(|path| {
-                        path.is_file() && path.extension().is_some_and(|ext| ext == "toml")
-                    }),
-            );
-        }
+        let mut entries = fs::read_dir(inputs_dir)
+            .map_err(|err| {
+                miette::miette!(
+                    "Failed to read input manifest directory {}: {}",
+                    inputs_dir.display(),
+                    err
+                )
+            })?
+            .collect::<std::result::Result<Vec<_>, _>>()
+            .map_err(|err| {
+                miette::miette!(
+                    "Failed to read input manifest directory {}: {}",
+                    inputs_dir.display(),
+                    err
+                )
+            })?;
+        entries.sort_by_key(|entry| entry.path());
 
-        Ok(paths)
+        Ok(entries
+            .into_iter()
+            .map(|entry| entry.path())
+            .filter(|path| {
+                path.is_file()
+                    && path
+                        .file_name()
+                        .is_some_and(|name| name.to_string_lossy().ends_with(".inputs.toml"))
+            })
+            .collect())
     }
 
     fn read_manifest(path: &Path) -> miette::Result<InputManifest> {
@@ -778,7 +801,8 @@ selector = "$.content"
         )
         .into_diagnostic()?;
 
-        let error = InputConfig::load_from_dir(dir.path()).expect_err("unknown op should fail");
+        let error =
+            InputConfig::load_from_inputs_dir(dir.path()).expect_err("unknown op should fail");
         let message = error.to_string();
         assert!(message.contains("contains"), "{message}");
         assert!(message.contains("eq"), "{message}");

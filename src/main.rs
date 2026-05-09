@@ -338,7 +338,9 @@ fn print_input_list(input_config: &InputConfig, json: bool) -> Result<()> {
     }
 
     if entries.is_empty() {
-        println!("No input manifests found.");
+        println!(
+            "No input manifests found in <config_dir>/backscroll/inputs/*.inputs.toml (set BACKSCROLL_CONFIG_DIR to override)."
+        );
         return Ok(());
     }
 
@@ -1009,38 +1011,48 @@ mod tests {
     use std::fs;
     use tempfile::tempdir;
 
-    fn write_manifest(dir: &std::path::Path, root: &std::path::Path, active: bool) {
+    fn test_input_config(root: &std::path::Path, active: bool) -> InputConfig {
         if active {
             fs::create_dir_all(root).unwrap();
         }
-        fs::write(
-            dir.join("test.inputs.toml"),
-            format!(
-                r#"version = 1
-
-[[inputs]]
-id = "test"
-source = "session"
-active = {active}
-
-[inputs.discover]
-roots = ["{}"]
-include = ["**/*.jsonl"]
-exclude = ["**/subagents/**"]
-
-[inputs.decode]
-format = "jsonl"
-
-[inputs.map]
-role = "$.message.role"
-
-[inputs.content]
-selector = "$.message.content"
-"#,
-                root.display()
-            ),
-        )
-        .unwrap();
+        InputConfig {
+            manifests: Vec::new(),
+            inputs: vec![backscroll::input_config::InputDefinition {
+                id: "test".to_string(),
+                source: "session".to_string(),
+                active,
+                discover: backscroll::input_config::DiscoverConfig {
+                    roots: vec![root.to_string_lossy().into_owned()],
+                    include: vec!["**/*.jsonl".to_string()],
+                    exclude: vec!["**/subagents/**".to_string()],
+                    follow_symlinks: false,
+                },
+                decode: backscroll::input_config::DecodeConfig {
+                    format: backscroll::input_config::DecodeFormat::Jsonl,
+                    encoding: "utf-8".to_string(),
+                },
+                record: backscroll::input_config::RecordConfig::default(),
+                mapping: Some(backscroll::input_config::MapConfig {
+                    role: "$.message.role".to_string(),
+                    uuid: None,
+                    timestamp: None,
+                    session_id: None,
+                    project: None,
+                    role_aliases: std::collections::BTreeMap::new(),
+                }),
+                content: Some(backscroll::input_config::ContentConfig {
+                    selector: "$.message.content".to_string(),
+                    string: "$".to_string(),
+                    blocks: None,
+                    block_text: None,
+                    content_type: None,
+                    include_when: Vec::new(),
+                    exclude_when: Vec::new(),
+                    default_content_type: "text".to_string(),
+                }),
+                text: backscroll::input_config::TextConfig::default(),
+            }],
+        }
     }
 
     #[test]
@@ -1053,8 +1065,7 @@ selector = "$.message.content"
             r#"{"message":{"role":"user","content":"manifest sync signal"}}"#,
         )
         .unwrap();
-        write_manifest(dir.path(), &data, true);
-        let input_config = InputConfig::load_from_dir(dir.path())?;
+        let input_config = test_input_config(&data, true);
 
         let db_dir = tempdir().unwrap();
         let db_path = db_dir.path().join("sync_manifest.db");
@@ -1085,8 +1096,7 @@ selector = "$.message.content"
     fn sync_manifest_inputs_ignores_inactive_inputs() -> miette::Result<()> {
         let dir = tempdir().unwrap();
         let data = dir.path().join("inactive");
-        write_manifest(dir.path(), &data, false);
-        let input_config = InputConfig::load_from_dir(dir.path())?;
+        let input_config = test_input_config(&data, false);
 
         let db_dir = tempdir().unwrap();
         let db_path = db_dir.path().join("sync_inactive.db");
