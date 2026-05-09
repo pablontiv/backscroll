@@ -3,27 +3,10 @@ use figment::{
     providers::{Format, Toml},
 };
 use globset::Glob;
-use serde::{Deserialize, Deserializer, Serialize};
+use serde::{Deserialize, Serialize};
 use serde_json_path::JsonPath;
 use std::fs;
 use std::path::{Component, Path, PathBuf};
-
-#[derive(Deserialize)]
-#[serde(untagged)]
-enum StringOrVec {
-    String(String),
-    Vec(Vec<String>),
-}
-
-fn string_or_vec<'de, D>(deserializer: D) -> std::result::Result<Vec<String>, D::Error>
-where
-    D: Deserializer<'de>,
-{
-    match StringOrVec::deserialize(deserializer)? {
-        StringOrVec::String(s) => Ok(vec![s]),
-        StringOrVec::Vec(v) => Ok(v),
-    }
-}
 
 fn default_true() -> bool {
     true
@@ -47,91 +30,6 @@ fn default_content_type() -> String {
 
 fn default_join() -> String {
     "\n".to_string()
-}
-
-pub fn default_discover_include() -> Vec<String> {
-    vec!["**/*.{json,jsonl}".to_string()]
-}
-
-pub fn default_discover_exclude() -> Vec<String> {
-    vec!["**/subagents/**".to_string()]
-}
-
-#[derive(Debug, Serialize, Deserialize, Clone)]
-#[serde(default, deny_unknown_fields)]
-pub struct SessionInput {
-    pub source: String,
-    #[serde(default = "SessionInput::default_parser")]
-    pub parser: String,
-    #[serde(default, deserialize_with = "string_or_vec")]
-    pub paths: Vec<String>,
-    #[serde(default)]
-    pub glob: Option<String>,
-    #[serde(default)]
-    pub include_agents: bool,
-    #[serde(
-        default = "default_discover_include",
-        deserialize_with = "string_or_vec"
-    )]
-    pub include: Vec<String>,
-    #[serde(
-        default = "default_discover_exclude",
-        deserialize_with = "string_or_vec"
-    )]
-    pub exclude: Vec<String>,
-    #[serde(default)]
-    pub follow_symlinks: bool,
-    #[serde(default = "default_true")]
-    pub active: bool,
-}
-
-impl SessionInput {
-    fn default_parser() -> String {
-        "claude".to_string()
-    }
-
-    pub fn is_active(&self) -> bool {
-        self.active
-    }
-
-    pub fn parser(&self) -> &str {
-        if self.parser.is_empty() {
-            "claude"
-        } else {
-            self.parser.as_str()
-        }
-    }
-
-    pub fn discover_config(&self) -> DiscoverConfig {
-        let include = self
-            .glob
-            .as_ref()
-            .map_or_else(|| self.include.clone(), |glob| vec![glob.clone()]);
-        let exclude = self.exclude.clone();
-
-        DiscoverConfig {
-            roots: self.paths.clone(),
-            include,
-            exclude,
-            follow_symlinks: self.follow_symlinks,
-        }
-    }
-}
-
-impl Default for SessionInput {
-    fn default() -> Self {
-        Self {
-            source: "session".to_string(),
-            parser: Self::default_parser(),
-            paths: Vec::new(),
-            glob: None,
-            include_agents: false,
-            include: default_discover_include(),
-            exclude: default_discover_exclude(),
-            follow_symlinks: false,
-            active: true,
-        }
-    }
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
@@ -483,14 +381,6 @@ impl InputConfig {
             .collect()
     }
 
-    pub fn active_session_inputs(&self) -> Vec<SessionInput> {
-        self.inputs
-            .iter()
-            .filter(|input| input.active && input.source == "session")
-            .map(InputDefinition::to_legacy_session_input)
-            .collect()
-    }
-
     fn manifest_paths_from_inputs_dir(inputs_dir: &Path) -> miette::Result<Vec<PathBuf>> {
         if !inputs_dir.exists() {
             return Ok(Vec::new());
@@ -734,20 +624,6 @@ impl InputDefinition {
             &content.exclude_when,
         )?;
         Ok(())
-    }
-
-    fn to_legacy_session_input(&self) -> SessionInput {
-        SessionInput {
-            source: self.source.clone(),
-            parser: self.id.clone(),
-            paths: self.discover.roots.clone(),
-            glob: None,
-            include_agents: true,
-            include: self.discover.include.clone(),
-            exclude: self.discover.exclude.clone(),
-            follow_symlinks: self.discover.follow_symlinks,
-            active: self.active,
-        }
     }
 }
 

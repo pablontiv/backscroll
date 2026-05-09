@@ -1,7 +1,7 @@
 //! Integration test verifying the public library API surface.
 //! Exercises the parse → sync → search pipeline as a library consumer (like Kedral).
 
-use backscroll::core::sync::{filter_noise, parse_input_definitions};
+use backscroll::core::sync::parse_input_definitions;
 use backscroll::core::{ParsedFile, SearchEngine, SearchParams, SearchResult};
 use backscroll::input_config::InputConfig;
 use backscroll::storage::sqlite::Database;
@@ -130,20 +130,6 @@ string = "$"
     assert!(
         !results.is_empty(),
         "Should find results for 'authentication'"
-    );
-}
-
-#[test]
-fn test_filter_noise_exposed() {
-    // Verify filter_noise is accessible as a library function
-    let clean = filter_noise("This is clean text");
-    assert!(clean.is_some());
-
-    // Noise should be filtered
-    let noisy = filter_noise("<system-reminder>internal noise</system-reminder>");
-    assert!(
-        noisy.is_none(),
-        "system-reminder tags should be filtered as noise"
     );
 }
 
