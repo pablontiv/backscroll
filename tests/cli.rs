@@ -135,13 +135,32 @@ fn fixture_path(relative: &str) -> std::path::PathBuf {
         .join(relative)
 }
 
+fn isolated_empty_config_dir() -> &'static std::path::Path {
+    static EMPTY_CONFIG_DIR: std::sync::OnceLock<std::path::PathBuf> = std::sync::OnceLock::new();
+
+    EMPTY_CONFIG_DIR
+        .get_or_init(|| tempdir().unwrap().keep())
+        .as_path()
+}
+
+fn backscroll_cmd() -> Command {
+    let mut cmd = Command::cargo_bin("backscroll").unwrap();
+    // CLI commands load input manifests on startup. Default every test command
+    // to an isolated empty config dir so the suite never reads
+    // ~/.config/backscroll/inputs/*.inputs.toml from the developer
+    // machine; tests that need inputs override BACKSCROLL_CONFIG_DIR explicitly.
+    cmd.env("BACKSCROLL_CONFIG_DIR", isolated_empty_config_dir())
+        .env_remove("BACKSCROLL_SESSION_DIR")
+        .env_remove("BACKSCROLL_SESSION_DIRS");
+    cmd
+}
+
 #[test]
 fn test_cli_help_hides_read_command_and_search_exposes_source_path() {
     let dir = tempdir().unwrap();
     let db_path = dir.path().join("help.db");
 
-    Command::cargo_bin("backscroll")
-        .unwrap()
+    backscroll_cmd()
         .arg("--help")
         .env("BACKSCROLL_DATABASE_PATH", db_path.to_str().unwrap())
         .env("BACKSCROLL_SESSION_DIR", dir.path().to_str().unwrap())
@@ -151,8 +170,7 @@ fn test_cli_help_hides_read_command_and_search_exposes_source_path() {
         .stdout(predicate::str::contains(" read").not())
         .stdout(predicate::str::contains("Leer una sesión").not());
 
-    Command::cargo_bin("backscroll")
-        .unwrap()
+    backscroll_cmd()
         .arg("search")
         .arg("--help")
         .env("BACKSCROLL_DATABASE_PATH", db_path.to_str().unwrap())
@@ -167,7 +185,7 @@ fn test_cli_status() {
     let dir = tempdir().unwrap();
     let db_path = dir.path().join("status.db");
 
-    let mut cmd = Command::cargo_bin("backscroll").unwrap();
+    let mut cmd = backscroll_cmd();
     cmd.arg("status")
         .env("BACKSCROLL_DATABASE_PATH", db_path.to_str().unwrap())
         .env("BACKSCROLL_SESSION_DIR", dir.path().to_str().unwrap())
@@ -182,8 +200,7 @@ fn test_cli_sync_rejects_legacy_path_flag() {
     let db_dir = tempdir().unwrap();
     let db_path = db_dir.path().join("reject_path.db");
 
-    Command::cargo_bin("backscroll")
-        .unwrap()
+    backscroll_cmd()
         .arg("sync")
         .arg("--path")
         .arg(session_dir.path().to_str().unwrap())
@@ -198,8 +215,7 @@ fn test_cli_read_command_is_not_public() {
     let dir = tempdir().unwrap();
     let db_path = dir.path().join("read_not_public.db");
 
-    Command::cargo_bin("backscroll")
-        .unwrap()
+    backscroll_cmd()
         .current_dir(dir.path())
         .arg("read")
         .arg("session.jsonl")
@@ -230,8 +246,7 @@ fn test_search_source_path_filter_exact_path_cli() {
     .unwrap();
     write_claude_input_manifest(work_dir.path(), data_dir.path());
 
-    Command::cargo_bin("backscroll")
-        .unwrap()
+    backscroll_cmd()
         .current_dir(work_dir.path())
         .arg("search")
         .arg("lookup")
@@ -271,8 +286,7 @@ fn test_search_source_path_filter_glob_pattern_cli() {
     .unwrap();
     write_claude_input_manifest(work_dir.path(), data_dir.path());
 
-    Command::cargo_bin("backscroll")
-        .unwrap()
+    backscroll_cmd()
         .current_dir(work_dir.path())
         .arg("search")
         .arg("lookup")
@@ -306,8 +320,7 @@ fn test_cli_sync_skips_missing_discovery_root_and_indexes_existing_root() {
     .unwrap();
     write_claude_input_manifest_roots(work_dir.path(), &[&missing_root, data_dir.path()]);
 
-    Command::cargo_bin("backscroll")
-        .unwrap()
+    backscroll_cmd()
         .current_dir(work_dir.path())
         .arg("sync")
         .arg("--no-plans")
@@ -319,8 +332,7 @@ fn test_cli_sync_skips_missing_discovery_root_and_indexes_existing_root() {
         .assert()
         .success();
 
-    Command::cargo_bin("backscroll")
-        .unwrap()
+    backscroll_cmd()
         .current_dir(work_dir.path())
         .arg("search")
         .arg("survives")
@@ -342,8 +354,7 @@ fn test_cli_inputs_validate_allows_missing_discovery_roots() {
     let missing_root = work_dir.path().join("missing-root");
     write_claude_input_manifest(work_dir.path(), &missing_root);
 
-    Command::cargo_bin("backscroll")
-        .unwrap()
+    backscroll_cmd()
         .current_dir(work_dir.path())
         .arg("inputs")
         .arg("validate")
@@ -369,7 +380,7 @@ fn test_cli_sync_and_search() {
     write_claude_input_manifest(session_dir.path(), session_dir.path());
 
     // Sincronizar
-    let mut sync_cmd = Command::cargo_bin("backscroll").unwrap();
+    let mut sync_cmd = backscroll_cmd();
     sync_cmd
         .current_dir(session_dir.path())
         .arg("sync")
@@ -384,7 +395,7 @@ fn test_cli_sync_and_search() {
         .success();
 
     // Buscar (--all-projects porque CWD no coincide con el tempdir del test)
-    let mut search_cmd = Command::cargo_bin("backscroll").unwrap();
+    let mut search_cmd = backscroll_cmd();
     search_cmd
         .arg("search")
         .arg("buscame")
@@ -414,7 +425,7 @@ fn test_parse_real_jsonl() {
     fs::write(&session_file, real_jsonl).unwrap();
     write_claude_input_manifest(session_dir.path(), session_dir.path());
 
-    let mut sync_cmd = Command::cargo_bin("backscroll").unwrap();
+    let mut sync_cmd = backscroll_cmd();
     sync_cmd
         .current_dir(session_dir.path())
         .arg("sync")
@@ -428,7 +439,7 @@ fn test_parse_real_jsonl() {
         .assert()
         .success();
 
-    let mut search_cmd = Command::cargo_bin("backscroll").unwrap();
+    let mut search_cmd = backscroll_cmd();
     search_cmd
         .arg("search")
         .arg("mundo")
@@ -457,8 +468,7 @@ fn sync_fixture(session_dir: &std::path::Path, db_path: &std::path::Path) {
     .unwrap();
     write_claude_input_manifest(session_dir, session_dir);
 
-    Command::cargo_bin("backscroll")
-        .unwrap()
+    backscroll_cmd()
         .current_dir(session_dir)
         .arg("sync")
         .env("BACKSCROLL_DATABASE_PATH", db_path.to_str().unwrap())
@@ -476,8 +486,7 @@ fn test_resume_text_output() {
     let db_path = db_dir.path().join("resume_text.db");
     sync_fixture(session_dir.path(), &db_path);
 
-    Command::cargo_bin("backscroll")
-        .unwrap()
+    backscroll_cmd()
         .arg("resume")
         .arg("kubernetes")
         .arg("--all-projects")
@@ -499,8 +508,7 @@ fn test_resume_robot_output() {
     let db_path = db_dir.path().join("resume_robot.db");
     sync_fixture(session_dir.path(), &db_path);
 
-    let output = Command::cargo_bin("backscroll")
-        .unwrap()
+    let output = backscroll_cmd()
         .arg("resume")
         .arg("kubernetes")
         .arg("--robot")
@@ -576,8 +584,7 @@ include_when = [
         ),
     );
 
-    Command::cargo_bin("backscroll")
-        .unwrap()
+    backscroll_cmd()
         .current_dir(work_dir.path())
         .arg("sync")
         .arg("--no-plans")
@@ -589,8 +596,7 @@ include_when = [
         .assert()
         .success();
 
-    Command::cargo_bin("backscroll")
-        .unwrap()
+    backscroll_cmd()
         .current_dir(work_dir.path())
         .arg("search")
         .arg("manifest")
@@ -622,8 +628,7 @@ fn test_cli_claude_fixture_manifest_excludes_subagents_and_indexes_session_sourc
         );
     write_manifest_file(config_dir.path(), "claude.inputs.toml", manifest);
 
-    Command::cargo_bin("backscroll")
-        .unwrap()
+    backscroll_cmd()
         .current_dir(&work_dir)
         .arg("sync")
         .arg("--no-plans")
@@ -635,8 +640,7 @@ fn test_cli_claude_fixture_manifest_excludes_subagents_and_indexes_session_sourc
         .assert()
         .success();
 
-    Command::cargo_bin("backscroll")
-        .unwrap()
+    backscroll_cmd()
         .current_dir(&work_dir)
         .arg("search")
         .arg("hello")
@@ -652,8 +656,7 @@ fn test_cli_claude_fixture_manifest_excludes_subagents_and_indexes_session_sourc
         .success()
         .stdout(predicate::str::contains("world"));
 
-    Command::cargo_bin("backscroll")
-        .unwrap()
+    backscroll_cmd()
         .current_dir(&work_dir)
         .arg("search")
         .arg("subagent")
@@ -685,8 +688,7 @@ fn test_cli_pi_fixture_manifest_excludes_think_and_indexes_session_source() {
         );
     write_manifest_file(config_dir.path(), "pi.inputs.toml", manifest);
 
-    Command::cargo_bin("backscroll")
-        .unwrap()
+    backscroll_cmd()
         .current_dir(&work_dir)
         .arg("sync")
         .arg("--no-plans")
@@ -698,8 +700,7 @@ fn test_cli_pi_fixture_manifest_excludes_think_and_indexes_session_source() {
         .assert()
         .success();
 
-    Command::cargo_bin("backscroll")
-        .unwrap()
+    backscroll_cmd()
         .current_dir(&work_dir)
         .arg("search")
         .arg("fixture")
@@ -715,8 +716,7 @@ fn test_cli_pi_fixture_manifest_excludes_think_and_indexes_session_source() {
         .success()
         .stdout(predicate::str::contains("signal"));
 
-    Command::cargo_bin("backscroll")
-        .unwrap()
+    backscroll_cmd()
         .current_dir(&work_dir)
         .arg("search")
         .arg("hidden")
@@ -809,8 +809,7 @@ selector = "$.content"
         ),
     );
 
-    Command::cargo_bin("backscroll")
-        .unwrap()
+    backscroll_cmd()
         .current_dir(work_dir.path())
         .arg("sync")
         .arg("--no-plans")
@@ -826,8 +825,7 @@ selector = "$.content"
         ("alpha", "distinct manifest"),
         ("beta", "distinct manifest"),
     ] {
-        Command::cargo_bin("backscroll")
-            .unwrap()
+        backscroll_cmd()
             .current_dir(work_dir.path())
             .arg("search")
             .arg(query)
@@ -859,8 +857,7 @@ fn test_cli_sync_without_input_manifest_does_not_fallback_to_session_dir() {
     )
     .unwrap();
 
-    Command::cargo_bin("backscroll")
-        .unwrap()
+    backscroll_cmd()
         .current_dir(work_dir.path())
         .arg("sync")
         .arg("--no-plans")
@@ -873,8 +870,7 @@ fn test_cli_sync_without_input_manifest_does_not_fallback_to_session_dir() {
         .assert()
         .success();
 
-    Command::cargo_bin("backscroll")
-        .unwrap()
+    backscroll_cmd()
         .current_dir(work_dir.path())
         .arg("search")
         .arg("sentinel")
@@ -913,8 +909,7 @@ fn test_cli_sync_without_input_manifest_does_not_fallback_to_app_config_session_
     )
     .unwrap();
 
-    Command::cargo_bin("backscroll")
-        .unwrap()
+    backscroll_cmd()
         .current_dir(work_dir.path())
         .arg("sync")
         .arg("--no-plans")
@@ -925,8 +920,7 @@ fn test_cli_sync_without_input_manifest_does_not_fallback_to_app_config_session_
         .assert()
         .success();
 
-    Command::cargo_bin("backscroll")
-        .unwrap()
+    backscroll_cmd()
         .current_dir(work_dir.path())
         .arg("search")
         .arg("sentinel")
@@ -953,8 +947,7 @@ fn test_cli_sync_invalid_input_manifest_fails_cleanly() {
         "[[inputs]\n".to_string(),
     );
 
-    Command::cargo_bin("backscroll")
-        .unwrap()
+    backscroll_cmd()
         .current_dir(work_dir.path())
         .arg("sync")
         .arg("--no-plans")
@@ -981,8 +974,7 @@ fn test_cli_autosync_invalid_input_manifest_fails_fast() {
         "[[inputs]\n".to_string(),
     );
 
-    Command::cargo_bin("backscroll")
-        .unwrap()
+    backscroll_cmd()
         .current_dir(work_dir.path())
         .arg("search")
         .arg("visible")
@@ -1052,8 +1044,7 @@ fn test_cli_inputs_list_and_validate_json() {
     fs::write(data_dir.path().join("session.jsonl"), "{}\n").unwrap();
     write_cli_input_manifest(work_dir.path(), data_dir.path(), "");
 
-    Command::cargo_bin("backscroll")
-        .unwrap()
+    backscroll_cmd()
         .current_dir(work_dir.path())
         .arg("inputs")
         .arg("validate")
@@ -1065,8 +1056,7 @@ fn test_cli_inputs_list_and_validate_json() {
         .stdout(predicate::str::contains(r#""valid":true"#))
         .stdout(predicate::str::contains(r#""input_count":1"#));
 
-    Command::cargo_bin("backscroll")
-        .unwrap()
+    backscroll_cmd()
         .current_dir(work_dir.path())
         .arg("inputs")
         .arg("list")
@@ -1094,8 +1084,7 @@ fn test_cli_inputs_validate_reports_invalid_selector() {
     )
     .unwrap();
 
-    Command::cargo_bin("backscroll")
-        .unwrap()
+    backscroll_cmd()
         .current_dir(work_dir.path())
         .arg("inputs")
         .arg("validate")
@@ -1119,8 +1108,7 @@ fn test_cli_inputs_validate_reports_invalid_regex() {
         "remove = [{ kind = \"regex\", pattern = \"[\" }]",
     );
 
-    Command::cargo_bin("backscroll")
-        .unwrap()
+    backscroll_cmd()
         .current_dir(work_dir.path())
         .arg("inputs")
         .arg("validate")
@@ -1144,8 +1132,7 @@ fn test_cli_inputs_validate_reports_unknown_field() {
         "unknown_text_field = true",
     );
 
-    Command::cargo_bin("backscroll")
-        .unwrap()
+    backscroll_cmd()
         .current_dir(work_dir.path())
         .arg("inputs")
         .arg("validate")
@@ -1172,8 +1159,7 @@ fn test_cli_inputs_validate_reports_invalid_operator() {
     )
     .unwrap();
 
-    Command::cargo_bin("backscroll")
-        .unwrap()
+    backscroll_cmd()
         .current_dir(work_dir.path())
         .arg("inputs")
         .arg("validate")
@@ -1202,8 +1188,7 @@ fn test_cli_inputs_test_dry_run_outputs_normalized_messages_without_db_write() {
     .unwrap();
     write_cli_input_manifest(work_dir.path(), data_dir.path(), "");
 
-    Command::cargo_bin("backscroll")
-        .unwrap()
+    backscroll_cmd()
         .current_dir(work_dir.path())
         .arg("inputs")
         .arg("test")
@@ -1246,8 +1231,7 @@ fn test_cli_ignores_local_poison_manifests_for_validate_sync_and_autosync() {
     .unwrap();
     write_pi_input_manifest(config_dir.path(), data_dir.path());
 
-    Command::cargo_bin("backscroll")
-        .unwrap()
+    backscroll_cmd()
         .current_dir(work_dir.path())
         .arg("inputs")
         .arg("validate")
@@ -1256,8 +1240,7 @@ fn test_cli_ignores_local_poison_manifests_for_validate_sync_and_autosync() {
         .assert()
         .success();
 
-    Command::cargo_bin("backscroll")
-        .unwrap()
+    backscroll_cmd()
         .current_dir(work_dir.path())
         .arg("sync")
         .env("BACKSCROLL_DATABASE_PATH", sync_db.to_str().unwrap())
@@ -1266,8 +1249,7 @@ fn test_cli_ignores_local_poison_manifests_for_validate_sync_and_autosync() {
         .assert()
         .success();
 
-    Command::cargo_bin("backscroll")
-        .unwrap()
+    backscroll_cmd()
         .current_dir(work_dir.path())
         .arg("search")
         .arg("survives")
@@ -1295,8 +1277,7 @@ fn test_cli_sync_skips_invalid_session_file_and_indexes_valid_neighbor() {
     .unwrap();
     write_claude_input_manifest(session_dir.path(), session_dir.path());
 
-    Command::cargo_bin("backscroll")
-        .unwrap()
+    backscroll_cmd()
         .current_dir(session_dir.path())
         .arg("sync")
         .arg("--no-plans")
@@ -1309,8 +1290,7 @@ fn test_cli_sync_skips_invalid_session_file_and_indexes_valid_neighbor() {
         .assert()
         .success();
 
-    Command::cargo_bin("backscroll")
-        .unwrap()
+    backscroll_cmd()
         .arg("search")
         .arg("neighbor")
         .arg("--source")
@@ -1348,8 +1328,7 @@ fn test_search_source_flag_cli() {
     let fake_home = tempdir().unwrap();
 
     // Sync (isolated HOME to prevent real plan discovery)
-    Command::cargo_bin("backscroll")
-        .unwrap()
+    backscroll_cmd()
         .current_dir(session_dir.path())
         .arg("sync")
         .arg("--no-plans")
@@ -1367,8 +1346,7 @@ fn test_search_source_flag_cli() {
         .success();
 
     // Search with --source sessions should find it
-    Command::cargo_bin("backscroll")
-        .unwrap()
+    backscroll_cmd()
         .arg("search")
         .arg("source")
         .arg("--source")
@@ -1389,8 +1367,7 @@ fn test_search_source_flag_cli() {
         .stdout(predicate::str::contains("filter"));
 
     // Search with --source plans should NOT find session data
-    Command::cargo_bin("backscroll")
-        .unwrap()
+    backscroll_cmd()
         .arg("search")
         .arg("source")
         .arg("--source")
@@ -1447,8 +1424,7 @@ format = "markdown_sections"
     let db_path = db_dir.path().join("declared_plan.db");
     let fake_home = tempdir().unwrap();
 
-    Command::cargo_bin("backscroll")
-        .unwrap()
+    backscroll_cmd()
         .current_dir(work_dir.path())
         .arg("sync")
         .env("BACKSCROLL_DATABASE_PATH", db_path.to_str().unwrap())
@@ -1457,8 +1433,7 @@ format = "markdown_sections"
         .assert()
         .success();
 
-    Command::cargo_bin("backscroll")
-        .unwrap()
+    backscroll_cmd()
         .current_dir(work_dir.path())
         .arg("search")
         .arg("unique-plan-input-sentinel")
@@ -1509,8 +1484,7 @@ format = "markdown"
     let db_path = db_dir.path().join("declared_ke.db");
     let fake_home = tempdir().unwrap();
 
-    Command::cargo_bin("backscroll")
-        .unwrap()
+    backscroll_cmd()
         .current_dir(work_dir.path())
         .arg("sync")
         .env("BACKSCROLL_DATABASE_PATH", db_path.to_str().unwrap())
@@ -1519,8 +1493,7 @@ format = "markdown"
         .assert()
         .success();
 
-    Command::cargo_bin("backscroll")
-        .unwrap()
+    backscroll_cmd()
         .current_dir(work_dir.path())
         .arg("search")
         .arg("unique-ke-input-sentinel")
@@ -1549,8 +1522,7 @@ fn test_cli_sync_does_not_use_hardcoded_claude_plans_without_input() {
     let db_dir = tempdir().unwrap();
     let db_path = db_dir.path().join("no_implicit_plans.db");
 
-    Command::cargo_bin("backscroll")
-        .unwrap()
+    backscroll_cmd()
         .current_dir(work_dir.path())
         .arg("sync")
         .env("BACKSCROLL_DATABASE_PATH", db_path.to_str().unwrap())
@@ -1558,8 +1530,7 @@ fn test_cli_sync_does_not_use_hardcoded_claude_plans_without_input() {
         .assert()
         .success();
 
-    Command::cargo_bin("backscroll")
-        .unwrap()
+    backscroll_cmd()
         .current_dir(work_dir.path())
         .arg("search")
         .arg("unique-hardcoded-plan-sentinel")
@@ -1597,8 +1568,7 @@ ke = ["{}"]
     let db_path = db_dir.path().join("no_legacy_sources.db");
     let fake_home = tempdir().unwrap();
 
-    Command::cargo_bin("backscroll")
-        .unwrap()
+    backscroll_cmd()
         .current_dir(work_dir.path())
         .arg("sync")
         .env("BACKSCROLL_DATABASE_PATH", db_path.to_str().unwrap())
@@ -1606,8 +1576,7 @@ ke = ["{}"]
         .assert()
         .success();
 
-    Command::cargo_bin("backscroll")
-        .unwrap()
+    backscroll_cmd()
         .current_dir(work_dir.path())
         .arg("search")
         .arg("unique-legacy-source-config-sentinel")
@@ -1675,8 +1644,7 @@ format = "markdown"
         ),
     );
 
-    let output = Command::cargo_bin("backscroll")
-        .unwrap()
+    let output = backscroll_cmd()
         .current_dir(work_dir.path())
         .arg("search")
         .arg("genericcli")
@@ -1711,8 +1679,7 @@ fn test_sync_no_plans_flag() {
     .unwrap();
     write_claude_input_manifest(session_dir.path(), session_dir.path());
 
-    Command::cargo_bin("backscroll")
-        .unwrap()
+    backscroll_cmd()
         .current_dir(session_dir.path())
         .arg("sync")
         .arg("--no-plans")
@@ -1742,8 +1709,7 @@ fn test_cli_sync_preserves_valid_content_after_noise_filter() {
 
     let fake_home = tempdir().unwrap();
 
-    Command::cargo_bin("backscroll")
-        .unwrap()
+    backscroll_cmd()
         .current_dir(session_dir.path())
         .arg("sync")
         .arg("--no-plans")
@@ -1760,8 +1726,7 @@ fn test_cli_sync_preserves_valid_content_after_noise_filter() {
         .assert()
         .success();
 
-    let output = Command::cargo_bin("backscroll")
-        .unwrap()
+    let output = backscroll_cmd()
         .arg("search")
         .arg("retained")
         .arg("--all-projects")
@@ -1796,8 +1761,7 @@ fn test_resume_no_results_exit_code() {
     let db_path = db_dir.path().join("resume_noresult.db");
     sync_fixture(session_dir.path(), &db_path);
 
-    Command::cargo_bin("backscroll")
-        .unwrap()
+    backscroll_cmd()
         .arg("resume")
         .arg("xyznonexistent999")
         .arg("--all-projects")
@@ -1818,8 +1782,7 @@ fn test_topics_robot_output() {
     let db_path = db_dir.path().join("topics_robot.db");
     sync_fixture(session_dir.path(), &db_path);
 
-    let output = Command::cargo_bin("backscroll")
-        .unwrap()
+    let output = backscroll_cmd()
         .arg("topics")
         .arg("--all-projects")
         .arg("--robot")
@@ -1851,8 +1814,7 @@ fn test_topics_json_output() {
     let db_path = db_dir.path().join("topics_json.db");
     sync_fixture(session_dir.path(), &db_path);
 
-    let output = Command::cargo_bin("backscroll")
-        .unwrap()
+    let output = backscroll_cmd()
         .arg("topics")
         .arg("--all-projects")
         .arg("--json")
@@ -1890,8 +1852,7 @@ fn test_list_robot_output() {
     let db_path = db_dir.path().join("list_robot.db");
     sync_fixture(session_dir.path(), &db_path);
 
-    let output = Command::cargo_bin("backscroll")
-        .unwrap()
+    let output = backscroll_cmd()
         .arg("list")
         .arg("--all-projects")
         .arg("--robot")
@@ -1923,8 +1884,7 @@ fn test_list_json_output() {
     let db_path = db_dir.path().join("list_json.db");
     sync_fixture(session_dir.path(), &db_path);
 
-    let output = Command::cargo_bin("backscroll")
-        .unwrap()
+    let output = backscroll_cmd()
         .arg("list")
         .arg("--all-projects")
         .arg("--json")
@@ -1958,8 +1918,7 @@ fn test_status_shows_project_breakdown() {
     let db_path = db_dir.path().join("status_breakdown.db");
     sync_fixture(session_dir.path(), &db_path);
 
-    Command::cargo_bin("backscroll")
-        .unwrap()
+    backscroll_cmd()
         .arg("status")
         .env("BACKSCROLL_DATABASE_PATH", db_path.to_str().unwrap())
         .env(
@@ -1981,8 +1940,7 @@ fn sync_date_fixture(session_dir: &std::path::Path, db_path: &std::path::Path) {
     fs::write(&session_file, jsonl).unwrap();
     write_claude_input_manifest(session_dir, session_dir);
 
-    Command::cargo_bin("backscroll")
-        .unwrap()
+    backscroll_cmd()
         .current_dir(session_dir)
         .arg("sync")
         .arg("--no-plans")
@@ -2002,8 +1960,7 @@ fn test_search_date_after_only() {
     sync_date_fixture(session_dir.path(), &db_path);
 
     // --after 2026-03-01 should exclude "alpha" (Jan), include "beta" (Mar) and "gamma" (Jun)
-    let output = Command::cargo_bin("backscroll")
-        .unwrap()
+    let output = backscroll_cmd()
         .arg("search")
         .arg("message")
         .arg("--after")
@@ -2036,8 +1993,7 @@ fn test_search_date_before_only() {
     sync_date_fixture(session_dir.path(), &db_path);
 
     // --before 2026-03-01 should include "alpha" (Jan), exclude "beta" (Mar) and "gamma" (Jun)
-    let output = Command::cargo_bin("backscroll")
-        .unwrap()
+    let output = backscroll_cmd()
         .arg("search")
         .arg("message")
         .arg("--before")
@@ -2074,8 +2030,7 @@ fn test_search_date_after_and_before() {
     sync_date_fixture(session_dir.path(), &db_path);
 
     // --after 2026-02-01 --before 2026-05-01 should include only "beta" (Mar)
-    let output = Command::cargo_bin("backscroll")
-        .unwrap()
+    let output = backscroll_cmd()
         .arg("search")
         .arg("message")
         .arg("--after")
@@ -2114,8 +2069,7 @@ fn test_search_date_no_flags_returns_all() {
     sync_date_fixture(session_dir.path(), &db_path);
 
     // No date flags should return all messages (backward compat)
-    let output = Command::cargo_bin("backscroll")
-        .unwrap()
+    let output = backscroll_cmd()
         .arg("search")
         .arg("message")
         .arg("--all-projects")
@@ -2142,8 +2096,7 @@ fn sync_role_fixture(session_dir: &std::path::Path, db_path: &std::path::Path) {
     fs::write(&session_file, jsonl).unwrap();
     write_claude_input_manifest(session_dir, session_dir);
 
-    Command::cargo_bin("backscroll")
-        .unwrap()
+    backscroll_cmd()
         .current_dir(session_dir)
         .arg("sync")
         .arg("--no-plans")
@@ -2162,8 +2115,7 @@ fn test_search_role_human_only() {
     let db_path = db_dir.path().join("role_human.db");
     sync_role_fixture(session_dir.path(), &db_path);
 
-    let output = Command::cargo_bin("backscroll")
-        .unwrap()
+    let output = backscroll_cmd()
         .arg("search")
         .arg("deployment")
         .arg("--role")
@@ -2195,8 +2147,7 @@ fn test_search_role_assistant_only() {
     let db_path = db_dir.path().join("role_assistant.db");
     sync_role_fixture(session_dir.path(), &db_path);
 
-    let output = Command::cargo_bin("backscroll")
-        .unwrap()
+    let output = backscroll_cmd()
         .arg("search")
         .arg("deployment")
         .arg("--role")
@@ -2228,8 +2179,7 @@ fn test_search_role_none_returns_both() {
     let db_path = db_dir.path().join("role_none.db");
     sync_role_fixture(session_dir.path(), &db_path);
 
-    let output = Command::cargo_bin("backscroll")
-        .unwrap()
+    let output = backscroll_cmd()
         .arg("search")
         .arg("deployment")
         .arg("--all-projects")
@@ -2261,8 +2211,7 @@ fn sync_pagination_fixture(session_dir: &std::path::Path, db_path: &std::path::P
     fs::write(&session_file, lines.join("\n")).unwrap();
     write_claude_input_manifest(session_dir, session_dir);
 
-    Command::cargo_bin("backscroll")
-        .unwrap()
+    backscroll_cmd()
         .current_dir(session_dir)
         .arg("sync")
         .arg("--no-plans")
@@ -2279,8 +2228,7 @@ fn search_json_count(
     session_dir: &std::path::Path,
     extra_args: &[&str],
 ) -> usize {
-    let output = Command::cargo_bin("backscroll")
-        .unwrap()
+    let output = backscroll_cmd()
         .arg("search")
         .arg("pagtest")
         .arg("--all-projects")
@@ -2359,8 +2307,7 @@ fn test_reindex() {
     sync_fixture(session_dir.path(), &db_path);
 
     // Search should find data
-    Command::cargo_bin("backscroll")
-        .unwrap()
+    backscroll_cmd()
         .arg("search")
         .arg("kubernetes")
         .arg("--all-projects")
@@ -2374,8 +2321,7 @@ fn test_reindex() {
         .stdout(predicate::str::contains("kubernetes"));
 
     // Reindex should complete successfully
-    Command::cargo_bin("backscroll")
-        .unwrap()
+    backscroll_cmd()
         .current_dir(session_dir.path())
         .arg("reindex")
         .arg("--no-plans")
@@ -2389,8 +2335,7 @@ fn test_reindex() {
         .stdout(predicate::str::contains("Reindex complete"));
 
     // Search should still find data after reindex
-    Command::cargo_bin("backscroll")
-        .unwrap()
+    backscroll_cmd()
         .arg("search")
         .arg("kubernetes")
         .arg("--all-projects")
@@ -2413,8 +2358,7 @@ fn test_purge() {
     sync_date_fixture(session_dir.path(), &db_path);
 
     // Verify all 3 messages exist before purge
-    let output = Command::cargo_bin("backscroll")
-        .unwrap()
+    let output = backscroll_cmd()
         .arg("search")
         .arg("message")
         .arg("--all-projects")
@@ -2434,8 +2378,7 @@ fn test_purge() {
     assert_eq!(before_count, 3, "Should have 3 messages before purge");
 
     // Purge data before March (should remove alpha/Jan only)
-    Command::cargo_bin("backscroll")
-        .unwrap()
+    backscroll_cmd()
         .arg("purge")
         .arg("--before")
         .arg("2026-03-01")
@@ -2450,8 +2393,7 @@ fn test_purge() {
         .stdout(predicate::str::contains("1 items"));
 
     // Search should only find beta and gamma now
-    let output = Command::cargo_bin("backscroll")
-        .unwrap()
+    let output = backscroll_cmd()
         .arg("search")
         .arg("message")
         .arg("--all-projects")
@@ -2482,8 +2424,7 @@ fn test_validate_healthy() {
     sync_fixture(session_dir.path(), &db_path);
 
     // Validate should report healthy on a clean index
-    Command::cargo_bin("backscroll")
-        .unwrap()
+    backscroll_cmd()
         .arg("validate")
         .env("BACKSCROLL_DATABASE_PATH", db_path.to_str().unwrap())
         .env(
@@ -2507,8 +2448,7 @@ fn test_validate_orphan() {
     fs::remove_file(&session_file).unwrap();
 
     // Validate should detect the orphan and exit non-zero
-    Command::cargo_bin("backscroll")
-        .unwrap()
+    backscroll_cmd()
         .arg("validate")
         .env("BACKSCROLL_DATABASE_PATH", db_path.to_str().unwrap())
         .env(
@@ -2536,8 +2476,7 @@ fn test_search_hyphenated_query() {
     .unwrap();
     write_claude_input_manifest(session_dir.path(), session_dir.path());
 
-    Command::cargo_bin("backscroll")
-        .unwrap()
+    backscroll_cmd()
         .current_dir(session_dir.path())
         .arg("sync")
         .arg("--no-plans")
@@ -2549,8 +2488,7 @@ fn test_search_hyphenated_query() {
         .assert()
         .success();
 
-    Command::cargo_bin("backscroll")
-        .unwrap()
+    backscroll_cmd()
         .arg("search")
         .arg("anti-patron")
         .arg("--all-projects")
@@ -2581,8 +2519,7 @@ fn test_search_special_chars_no_crash() {
 
     let fake_home = tempdir().unwrap();
 
-    Command::cargo_bin("backscroll")
-        .unwrap()
+    backscroll_cmd()
         .current_dir(session_dir.path())
         .arg("sync")
         .arg("--no-plans")
@@ -2596,8 +2533,7 @@ fn test_search_special_chars_no_crash() {
         .success();
 
     for query in &["http://localhost:8080", "status (production)", "NOT a OR b"] {
-        Command::cargo_bin("backscroll")
-            .unwrap()
+        backscroll_cmd()
             .arg("search")
             .arg(query)
             .arg("--all-projects")
@@ -2629,8 +2565,7 @@ fn test_porter_stemmer_search() {
 
     let fake_home = tempdir().unwrap();
 
-    Command::cargo_bin("backscroll")
-        .unwrap()
+    backscroll_cmd()
         .current_dir(session_dir.path())
         .arg("sync")
         .arg("--no-plans")
@@ -2648,8 +2583,7 @@ fn test_porter_stemmer_search() {
         .success();
 
     // Search for "run" should find "running" thanks to Porter stemmer
-    Command::cargo_bin("backscroll")
-        .unwrap()
+    backscroll_cmd()
         .arg("search")
         .arg("run")
         .arg("--all-projects")
@@ -2683,8 +2617,7 @@ fn test_sync_optimize_flag() {
     .unwrap();
     write_claude_input_manifest(session_dir.path(), session_dir.path());
 
-    Command::cargo_bin("backscroll")
-        .unwrap()
+    backscroll_cmd()
         .current_dir(session_dir.path())
         .arg("sync")
         .arg("--no-plans")
@@ -2708,8 +2641,7 @@ fn test_insights_command() {
     let fake_home = tempdir().unwrap();
     sync_date_fixture(session_dir.path(), &db_path);
 
-    Command::cargo_bin("backscroll")
-        .unwrap()
+    backscroll_cmd()
         .arg("insights")
         .arg("--all-projects")
         .env("BACKSCROLL_DATABASE_PATH", db_path.to_str().unwrap())
@@ -2732,8 +2664,7 @@ fn test_insights_json_output() {
     let fake_home = tempdir().unwrap();
     sync_date_fixture(session_dir.path(), &db_path);
 
-    let output = Command::cargo_bin("backscroll")
-        .unwrap()
+    let output = backscroll_cmd()
         .arg("insights")
         .arg("--all-projects")
         .arg("--json")
@@ -2761,8 +2692,7 @@ fn test_export_markdown() {
     let fake_home = tempdir().unwrap();
     sync_fixture(session_dir.path(), &db_path);
 
-    Command::cargo_bin("backscroll")
-        .unwrap()
+    backscroll_cmd()
         .arg("export")
         .arg("kubernetes")
         .arg("--format")
@@ -2788,8 +2718,7 @@ fn test_export_csv() {
     let fake_home = tempdir().unwrap();
     sync_fixture(session_dir.path(), &db_path);
 
-    let output = Command::cargo_bin("backscroll")
-        .unwrap()
+    let output = backscroll_cmd()
         .arg("export")
         .arg("kubernetes")
         .arg("--format")
@@ -2819,8 +2748,7 @@ fn test_search_content_type_filter() {
     let fake_home = tempdir().unwrap();
     sync_fixture(session_dir.path(), &db_path);
 
-    Command::cargo_bin("backscroll")
-        .unwrap()
+    backscroll_cmd()
         .arg("search")
         .arg("kubernetes")
         .arg("--content-type")
@@ -2844,8 +2772,7 @@ fn test_search_content_type_allows_custom_values() {
     let fake_home = tempdir().unwrap();
     sync_fixture(session_dir.path(), &db_path);
 
-    Command::cargo_bin("backscroll")
-        .unwrap()
+    backscroll_cmd()
         .arg("search")
         .arg("test")
         .arg("--content-type")
@@ -2866,8 +2793,7 @@ fn test_lexical_only_flag() {
     let dir = tempdir().unwrap();
     let db_path = dir.path().join("test.db");
 
-    Command::cargo_bin("backscroll")
-        .unwrap()
+    backscroll_cmd()
         .env("BACKSCROLL_DATABASE_PATH", db_path.to_str().unwrap())
         .args(["search", "test", "--lexical-only"])
         .assert()
@@ -2882,8 +2808,7 @@ fn test_no_embeddings_flag() {
     std::fs::create_dir_all(&session_dir).unwrap();
     write_claude_input_manifest(dir.path(), &session_dir);
 
-    Command::cargo_bin("backscroll")
-        .unwrap()
+    backscroll_cmd()
         .current_dir(dir.path())
         .env("BACKSCROLL_DATABASE_PATH", db_path.to_str().unwrap())
         .args(["sync", "--no-embeddings"])
