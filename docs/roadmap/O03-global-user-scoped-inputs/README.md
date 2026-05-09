@@ -63,3 +63,5 @@ Completar la refactorización del motor genérico agnóstico de Backscroll para 
 | [T006](T006-remove-legacy-claude-pi-parser-apis.md) | Eliminar APIs/parsers legacy Claude/Pi |
 | [T007](T007-update-docs-skill-and-examples.md) | Actualizar docs, skill y ejemplos al modelo global |
 | [T008](T008-run-validation-and-smoke-tests.md) | Ejecutar validación completa y smoke tests |
+| [T009](T009-isolate-cli-tests-from-user-config.md) | Aislar tests CLI de la config global real del usuario |
+| [T010](T010-harden-test-command-against-user-config.md) | Endurecer `just test` contra contaminación de config global |
