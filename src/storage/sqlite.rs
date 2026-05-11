@@ -2,8 +2,8 @@ use crate::core::chunking::chunk_text;
 use crate::core::embedding::EmbeddingProvider;
 use crate::core::hybrid::{RankedItem, reciprocal_rank_fusion};
 use crate::core::{
-    InsightData, ParsedFile, ProjectBreakdown, SearchEngine, SearchResult, SessionEntry, Stats,
-    TopicEntry,
+    IndexedRecord, IndexedRecordQuery, InsightData, ParsedFile, ProjectBreakdown, SearchEngine,
+    SearchResult, SessionEntry, Stats, TopicEntry,
 };
 use miette::IntoDiagnostic;
 use rusqlite::{Connection, Result, Row, params};
@@ -1245,6 +1245,82 @@ impl SearchEngine for Database {
                     messages: row.get(2)?,
                     started: row.get(3)?,
                     ended: row.get(4)?,
+                })
+            })
+            .into_diagnostic()?;
+
+        let mut results = Vec::new();
+        for row in rows {
+            results.push(row.into_diagnostic()?);
+        }
+        Ok(results)
+    }
+
+    fn query_indexed_records(
+        &self,
+        query: &IndexedRecordQuery,
+    ) -> miette::Result<Vec<IndexedRecord>> {
+        let mut conditions = Vec::new();
+        let mut param_values: Vec<Box<dyn rusqlite::types::ToSql>> = Vec::new();
+
+        if let Some(project) = &query.project {
+            conditions.push("si.project = ?");
+            param_values.push(Box::new(project.clone()));
+        }
+        if let Some(source) = &query.source {
+            if let Some(normalized) = Database::normalized_source_filter(source) {
+                conditions.push("si.source = ?");
+                param_values.push(Box::new(normalized));
+            }
+        }
+        if let Some(source_path) = &query.source_path {
+            let (condition, value) = Database::source_path_filter(source_path);
+            conditions.push(condition);
+            param_values.push(Box::new(value));
+        }
+        if let Some(after) = &query.after {
+            conditions.push("si.timestamp IS NOT NULL AND si.timestamp >= ?");
+            param_values.push(Box::new(after.clone()));
+        }
+        if let Some(before) = &query.before {
+            conditions.push("si.timestamp IS NOT NULL AND si.timestamp < ?");
+            param_values.push(Box::new(before.clone()));
+        }
+
+        let where_clause = if conditions.is_empty() {
+            String::new()
+        } else {
+            format!(" WHERE {}", conditions.join(" AND "))
+        };
+        let limit_clause = if query.limit == 0 {
+            String::new()
+        } else {
+            format!(" LIMIT {}", query.limit)
+        };
+        let sql = format!(
+            "SELECT si.source, si.source_path, si.ordinal, si.role, si.text, si.project, \
+             si.uuid, si.timestamp, si.content_type \
+             FROM search_items si{} \
+             ORDER BY si.source_path ASC, si.ordinal ASC, si.timestamp ASC, si.id ASC{}",
+            where_clause, limit_clause
+        );
+
+        let param_refs: Vec<&dyn rusqlite::types::ToSql> =
+            param_values.iter().map(|p| p.as_ref()).collect();
+        let mut stmt = self.conn.prepare(&sql).into_diagnostic()?;
+        let rows = stmt
+            .query_map(param_refs.as_slice(), |row| {
+                Ok(IndexedRecord {
+                    schema_version: 1,
+                    source: row.get(0)?,
+                    source_path: row.get(1)?,
+                    ordinal: row.get(2)?,
+                    role: row.get(3)?,
+                    text: row.get(4)?,
+                    project: row.get(5)?,
+                    uuid: row.get(6)?,
+                    timestamp: row.get(7)?,
+                    content_type: row.get(8)?,
                 })
             })
             .into_diagnostic()?;

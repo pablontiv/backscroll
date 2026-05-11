@@ -1971,6 +1971,110 @@ fn test_list_indexed_only_requires_existing_index_without_creating_database() {
 }
 
 #[test]
+fn test_sessions_query_jsonl_streams_indexed_records_in_deterministic_order() {
+    let session_dir = tempdir().unwrap();
+    let db_dir = tempdir().unwrap();
+    let db_path = db_dir.path().join("sessions_query_order.db");
+
+    fs::write(
+        session_dir.path().join("a.jsonl"),
+        r#"{"type":"user","message":{"role":"user","content":"alpha first"},"uuid":"qa1","timestamp":"100"}
+{"type":"assistant","message":{"role":"assistant","content":"alpha second"},"uuid":"qa2","timestamp":"101"}"#,
+    )
+    .unwrap();
+    fs::write(
+        session_dir.path().join("b.jsonl"),
+        r#"{"type":"user","message":{"role":"user","content":"beta only"},"uuid":"qb1","timestamp":"102"}"#,
+    )
+    .unwrap();
+    write_claude_input_manifest(session_dir.path(), session_dir.path());
+
+    backscroll_cmd()
+        .current_dir(session_dir.path())
+        .arg("sync")
+        .env("BACKSCROLL_DATABASE_PATH", db_path.to_str().unwrap())
+        .env(
+            "BACKSCROLL_CONFIG_DIR",
+            session_dir.path().to_str().unwrap(),
+        )
+        .assert()
+        .success();
+
+    let output = backscroll_cmd()
+        .arg("sessions")
+        .arg("query")
+        .arg("--jsonl")
+        .arg("--all-projects")
+        .env("BACKSCROLL_DATABASE_PATH", db_path.to_str().unwrap())
+        .env("BACKSCROLL_CONFIG_DIR", isolated_empty_config_dir())
+        .output()
+        .unwrap();
+
+    assert!(output.status.success());
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    let records: Vec<serde_json::Value> = stdout
+        .trim()
+        .lines()
+        .map(|line| serde_json::from_str(line).unwrap())
+        .collect();
+    assert_eq!(records.len(), 3);
+    assert_eq!(records[0]["schema_version"], 1);
+    assert!(
+        records[0]["source_path"]
+            .as_str()
+            .unwrap()
+            .ends_with("a.jsonl")
+    );
+    assert_eq!(records[0]["ordinal"], 0);
+    assert_eq!(records[0]["role"], "user");
+    assert!(records[0].get("content_type").is_some());
+    assert_eq!(records[1]["ordinal"], 1);
+    assert!(
+        records[2]["source_path"]
+            .as_str()
+            .unwrap()
+            .ends_with("b.jsonl")
+    );
+}
+
+#[test]
+fn test_sessions_query_jsonl_filters_by_source_path_and_limit() {
+    let session_dir = tempdir().unwrap();
+    let db_dir = tempdir().unwrap();
+    let db_path = db_dir.path().join("sessions_query_filter.db");
+    sync_fixture(session_dir.path(), &db_path);
+
+    let output = backscroll_cmd()
+        .arg("sessions")
+        .arg("query")
+        .arg("--jsonl")
+        .arg("--all-projects")
+        .arg("--source-path")
+        .arg("*session-2.jsonl")
+        .arg("--limit")
+        .arg("1")
+        .env("BACKSCROLL_DATABASE_PATH", db_path.to_str().unwrap())
+        .env("BACKSCROLL_CONFIG_DIR", isolated_empty_config_dir())
+        .output()
+        .unwrap();
+
+    assert!(output.status.success());
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    let records: Vec<serde_json::Value> = stdout
+        .trim()
+        .lines()
+        .map(|line| serde_json::from_str(line).unwrap())
+        .collect();
+    assert_eq!(records.len(), 1);
+    assert!(
+        records[0]["source_path"]
+            .as_str()
+            .unwrap()
+            .ends_with("session-2.jsonl")
+    );
+}
+
+#[test]
 fn test_status_json_reports_populated_index_and_inputs() {
     let session_dir = tempdir().unwrap();
     let db_dir = tempdir().unwrap();

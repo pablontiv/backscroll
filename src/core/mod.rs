@@ -71,6 +71,30 @@ pub struct SessionEntry {
     pub ended: Option<String>,
 }
 
+#[derive(Debug, Default)]
+pub struct IndexedRecordQuery {
+    pub project: Option<String>,
+    pub source: Option<String>,
+    pub source_path: Option<String>,
+    pub after: Option<String>,
+    pub before: Option<String>,
+    pub limit: usize,
+}
+
+#[derive(Debug, Serialize)]
+pub struct IndexedRecord {
+    pub schema_version: u8,
+    pub source: String,
+    pub source_path: String,
+    pub ordinal: i64,
+    pub role: String,
+    pub text: String,
+    pub project: Option<String>,
+    pub uuid: Option<String>,
+    pub timestamp: Option<String>,
+    pub content_type: String,
+}
+
 #[derive(Debug, Serialize)]
 pub struct ProjectBreakdown {
     pub project: Option<String>,
@@ -175,6 +199,10 @@ pub trait SearchEngine {
         project: Option<&str>,
         limit: usize,
     ) -> miette::Result<Vec<SessionEntry>>;
+    fn query_indexed_records(
+        &self,
+        query: &IndexedRecordQuery,
+    ) -> miette::Result<Vec<IndexedRecord>>;
     fn get_project_breakdown(&self) -> miette::Result<Vec<ProjectBreakdown>>;
     fn validate(&self) -> miette::Result<ValidationReport>;
     fn optimize_fts(&self) -> miette::Result<()>;

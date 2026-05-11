@@ -21,16 +21,21 @@ backscroll search "query terms" --source-path "*/example/*.jsonl" --robot
 
 # UUID/session-id fragment in an indexed source_path
 backscroll search "query terms" --source sessions --source-path "*019e0d38-c437-7565-ba11-5dd57d516744*" --all-projects --robot
+
+# Exhaustive ordered records without a search term
+backscroll sessions query --jsonl --all-projects --source-path "*/example/*.jsonl"
 ```
 
 The search query still controls the full-text match. `--source-path` narrows those matches to rows whose indexed `search_items.source_path` equals the provided path or matches the provided `*`/SQL `LIKE` pattern.
+
+For deterministic audit/local tooling, `backscroll sessions query --jsonl` streams indexed records without full-text ranking. Records are ordered by `source_path`, `ordinal`, `timestamp`, and row id, include schema version plus project/source identifiers, role, content type, timestamp, ordinal, and bounded text, and support filters such as `--project`, `--all-projects`, `--source`, `--source-path`, `--after`, `--before`, `--limit`, and `--indexed-only`.
 
 ## How It Works
 
 - `sync` ingests files declared by active manifests under `<config_dir>/backscroll/inputs/*.inputs.toml`.
 - Each indexed message stores its original `source_path` in SQLite.
-- `search --source-path` filters over that indexed `source_path`; it does not parse arbitrary files directly.
-- Search output includes `source_path` in text, JSON, and robot formats.
+- `search --source-path` and `sessions query --source-path` filter over that indexed `source_path`; they do not parse arbitrary files directly.
+- Search output includes `source_path` in text, JSON, and robot formats; `sessions query --jsonl` emits one indexed record per line.
 
 This preserves the database as the source of truth and avoids stale direct-file reads.
 

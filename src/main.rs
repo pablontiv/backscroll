@@ -6,7 +6,8 @@ use crate::output::{OutputFormat, OutputOptions, format_results};
 use backscroll::config::Config;
 use backscroll::core::sync::{dry_run_input_definition, parse_input_definitions};
 use backscroll::core::{
-    ParsedMessage, ProjectBreakdown, SearchEngine, SearchParams, SourceCount, Stats,
+    IndexedRecordQuery, ParsedMessage, ProjectBreakdown, SearchEngine, SearchParams, SourceCount,
+    Stats,
 };
 use backscroll::input_config::InputConfig;
 use backscroll::storage::sqlite::Database;
@@ -210,6 +211,11 @@ enum Commands {
         #[arg(long, default_value_t = 20)]
         limit: usize,
     },
+    /// Query indexed session records without a search term
+    Sessions {
+        #[command(subcommand)]
+        command: SessionCommands,
+    },
     /// Tooling for generic input manifests
     Inputs {
         #[command(subcommand)]
@@ -220,6 +226,43 @@ enum Commands {
         /// Emit machine-readable JSON
         #[arg(long, default_value_t = false)]
         json: bool,
+        /// Read only the existing SQLite index without auto-syncing inputs
+        #[arg(long, default_value_t = false)]
+        indexed_only: bool,
+    },
+}
+
+#[derive(Subcommand)]
+enum SessionCommands {
+    /// Stream indexed records in deterministic order
+    Query {
+        /// Emit JSON Lines (the stable output format for this command)
+        #[arg(long, default_value_t = false)]
+        jsonl: bool,
+        /// Filter by project (default: derived from current directory)
+        #[arg(short, long)]
+        project: Option<String>,
+        /// Query all projects instead of deriving the current project
+        #[arg(long, default_value_t = false)]
+        all_projects: bool,
+        /// Filter by source/input type: session, plan, ke, decision, memory, rule, spec, backlog, or all
+        #[arg(long, default_value = "session")]
+        source: String,
+        /// Filter by indexed source path (exact path, SQL LIKE pattern, or * glob pattern)
+        #[arg(long)]
+        source_path: Option<String>,
+        /// Only records at or after this timestamp/date
+        #[arg(long)]
+        after: Option<String>,
+        /// Only records before this timestamp/date
+        #[arg(long)]
+        before: Option<String>,
+        /// Maximum records to stream (default 100, 0 = no limit)
+        #[arg(long, default_value_t = 100)]
+        limit: usize,
+        /// Maximum text characters per record (default 2000, 0 = no text)
+        #[arg(long, default_value_t = 2000)]
+        max_chars: usize,
         /// Read only the existing SQLite index without auto-syncing inputs
         #[arg(long, default_value_t = false)]
         indexed_only: bool,
@@ -501,6 +544,10 @@ fn print_status_json(
             .map_err(|err| miette::miette!("Failed to serialize status JSON: {}", err))?
     );
     Ok(())
+}
+
+fn bounded_text(text: &str, max_chars: usize) -> String {
+    text.chars().take(max_chars).collect()
 }
 
 fn print_input_list(input_config: &InputConfig, json: bool) -> Result<()> {
@@ -1126,6 +1173,69 @@ fn main() -> Result<()> {
                         println!("> {}\n", snippet);
                     }
                 }
+            }
+        }
+        Commands::Sessions {
+            command:
+                SessionCommands::Query {
+                    jsonl,
+                    project,
+                    all_projects,
+                    source,
+                    source_path,
+                    after,
+                    before,
+                    limit,
+                    max_chars,
+                    indexed_only,
+                },
+        } => {
+            if !jsonl {
+                return Err(miette::miette!(
+                    "sessions query currently supports JSON Lines output; pass --jsonl"
+                ));
+            }
+
+            let engine = if *indexed_only {
+                create_indexed_only_engine(&config)?
+            } else {
+                let engine = create_engine(&config)?;
+                sync_manifest_inputs(engine.as_ref(), &input_config)?;
+                engine
+            };
+
+            let effective_project = if *all_projects {
+                None
+            } else {
+                match project {
+                    Some(p) => Some(p.clone()),
+                    None => std::env::current_dir()
+                        .ok()
+                        .map(|p| p.to_string_lossy().replace('/', "-")),
+                }
+            };
+            let source_filter = if source == "all" {
+                None
+            } else {
+                Some(source.clone())
+            };
+            let query = IndexedRecordQuery {
+                project: effective_project,
+                source: source_filter,
+                source_path: source_path.clone(),
+                after: after.clone(),
+                before: before.clone(),
+                limit: *limit,
+            };
+
+            for mut record in engine.query_indexed_records(&query)? {
+                record.text = bounded_text(&record.text, *max_chars);
+                println!(
+                    "{}",
+                    serde_json::to_string(&record).map_err(|err| {
+                        miette::miette!("Failed to serialize indexed record: {}", err)
+                    })?
+                );
             }
         }
         Commands::Inputs { .. } => unreachable!("inputs commands are handled before DB setup"),
