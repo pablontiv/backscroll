@@ -6,6 +6,7 @@ conversation records into the stable ingestion boundary:
 
 - `ParsedFile { source, source_path, hash, project, messages }`
 - `ParsedMessage { role, text, ordinal, uuid, timestamp, content_type }`
+- Normalized session events stored with `schema_version = 1`, `source`, `source_path`, `project`, `ordinal`, `timestamp`, `event_type`, `actor`/`role`, optional tool/command/error metadata, and a bounded `snippet`.
 
 The manifest carries provider-specific details in data, while Backscroll keeps a
 provider-neutral pipeline. Runtime loaders discover manifests from the OS-aware
@@ -27,8 +28,10 @@ config directory before running `backscroll sync`. Preset installation should
 skip existing manifest files by default so user edits are not overwritten.
 
 ```text
-discover -> decode -> record -> map -> content -> text -> emit
+discover -> decode -> record -> map -> content -> text -> emit -> search_items + session_events
 ```
+
+`search_items` remains optimized for retrieval UX. `session_events` is the audit-oriented, ordered event stream. Message records currently emit `event_type = "message"`; tool calls/results, commands, errors, and provider metadata use the same versioned table without indexing unlimited raw tool output into search by default.
 
 ## File shape
 

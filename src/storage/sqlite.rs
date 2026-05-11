@@ -3,7 +3,7 @@ use crate::core::embedding::EmbeddingProvider;
 use crate::core::hybrid::{RankedItem, reciprocal_rank_fusion};
 use crate::core::{
     IndexedRecord, IndexedRecordQuery, InsightData, ParsedFile, ProjectBreakdown, SearchEngine,
-    SearchResult, SessionEntry, Stats, TopicEntry,
+    SearchResult, SessionEntry, SessionEvent, SessionEventQuery, Stats, TopicEntry,
 };
 use miette::IntoDiagnostic;
 use rusqlite::{Connection, Result, Row, params};
@@ -34,6 +34,10 @@ impl Database {
 ///
 /// If all tokens are stopwords, falls back to the unfiltered query with prefix
 /// matching to avoid returning zero results.
+fn event_snippet(text: &str) -> String {
+    text.chars().take(2_000).collect()
+}
+
 fn sanitize_fts5_query(query: &str, stopwords: &HashSet<String>) -> String {
     let tokens: Vec<&str> = query.split_whitespace().collect();
     let filtered: Vec<&str> = tokens
@@ -209,6 +213,40 @@ impl Database {
                     [],
                 )
                 .into_diagnostic()?;
+
+            self.conn
+                .execute(
+                    "CREATE TABLE IF NOT EXISTS session_events (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    schema_version INTEGER NOT NULL DEFAULT 1,
+                    source TEXT NOT NULL DEFAULT 'session',
+                    source_path TEXT NOT NULL,
+                    project TEXT,
+                    ordinal INTEGER NOT NULL,
+                    timestamp TEXT,
+                    event_type TEXT NOT NULL,
+                    actor TEXT,
+                    role TEXT,
+                    tool_name TEXT,
+                    tool_id TEXT,
+                    command TEXT,
+                    cwd TEXT,
+                    exit_code INTEGER,
+                    is_error INTEGER,
+                    snippet TEXT NOT NULL
+                )",
+                    [],
+                )
+                .into_diagnostic()?;
+
+            self.conn.execute(
+                "CREATE INDEX IF NOT EXISTS idx_session_events_order ON session_events(source_path, ordinal, timestamp, id)",
+                [],
+            ).into_diagnostic()?;
+            self.conn.execute(
+                "CREATE INDEX IF NOT EXISTS idx_session_events_project ON session_events(project)",
+                [],
+            ).into_diagnostic()?;
 
             self.conn
                 .execute("DROP TABLE IF EXISTS messages_fts", [])
@@ -688,6 +726,12 @@ impl SearchEngine for Database {
                     [&file.source_path],
                 )
                 .into_diagnostic()?;
+            self.conn
+                .execute(
+                    "DELETE FROM session_events WHERE source_path = ?",
+                    [&file.source_path],
+                )
+                .into_diagnostic()?;
 
             for msg in &file.messages {
                 self.conn
@@ -703,6 +747,24 @@ impl SearchEngine for Database {
                             msg.uuid.as_deref(),
                             msg.timestamp.as_deref(),
                             &msg.content_type,
+                        ),
+                    )
+                    .into_diagnostic()?;
+                self.conn
+                    .execute(
+                        "INSERT INTO session_events (
+                            schema_version, source, source_path, project, ordinal, timestamp,
+                            event_type, actor, role, snippet
+                        ) VALUES (1, ?, ?, ?, ?, ?, 'message', ?, ?, ?)",
+                        (
+                            &file.source,
+                            &file.source_path,
+                            file.project.as_deref(),
+                            msg.ordinal as i64,
+                            msg.timestamp.as_deref(),
+                            msg.role.as_str(),
+                            msg.role.as_str(),
+                            event_snippet(&msg.text),
                         ),
                     )
                     .into_diagnostic()?;
@@ -1332,6 +1394,90 @@ impl SearchEngine for Database {
         Ok(results)
     }
 
+    fn query_session_events(&self, query: &SessionEventQuery) -> miette::Result<Vec<SessionEvent>> {
+        let mut conditions = Vec::new();
+        let mut param_values: Vec<Box<dyn rusqlite::types::ToSql>> = Vec::new();
+
+        if let Some(project) = &query.project {
+            conditions.push("project = ?");
+            param_values.push(Box::new(project.clone()));
+        }
+        if let Some(source) = &query.source {
+            if let Some(normalized) = Database::normalized_source_filter(source) {
+                conditions.push("source = ?");
+                param_values.push(Box::new(normalized));
+            }
+        }
+        if let Some(source_path) = &query.source_path {
+            if source_path.contains('*') || source_path.contains('%') {
+                conditions.push("source_path LIKE ?");
+                param_values.push(Box::new(source_path.replace('*', "%")));
+            } else {
+                conditions.push("source_path = ?");
+                param_values.push(Box::new(source_path.clone()));
+            }
+        }
+        if let Some(after) = &query.after {
+            conditions.push("timestamp IS NOT NULL AND timestamp >= ?");
+            param_values.push(Box::new(after.clone()));
+        }
+        if let Some(before) = &query.before {
+            conditions.push("timestamp IS NOT NULL AND timestamp < ?");
+            param_values.push(Box::new(before.clone()));
+        }
+
+        let where_clause = if conditions.is_empty() {
+            String::new()
+        } else {
+            format!(" WHERE {}", conditions.join(" AND "))
+        };
+        let limit_clause = if query.limit == 0 {
+            String::new()
+        } else {
+            format!(" LIMIT {}", query.limit)
+        };
+        let sql = format!(
+            "SELECT schema_version, source, source_path, project, ordinal, timestamp, event_type,
+                    actor, role, tool_name, tool_id, command, cwd, exit_code, is_error, snippet
+             FROM session_events{}
+             ORDER BY source_path ASC, ordinal ASC, timestamp ASC, id ASC{}",
+            where_clause, limit_clause
+        );
+
+        let param_refs: Vec<&dyn rusqlite::types::ToSql> =
+            param_values.iter().map(|p| p.as_ref()).collect();
+        let mut stmt = self.conn.prepare(&sql).into_diagnostic()?;
+        let rows = stmt
+            .query_map(param_refs.as_slice(), |row| {
+                let schema_version: i64 = row.get(0)?;
+                Ok(SessionEvent {
+                    schema_version: schema_version as u8,
+                    source: row.get(1)?,
+                    source_path: row.get(2)?,
+                    project: row.get(3)?,
+                    ordinal: row.get(4)?,
+                    timestamp: row.get(5)?,
+                    event_type: row.get(6)?,
+                    actor: row.get(7)?,
+                    role: row.get(8)?,
+                    tool_name: row.get(9)?,
+                    tool_id: row.get(10)?,
+                    command: row.get(11)?,
+                    cwd: row.get(12)?,
+                    exit_code: row.get(13)?,
+                    is_error: row.get(14)?,
+                    snippet: row.get(15)?,
+                })
+            })
+            .into_diagnostic()?;
+
+        let mut results = Vec::new();
+        for row in rows {
+            results.push(row.into_diagnostic()?);
+        }
+        Ok(results)
+    }
+
     fn get_project_breakdown(&self) -> miette::Result<Vec<ProjectBreakdown>> {
         let sql = "SELECT project, COUNT(DISTINCT source_path) as sessions, COUNT(*) as messages \
                    FROM search_items GROUP BY project ORDER BY sessions DESC";
@@ -1536,7 +1682,7 @@ impl SearchEngine for Database {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::core::{ParsedMessage, SearchParams};
+    use crate::core::{ParsedMessage, SearchParams, SessionEventQuery};
 
     fn single_message_file(
         source: &str,
@@ -1905,6 +2051,68 @@ mod tests {
             )
             .into_diagnostic()?;
         assert_eq!(text, "second version");
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_session_events_store_message_and_normalized_tool_events_in_order() -> miette::Result<()>
+    {
+        let db = Database::open(":memory:")?;
+        db.setup_schema()?;
+
+        db.sync_files(vec![ParsedFile {
+            source: "session".into(),
+            source_path: "session.jsonl".into(),
+            hash: "events-hash".into(),
+            project: Some("events-project".into()),
+            messages: vec![ParsedMessage {
+                role: "user".into(),
+                text: "hello from user".into(),
+                ordinal: 0,
+                uuid: Some("msg-1".into()),
+                timestamp: Some("100".into()),
+                content_type: "text".into(),
+            }],
+        }])?;
+
+        for (event_type, ordinal, snippet) in [
+            ("tool_call", 1_i64, "Read call"),
+            ("tool_result", 2_i64, "Read result"),
+            ("command", 3_i64, "cargo test"),
+            ("error", 4_i64, "command failed"),
+        ] {
+            db.conn
+                .execute(
+                    "INSERT INTO session_events (
+                        schema_version, source, source_path, project, ordinal, timestamp,
+                        event_type, actor, role, tool_name, tool_id, command, cwd,
+                        exit_code, is_error, snippet
+                    ) VALUES (1, 'session', 'session.jsonl', 'events-project', ?, '101', ?,
+                        'assistant', 'assistant', 'Read', 'tool-1', 'cargo test', '/tmp', 1, ?, ?)",
+                    rusqlite::params![ordinal, event_type, event_type == "error", snippet],
+                )
+                .into_diagnostic()?;
+        }
+
+        let events = db.query_session_events(&SessionEventQuery {
+            source_path: Some("session.jsonl".into()),
+            ..SessionEventQuery::default()
+        })?;
+
+        let event_types: Vec<&str> = events
+            .iter()
+            .map(|event| event.event_type.as_str())
+            .collect();
+        assert_eq!(
+            event_types,
+            vec!["message", "tool_call", "tool_result", "command", "error"]
+        );
+        assert!(events.iter().all(|event| event.schema_version == 1));
+        assert_eq!(events[0].actor.as_deref(), Some("user"));
+        assert_eq!(events[0].snippet, "hello from user");
+        assert_eq!(events[4].is_error, Some(true));
+        assert_eq!(events[4].exit_code, Some(1));
 
         Ok(())
     }

@@ -95,6 +95,36 @@ pub struct IndexedRecord {
     pub content_type: String,
 }
 
+#[derive(Debug, Default)]
+pub struct SessionEventQuery {
+    pub project: Option<String>,
+    pub source: Option<String>,
+    pub source_path: Option<String>,
+    pub after: Option<String>,
+    pub before: Option<String>,
+    pub limit: usize,
+}
+
+#[derive(Debug, Serialize)]
+pub struct SessionEvent {
+    pub schema_version: u8,
+    pub source: String,
+    pub source_path: String,
+    pub project: Option<String>,
+    pub ordinal: i64,
+    pub timestamp: Option<String>,
+    pub event_type: String,
+    pub actor: Option<String>,
+    pub role: Option<String>,
+    pub tool_name: Option<String>,
+    pub tool_id: Option<String>,
+    pub command: Option<String>,
+    pub cwd: Option<String>,
+    pub exit_code: Option<i64>,
+    pub is_error: Option<bool>,
+    pub snippet: String,
+}
+
 #[derive(Debug, Serialize)]
 pub struct ProjectBreakdown {
     pub project: Option<String>,
@@ -203,6 +233,7 @@ pub trait SearchEngine {
         &self,
         query: &IndexedRecordQuery,
     ) -> miette::Result<Vec<IndexedRecord>>;
+    fn query_session_events(&self, query: &SessionEventQuery) -> miette::Result<Vec<SessionEvent>>;
     fn get_project_breakdown(&self) -> miette::Result<Vec<ProjectBreakdown>>;
     fn validate(&self) -> miette::Result<ValidationReport>;
     fn optimize_fts(&self) -> miette::Result<()>;
