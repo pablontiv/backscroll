@@ -105,7 +105,7 @@ pub struct SessionEventQuery {
     pub limit: usize,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Clone, Debug, Serialize)]
 pub struct SessionEvent {
     pub schema_version: u8,
     pub source: String,

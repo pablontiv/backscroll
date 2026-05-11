@@ -770,6 +770,36 @@ impl SearchEngine for Database {
                     .into_diagnostic()?;
             }
 
+            for event in crate::core::sync::extract_provider_session_events(&file) {
+                self.conn
+                    .execute(
+                        "INSERT INTO session_events (
+                            schema_version, source, source_path, project, ordinal, timestamp,
+                            event_type, actor, role, tool_name, tool_id, command, cwd,
+                            exit_code, is_error, snippet
+                        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                        (
+                            event.schema_version as i64,
+                            event.source.as_str(),
+                            event.source_path.as_str(),
+                            event.project.as_deref(),
+                            event.ordinal,
+                            event.timestamp.as_deref(),
+                            event.event_type.as_str(),
+                            event.actor.as_deref(),
+                            event.role.as_deref(),
+                            event.tool_name.as_deref(),
+                            event.tool_id.as_deref(),
+                            event.command.as_deref(),
+                            event.cwd.as_deref(),
+                            event.exit_code,
+                            event.is_error,
+                            event.snippet.as_str(),
+                        ),
+                    )
+                    .into_diagnostic()?;
+            }
+
             // Auto-tag session based on content heuristics
             if file.source == "session" {
                 self.conn
@@ -2113,6 +2143,90 @@ mod tests {
         assert_eq!(events[0].snippet, "hello from user");
         assert_eq!(events[4].is_error, Some(true));
         assert_eq!(events[4].exit_code, Some(1));
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_pi_fixture_preserves_tool_command_and_error_events() -> miette::Result<()> {
+        let db = Database::open(":memory:")?;
+        db.setup_schema()?;
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("tests/fixtures/pi-tool-events.jsonl");
+
+        db.sync_files(vec![ParsedFile {
+            source: "session".into(),
+            source_path: path.to_string_lossy().into_owned(),
+            hash: "pi-tool-events".into(),
+            project: Some("pi-project".into()),
+            messages: vec![ParsedMessage {
+                role: "user".into(),
+                text: "normal pi message".into(),
+                ordinal: 0,
+                uuid: Some("pi-msg-1".into()),
+                timestamp: Some("2024-02-03T04:05:06Z".into()),
+                content_type: "text".into(),
+            }],
+        }])?;
+
+        let events = db.query_session_events(&SessionEventQuery {
+            source_path: Some(path.to_string_lossy().into_owned()),
+            ..SessionEventQuery::default()
+        })?;
+        let event_types: Vec<&str> = events
+            .iter()
+            .map(|event| event.event_type.as_str())
+            .collect();
+        assert_eq!(
+            event_types,
+            vec!["message", "tool_call", "command", "tool_result", "error"]
+        );
+        assert_eq!(events[1].tool_name.as_deref(), Some("bash"));
+        assert_eq!(events[2].command.as_deref(), Some("cargo test --test cli"));
+        assert_eq!(events[4].exit_code, Some(101));
+        assert_eq!(events[4].is_error, Some(true));
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_claude_fixture_preserves_tool_command_and_error_events() -> miette::Result<()> {
+        let db = Database::open(":memory:")?;
+        db.setup_schema()?;
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("tests/fixtures/claude-tool-events.jsonl");
+
+        db.sync_files(vec![ParsedFile {
+            source: "session".into(),
+            source_path: path.to_string_lossy().into_owned(),
+            hash: "claude-tool-events".into(),
+            project: Some("claude-project".into()),
+            messages: vec![ParsedMessage {
+                role: "user".into(),
+                text: "normal claude message".into(),
+                ordinal: 0,
+                uuid: Some("claude-msg-1".into()),
+                timestamp: Some("2024-01-02T03:04:05Z".into()),
+                content_type: "text".into(),
+            }],
+        }])?;
+
+        let events = db.query_session_events(&SessionEventQuery {
+            source_path: Some(path.to_string_lossy().into_owned()),
+            ..SessionEventQuery::default()
+        })?;
+        let event_types: Vec<&str> = events
+            .iter()
+            .map(|event| event.event_type.as_str())
+            .collect();
+        assert_eq!(
+            event_types,
+            vec!["message", "tool_call", "command", "tool_result", "error"]
+        );
+        assert_eq!(events[1].tool_name.as_deref(), Some("Bash"));
+        assert_eq!(events[2].command.as_deref(), Some("cargo clippy"));
+        assert_eq!(events[4].exit_code, Some(1));
+        assert_eq!(events[4].is_error, Some(true));
 
         Ok(())
     }

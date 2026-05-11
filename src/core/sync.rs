@@ -1,5 +1,5 @@
 use crate::core::plans::split_by_headers;
-use crate::core::{ParsedFile, ParsedMessage};
+use crate::core::{ParsedFile, ParsedMessage, SessionEvent};
 use crate::input_config::{
     DecodeFormat, DiscoverConfig, InputDefinition, Predicate, PredicateOp, PredicateValue,
     RemoveKind,
@@ -138,6 +138,74 @@ fn value_to_field_string(value: &Value) -> Option<String> {
         Value::Bool(value) => Some(value.to_string()),
         Value::Null | Value::Array(_) | Value::Object(_) => None,
     }
+}
+
+fn object_field_string(value: &Value, field: &str) -> Option<String> {
+    value.get(field).and_then(value_to_field_string)
+}
+
+fn object_path_string(value: &Value, fields: &[&str]) -> Option<String> {
+    let mut current = value;
+    for field in fields {
+        current = current.get(field)?;
+    }
+    value_to_field_string(current)
+}
+
+fn object_field_i64(value: &Value, field: &str) -> Option<i64> {
+    value.get(field).and_then(|value| match value {
+        Value::Number(number) => number.as_i64(),
+        Value::String(text) => text.parse().ok(),
+        _ => None,
+    })
+}
+
+fn object_field_bool(value: &Value, field: &str) -> Option<bool> {
+    value.get(field).and_then(|value| match value {
+        Value::Bool(value) => Some(*value),
+        Value::String(text) => text.parse().ok(),
+        _ => None,
+    })
+}
+
+fn bounded_event_snippet(text: &str) -> String {
+    text.chars().take(2_000).collect()
+}
+
+fn json_snippet(value: &Value) -> String {
+    bounded_event_snippet(&value_to_field_string(value).unwrap_or_else(|| value.to_string()))
+}
+
+fn select_text_from_content(value: &Value) -> String {
+    match value {
+        Value::String(text) => bounded_event_snippet(text),
+        Value::Array(blocks) => bounded_event_snippet(
+            &blocks
+                .iter()
+                .filter_map(|block| object_field_string(block, "text"))
+                .collect::<Vec<_>>()
+                .join("\n"),
+        ),
+        _ => json_snippet(value),
+    }
+}
+
+fn select_first_present_string(value: &Value, paths: &[&[&str]]) -> Option<String> {
+    paths
+        .iter()
+        .find_map(|path| object_path_string(value, path))
+}
+
+fn select_first_present_i64(value: &Value, fields: &[&str]) -> Option<i64> {
+    fields
+        .iter()
+        .find_map(|field| object_field_i64(value, field))
+}
+
+fn select_first_present_bool(value: &Value, fields: &[&str]) -> Option<bool> {
+    fields
+        .iter()
+        .find_map(|field| object_field_bool(value, field))
 }
 
 fn select_first_string(
@@ -997,6 +1065,176 @@ pub fn dry_run_input_definition(
     }
     report.records_emitted = report.messages.len();
     Ok(report)
+}
+
+fn provider_event_base(
+    file: &ParsedFile,
+    ordinal: i64,
+    timestamp: Option<String>,
+    event_type: &str,
+) -> SessionEvent {
+    SessionEvent {
+        schema_version: 1,
+        source: file.source.clone(),
+        source_path: file.source_path.clone(),
+        project: file.project.clone(),
+        ordinal,
+        timestamp,
+        event_type: event_type.to_string(),
+        actor: None,
+        role: None,
+        tool_name: None,
+        tool_id: None,
+        command: None,
+        cwd: None,
+        exit_code: None,
+        is_error: None,
+        snippet: String::new(),
+    }
+}
+
+fn push_command_event(
+    events: &mut Vec<SessionEvent>,
+    event: &SessionEvent,
+    command: Option<String>,
+) {
+    let Some(command) = command else {
+        return;
+    };
+    let tool_name = event
+        .tool_name
+        .as_deref()
+        .unwrap_or_default()
+        .to_lowercase();
+    if !matches!(tool_name.as_str(), "bash" | "shell" | "run_command") {
+        return;
+    }
+    events.push(SessionEvent {
+        event_type: "command".to_string(),
+        command: Some(command.clone()),
+        snippet: bounded_event_snippet(&command),
+        ..event.clone()
+    });
+}
+
+fn extract_tool_call_event(
+    file: &ParsedFile,
+    line_number: usize,
+    timestamp: Option<String>,
+    role: Option<String>,
+    block: &Value,
+) -> Vec<SessionEvent> {
+    let mut event = provider_event_base(file, line_number as i64, timestamp, "tool_call");
+    event.actor = Some("assistant".to_string());
+    event.role = role;
+    event.tool_name = object_field_string(block, "name");
+    event.tool_id =
+        object_field_string(block, "id").or_else(|| object_field_string(block, "toolCallId"));
+    event.command = select_first_present_string(
+        block,
+        &[
+            &["arguments", "command"],
+            &["arguments", "cmd"],
+            &["input", "command"],
+            &["input", "cmd"],
+        ],
+    );
+    event.cwd = select_first_present_string(block, &[&["arguments", "cwd"], &["input", "cwd"]]);
+    event.snippet = event
+        .command
+        .clone()
+        .or_else(|| block.get("arguments").map(json_snippet))
+        .or_else(|| block.get("input").map(json_snippet))
+        .unwrap_or_else(|| json_snippet(block));
+
+    let mut events = vec![event.clone()];
+    push_command_event(&mut events, &event, event.command.clone());
+    events
+}
+
+fn extract_tool_result_events(
+    file: &ParsedFile,
+    line_number: usize,
+    timestamp: Option<String>,
+    role: Option<String>,
+    value: &Value,
+    content: Option<&Value>,
+) -> Vec<SessionEvent> {
+    let mut event = provider_event_base(file, line_number as i64, timestamp, "tool_result");
+    event.actor = Some("tool".to_string());
+    event.role = role;
+    event.tool_id = object_field_string(value, "toolCallId")
+        .or_else(|| object_field_string(value, "tool_use_id"));
+    event.exit_code = select_first_present_i64(value, &["exitCode", "exit_code"]);
+    event.is_error = select_first_present_bool(value, &["isError", "is_error", "error"])
+        .or(event.exit_code.map(|code| code != 0));
+    event.snippet = content.map_or_else(|| json_snippet(value), select_text_from_content);
+
+    let mut events = vec![event.clone()];
+    if event.is_error == Some(true) {
+        events.push(SessionEvent {
+            event_type: "error".to_string(),
+            snippet: event.snippet.clone(),
+            ..event
+        });
+    }
+    events
+}
+
+pub(crate) fn extract_provider_session_events(file: &ParsedFile) -> Vec<SessionEvent> {
+    if file.source != "session" {
+        return Vec::new();
+    }
+    let Ok(content) = fs::read_to_string(&file.source_path) else {
+        return Vec::new();
+    };
+
+    let mut events = Vec::new();
+    for (line_number, line) in content.lines().enumerate() {
+        let Ok(value) = serde_json::from_str::<Value>(line) else {
+            continue;
+        };
+        let timestamp = object_field_string(&value, "timestamp");
+        let message = value.get("message").unwrap_or(&value);
+        let role = object_path_string(&value, &["message", "role"])
+            .or_else(|| object_field_string(&value, "role"));
+        let content = message.get("content");
+
+        if role.as_deref() == Some("toolResult") {
+            events.extend(extract_tool_result_events(
+                file,
+                line_number,
+                timestamp.clone(),
+                role.clone(),
+                message,
+                content,
+            ));
+        }
+
+        if let Some(Value::Array(blocks)) = content {
+            for block in blocks {
+                match object_field_string(block, "type").as_deref() {
+                    Some("toolCall") | Some("tool_use") => events.extend(extract_tool_call_event(
+                        file,
+                        line_number,
+                        timestamp.clone(),
+                        role.clone(),
+                        block,
+                    )),
+                    Some("tool_result") => events.extend(extract_tool_result_events(
+                        file,
+                        line_number,
+                        timestamp.clone(),
+                        role.clone(),
+                        block,
+                        block.get("content"),
+                    )),
+                    _ => {}
+                }
+            }
+        }
+    }
+    events
 }
 
 pub(crate) fn parse_input_file_with_definition(

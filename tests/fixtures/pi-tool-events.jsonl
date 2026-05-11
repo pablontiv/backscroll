@@ -1,0 +1,3 @@
+{"type":"message","id":"pi-msg-1","timestamp":"2024-02-03T04:05:06Z","cwd":"/repo","message":{"role":"user","content":"normal pi message"}}
+{"type":"message","id":"pi-msg-2","timestamp":"2024-02-03T04:05:07Z","cwd":"/repo","message":{"role":"assistant","content":[{"type":"text","text":"I will run a command"},{"type":"toolCall","id":"pi-tool-1","name":"bash","arguments":{"command":"cargo test --test cli","cwd":"/repo"}}]}}
+{"type":"message","id":"pi-msg-3","timestamp":"2024-02-03T04:05:08Z","cwd":"/repo","message":{"role":"toolResult","toolCallId":"pi-tool-1","isError":true,"exitCode":101,"content":[{"type":"text","text":"tests failed"}]}}

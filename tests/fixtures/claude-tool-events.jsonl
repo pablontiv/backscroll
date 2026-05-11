@@ -1,0 +1,3 @@
+{"uuid":"claude-msg-1","timestamp":"2024-01-02T03:04:05Z","sessionId":"claude-session-1","type":"user","message":{"role":"user","content":"normal claude message"}}
+{"uuid":"claude-msg-2","timestamp":"2024-01-02T03:04:06Z","sessionId":"claude-session-1","type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"I will call Bash"},{"type":"tool_use","id":"claude-tool-1","name":"Bash","input":{"command":"cargo clippy","cwd":"/repo"}}]}}
+{"uuid":"claude-msg-3","timestamp":"2024-01-02T03:04:07Z","sessionId":"claude-session-1","type":"user","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"claude-tool-1","is_error":true,"content":"clippy failed","exit_code":1}]}}
