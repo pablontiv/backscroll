@@ -1,4 +1,5 @@
 ---
+estado: Completed
 tipo: outcome
 ---
 # Audit-grade session event query API

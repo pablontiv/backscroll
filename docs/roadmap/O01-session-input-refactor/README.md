@@ -1,5 +1,5 @@
 ---
-estado: Pending
+estado: Completed
 tipo: outcome
 ---
 # O01: Refactor de parser de sesiones para inputs declarativos

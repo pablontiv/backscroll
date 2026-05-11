@@ -1,5 +1,5 @@
 ---
-estado: Pending
+estado: Completed
 tipo: outcome
 ---
 # O03: Global user-scoped inputs
