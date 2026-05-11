@@ -52,7 +52,7 @@ serde_json_path = "0.7.2"
 toml = { version = "0.8", features = ["parse"] }
 
 [dev-dependencies]
-assert_cmd = "2.1.2"
+assert_cmd = "2.2.2"
 insta = { version = "1.46.3", features = ["yaml", "json"] }
 predicates = "3.1.4"
 tempfile = "3.26.0"
