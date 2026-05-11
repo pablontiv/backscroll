@@ -5,7 +5,9 @@ mod output;
 use crate::output::{OutputFormat, OutputOptions, format_results};
 use backscroll::config::Config;
 use backscroll::core::sync::{dry_run_input_definition, parse_input_definitions};
-use backscroll::core::{ParsedMessage, SearchEngine, SearchParams};
+use backscroll::core::{
+    ParsedMessage, ProjectBreakdown, SearchEngine, SearchParams, SourceCount, Stats,
+};
 use backscroll::input_config::InputConfig;
 use backscroll::storage::sqlite::Database;
 use clap::{Parser, Subcommand};
@@ -214,7 +216,14 @@ enum Commands {
         command: InputCommands,
     },
     /// Mostrar estado del índice
-    Status,
+    Status {
+        /// Emit machine-readable JSON
+        #[arg(long, default_value_t = false)]
+        json: bool,
+        /// Read only the existing SQLite index without auto-syncing inputs
+        #[arg(long, default_value_t = false)]
+        indexed_only: bool,
+    },
 }
 
 #[derive(Subcommand)]
@@ -303,6 +312,48 @@ struct InputListOutput {
 }
 
 #[derive(Serialize)]
+struct StatusInputEntry {
+    id: String,
+    source: String,
+    active: bool,
+}
+
+#[derive(Serialize)]
+struct StatusInputs {
+    active_count: usize,
+    inputs: Vec<StatusInputEntry>,
+}
+
+#[derive(Serialize)]
+struct StatusDatabase {
+    path: String,
+    exists: bool,
+}
+
+#[derive(Serialize)]
+struct StatusIndex {
+    usable: bool,
+    files: i64,
+    messages: i64,
+    projects: i64,
+    database_size_bytes: i64,
+    last_sync: Option<String>,
+    embedding_count: i64,
+    embedding_model: Option<String>,
+    sources: Vec<SourceCount>,
+}
+
+#[derive(Serialize)]
+struct StatusJson {
+    version: u8,
+    database: StatusDatabase,
+    inputs: StatusInputs,
+    index: StatusIndex,
+    projects: Vec<ProjectBreakdown>,
+    diagnostics: Vec<String>,
+}
+
+#[derive(Serialize)]
 struct InputValidationOutput {
     valid: bool,
     manifest_count: usize,
@@ -335,6 +386,121 @@ fn list_input_entries(input_config: &InputConfig) -> Vec<InputListEntry> {
             })
         })
         .collect()
+}
+
+fn status_inputs(input_config: &InputConfig) -> StatusInputs {
+    let inputs: Vec<StatusInputEntry> = input_config
+        .inputs
+        .iter()
+        .map(|input| StatusInputEntry {
+            id: input.id.clone(),
+            source: input.source.clone(),
+            active: input.active,
+        })
+        .collect();
+    let active_count = inputs.iter().filter(|input| input.active).count();
+
+    StatusInputs {
+        active_count,
+        inputs,
+    }
+}
+
+fn status_index_from_stats(stats: Stats) -> StatusIndex {
+    StatusIndex {
+        usable: true,
+        files: stats.file_count,
+        messages: stats.message_count,
+        projects: stats.project_count,
+        database_size_bytes: stats.db_size_bytes,
+        last_sync: stats.last_sync,
+        embedding_count: stats.embedding_count,
+        embedding_model: stats.embedding_model,
+        sources: stats.source_breakdown,
+    }
+}
+
+fn empty_status_index() -> StatusIndex {
+    StatusIndex {
+        usable: false,
+        files: 0,
+        messages: 0,
+        projects: 0,
+        database_size_bytes: 0,
+        last_sync: None,
+        embedding_count: 0,
+        embedding_model: None,
+        sources: Vec::new(),
+    }
+}
+
+fn build_status_json(
+    config: &Config,
+    input_config: &InputConfig,
+    indexed_only: bool,
+) -> Result<StatusJson> {
+    let database_path = Path::new(&config.database_path);
+    let mut diagnostics = Vec::new();
+    let mut index = empty_status_index();
+    let mut projects = Vec::new();
+
+    if indexed_only && !database_path.exists() {
+        diagnostics.push(format!(
+            "indexed-only requires an existing backscroll database: {}; run `backscroll sync` first",
+            database_path.display()
+        ));
+    } else {
+        let engine = if indexed_only {
+            match create_indexed_only_engine(config) {
+                Ok(engine) => Some(engine),
+                Err(err) => {
+                    diagnostics.push(err.to_string());
+                    None
+                }
+            }
+        } else {
+            let engine = create_engine(config)?;
+            sync_manifest_inputs(engine.as_ref(), input_config)?;
+            Some(engine)
+        };
+
+        if let Some(engine) = engine {
+            match engine.get_stats() {
+                Ok(stats) => index = status_index_from_stats(stats),
+                Err(err) => diagnostics.push(format!("failed to read index stats: {err}")),
+            }
+            match engine.get_project_breakdown() {
+                Ok(breakdown) => projects = breakdown,
+                Err(err) => diagnostics.push(format!("failed to read project breakdown: {err}")),
+            }
+        }
+    }
+
+    Ok(StatusJson {
+        version: 1,
+        database: StatusDatabase {
+            path: config.database_path.clone(),
+            exists: database_path.exists(),
+        },
+        inputs: status_inputs(input_config),
+        index,
+        projects,
+        diagnostics,
+    })
+}
+
+fn print_status_json(
+    config: &Config,
+    input_config: &InputConfig,
+    indexed_only: bool,
+) -> Result<()> {
+    let status = build_status_json(config, input_config, indexed_only)?;
+    println!(
+        "{}",
+        serde_json::to_string_pretty(&status)
+            .map_err(|err| miette::miette!("Failed to serialize status JSON: {}", err))?
+    );
+    Ok(())
 }
 
 fn print_input_list(input_config: &InputConfig, json: bool) -> Result<()> {
@@ -963,7 +1129,12 @@ fn main() -> Result<()> {
             }
         }
         Commands::Inputs { .. } => unreachable!("inputs commands are handled before DB setup"),
-        Commands::Status => {
+        Commands::Status { json, indexed_only } => {
+            if *json {
+                print_status_json(&config, &input_config, *indexed_only)?;
+                return Ok(());
+            }
+
             println!("Backscroll v{}", env!("CARGO_PKG_VERSION"));
             println!("Base de datos: {}", config.database_path);
             println!(
@@ -971,10 +1142,18 @@ fn main() -> Result<()> {
                 input_config.active_inputs().len()
             );
 
-            if let Ok(engine) = create_engine(&config) {
-                // Auto-sync antes de mostrar stats
-                let _ = sync_manifest_inputs(engine.as_ref(), &input_config);
+            let engine = if *indexed_only {
+                create_indexed_only_engine(&config)
+            } else {
+                let engine = create_engine(&config);
+                if let Ok(engine) = &engine {
+                    // Auto-sync antes de mostrar stats
+                    let _ = sync_manifest_inputs(engine.as_ref(), &input_config);
+                }
+                engine
+            };
 
+            if let Ok(engine) = engine {
                 if let Ok(stats) = engine.get_stats() {
                     println!("\nBackscroll Index Status");
                     println!("  Files indexed:  {}", stats.file_count);

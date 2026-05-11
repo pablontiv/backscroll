@@ -28,7 +28,9 @@ Read commands normally auto-sync declared inputs before querying SQLite. For det
 backscroll list --indexed-only --json
 ```
 
-This mode never creates or mutates the database. If no usable index exists, it fails with a diagnostic instructing the user to run `backscroll sync` first.
+This mode never creates or mutates the database. If no usable index exists, list fails with a diagnostic instructing the user to run `backscroll sync` first.
+
+`backscroll status --json` emits a versioned status document with database path, index counts, project counts, source counts, active input metadata, and diagnostics. Add `--indexed-only` to inspect the current SQLite snapshot without auto-syncing; when no usable index exists, JSON status reports `index.usable = false` instead of creating a database.
 
 ## Declarative Inputs
 

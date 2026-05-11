@@ -1971,6 +1971,109 @@ fn test_list_indexed_only_requires_existing_index_without_creating_database() {
 }
 
 #[test]
+fn test_status_json_reports_populated_index_and_inputs() {
+    let session_dir = tempdir().unwrap();
+    let db_dir = tempdir().unwrap();
+    let db_path = db_dir.path().join("status_json.db");
+    sync_fixture(session_dir.path(), &db_path);
+
+    let output = backscroll_cmd()
+        .arg("status")
+        .arg("--json")
+        .env("BACKSCROLL_DATABASE_PATH", db_path.to_str().unwrap())
+        .env(
+            "BACKSCROLL_CONFIG_DIR",
+            session_dir.path().to_str().unwrap(),
+        )
+        .output()
+        .unwrap();
+
+    assert!(output.status.success());
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    let parsed: serde_json::Value = serde_json::from_str(&stdout).unwrap();
+    assert_eq!(parsed["version"], 1);
+    assert_eq!(
+        parsed["database"]["path"].as_str().unwrap(),
+        db_path.to_string_lossy()
+    );
+    assert_eq!(parsed["database"]["exists"], true);
+    assert_eq!(parsed["index"]["usable"], true);
+    assert_eq!(parsed["index"]["files"], 2);
+    assert_eq!(parsed["index"]["messages"], 2);
+    assert_eq!(parsed["inputs"]["active_count"], 1);
+    assert!(!parsed["projects"].as_array().unwrap().is_empty());
+}
+
+#[test]
+fn test_status_json_indexed_only_does_not_sync_new_inputs() {
+    let session_dir = tempdir().unwrap();
+    let db_dir = tempdir().unwrap();
+    let db_path = db_dir.path().join("status_indexed_only.db");
+    sync_fixture(session_dir.path(), &db_path);
+
+    fs::write(
+        session_dir.path().join("session-new.jsonl"),
+        r#"{"type":"user","message":{"role":"user","content":"status should not sync"},"uuid":"r3","timestamp":"102"}"#,
+    )
+    .unwrap();
+
+    let output = backscroll_cmd()
+        .arg("status")
+        .arg("--json")
+        .arg("--indexed-only")
+        .env("BACKSCROLL_DATABASE_PATH", db_path.to_str().unwrap())
+        .env(
+            "BACKSCROLL_CONFIG_DIR",
+            session_dir.path().to_str().unwrap(),
+        )
+        .output()
+        .unwrap();
+
+    assert!(output.status.success());
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    let parsed: serde_json::Value = serde_json::from_str(&stdout).unwrap();
+    assert_eq!(parsed["index"]["usable"], true);
+    assert_eq!(parsed["index"]["files"], 2);
+    assert_eq!(parsed["index"]["messages"], 2);
+}
+
+#[test]
+fn test_status_json_indexed_only_reports_missing_index_without_creating_database() {
+    let session_dir = tempdir().unwrap();
+    let db_dir = tempdir().unwrap();
+    let db_path = db_dir.path().join("missing_status_json.db");
+    write_claude_input_manifest(session_dir.path(), session_dir.path());
+
+    let output = backscroll_cmd()
+        .arg("status")
+        .arg("--json")
+        .arg("--indexed-only")
+        .env("BACKSCROLL_DATABASE_PATH", db_path.to_str().unwrap())
+        .env(
+            "BACKSCROLL_CONFIG_DIR",
+            session_dir.path().to_str().unwrap(),
+        )
+        .output()
+        .unwrap();
+
+    assert!(output.status.success());
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    let parsed: serde_json::Value = serde_json::from_str(&stdout).unwrap();
+    assert_eq!(parsed["database"]["exists"], false);
+    assert_eq!(parsed["index"]["usable"], false);
+    assert!(
+        parsed["diagnostics"][0]
+            .as_str()
+            .unwrap()
+            .contains("run `backscroll sync` first")
+    );
+    assert!(
+        !db_path.exists(),
+        "indexed-only status must not create a DB"
+    );
+}
+
+#[test]
 fn test_status_shows_project_breakdown() {
     let session_dir = tempdir().unwrap();
     let db_dir = tempdir().unwrap();

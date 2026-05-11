@@ -178,10 +178,11 @@ backscroll inputs validate                             # Validate global input m
 backscroll inputs list                                 # List loaded manifests and inputs
 backscroll inputs test --input claude --file <PATH>    # Dry-run one file without writing SQLite
 backscroll sync                                        # Index files declared by active inputs
-backscroll status                                      # Show index health and metrics
+backscroll status [--json]                            # Show index health and metrics
 
 # Retrieval
 backscroll search <QUERY> [--project] [--json|--robot] [--fields] [--max-tokens] [--source-path <PATH_OR_PATTERN>]
+backscroll list --indexed-only --json                  # Query the existing index without auto-sync
 ```
 
 ### Output Formats
@@ -207,7 +208,7 @@ Use `backscroll search ... --source-path <PATH_OR_PATTERN>` to retrieve messages
 
 ### Status
 
-`backscroll status` shows index health: files indexed, message count, projects discovered, database size, and last sync time.
+`backscroll status` shows index health: files indexed, message count, projects discovered, database size, and last sync time. Use `backscroll status --json` for a versioned machine-readable status document; add `--indexed-only` to avoid auto-syncing while inspecting the current SQLite snapshot.
 
 ---
 
