@@ -20,6 +20,16 @@ backscroll sync
 | `--optimize` | Run FTS5 optimization after sync |
 | `--no-embeddings` | Skip embedding generation during sync |
 
+## Indexed-only snapshot reads
+
+Read commands normally auto-sync declared inputs before querying SQLite. For deterministic audit consumers, `backscroll list --indexed-only` opens the existing database read-only and skips input manifest sync/discovery entirely:
+
+```bash
+backscroll list --indexed-only --json
+```
+
+This mode never creates or mutates the database. If no usable index exists, it fails with a diagnostic instructing the user to run `backscroll sync` first.
+
 ## Declarative Inputs
 
 Canonical ingestion is configured with user-scoped manifests:

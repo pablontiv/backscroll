@@ -11,7 +11,7 @@ use backscroll::storage::sqlite::Database;
 use clap::{Parser, Subcommand};
 use miette::Result;
 use serde::Serialize;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 #[derive(Parser)]
 #[command(name = "backscroll")]
@@ -125,6 +125,9 @@ enum Commands {
         /// Formato compacto tab-separated
         #[arg(long, default_value_t = false)]
         robot: bool,
+        /// Read only the existing SQLite index without auto-syncing inputs
+        #[arg(long, default_value_t = false)]
+        indexed_only: bool,
     },
     /// Mostrar temas frecuentes del corpus indexado
     Topics {
@@ -246,6 +249,20 @@ enum InputCommands {
 fn create_engine(config: &Config) -> Result<Box<dyn SearchEngine>> {
     let db = Database::open(&config.database_path)?;
     db.setup_schema()?;
+    Ok(Box::new(db))
+}
+
+fn create_indexed_only_engine(config: &Config) -> Result<Box<dyn SearchEngine>> {
+    let database_path = Path::new(&config.database_path);
+    if !database_path.exists() {
+        return Err(miette::miette!(
+            "indexed-only requires an existing backscroll database: {}; run `backscroll sync` first",
+            database_path.display()
+        ));
+    }
+
+    let db = Database::open_readonly(database_path)?;
+    db.ensure_usable_index()?;
     Ok(Box::new(db))
 }
 
@@ -467,7 +484,17 @@ fn main() -> Result<()> {
     if let Commands::Inputs { command } = &cli.command {
         return handle_inputs_command(command);
     }
-    let input_config = InputConfig::load()?;
+    let input_config = if matches!(
+        &cli.command,
+        Commands::List {
+            indexed_only: true,
+            ..
+        }
+    ) {
+        InputConfig::default()
+    } else {
+        InputConfig::load()?
+    };
 
     match &cli.command {
         Commands::Sync {
@@ -623,11 +650,16 @@ fn main() -> Result<()> {
             recent,
             json,
             robot,
+            indexed_only,
         } => {
-            let engine = create_engine(&config)?;
-
-            // Auto-sync before list
-            sync_manifest_inputs(engine.as_ref(), &input_config)?;
+            let engine = if *indexed_only {
+                create_indexed_only_engine(&config)?
+            } else {
+                let engine = create_engine(&config)?;
+                // Auto-sync before list
+                sync_manifest_inputs(engine.as_ref(), &input_config)?;
+                engine
+            };
 
             let effective_project = if *all_projects {
                 None

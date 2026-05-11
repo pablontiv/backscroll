@@ -1912,6 +1912,65 @@ fn test_list_json_output() {
 }
 
 #[test]
+fn test_list_indexed_only_uses_existing_index_without_syncing_new_inputs() {
+    let session_dir = tempdir().unwrap();
+    let db_dir = tempdir().unwrap();
+    let db_path = db_dir.path().join("list_indexed_only.db");
+    sync_fixture(session_dir.path(), &db_path);
+
+    fs::write(
+        session_dir.path().join("session-new.jsonl"),
+        r#"{"type":"user","message":{"role":"user","content":"not indexed yet"},"uuid":"r3","timestamp":"102"}"#,
+    )
+    .unwrap();
+
+    backscroll_cmd()
+        .arg("list")
+        .arg("--indexed-only")
+        .arg("--all-projects")
+        .arg("--json")
+        .env("BACKSCROLL_DATABASE_PATH", db_path.to_str().unwrap())
+        .env(
+            "BACKSCROLL_CONFIG_DIR",
+            session_dir.path().to_str().unwrap(),
+        )
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("session.jsonl"))
+        .stdout(predicate::str::contains("session-2.jsonl"))
+        .stdout(predicate::str::contains("session-new.jsonl").not());
+}
+
+#[test]
+fn test_list_indexed_only_requires_existing_index_without_creating_database() {
+    let session_dir = tempdir().unwrap();
+    let db_dir = tempdir().unwrap();
+    let db_path = db_dir.path().join("missing_indexed_only.db");
+    write_claude_input_manifest(session_dir.path(), session_dir.path());
+
+    backscroll_cmd()
+        .arg("list")
+        .arg("--indexed-only")
+        .arg("--all-projects")
+        .arg("--json")
+        .env("BACKSCROLL_DATABASE_PATH", db_path.to_str().unwrap())
+        .env(
+            "BACKSCROLL_CONFIG_DIR",
+            session_dir.path().to_str().unwrap(),
+        )
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains(
+            "indexed-only requires an existing backscroll database",
+        ));
+
+    assert!(
+        !db_path.exists(),
+        "indexed-only list must not create a new database"
+    );
+}
+
+#[test]
 fn test_status_shows_project_breakdown() {
     let session_dir = tempdir().unwrap();
     let db_dir = tempdir().unwrap();

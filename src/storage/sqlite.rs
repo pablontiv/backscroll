@@ -119,6 +119,18 @@ impl Database {
         })
     }
 
+    pub fn ensure_usable_index(&self) -> miette::Result<()> {
+        self.conn
+            .prepare("SELECT source_path, project, timestamp FROM search_items LIMIT 0")
+            .map(|_| ())
+            .map_err(|err| {
+                miette::miette!(
+                    "indexed-only requires an existing usable backscroll index; run `backscroll sync` first ({})",
+                    err
+                )
+            })
+    }
+
     pub fn setup_schema(&self) -> miette::Result<()> {
         self.conn
             .execute(
