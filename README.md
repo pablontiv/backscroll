@@ -184,6 +184,7 @@ backscroll status [--json]                            # Show index health and me
 backscroll search <QUERY> [--project] [--json|--robot] [--fields] [--max-tokens] [--source-path <PATH_OR_PATTERN>]
 backscroll list --indexed-only --json                  # Query the existing index without auto-sync
 backscroll sessions query --jsonl --all-projects       # Stream indexed records in deterministic order
+backscroll events query --jsonl --indexed-only          # Stream normalized events without auto-sync
 ```
 
 ### Output Formats
@@ -205,7 +206,7 @@ The `--fields` flag controls field density (`minimal` or `full`), and `--max-tok
 
 ### Indexed path lookup
 
-Use `backscroll search ... --source-path <PATH_OR_PATTERN>` to retrieve matching messages from an already indexed file path through SQLite. Patterns may use `*` globs, so UUID-like session filenames can be found with `--source-path '*019e0d38-c437-7565-ba11-5dd57d516744*'`. For exhaustive local tooling, use `backscroll sessions query --jsonl` to stream indexed records in deterministic `source_path, ordinal, timestamp` order without a search term. See [Path lookup docs](docs/read.md).
+Use `backscroll search ... --source-path <PATH_OR_PATTERN>` to retrieve matching messages from an already indexed file path through SQLite. Patterns may use `*` globs, so UUID-like session filenames can be found with `--source-path '*019e0d38-c437-7565-ba11-5dd57d516744*'`. For exhaustive local tooling, use `backscroll sessions query --jsonl` to stream indexed records in deterministic `source_path, ordinal, timestamp` order without a search term. For audit tooling that needs tool calls/results and command/error metadata, use `backscroll events query --jsonl --indexed-only`. See [Path lookup docs](docs/read.md).
 
 ### Status
 

@@ -100,6 +100,7 @@ pub struct SessionEventQuery {
     pub project: Option<String>,
     pub source: Option<String>,
     pub source_path: Option<String>,
+    pub event_type: Option<String>,
     pub after: Option<String>,
     pub before: Option<String>,
     pub limit: usize,

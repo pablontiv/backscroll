@@ -211,6 +211,11 @@ enum Commands {
         #[arg(long, default_value_t = 20)]
         limit: usize,
     },
+    /// Query normalized session events without a search term
+    Events {
+        #[command(subcommand)]
+        command: EventCommands,
+    },
     /// Query indexed session records without a search term
     Sessions {
         #[command(subcommand)]
@@ -226,6 +231,43 @@ enum Commands {
         /// Emit machine-readable JSON
         #[arg(long, default_value_t = false)]
         json: bool,
+        /// Read only the existing SQLite index without auto-syncing inputs
+        #[arg(long, default_value_t = false)]
+        indexed_only: bool,
+    },
+}
+
+#[derive(Subcommand)]
+enum EventCommands {
+    /// Stream normalized session events in deterministic order
+    Query {
+        /// Emit JSON Lines (the stable output format for this command)
+        #[arg(long, default_value_t = false)]
+        jsonl: bool,
+        /// Filter by project (default: derived from current directory)
+        #[arg(short, long)]
+        project: Option<String>,
+        /// Query all projects instead of deriving the current project
+        #[arg(long, default_value_t = false)]
+        all_projects: bool,
+        /// Filter by source/input type: session, plan, ke, decision, memory, rule, spec, backlog, or all
+        #[arg(long, default_value = "session")]
+        source: String,
+        /// Filter by indexed source path (exact path, SQL LIKE pattern, or * glob pattern)
+        #[arg(long)]
+        source_path: Option<String>,
+        /// Filter by normalized event type: message, tool_call, tool_result, command, error, metadata, other
+        #[arg(long)]
+        event_type: Option<String>,
+        /// Only events at or after this timestamp/date
+        #[arg(long)]
+        after: Option<String>,
+        /// Only events before this timestamp/date
+        #[arg(long)]
+        before: Option<String>,
+        /// Maximum events to stream (default 100, 0 = no limit)
+        #[arg(long, default_value_t = 100)]
+        limit: usize,
         /// Read only the existing SQLite index without auto-syncing inputs
         #[arg(long, default_value_t = false)]
         indexed_only: bool,
@@ -1173,6 +1215,69 @@ fn main() -> Result<()> {
                         println!("> {}\n", snippet);
                     }
                 }
+            }
+        }
+        Commands::Events {
+            command:
+                EventCommands::Query {
+                    jsonl,
+                    project,
+                    all_projects,
+                    source,
+                    source_path,
+                    event_type,
+                    after,
+                    before,
+                    limit,
+                    indexed_only,
+                },
+        } => {
+            if !jsonl {
+                return Err(miette::miette!(
+                    "events query currently supports JSON Lines output; pass --jsonl"
+                ));
+            }
+
+            let engine = if *indexed_only {
+                create_indexed_only_engine(&config)?
+            } else {
+                let engine = create_engine(&config)?;
+                sync_manifest_inputs(engine.as_ref(), &input_config)?;
+                engine
+            };
+
+            let effective_project = if *all_projects {
+                None
+            } else {
+                match project {
+                    Some(p) => Some(p.clone()),
+                    None => std::env::current_dir()
+                        .ok()
+                        .map(|p| p.to_string_lossy().replace('/', "-")),
+                }
+            };
+            let source_filter = if source == "all" {
+                None
+            } else {
+                Some(source.clone())
+            };
+            let query = backscroll::core::SessionEventQuery {
+                project: effective_project,
+                source: source_filter,
+                source_path: source_path.clone(),
+                event_type: event_type.clone(),
+                after: after.clone(),
+                before: before.clone(),
+                limit: *limit,
+            };
+
+            for event in engine.query_session_events(&query)? {
+                println!(
+                    "{}",
+                    serde_json::to_string(&event).map_err(|err| {
+                        miette::miette!("Failed to serialize session event: {}", err)
+                    })?
+                );
             }
         }
         Commands::Sessions {

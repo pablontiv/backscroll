@@ -1970,6 +1970,182 @@ fn test_list_indexed_only_requires_existing_index_without_creating_database() {
     );
 }
 
+fn sync_pi_tool_fixture(session_dir: &std::path::Path, db_path: &std::path::Path) {
+    let fixture = fixture_path("pi-tool-events.jsonl");
+    fs::copy(&fixture, session_dir.join("pi-tool-events.jsonl")).unwrap();
+    write_manifest_file(
+        session_dir,
+        "pi-tool.inputs.toml",
+        format!(
+            r#"version = 1
+
+[[inputs]]
+id = "pi"
+source = "session"
+active = true
+
+[inputs.discover]
+roots = ["{}"]
+include = ["pi-tool-events.jsonl"]
+
+[inputs.decode]
+format = "jsonl"
+
+[inputs.record]
+include_when = [
+  {{ selector = "$.type", op = "eq", value = "message" }},
+  {{ selector = "$.message.role", op = "in", value = ["user", "assistant"] }},
+]
+
+[inputs.map]
+role = "$.message.role"
+uuid = "$.id"
+timestamp = "$.timestamp"
+project = "$.cwd"
+
+[inputs.content]
+selector = "$.message.content"
+string = "$"
+blocks = "$.message.content[*]"
+block_text = "$.text"
+content_type = "$.type"
+include_when = [
+  {{ selector = "$.type", op = "eq", value = "text" }},
+]
+default_content_type = "text"
+
+[inputs.text]
+join = "\n"
+trim = true
+drop_empty = true
+"#,
+            session_dir.display()
+        ),
+    );
+
+    backscroll_cmd()
+        .current_dir(session_dir)
+        .arg("sync")
+        .env("BACKSCROLL_DATABASE_PATH", db_path.to_str().unwrap())
+        .env("BACKSCROLL_CONFIG_DIR", session_dir.to_str().unwrap())
+        .assert()
+        .success();
+}
+
+#[test]
+fn test_events_query_jsonl_streams_ordered_events_with_filters() {
+    let session_dir = tempdir().unwrap();
+    let db_dir = tempdir().unwrap();
+    let db_path = db_dir.path().join("events_query.db");
+    sync_pi_tool_fixture(session_dir.path(), &db_path);
+
+    let output = backscroll_cmd()
+        .arg("events")
+        .arg("query")
+        .arg("--jsonl")
+        .arg("--indexed-only")
+        .arg("--all-projects")
+        .arg("--source-path")
+        .arg("*pi-tool-events.jsonl")
+        .env("BACKSCROLL_DATABASE_PATH", db_path.to_str().unwrap())
+        .env("BACKSCROLL_CONFIG_DIR", isolated_empty_config_dir())
+        .output()
+        .unwrap();
+
+    assert!(output.status.success());
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    let records: Vec<serde_json::Value> = stdout
+        .trim()
+        .lines()
+        .map(|line| serde_json::from_str(line).unwrap())
+        .collect();
+    let event_types: Vec<&str> = records
+        .iter()
+        .map(|record| record["event_type"].as_str().unwrap())
+        .collect();
+    assert_eq!(
+        event_types,
+        vec![
+            "message",
+            "message",
+            "tool_call",
+            "command",
+            "tool_result",
+            "error"
+        ]
+    );
+    assert_eq!(records[0]["schema_version"], 1);
+    assert_eq!(records[3]["command"], "cargo test --test cli");
+    assert_eq!(records[5]["exit_code"], 101);
+}
+
+#[test]
+fn test_events_query_jsonl_filters_event_type_and_empty_results() {
+    let session_dir = tempdir().unwrap();
+    let db_dir = tempdir().unwrap();
+    let db_path = db_dir.path().join("events_query_filter.db");
+    sync_pi_tool_fixture(session_dir.path(), &db_path);
+
+    backscroll_cmd()
+        .arg("events")
+        .arg("query")
+        .arg("--jsonl")
+        .arg("--indexed-only")
+        .arg("--all-projects")
+        .arg("--event-type")
+        .arg("command")
+        .env("BACKSCROLL_DATABASE_PATH", db_path.to_str().unwrap())
+        .env("BACKSCROLL_CONFIG_DIR", isolated_empty_config_dir())
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("cargo test --test cli"))
+        .stdout(predicate::str::contains("tool_result").not());
+
+    backscroll_cmd()
+        .arg("events")
+        .arg("query")
+        .arg("--jsonl")
+        .arg("--indexed-only")
+        .arg("--all-projects")
+        .arg("--event-type")
+        .arg("metadata")
+        .env("BACKSCROLL_DATABASE_PATH", db_path.to_str().unwrap())
+        .env("BACKSCROLL_CONFIG_DIR", isolated_empty_config_dir())
+        .assert()
+        .success()
+        .stdout("");
+}
+
+#[test]
+fn test_events_query_indexed_only_does_not_sync_changed_fixture() {
+    let session_dir = tempdir().unwrap();
+    let db_dir = tempdir().unwrap();
+    let db_path = db_dir.path().join("events_query_no_sync.db");
+    sync_pi_tool_fixture(session_dir.path(), &db_path);
+
+    fs::write(
+        session_dir.path().join("pi-tool-events.jsonl"),
+        r#"{"type":"message","id":"pi-new","timestamp":"2024-02-03T04:05:09Z","cwd":"/repo","message":{"role":"assistant","content":[{"type":"toolCall","id":"new-tool","name":"bash","arguments":{"command":"echo should-not-sync"}}]}}"#,
+    )
+    .unwrap();
+
+    backscroll_cmd()
+        .arg("events")
+        .arg("query")
+        .arg("--jsonl")
+        .arg("--indexed-only")
+        .arg("--all-projects")
+        .env("BACKSCROLL_DATABASE_PATH", db_path.to_str().unwrap())
+        .env(
+            "BACKSCROLL_CONFIG_DIR",
+            session_dir.path().to_str().unwrap(),
+        )
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("cargo test --test cli"))
+        .stdout(predicate::str::contains("should-not-sync").not());
+}
+
 #[test]
 fn test_sessions_query_jsonl_streams_indexed_records_in_deterministic_order() {
     let session_dir = tempdir().unwrap();

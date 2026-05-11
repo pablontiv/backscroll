@@ -1447,6 +1447,10 @@ impl SearchEngine for Database {
                 param_values.push(Box::new(source_path.clone()));
             }
         }
+        if let Some(event_type) = &query.event_type {
+            conditions.push("event_type = ?");
+            param_values.push(Box::new(event_type.clone()));
+        }
         if let Some(after) = &query.after {
             conditions.push("timestamp IS NOT NULL AND timestamp >= ?");
             param_values.push(Box::new(after.clone()));
