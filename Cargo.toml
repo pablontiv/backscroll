@@ -49,6 +49,7 @@ tokenizers = { version = "0.21", default-features = false, features = ["fancy-re
 ndarray = "0.16"
 dirs = "6"
 serde_json_path = "0.7.2"
+toml = { version = "0.8", features = ["parse"] }
 
 [dev-dependencies]
 assert_cmd = "2.1.2"

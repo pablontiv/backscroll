@@ -4,6 +4,9 @@ mod output;
 
 use crate::output::{OutputFormat, OutputOptions, format_results};
 use backscroll::config::Config;
+use backscroll::core::projects::{
+    IdentificationConfidence, ProjectConfig, identify, load_global_registry,
+};
 use backscroll::core::sync::{dry_run_input_definition, parse_input_definitions};
 use backscroll::core::{
     IndexedRecordQuery, ParsedMessage, ProjectBreakdown, SearchEngine, SearchParams, SourceCount,
@@ -226,6 +229,11 @@ enum Commands {
         #[command(subcommand)]
         command: InputCommands,
     },
+    /// Manage and query the project identity registry
+    Projects {
+        #[command(subcommand)]
+        command: ProjectsCommands,
+    },
     /// Mostrar estado del índice
     Status {
         /// Emit machine-readable JSON
@@ -338,6 +346,123 @@ enum InputCommands {
         #[arg(long, default_value_t = false)]
         json: bool,
     },
+}
+
+#[derive(Subcommand)]
+enum ProjectsCommands {
+    /// Identify the canonical project for a directory path
+    Identify {
+        /// Directory path to identify (default: current directory)
+        #[arg(long)]
+        cwd: Option<PathBuf>,
+        /// Emit machine-readable JSON
+        #[arg(long, default_value_t = false)]
+        json: bool,
+    },
+    /// List all projects in the registry
+    List {
+        /// Emit machine-readable JSON
+        #[arg(long, default_value_t = false)]
+        json: bool,
+    },
+    /// Show aliases for a project
+    Aliases {
+        /// Project ID to look up
+        #[arg(long = "project-id")]
+        project_id: String,
+        /// Emit machine-readable JSON
+        #[arg(long, default_value_t = false)]
+        json: bool,
+    },
+}
+
+#[derive(Serialize)]
+struct ProjectIdentifyOutput {
+    project_id: String,
+    confidence: String,
+    cwd: String,
+}
+
+#[derive(Serialize)]
+struct ProjectListOutput {
+    count: usize,
+    projects: Vec<ProjectConfig>,
+}
+
+#[derive(Serialize)]
+struct ProjectAliasesOutput {
+    project_id: String,
+    aliases: Vec<String>,
+}
+
+fn handle_projects_command(command: &ProjectsCommands) -> Result<()> {
+    let registry = load_global_registry();
+    match command {
+        ProjectsCommands::Identify { cwd, json } => {
+            let effective_cwd = match cwd {
+                Some(p) => p.clone(),
+                None => std::env::current_dir()
+                    .map_err(|e| miette::miette!("Cannot determine current directory: {}", e))?,
+            };
+            let result = identify(&effective_cwd, &registry);
+            let confidence_str = match result.confidence {
+                IdentificationConfidence::Exact => "exact",
+                IdentificationConfidence::Pattern => "pattern",
+                IdentificationConfidence::Hint => "hint",
+                IdentificationConfidence::Truncated => "truncated",
+                IdentificationConfidence::Unknown => "unknown",
+            };
+            if *json {
+                let out = ProjectIdentifyOutput {
+                    project_id: result.project_id,
+                    confidence: confidence_str.to_string(),
+                    cwd: effective_cwd.to_string_lossy().into_owned(),
+                };
+                println!("{}", serde_json::to_string(&out).unwrap());
+            } else {
+                println!(
+                    "project: {} (confidence: {})",
+                    result.project_id, confidence_str
+                );
+            }
+        }
+        ProjectsCommands::List { json } => {
+            if *json {
+                let out = ProjectListOutput {
+                    count: registry.projects.len(),
+                    projects: registry.projects.clone(),
+                };
+                println!("{}", serde_json::to_string(&out).unwrap());
+            } else {
+                for p in &registry.projects {
+                    println!(
+                        "{} — roots: {:?}  patterns: {:?}  aliases: {:?}",
+                        p.id, p.roots, p.worktree_patterns, p.aliases
+                    );
+                }
+            }
+        }
+        ProjectsCommands::Aliases { project_id, json } => {
+            let aliases: Vec<String> = registry
+                .projects
+                .iter()
+                .find(|p| &p.id == project_id)
+                .map(|p| p.aliases.clone())
+                .unwrap_or_default();
+            if *json {
+                let out = ProjectAliasesOutput {
+                    project_id: project_id.clone(),
+                    aliases,
+                };
+                println!("{}", serde_json::to_string(&out).unwrap());
+            } else {
+                for alias in &aliases {
+                    println!("{}", alias);
+                }
+            }
+        }
+    }
+    Ok(())
 }
 
 fn create_engine(config: &Config) -> Result<Box<dyn SearchEngine>> {
@@ -738,6 +863,10 @@ fn main() -> Result<()> {
     let config = Config::load().unwrap_or_else(|_| Config::default_with_paths());
     if let Commands::Inputs { command } = &cli.command {
         return handle_inputs_command(command);
+    }
+
+    if let Commands::Projects { command } = &cli.command {
+        return handle_projects_command(command);
     }
     let input_config = if matches!(
         &cli.command,
@@ -1344,6 +1473,7 @@ fn main() -> Result<()> {
             }
         }
         Commands::Inputs { .. } => unreachable!("inputs commands are handled before DB setup"),
+        Commands::Projects { .. } => unreachable!("projects commands are handled before DB setup"),
         Commands::Status { json, indexed_only } => {
             if *json {
                 print_status_json(&config, &input_config, *indexed_only)?;

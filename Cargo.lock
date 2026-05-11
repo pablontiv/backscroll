@@ -150,6 +150,7 @@ dependencies = [
  "sqlite-vec",
  "tempfile",
  "tokenizers",
+ "toml",
  "tracing",
  "tracing-subscriber",
  "walkdir",

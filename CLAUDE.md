@@ -44,6 +44,7 @@ main.rs (CLI: clap)
 │   ├── embedding.rs   — EmbeddingProvider trait, MockProvider, OnnxProvider
 │   ├── chunking.rs    — Text chunking pipeline (~512 tokens, sentence-aware)
 │   ├── sources.rs     — External source parsers (KE, decision, memory, rule, spec, backlog) + SourceRegistry
+│   ├── projects.rs    — Project identity registry: load_global_registry(), identify(), local hint support
 │   └── hybrid.rs      — Reciprocal Rank Fusion (RRF) for combining BM25 + vector rankings
 └── storage/
     └── sqlite.rs      — SQLite adapter (FTS5 + sqlite-vec, hybrid search, embeddings)
@@ -58,9 +59,10 @@ main.rs (CLI: clap)
 - `core/reader.rs` — Direct reading and filtering of individual session files
 - `core/sync.rs` — WalkDir traversal, SHA-256 hashing, JSONL parsing, noise filter regex (LazyLock), content-type classification
 - `core/tagging.rs` — Heuristic session auto-tagging: regex patterns detect categories (debugging, refactoring, feature, testing, docs, config)
+- `core/projects.rs` — Project identity registry: `load_global_registry()` reads `~/.config/backscroll/projects.toml`, `load_local_hint()` walks upward for `.backscroll/project.toml`, `identify()` resolves canonical project IDs with confidence levels (exact/pattern/hint/truncated/unknown)
 - `storage/sqlite.rs` — SQLite adapter (external FTS5 with Porter stemmer, triggers, BM25 ranking, WAL mode, source-aware filtering, session tags)
 
-Twelve CLI commands: `sync [--path] [--include-agents] [--no-plans] [--optimize]`, `search <query> [--project] [--all-projects] [--json] [--robot] [--fields] [--max-tokens] [--source] [--after] [--before] [--role] [--limit] [--offset] [--content-type] [--tag]`, `read <path>`, `resume <query> [--project] [--all-projects] [--robot] [--source]`, `topics [--project] [--all-projects] [--limit] [--json] [--robot]`, `list [--project] [--all-projects] [--recent] [--json] [--robot]`, `insights [--project] [--all-projects] [--json] [--robot]`, `export <query> [--format markdown|csv] [--project] [--all-projects]`, `reindex`, `purge --before <date>`, `validate`, `status`.
+Thirteen CLI commands: `sync [--path] [--include-agents] [--no-plans] [--optimize]`, `search <query> [--project] [--all-projects] [--json] [--robot] [--fields] [--max-tokens] [--source] [--after] [--before] [--role] [--limit] [--offset] [--content-type] [--tag]`, `read <path>`, `resume <query> [--project] [--all-projects] [--robot] [--source]`, `topics [--project] [--all-projects] [--limit] [--json] [--robot]`, `list [--project] [--all-projects] [--recent] [--json] [--robot]`, `insights [--project] [--all-projects] [--json] [--robot]`, `export <query> [--format markdown|csv] [--project] [--all-projects]`, `reindex`, `purge --before <date>`, `validate`, `status`.
 
 The `SearchEngine` trait is the port; `storage::sqlite` is the adapter. Database is opened lazily. `Database::open_readonly()` provides read-only access for external consumers (e.g., kedral) via `SQLITE_OPEN_READ_ONLY` — fails fast if DB file missing.
 
