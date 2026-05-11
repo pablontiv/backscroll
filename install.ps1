@@ -2,7 +2,7 @@ $ErrorActionPreference = "Stop"
 
 $Repo = "pablontiv/backscroll"
 $Binary = "backscroll"
-$InputPresets = @("claude.inputs.toml", "pi.inputs.toml")
+$InputPresets = @("claude.inputs.toml")
 
 function Main {
     $arch = Get-Arch

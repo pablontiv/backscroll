@@ -156,7 +156,7 @@ MVP operators are `eq`, `ne`, `in`, `exists`, and `missing`.
 
 ## `map`
 
-Maps record fields to Backscroll metadata. Required for `jsonl` and `json` inputs. Markdown inputs (`markdown` and `markdown_sections`) emit document text directly and may omit this section.
+Maps record fields to Backscroll metadata. Required for `jsonl` and `json` inputs. Markdown inputs (`markdown` and `markdown_sections`) emit document text directly and may omit this section. `project` is also evaluated against the full JSON document (or each JSONL line) before record filtering, so file/session metadata records can provide a project for emitted messages.
 
 | Field | Type | Default | Meaning |
 |---|---:|---:|---|
@@ -164,7 +164,7 @@ Maps record fields to Backscroll metadata. Required for `jsonl` and `json` input
 | `uuid` | JSONPath string | unset | Message or session identifier. |
 | `timestamp` | JSONPath string | unset | Message timestamp. |
 | `session_id` | JSONPath string | unset | Conversation identifier. |
-| `project` | JSONPath string | unset | Project value when present in data. |
+| `project` | JSONPath string | unset | Project value when present on the document/line or emitted records. |
 | `role_aliases` | table | `{}` | Provider role names mapped to Backscroll roles. |
 
 ## `content`

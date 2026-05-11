@@ -13,7 +13,7 @@ Backscroll interpreta sesiones y documentos mediante **definiciones externas en 
 ## 2) Alcance MVP vigente
 
 - Inputs externos para sesiones con `source = "session"`.
-- Presets shipped para Claude y Pi en `inputs/claude.inputs.toml` y `inputs/pi.inputs.toml`, instalables en el config dir del usuario.
+- Preset shipped para Claude en `inputs/claude.inputs.toml`, instalable en el config dir del usuario; otros agentes se agregan como manifests user-scoped.
 - Manifests data-only: discovery, decode, selectors, predicates, mapping y normalización de texto.
 - App config (`backscroll.toml`) separada de input config.
 - **Regla absoluta:** no hay soporte de adapters ejecutables, scripts externos ni JMESPath en este MVP.

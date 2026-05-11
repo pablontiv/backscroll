@@ -53,7 +53,7 @@ Canonical input manifests are loaded from exactly this runtime directory:
 
 Set `BACKSCROLL_CONFIG_DIR` to override the base directory. For example, `BACKSCROLL_CONFIG_DIR=/tmp/bs-cfg` makes Backscroll read `/tmp/bs-cfg/backscroll/inputs/*.inputs.toml`.
 
-The repository ships preset manifests at `inputs/claude.inputs.toml` and `inputs/pi.inputs.toml`. Those files are source presets; Backscroll reads them only after they are copied into the user input config directory. When installing or refreshing presets, keep existing files by default so user edits are not overwritten.
+The repository ships a source preset manifest at `inputs/claude.inputs.toml`. Backscroll reads source presets only after they are copied into the user input config directory. When installing or refreshing presets, keep existing files by default so user edits are not overwritten.
 
 A minimal installed manifest looks like:
 

@@ -150,7 +150,6 @@ Describe "Install-InputPresets" -Tag "Runtime" {
             Install-InputPresets -Version "v0.2.3" -SourceDir $InputsSource
             Test-Path (Join-Path (Join-Path $configDir "backscroll") "inputs") | Should -BeTrue
             Test-Path (Join-Path (Join-Path (Join-Path $configDir "backscroll") "inputs") "claude.inputs.toml") | Should -BeTrue
-            Test-Path (Join-Path (Join-Path (Join-Path $configDir "backscroll") "inputs") "pi.inputs.toml") | Should -BeTrue
         } finally {
             Remove-Item Env:\BACKSCROLL_CONFIG_DIR -ErrorAction SilentlyContinue
         }

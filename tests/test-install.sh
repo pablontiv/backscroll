@@ -265,10 +265,10 @@ CONFIG_DIR=$(mktemp -d)
 output=$(run_main_linux "$testable" "$INSTALL_DIR" "$CONFIG_DIR") && rc=$? || rc=$?
 rm -f "$testable"
 
-if [ -f "$CONFIG_DIR/backscroll/inputs/claude.inputs.toml" ] && [ -f "$CONFIG_DIR/backscroll/inputs/pi.inputs.toml" ]; then
+if [ -f "$CONFIG_DIR/backscroll/inputs/claude.inputs.toml" ]; then
     pass "installs input presets under BACKSCROLL_CONFIG_DIR/backscroll/inputs"
 else
-    fail "input preset install" "presets not found in $CONFIG_DIR/backscroll/inputs; output: $output"
+    fail "input preset install" "preset not found in $CONFIG_DIR/backscroll/inputs; output: $output"
 fi
 rm -rf "$INSTALL_DIR" "$CONFIG_DIR"
 

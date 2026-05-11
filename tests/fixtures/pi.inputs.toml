@@ -25,6 +25,7 @@ include_when = [
 role = "$.message.role"
 uuid = "$.id"
 timestamp = "$.timestamp"
+project = "$.cwd"
 
 [inputs.content]
 selector = "$.message.content"

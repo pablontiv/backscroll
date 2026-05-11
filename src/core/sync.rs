@@ -539,6 +539,11 @@ fn parse_generic_jsonl_content(
                 continue;
             }
         };
+        if project.is_none() {
+            project = input.mapping.as_ref().and_then(|mapping| {
+                select_optional_string(mapping.project.as_ref(), &value, &input.id, "map.project")
+            });
+        }
         let Some(records) = parse_records_from_value(input, &value, "record.selector") else {
             data_errors += 1;
             continue;
@@ -587,7 +592,9 @@ fn parse_generic_json_content(
     };
 
     let mut messages = Vec::new();
-    let mut project = None;
+    let mut project = input.mapping.as_ref().and_then(|mapping| {
+        select_optional_string(mapping.project.as_ref(), &value, &input.id, "map.project")
+    });
     let mut data_errors = 0;
     for (ordinal, record) in records.into_iter().enumerate() {
         if !record_passes_predicates(input, record, ordinal) {
@@ -1359,6 +1366,7 @@ not-json
 
         assert_eq!(files.len(), 1);
         assert_eq!(files[0].source, "session");
+        assert_eq!(files[0].project.as_deref(), Some("/workspace/pi"));
         assert_eq!(files[0].messages.len(), 2);
         assert_eq!(files[0].messages[0].role, "user");
         assert_eq!(files[0].messages[0].text, "pi manifest fixture signal");
@@ -1392,17 +1400,10 @@ not-json
     }
 
     #[test]
-    fn test_shipped_claude_and_pi_presets_emit_session_source() -> miette::Result<()> {
+    fn test_shipped_claude_preset_emits_session_source() -> miette::Result<()> {
         let dir = tempdir().into_diagnostic()?;
         let fixtures_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures");
         let claude_root = fixtures_dir.join("claude-preset/projects");
-        let pi_root = dir.path().join("pi-sessions");
-        fs::create_dir(&pi_root).into_diagnostic()?;
-        fs::copy(
-            fixtures_dir.join("pi-session.jsonl"),
-            pi_root.join("pi-session.jsonl"),
-        )
-        .into_diagnostic()?;
 
         write_shipped_manifest_with_root(
             dir.path(),
@@ -1414,37 +1415,24 @@ not-json
             "~/.claude/projects",
             &claude_root,
         )?;
-        write_shipped_manifest_with_root(
-            dir.path(),
-            "pi.inputs.toml",
-            include_str!(concat!(
-                env!("CARGO_MANIFEST_DIR"),
-                "/inputs/pi.inputs.toml"
-            )),
-            "~/.pi/agent/sessions",
-            &pi_root,
-        )?;
 
         let input_config =
             crate::input_config::InputConfig::load_from_inputs_dir_for_tests(dir.path())?;
+        let inputs: Vec<_> = input_config
+            .active_inputs()
+            .into_iter()
+            .filter(|input| input.id == "claude")
+            .collect();
+        assert_eq!(inputs.len(), 1, "expected shipped claude preset");
+        assert_eq!(inputs[0].source, "session");
 
-        for input_id in ["claude", "pi"] {
-            let inputs: Vec<_> = input_config
-                .active_inputs()
-                .into_iter()
-                .filter(|input| input.id == input_id)
-                .collect();
-            assert_eq!(inputs.len(), 1, "expected shipped {input_id} preset");
-            assert_eq!(inputs[0].source, "session");
-
-            let files = parse_input_definitions(&inputs, &HashMap::new());
-            assert_eq!(files.len(), 1, "expected {input_id} fixture file");
-            assert_eq!(files[0].source, "session");
-            assert!(
-                !files[0].messages.is_empty(),
-                "expected {input_id} preset to emit messages"
-            );
-        }
+        let files = parse_input_definitions(&inputs, &HashMap::new());
+        assert_eq!(files.len(), 1, "expected claude fixture file");
+        assert_eq!(files[0].source, "session");
+        assert!(
+            !files[0].messages.is_empty(),
+            "expected claude preset to emit messages"
+        );
 
         Ok(())
     }

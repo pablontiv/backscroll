@@ -102,7 +102,7 @@ Missing discovery roots are skipped. This lets the shipped Claude and Pi presets
 
 ## Session File Format
 
-Claude and Pi presets both decode JSONL files. Each decoded record is filtered and mapped by the installed manifest, not by hardcoded provider-specific CLI flags. The shipped Claude preset keeps `user` and `assistant` records and removes Claude noise tags. The shipped Pi preset keeps message records whose role is `user` or `assistant` and text content blocks.
+Claude and Pi presets both decode JSONL files. Each decoded record is filtered and mapped by the installed manifest, not by hardcoded provider-specific CLI flags. The shipped Claude preset keeps `user` and `assistant` records and removes Claude noise tags. The shipped Pi preset discovers active and archived Pi session roots, maps project from the session metadata `cwd`, and keeps message records whose role is `user` or `assistant` and text content blocks.
 
 ## Noise Filtering
 
@@ -131,9 +131,9 @@ This makes repeated syncs fast: the first run indexes everything, subsequent run
 
 ## Project Detection
 
-Manifest-driven inputs can map a project value from the record with `inputs.map.project`. If the active manifest does not map a project value, indexed messages default to `"unknown"`.
+Manifest-driven inputs can map a project value with `inputs.map.project`. For JSONL, Backscroll evaluates that selector against each line before record filters and against emitted records, so a session metadata line can set the project for message records. If the active manifest does not map a project value, indexed messages default to `"unknown"`.
 
-The current MVP contract does not express provider-specific sidecar lookup such as Claude `sessions-index.json` project inference. If you need project-scoped search, prefer manifests whose records include a project field or organize sources with explicit metadata in a future-compatible way.
+The current MVP contract does not express provider-specific sidecar lookup such as Claude `sessions-index.json` project inference. If you need project-scoped search, prefer manifests whose files contain project metadata or organize sources with explicit metadata in a future-compatible way.
 
 ## Subagent Sessions
 

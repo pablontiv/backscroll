@@ -11,3 +11,4 @@ session_test.json
 
 # Skill eval workspace (local artifacts)
 .claude/skills/backscroll-workspace/iteration-*/
+cartyx-out/
