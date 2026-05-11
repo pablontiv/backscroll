@@ -121,4 +121,4 @@ backscroll inputs test --input claude --file ~/.claude/projects/example/session.
 backscroll sync
 ```
 
-See [the generic input contract](input-contract.md) for the full manifest schema.
+See [the generic input contract](input-contract.md) for the full manifest schema. For read-only audit consumers, see the [downstream audit integration contract](audit-integration.md), which uses `--indexed-only` status, session, and event queries against the configured database path.

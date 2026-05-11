@@ -166,7 +166,7 @@ backscroll sync
 
 Subagent handling is controlled by the active input manifest. The shipped Claude preset excludes `subagents` paths with a discovery glob, and you can edit your installed preset if you intentionally want a different corpus.
 
-See [Sync & Indexing docs](docs/sync.md) for input manifests, noise filtering, and project metadata behavior.
+See [Sync & Indexing docs](docs/sync.md) for input manifests, noise filtering, and project metadata behavior. See [Downstream audit integration contract](docs/audit-integration.md) for deterministic indexed-only status/session/event queries.
 
 ---
 
@@ -206,7 +206,7 @@ The `--fields` flag controls field density (`minimal` or `full`), and `--max-tok
 
 ### Indexed path lookup
 
-Use `backscroll search ... --source-path <PATH_OR_PATTERN>` to retrieve matching messages from an already indexed file path through SQLite. Patterns may use `*` globs, so UUID-like session filenames can be found with `--source-path '*019e0d38-c437-7565-ba11-5dd57d516744*'`. For exhaustive local tooling, use `backscroll sessions query --jsonl` to stream indexed records in deterministic `source_path, ordinal, timestamp` order without a search term. For audit tooling that needs tool calls/results and command/error metadata, use `backscroll events query --jsonl --indexed-only`. See [Path lookup docs](docs/read.md).
+Use `backscroll search ... --source-path <PATH_OR_PATTERN>` to retrieve matching messages from an already indexed file path through SQLite. Patterns may use `*` globs, so UUID-like session filenames can be found with `--source-path '*019e0d38-c437-7565-ba11-5dd57d516744*'`. For exhaustive local tooling, use `backscroll sessions query --jsonl` to stream indexed records in deterministic `source_path, ordinal, timestamp` order without a search term. For audit tooling that needs tool calls/results and command/error metadata, use `backscroll events query --jsonl --indexed-only`. See [Path lookup docs](docs/read.md) and the [audit integration contract](docs/audit-integration.md).
 
 ### Status
 
