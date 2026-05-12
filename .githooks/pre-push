@@ -70,7 +70,7 @@ install_input_presets() {
 
   inputs_dest="$config_dir/backscroll/inputs"
   mkdir -p "$inputs_dest"
-  for preset in claude.inputs.toml pi.inputs.toml; do
+  for preset in claude.inputs.toml pi.inputs.toml decisions.inputs.toml; do
     dest="$inputs_dest/$preset"
     if [ -e "$dest" ] && [ "${BACKSCROLL_FORCE_INPUTS:-0}" != "1" ]; then
       echo "backscroll: $dest exists, skipping"
