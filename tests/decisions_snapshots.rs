@@ -143,11 +143,10 @@ Under review by the architecture team.
             if let Some(obj) = json.as_object_mut() {
                 if let Some(path) = obj.get_mut("source_path") {
                     if let Some(path_str) = path.as_str() {
-                        let normalized_path = path_str
-                            .split('/')
-                            .last()
-                            .unwrap_or("unknown.md");
-                        *path = serde_json::Value::String(format!("/decisions/{}", normalized_path));
+                        let normalized_path =
+                            path_str.split('/').next_back().unwrap_or("unknown.md");
+                        *path =
+                            serde_json::Value::String(format!("/decisions/{}", normalized_path));
                     }
                 }
             }
@@ -230,11 +229,12 @@ We are waiting for stakeholder feedback.
                     if let Some(decision_obj) = decision.as_object_mut() {
                         if let Some(path) = decision_obj.get_mut("source_path") {
                             if let Some(path_str) = path.as_str() {
-                                let normalized_path = path_str
-                                    .split('/')
-                                    .last()
-                                    .unwrap_or("unknown.md");
-                                *path = serde_json::Value::String(format!("/decisions/{}", normalized_path));
+                                let normalized_path =
+                                    path_str.split('/').next_back().unwrap_or("unknown.md");
+                                *path = serde_json::Value::String(format!(
+                                    "/decisions/{}",
+                                    normalized_path
+                                ));
                             }
                         }
                     }

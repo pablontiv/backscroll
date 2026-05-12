@@ -16,7 +16,7 @@ use backscroll::input_config::InputConfig;
 use backscroll::storage::sqlite::Database;
 use clap::{Parser, Subcommand};
 use miette::Result;
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 
 #[derive(Parser)]
@@ -446,6 +446,24 @@ enum DecisionsCommands {
         #[arg(long, default_value_t = false)]
         indexed_only: bool,
     },
+    /// Detect conflicts between a proposed decision and the indexed corpus
+    Conflicts {
+        /// JSON string with proposal to check (or read from stdin if omitted)
+        #[arg(long)]
+        proposal_json: Option<String>,
+        /// Filter by project (default: derived from current directory)
+        #[arg(short, long)]
+        project: Option<String>,
+        /// Query all projects
+        #[arg(long, default_value_t = false)]
+        all_projects: bool,
+        /// Emit JSON output
+        #[arg(long, default_value_t = false)]
+        json: bool,
+        /// Read only the existing SQLite index without auto-syncing inputs
+        #[arg(long, default_value_t = false)]
+        indexed_only: bool,
+    },
 }
 
 #[derive(Serialize)]
@@ -483,6 +501,25 @@ struct ProjectAliasesOutput {
     aliases: Vec<String>,
 }
 
+#[derive(Serialize, Deserialize)]
+#[serde(crate = "serde")]
+struct ProposalInput {
+    id: Option<String>,
+    statement: String,
+    status: Option<String>,
+    scope: Option<String>,
+}
+
+#[derive(Serialize)]
+struct ConflictHint {
+    conflict_type: String,
+    existing_decision_id: Option<String>,
+    existing_statement: String,
+    existing_status: String,
+    source_path: String,
+    explanation: String,
+}
+
 #[derive(Serialize)]
 struct DecisionRecord {
     id: Option<String>,
@@ -493,6 +530,10 @@ struct DecisionRecord {
     provenance: serde_json::Value,
     is_accepted: bool,
     excerpt: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    freshness: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    last_seen: Option<String>,
 }
 
 #[derive(Serialize)]
@@ -573,9 +614,125 @@ fn normalize_statement(text: &str) -> String {
         .join(" ")
 }
 
+fn compute_freshness(last_seen: Option<&str>) -> String {
+    match last_seen {
+        None => "unknown".to_string(),
+        Some(ts) => {
+            if ts.starts_with("2026") {
+                "active".to_string()
+            } else if ts.starts_with("2025") || ts.starts_with("202") {
+                "stale".to_string()
+            } else {
+                "unknown".to_string()
+            }
+        }
+    }
+}
+
 fn compute_cluster_id(statement: &str) -> String {
     let normalized = normalize_statement(statement);
     normalized.chars().take(40).collect()
+}
+
+fn extract_significant_words(text: &str) -> Vec<String> {
+    normalize_statement(text)
+        .split_whitespace()
+        .filter(|w| w.len() > 4)
+        .map(|w| w.to_string())
+        .collect()
+}
+
+fn count_keyword_overlap(statement1: &str, statement2: &str) -> usize {
+    let words1: Vec<String> = extract_significant_words(statement1);
+    let words2: Vec<String> = extract_significant_words(statement2);
+
+    words1.iter().filter(|w| words2.contains(w)).count()
+}
+
+fn detect_conflicts(
+    proposal: &ProposalInput,
+    records: &[(String, String, String, Option<String>, String)],
+) -> Vec<ConflictHint> {
+    let mut hints = Vec::new();
+
+    let proposal_statement_normalized = normalize_statement(&proposal.statement);
+    let proposal_statement_prefix = proposal_statement_normalized
+        .chars()
+        .take(60)
+        .collect::<String>();
+
+    for (existing_id, existing_statement, existing_status, existing_scope, source_path) in records {
+        let existing_statement_normalized = normalize_statement(existing_statement);
+        let existing_statement_prefix = existing_statement_normalized
+            .chars()
+            .take(60)
+            .collect::<String>();
+
+        // Check for superseded: existing decision is superseded AND its id matches proposal.id
+        if existing_status.to_lowercase() == "superseded" {
+            if let Some(proposal_id) = &proposal.id {
+                if proposal_id == existing_id {
+                    hints.push(ConflictHint {
+                        conflict_type: "superseded".to_string(),
+                        existing_decision_id: Some(existing_id.clone()),
+                        existing_statement: existing_statement.clone(),
+                        existing_status: existing_status.clone(),
+                        source_path: source_path.clone(),
+                        explanation: format!(
+                            "proposal is replacing a known superseded record with id {}",
+                            proposal_id
+                        ),
+                    });
+                    continue;
+                }
+            }
+        }
+
+        // Check for duplicate: normalized statement prefixes match (first 60 chars)
+        if proposal_statement_prefix == existing_statement_prefix {
+            hints.push(ConflictHint {
+                conflict_type: "duplicate".to_string(),
+                existing_decision_id: Some(existing_id.clone()),
+                existing_statement: existing_statement.clone(),
+                existing_status: existing_status.clone(),
+                source_path: source_path.clone(),
+                explanation: "proposal statement matches an existing decision (normalized prefix)"
+                    .to_string(),
+            });
+            continue;
+        }
+
+        // Check for potential conflict: accepted AND same scope AND keyword overlap
+        // Only if NOT a duplicate
+        if existing_status.to_lowercase() == "accepted" {
+            // Check if scopes match (if provided)
+            let scopes_match = match (&proposal.scope, existing_scope) {
+                (Some(p_scope), Some(e_scope)) => p_scope.to_lowercase() == e_scope.to_lowercase(),
+                (None, None) => true, // Both unspecified
+                _ => false,
+            };
+
+            if scopes_match {
+                let keyword_overlap =
+                    count_keyword_overlap(&proposal.statement, existing_statement);
+                if keyword_overlap >= 2 {
+                    hints.push(ConflictHint {
+                        conflict_type: "potential_conflict".to_string(),
+                        existing_decision_id: Some(existing_id.clone()),
+                        existing_statement: existing_statement.clone(),
+                        existing_status: existing_status.clone(),
+                        source_path: source_path.clone(),
+                        explanation: format!(
+                            "accepted decision with same scope may conflict ({} keywords overlap)",
+                            keyword_overlap
+                        ),
+                    });
+                }
+            }
+        }
+    }
+
+    hints
 }
 
 fn extract_statement_from_snippet(snippet: &str) -> String {
@@ -742,6 +899,104 @@ fn extract_decision_candidates(
 
 fn handle_decisions_command(command: &DecisionsCommands, config: &Config) -> Result<()> {
     match command {
+        DecisionsCommands::Conflicts {
+            proposal_json,
+            project,
+            all_projects,
+            json: emit_json,
+            indexed_only,
+        } => {
+            // Parse proposal from input or stdin
+            let proposal_str = if let Some(json_str) = proposal_json {
+                json_str.clone()
+            } else {
+                use std::io::Read;
+                let mut buffer = String::new();
+                std::io::stdin()
+                    .read_to_string(&mut buffer)
+                    .map_err(|err| miette::miette!("Failed to read from stdin: {}", err))?;
+                buffer
+            };
+
+            let proposal: ProposalInput = serde_json::from_str(&proposal_str)
+                .map_err(|err| miette::miette!("Failed to parse proposal JSON: {}", err))?;
+
+            let engine = if *indexed_only {
+                create_indexed_only_engine(config)?
+            } else {
+                create_engine(config)?
+            };
+
+            let effective_project = if *all_projects {
+                None
+            } else {
+                match project {
+                    Some(p) => Some(p.clone()),
+                    None => std::env::current_dir()
+                        .ok()
+                        .map(|p| p.to_string_lossy().replace('/', "-")),
+                }
+            };
+
+            // Query all decision records for the project
+            let query = backscroll::core::IndexedRecordQuery {
+                project: effective_project,
+                source: Some("decision".to_string()),
+                source_path: None,
+                after: None,
+                before: None,
+                limit: 0,
+            };
+
+            let records = engine.query_indexed_records(&query)?;
+            let mut existing_decisions = Vec::new();
+
+            for record in records {
+                let (id, _title, rec_status, rec_scope, _is_accepted) =
+                    get_decision_metadata(&record.text, &record.source_path);
+                existing_decisions.push((
+                    id.unwrap_or_default(),
+                    record.text.clone(),
+                    rec_status,
+                    rec_scope,
+                    record.source_path.clone(),
+                ));
+            }
+
+            let hints = detect_conflicts(&proposal, &existing_decisions);
+
+            if *emit_json {
+                println!(
+                    "{}",
+                    serde_json::to_string(&hints).map_err(|err| {
+                        miette::miette!("Failed to serialize conflict hints: {}", err)
+                    })?
+                );
+            } else {
+                if hints.is_empty() {
+                    println!("No conflicts found.");
+                } else {
+                    println!("Conflict Analysis:");
+                    println!(
+                        "Proposal: {} (scope: {})\n",
+                        proposal.statement,
+                        proposal.scope.as_deref().unwrap_or("unspecified")
+                    );
+                    for (i, hint) in hints.iter().enumerate() {
+                        println!(
+                            "{}. [{}] {} at {}",
+                            i + 1,
+                            hint.conflict_type.to_uppercase(),
+                            hint.existing_decision_id.as_deref().unwrap_or("(no id)"),
+                            hint.source_path
+                        );
+                        println!("   Statement: {}", hint.existing_statement);
+                        println!("   Status: {}", hint.existing_status);
+                        println!("   Note: {}\n", hint.explanation);
+                    }
+                }
+            }
+        }
         DecisionsCommands::Extract {
             project,
             all_projects,
@@ -866,6 +1121,8 @@ fn handle_decisions_command(command: &DecisionsCommands, config: &Config) -> Res
                 // Truncate excerpt to first 200 chars
                 let excerpt = record.text.chars().take(200).collect::<String>();
 
+                let freshness = compute_freshness(record.timestamp.as_deref());
+
                 let decision = DecisionRecord {
                     id: id.clone(),
                     title: title.clone(),
@@ -879,6 +1136,8 @@ fn handle_decisions_command(command: &DecisionsCommands, config: &Config) -> Res
                     }),
                     is_accepted,
                     excerpt,
+                    freshness: Some(freshness.clone()),
+                    last_seen: record.timestamp.clone(),
                 };
 
                 if *json {
@@ -891,11 +1150,12 @@ fn handle_decisions_command(command: &DecisionsCommands, config: &Config) -> Res
                 } else {
                     let status_indicator = if is_accepted { "[✓]" } else { "[ ]" };
                     println!(
-                        "{} {}\n   Status: {} | Scope: {} | {}\n",
+                        "{} {}\n   Status: {} | Scope: {} | Freshness: {} | {}\n",
                         status_indicator,
                         title,
                         rec_status,
                         rec_scope.as_deref().unwrap_or("unspecified"),
+                        freshness,
                         record.source_path
                     );
                 }
@@ -962,6 +1222,8 @@ fn handle_decisions_command(command: &DecisionsCommands, config: &Config) -> Res
                     break;
                 }
 
+                let freshness = compute_freshness(record.timestamp.as_deref());
+
                 let decision = DecisionRecord {
                     id,
                     title,
@@ -975,6 +1237,8 @@ fn handle_decisions_command(command: &DecisionsCommands, config: &Config) -> Res
                     }),
                     is_accepted,
                     excerpt,
+                    freshness: Some(freshness),
+                    last_seen: record.timestamp.clone(),
                 };
 
                 total_tokens += token_estimate;
@@ -2413,5 +2677,111 @@ mod tests {
         let candidates = extract_decision_candidates(records, &since_filter);
         assert_eq!(candidates.len(), 1);
         assert_eq!(candidates[0].evidence[0].source_path, "session-new.jsonl");
+    }
+
+    #[test]
+    fn conflicts_superseded_detected() {
+        let proposal = ProposalInput {
+            id: Some("DEC-001".to_string()),
+            statement: "use node for all scripts".to_string(),
+            status: Some("proposed".to_string()),
+            scope: None,
+        };
+
+        let existing_records = vec![(
+            "DEC-001".to_string(),
+            "use node for all scripts".to_string(),
+            "superseded".to_string(),
+            None,
+            "docs/adr/0001.md".to_string(),
+        )];
+
+        let hints = detect_conflicts(&proposal, &existing_records);
+        assert_eq!(hints.len(), 1);
+        assert_eq!(hints[0].conflict_type, "superseded");
+        assert_eq!(hints[0].existing_status, "superseded");
+    }
+
+    #[test]
+    fn conflicts_duplicate_detected() {
+        let proposal = ProposalInput {
+            id: None,
+            statement: "use typescript for frontend development".to_string(),
+            status: Some("proposed".to_string()),
+            scope: None,
+        };
+
+        let existing_records = vec![(
+            "DEC-002".to_string(),
+            "use typescript for frontend development".to_string(),
+            "accepted".to_string(),
+            None,
+            "docs/adr/0002.md".to_string(),
+        )];
+
+        let hints = detect_conflicts(&proposal, &existing_records);
+        assert_eq!(hints.len(), 1);
+        assert_eq!(hints[0].conflict_type, "duplicate");
+    }
+
+    #[test]
+    fn conflicts_potential_conflict_detected() {
+        let proposal = ProposalInput {
+            id: None,
+            statement: "use pnpm package manager for builds".to_string(),
+            status: Some("proposed".to_string()),
+            scope: Some("technical".to_string()),
+        };
+
+        let existing_records = vec![(
+            "DEC-003".to_string(),
+            "npm package manager is our standard".to_string(),
+            "accepted".to_string(),
+            Some("technical".to_string()),
+            "docs/adr/0003.md".to_string(),
+        )];
+
+        let hints = detect_conflicts(&proposal, &existing_records);
+        assert_eq!(hints.len(), 1);
+        assert_eq!(hints[0].conflict_type, "potential_conflict");
+    }
+
+    #[test]
+    fn conflicts_no_conflict_returns_empty() {
+        let proposal = ProposalInput {
+            id: None,
+            statement: "use bun for testing".to_string(),
+            status: Some("proposed".to_string()),
+            scope: Some("technical".to_string()),
+        };
+
+        let existing_records = vec![(
+            "DEC-004".to_string(),
+            "postgres is our database".to_string(),
+            "accepted".to_string(),
+            Some("technical".to_string()),
+            "docs/adr/0004.md".to_string(),
+        )];
+
+        let hints = detect_conflicts(&proposal, &existing_records);
+        assert_eq!(hints.len(), 0);
+    }
+
+    #[test]
+    fn freshness_active_for_2026() {
+        let result = compute_freshness(Some("2026-05-11T10:00:00Z"));
+        assert_eq!(result, "active");
+    }
+
+    #[test]
+    fn freshness_stale_for_2025() {
+        let result = compute_freshness(Some("2025-01-01T10:00:00Z"));
+        assert_eq!(result, "stale");
+    }
+
+    #[test]
+    fn freshness_unknown_when_none() {
+        let result = compute_freshness(None);
+        assert_eq!(result, "unknown");
     }
 }
