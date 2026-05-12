@@ -3257,3 +3257,203 @@ fn test_no_embeddings_flag() {
         .assert()
         .success();
 }
+
+fn write_decisions_input_manifest(config_dir: &std::path::Path, root: &std::path::Path) {
+    write_manifest_file(
+        config_dir,
+        "decisions.inputs.toml",
+        format!(
+            r#"version = 1
+
+[[inputs]]
+id = "decisions"
+source = "decision"
+active = true
+
+[inputs.discover]
+roots = ["{}"]
+include = ["**/*.md"]
+
+[inputs.decode]
+format = "markdown"
+
+[inputs.record]
+# Decisions are indexed as whole documents
+"#,
+            root.display()
+        ),
+    );
+}
+
+#[test]
+fn test_decisions_query_json() {
+    let work_dir = tempdir().unwrap();
+    let decisions_dir = tempdir().unwrap();
+    let db_dir = tempdir().unwrap();
+    let db_path = db_dir.path().join("decisions_query.db");
+
+    // Write decision files
+    fs::write(
+        decisions_dir.path().join("auth.md"),
+        r#"---
+id: DEC-AUTH-001
+status: accepted
+scope: technical
+---
+
+# Implement OAuth 2.0
+
+Use OAuth 2.0 for API authentication.
+"#,
+    )
+    .unwrap();
+
+    fs::write(
+        decisions_dir.path().join("cache.md"),
+        r#"---
+id: DEC-CACHE-001
+status: proposed
+scope: architectural
+---
+
+# Use Redis for Caching
+
+Adopt Redis as the cache layer.
+"#,
+    )
+    .unwrap();
+
+    write_decisions_input_manifest(work_dir.path(), decisions_dir.path());
+
+    // First sync to index decisions
+    backscroll_cmd()
+        .current_dir(work_dir.path())
+        .arg("sync")
+        .env("BACKSCROLL_DATABASE_PATH", db_path.to_str().unwrap())
+        .env("BACKSCROLL_CONFIG_DIR", work_dir.path().to_str().unwrap())
+        .assert()
+        .success();
+
+    // Query all decisions
+    backscroll_cmd()
+        .current_dir(work_dir.path())
+        .arg("decisions")
+        .arg("query")
+        .arg("--json")
+        .arg("--all-projects")
+        .env("BACKSCROLL_DATABASE_PATH", db_path.to_str().unwrap())
+        .env("BACKSCROLL_CONFIG_DIR", work_dir.path().to_str().unwrap())
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("DEC-AUTH-001"))
+        .stdout(predicate::str::contains("DEC-CACHE-001"))
+        .stdout(predicate::str::contains("\"is_accepted\":true"))
+        .stdout(predicate::str::contains("\"is_accepted\":false"));
+}
+
+#[test]
+fn test_decisions_query_status_filter() {
+    let work_dir = tempdir().unwrap();
+    let decisions_dir = tempdir().unwrap();
+    let db_dir = tempdir().unwrap();
+    let db_path = db_dir.path().join("decisions_filter.db");
+
+    fs::write(
+        decisions_dir.path().join("accepted.md"),
+        r#"---
+id: DEC-001
+status: accepted
+---
+
+# Accepted Decision
+"#,
+    )
+    .unwrap();
+
+    fs::write(
+        decisions_dir.path().join("proposed.md"),
+        r#"---
+id: DEC-002
+status: proposed
+---
+
+# Proposed Decision
+"#,
+    )
+    .unwrap();
+
+    write_decisions_input_manifest(work_dir.path(), decisions_dir.path());
+
+    backscroll_cmd()
+        .current_dir(work_dir.path())
+        .arg("sync")
+        .env("BACKSCROLL_DATABASE_PATH", db_path.to_str().unwrap())
+        .env("BACKSCROLL_CONFIG_DIR", work_dir.path().to_str().unwrap())
+        .assert()
+        .success();
+
+    // Filter by accepted status
+    backscroll_cmd()
+        .current_dir(work_dir.path())
+        .arg("decisions")
+        .arg("query")
+        .arg("--status")
+        .arg("accepted")
+        .arg("--json")
+        .arg("--all-projects")
+        .env("BACKSCROLL_DATABASE_PATH", db_path.to_str().unwrap())
+        .env("BACKSCROLL_CONFIG_DIR", work_dir.path().to_str().unwrap())
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("DEC-001"))
+        .stdout(predicate::str::contains("DEC-002").not());
+}
+
+#[test]
+fn test_decisions_context_json() {
+    let work_dir = tempdir().unwrap();
+    let decisions_dir = tempdir().unwrap();
+    let db_dir = tempdir().unwrap();
+    let db_path = db_dir.path().join("decisions_context.db");
+
+    fs::write(
+        decisions_dir.path().join("decision1.md"),
+        r#"---
+id: DEC-001
+status: accepted
+scope: technical
+---
+
+# First Decision
+
+This is the first important decision.
+"#,
+    )
+    .unwrap();
+
+    write_decisions_input_manifest(work_dir.path(), decisions_dir.path());
+
+    backscroll_cmd()
+        .current_dir(work_dir.path())
+        .arg("sync")
+        .env("BACKSCROLL_DATABASE_PATH", db_path.to_str().unwrap())
+        .env("BACKSCROLL_CONFIG_DIR", work_dir.path().to_str().unwrap())
+        .assert()
+        .success();
+
+    // Get decision context
+    backscroll_cmd()
+        .current_dir(work_dir.path())
+        .arg("decisions")
+        .arg("context")
+        .arg("--json")
+        .arg("--all-projects")
+        .env("BACKSCROLL_DATABASE_PATH", db_path.to_str().unwrap())
+        .env("BACKSCROLL_CONFIG_DIR", work_dir.path().to_str().unwrap())
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("\"project\""))
+        .stdout(predicate::str::contains("\"decisions\""))
+        .stdout(predicate::str::contains("\"total_tokens\""))
+        .stdout(predicate::str::contains("DEC-001"));
+}

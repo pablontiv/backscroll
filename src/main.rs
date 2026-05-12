@@ -234,6 +234,11 @@ enum Commands {
         #[command(subcommand)]
         command: ProjectsCommands,
     },
+    /// Query and analyze decision records
+    Decisions {
+        #[command(subcommand)]
+        command: DecisionsCommands,
+    },
     /// Mostrar estado del índice
     Status {
         /// Emit machine-readable JSON
@@ -376,6 +381,52 @@ enum ProjectsCommands {
     },
 }
 
+#[derive(Subcommand)]
+enum DecisionsCommands {
+    /// Query indexed decision records
+    Query {
+        /// Filter by project (default: derived from current directory)
+        #[arg(short, long)]
+        project: Option<String>,
+        /// Query all projects instead of deriving the current project
+        #[arg(long, default_value_t = false)]
+        all_projects: bool,
+        /// Filter by decision status: accepted, proposed, candidate, rejected, superseded, conflicted, obsolete
+        #[arg(long)]
+        status: Option<String>,
+        /// Filter by decision scope: technical, organizational, architectural, operational
+        #[arg(long)]
+        scope: Option<String>,
+        /// Emit JSON Lines (the stable output format for this command)
+        #[arg(long, default_value_t = false)]
+        json: bool,
+        /// Maximum records to stream (default 100, 0 = no limit)
+        #[arg(long, default_value_t = 100)]
+        limit: usize,
+        /// Read only the existing SQLite index without auto-syncing inputs
+        #[arg(long, default_value_t = false)]
+        indexed_only: bool,
+    },
+    /// Get bounded decision context for LLM injection
+    Context {
+        /// Filter by project (default: derived from current directory)
+        #[arg(short, long)]
+        project: Option<String>,
+        /// Query all projects instead of deriving the current project
+        #[arg(long, default_value_t = false)]
+        all_projects: bool,
+        /// Maximum tokens (approximate) for context (default: 8000)
+        #[arg(long, default_value = "8000")]
+        max_tokens: usize,
+        /// Emit JSON output
+        #[arg(long, default_value_t = false)]
+        json: bool,
+        /// Read only the existing SQLite index without auto-syncing inputs
+        #[arg(long, default_value_t = false)]
+        indexed_only: bool,
+    },
+}
+
 #[derive(Serialize)]
 struct ProjectIdentifyOutput {
     project_id: String,
@@ -393,6 +444,303 @@ struct ProjectListOutput {
 struct ProjectAliasesOutput {
     project_id: String,
     aliases: Vec<String>,
+}
+
+#[derive(Serialize)]
+struct DecisionRecord {
+    id: Option<String>,
+    title: String,
+    status: String,
+    scope: Option<String>,
+    source_path: String,
+    provenance: serde_json::Value,
+    is_accepted: bool,
+    excerpt: String,
+}
+
+#[derive(Serialize)]
+struct DecisionContext {
+    project: Option<String>,
+    decisions: Vec<DecisionRecord>,
+    total_tokens: usize,
+}
+
+fn extract_frontmatter(text: &str) -> (Option<serde_json::Value>, String) {
+    use backscroll::core::sources::parse_frontmatter;
+
+    let (fm_opt, rest) = parse_frontmatter(text);
+    let fm_value = fm_opt.and_then(|fm_str| serde_json::from_str(&fm_str).ok());
+    (fm_value, rest.to_string())
+}
+
+fn get_decision_metadata(
+    text: &str,
+    source_path: &str,
+) -> (Option<String>, String, String, Option<String>, bool) {
+    let (fm_opt, rest) = extract_frontmatter(text);
+
+    // Extract ID from frontmatter
+    let id = fm_opt
+        .as_ref()
+        .and_then(|fm| fm.get("id"))
+        .and_then(|v| v.as_str())
+        .map(|s| s.to_string());
+
+    // Extract status from frontmatter (default: "proposed")
+    let status = fm_opt
+        .as_ref()
+        .and_then(|fm| fm.get("status"))
+        .and_then(|v| v.as_str())
+        .unwrap_or("proposed")
+        .to_string();
+
+    // Extract scope from frontmatter
+    let scope = fm_opt
+        .as_ref()
+        .and_then(|fm| fm.get("scope"))
+        .and_then(|v| v.as_str())
+        .map(|s| s.to_string());
+
+    // Accepted if status is "accepted" or "proposed" (pending acceptance)
+    let is_accepted = status.to_lowercase() == "accepted";
+
+    // Extract title from first heading or fallback to path
+    let title = rest
+        .lines()
+        .find(|line| line.trim().starts_with('#'))
+        .map(|line| {
+            line.trim()
+                .trim_start_matches('#')
+                .trim()
+                .to_string()
+        })
+        .unwrap_or_else(|| {
+            std::path::Path::new(source_path)
+                .file_stem()
+                .and_then(|stem| stem.to_str())
+                .unwrap_or("Unknown")
+                .to_string()
+        });
+
+    (id, title, status, scope, is_accepted)
+}
+
+fn handle_decisions_command(command: &DecisionsCommands, config: &Config) -> Result<()> {
+    match command {
+        DecisionsCommands::Query {
+            project,
+            all_projects,
+            status,
+            scope,
+            json,
+            limit,
+            indexed_only,
+        } => {
+            let engine = if *indexed_only {
+                create_indexed_only_engine(config)?
+            } else {
+                create_engine(config)?
+            };
+
+            let effective_project = if *all_projects {
+                None
+            } else {
+                match project {
+                    Some(p) => Some(p.clone()),
+                    None => std::env::current_dir()
+                        .ok()
+                        .map(|p| p.to_string_lossy().replace('/', "-")),
+                }
+            };
+
+            let query = backscroll::core::IndexedRecordQuery {
+                project: effective_project,
+                source: Some("decision".to_string()),
+                source_path: None,
+                after: None,
+                before: None,
+                limit: *limit,
+            };
+
+            let records = engine.query_indexed_records(&query)?;
+            let mut decision_count = 0;
+
+            for record in records {
+                let (id, title, rec_status, rec_scope, is_accepted) =
+                    get_decision_metadata(&record.text, &record.source_path);
+
+                // Apply status filter if provided
+                if let Some(status_filter) = status {
+                    if rec_status.to_lowercase() != status_filter.to_lowercase() {
+                        continue;
+                    }
+                }
+
+                // Apply scope filter if provided
+                if let Some(scope_filter) = scope {
+                    if let Some(rec_scope_val) = &rec_scope {
+                        if rec_scope_val.to_lowercase() != scope_filter.to_lowercase() {
+                            continue;
+                        }
+                    } else {
+                        continue;
+                    }
+                }
+
+                // Truncate excerpt to first 200 chars
+                let excerpt = record
+                    .text
+                    .chars()
+                    .take(200)
+                    .collect::<String>();
+
+                let decision = DecisionRecord {
+                    id: id.clone(),
+                    title: title.clone(),
+                    status: rec_status.clone(),
+                    scope: rec_scope.clone(),
+                    source_path: record.source_path.clone(),
+                    provenance: serde_json::json!({
+                        "source": record.source,
+                        "timestamp": record.timestamp,
+                        "ordinal": record.ordinal,
+                    }),
+                    is_accepted,
+                    excerpt,
+                };
+
+                if *json {
+                    println!(
+                        "{}",
+                        serde_json::to_string(&decision).map_err(|err| {
+                            miette::miette!("Failed to serialize decision record: {}", err)
+                        })?
+                    );
+                } else {
+                    let status_indicator = if is_accepted { "[✓]" } else { "[ ]" };
+                    println!(
+                        "{} {}\n   Status: {} | Scope: {} | {}\n",
+                        status_indicator,
+                        title,
+                        rec_status,
+                        rec_scope.as_deref().unwrap_or("unspecified"),
+                        record.source_path
+                    );
+                }
+
+                decision_count += 1;
+            }
+
+            if !*json && decision_count == 0 {
+                println!("No decisions found.");
+            }
+        }
+        DecisionsCommands::Context {
+            project,
+            all_projects,
+            max_tokens,
+            json,
+            indexed_only,
+        } => {
+            let engine = if *indexed_only {
+                create_indexed_only_engine(config)?
+            } else {
+                create_engine(config)?
+            };
+
+            let effective_project = if *all_projects {
+                None
+            } else {
+                match project {
+                    Some(p) => Some(p.clone()),
+                    None => std::env::current_dir()
+                        .ok()
+                        .map(|p| p.to_string_lossy().replace('/', "-")),
+                }
+            };
+
+            // Fetch all decisions for the project
+            let query = backscroll::core::IndexedRecordQuery {
+                project: effective_project.clone(),
+                source: Some("decision".to_string()),
+                source_path: None,
+                after: None,
+                before: None,
+                limit: 0,
+            };
+
+            let records = engine.query_indexed_records(&query)?;
+            let mut decisions = Vec::new();
+            let mut total_tokens = 0;
+
+            for record in records {
+                let (id, title, rec_status, rec_scope, is_accepted) =
+                    get_decision_metadata(&record.text, &record.source_path);
+
+                // Create a bounded excerpt suitable for context
+                let max_excerpt_chars = (*max_tokens as f64 * 4.0) as usize;
+                let excerpt = record
+                    .text
+                    .chars()
+                    .take(max_excerpt_chars)
+                    .collect::<String>();
+
+                let token_estimate = excerpt.split_whitespace().count() + 10;
+                if total_tokens + token_estimate > *max_tokens {
+                    break;
+                }
+
+                let decision = DecisionRecord {
+                    id,
+                    title,
+                    status: rec_status,
+                    scope: rec_scope,
+                    source_path: record.source_path.clone(),
+                    provenance: serde_json::json!({
+                        "source": record.source,
+                        "timestamp": record.timestamp,
+                        "ordinal": record.ordinal,
+                    }),
+                    is_accepted,
+                    excerpt,
+                };
+
+                total_tokens += token_estimate;
+                decisions.push(decision);
+            }
+
+            let context = DecisionContext {
+                project: effective_project,
+                decisions,
+                total_tokens,
+            };
+
+            if *json {
+                println!(
+                    "{}",
+                    serde_json::to_string(&context).map_err(|err| {
+                        miette::miette!("Failed to serialize decision context: {}", err)
+                    })?
+                );
+            } else {
+                println!("Decision Context (approx {} tokens)", context.total_tokens);
+                println!("Project: {}", context.project.as_deref().unwrap_or("(all)"));
+                println!("Decisions: {}\n", context.decisions.len());
+
+                for decision in &context.decisions {
+                    let status_indicator = if decision.is_accepted { "[✓]" } else { "[ ]" };
+                    println!(
+                        "{} {}\n   Status: {} | Scope: {}\n",
+                        status_indicator,
+                        decision.title,
+                        decision.status,
+                        decision.scope.as_deref().unwrap_or("unspecified")
+                    );
+                }
+            }
+        }
+    }
+    Ok(())
 }
 
 fn handle_projects_command(command: &ProjectsCommands) -> Result<()> {
@@ -867,6 +1215,11 @@ fn main() -> Result<()> {
 
     if let Commands::Projects { command } = &cli.command {
         return handle_projects_command(command);
+    }
+
+    if let Commands::Decisions { command } = &cli.command {
+        let config = Config::load().unwrap_or_else(|_| Config::default_with_paths());
+        return handle_decisions_command(command, &config);
     }
     let input_config = if matches!(
         &cli.command,
@@ -1474,6 +1827,9 @@ fn main() -> Result<()> {
         }
         Commands::Inputs { .. } => unreachable!("inputs commands are handled before DB setup"),
         Commands::Projects { .. } => unreachable!("projects commands are handled before DB setup"),
+        Commands::Decisions { command } => {
+            return handle_decisions_command(command, &config);
+        }
         Commands::Status { json, indexed_only } => {
             if *json {
                 print_status_json(&config, &input_config, *indexed_only)?;

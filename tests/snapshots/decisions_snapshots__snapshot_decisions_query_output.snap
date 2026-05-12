@@ -1,0 +1,7 @@
+---
+source: tests/decisions_snapshots.rs
+assertion_line: 158
+expression: normalized
+---
+{"excerpt":"---\nid: DEC-AUTH-001\nstatus: accepted\nscope: technical\n---\n\n# Implement OAuth 2.0\n\nWe've decided to implement OAuth 2.0 as the standard authentication mechanism for all external API access.\n\n## Ration","id":"DEC-AUTH-001","is_accepted":true,"provenance":{"ordinal":0,"source":"decision","timestamp":null},"scope":"technical","source_path":"/decisions/auth.md","status":"accepted","title":"Implement OAuth 2.0"}
+{"excerpt":"---\nid: DEC-CACHE-001\nstatus: proposed\nscope: architectural\n---\n\n# Use Redis for Distributed Caching\n\nThis is a proposal to adopt Redis as the standard distributed cache layer.\n\n## Advantages\n\n- High ","id":"DEC-CACHE-001","is_accepted":false,"provenance":{"ordinal":0,"source":"decision","timestamp":null},"scope":"architectural","source_path":"/decisions/cache.md","status":"proposed","title":"Use Redis for Distributed Caching"}
