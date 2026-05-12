@@ -102,6 +102,7 @@ Configurable in `[sources]` section of `backscroll.toml`. Source types: `ke`, `d
 - **Content-type classification**: Messages classified as `text`/`code`/`tool` based on `MessageContent::Blocks` types during sync.
 - **Bundled SQLite**: `rusqlite` with `bundled` feature — no system SQLite dependency.
 - **Rust edition 2024** with strict linting: clippy nursery + pedantic enabled, `-D warnings` in CI.
+- **Schema migration rule**: Every new table or column MUST be introduced as a new migration version (increment the version number and add a new `if current_version == N` block in `setup_schema()`). Never modify existing migration blocks — existing databases that already passed that version will never re-run them, causing the table/column to silently not exist.
 
 ## Dependencies
 

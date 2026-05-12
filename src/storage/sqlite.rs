@@ -498,6 +498,58 @@ impl Database {
                 .into_diagnostic()?;
         }
 
+        let current_version: i64 = self
+            .conn
+            .query_row("SELECT version FROM schema_version", [], |row| row.get(0))
+            .into_diagnostic()?;
+
+        if current_version == 6 {
+            // session_events was initially placed in the v1→v2 block but existing DBs were
+            // already at v6 when it was introduced, so they skipped it. This v7 migration
+            // backfills the table for all existing databases.
+            self.conn
+                .execute(
+                    "CREATE TABLE IF NOT EXISTS session_events (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    schema_version INTEGER NOT NULL DEFAULT 1,
+                    source TEXT NOT NULL DEFAULT 'session',
+                    source_path TEXT NOT NULL,
+                    project TEXT,
+                    ordinal INTEGER NOT NULL,
+                    timestamp TEXT,
+                    event_type TEXT NOT NULL,
+                    actor TEXT,
+                    role TEXT,
+                    tool_name TEXT,
+                    tool_id TEXT,
+                    command TEXT,
+                    cwd TEXT,
+                    exit_code INTEGER,
+                    is_error INTEGER,
+                    snippet TEXT NOT NULL
+                )",
+                    [],
+                )
+                .into_diagnostic()?;
+
+            self.conn
+                .execute(
+                    "CREATE INDEX IF NOT EXISTS idx_session_events_order ON session_events(source_path, ordinal, timestamp, id)",
+                    [],
+                )
+                .into_diagnostic()?;
+            self.conn
+                .execute(
+                    "CREATE INDEX IF NOT EXISTS idx_session_events_project ON session_events(project)",
+                    [],
+                )
+                .into_diagnostic()?;
+
+            self.conn
+                .execute("UPDATE schema_version SET version = 7", [])
+                .into_diagnostic()?;
+        }
+
         Ok(())
     }
 
@@ -3055,12 +3107,17 @@ mod tests {
             )
             .unwrap();
 
-        // Verify schema version is 6
+        // Verify session_events table exists (added in v7 to backfill existing v6 DBs)
+        db.conn
+            .prepare("SELECT id, source_path, event_type, snippet FROM session_events LIMIT 1")
+            .unwrap();
+
+        // Verify schema version is 7
         let version: i32 = db
             .conn
             .query_row("SELECT version FROM schema_version", [], |row| row.get(0))
             .unwrap();
-        assert_eq!(version, 6);
+        assert_eq!(version, 7);
     }
 
     #[test]
