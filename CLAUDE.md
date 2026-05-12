@@ -175,10 +175,8 @@ Workflows delegate to [pablontiv/crossbeam](https://github.com/pablontiv/crossbe
 | Workflow | Crossbeam caller |
 |---|---|
 | `ci.yml` | `rust-ci.yml`, `gitleaks.yml`, `rust-release.yml` |
-| `codeql.yml` | `codeql.yml` (runs on nightly schedule at 3 AM UTC for efficiency) |
-| `scorecard.yml` | `scorecard.yml` (runs on nightly schedule at 4 AM UTC for efficiency) |
-
-Security scanning workflows now run on a scheduled basis (not on every push) to reduce CI load, with concurrency controls in `ci.yml` to cancel redundant runs during commit bursts.
+| `codeql.yml` | `codeql.yml` |
+| `scorecard.yml` | `scorecard.yml` |
 
 ## Config Resolution Order
 
