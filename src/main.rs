@@ -425,6 +425,43 @@ enum DecisionsCommands {
         #[arg(long, default_value_t = false)]
         indexed_only: bool,
     },
+    /// Extract decision candidates from indexed session records using heuristics
+    Extract {
+        /// Filter by project (default: derived from current directory)
+        #[arg(short, long)]
+        project: Option<String>,
+        /// Query all projects instead of deriving the current project
+        #[arg(long, default_value_t = false)]
+        all_projects: bool,
+        /// Only sessions since this date (ISO 8601, e.g. 2026-01-01)
+        #[arg(long)]
+        since: Option<String>,
+        /// Maximum candidates to emit (default 0 = no limit)
+        #[arg(long, default_value_t = 0)]
+        limit: usize,
+        /// Emit JSON Lines output
+        #[arg(long, default_value_t = false)]
+        jsonl: bool,
+        /// Read only the existing SQLite index without auto-syncing inputs
+        #[arg(long, default_value_t = false)]
+        indexed_only: bool,
+    },
+}
+
+#[derive(Serialize)]
+struct CandidateEvidence {
+    source_path: String,
+    snippet: String,
+    timestamp: Option<String>,
+}
+
+#[derive(Serialize)]
+struct DecisionCandidate {
+    statement: String,
+    status: String,
+    confidence: f64,
+    cluster_id: String,
+    evidence: Vec<CandidateEvidence>,
 }
 
 #[derive(Serialize)]
@@ -508,12 +545,7 @@ fn get_decision_metadata(
     let title = rest
         .lines()
         .find(|line| line.trim().starts_with('#'))
-        .map(|line| {
-            line.trim()
-                .trim_start_matches('#')
-                .trim()
-                .to_string()
-        })
+        .map(|line| line.trim().trim_start_matches('#').trim().to_string())
         .unwrap_or_else(|| {
             std::path::Path::new(source_path)
                 .file_stem()
@@ -525,8 +557,252 @@ fn get_decision_metadata(
     (id, title, status, scope, is_accepted)
 }
 
+fn normalize_statement(text: &str) -> String {
+    text.to_lowercase()
+        .chars()
+        .map(|c| {
+            if c.is_alphanumeric() || c.is_whitespace() {
+                c
+            } else {
+                ' '
+            }
+        })
+        .collect::<String>()
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
+fn compute_cluster_id(statement: &str) -> String {
+    let normalized = normalize_statement(statement);
+    normalized.chars().take(40).collect()
+}
+
+fn extract_statement_from_snippet(snippet: &str) -> String {
+    let lower = snippet.to_lowercase();
+
+    let prefixes = vec![
+        "we decided to ",
+        "decision: ",
+        "decided: ",
+        "we have decided to ",
+        "the decision is ",
+        "we will use ",
+        "we are using ",
+        "we should ",
+        "we need to ",
+        "going forward ",
+        "we will not ",
+        "we must not ",
+    ];
+
+    for prefix in prefixes {
+        if lower.starts_with(prefix) {
+            let rest = &snippet[prefix.len()..];
+            return rest.trim().to_string();
+        }
+    }
+
+    snippet.trim().to_string()
+}
+
+fn get_confidence_for_snippet(snippet: &str) -> f64 {
+    let lower = snippet.to_lowercase();
+
+    // 0.90: exact phrase match
+    if lower.starts_with("we decided to ")
+        || lower.starts_with("decision: ")
+        || lower.starts_with("decided: ")
+        || lower.starts_with("we will not ")
+        || lower.starts_with("we must not ")
+    {
+        0.90
+    }
+    // 0.75: second tier patterns
+    else if lower.starts_with("we will use ")
+        || lower.starts_with("we are using ")
+        || lower.starts_with("we have decided ")
+        || lower.starts_with("the decision is ")
+    {
+        0.75
+    }
+    // 0.60: third tier patterns
+    else if (lower.starts_with("we should ") && !lower.starts_with("we should not "))
+        || lower.starts_with("we need to ")
+        || lower.starts_with("going forward ")
+    {
+        0.60
+    } else {
+        0.0
+    }
+}
+
+fn matches_decision_pattern(line: &str) -> bool {
+    let lower = line.to_lowercase();
+    lower.contains("we decided to ")
+        || lower.contains("decision: ")
+        || lower.contains("decided: ")
+        || lower.contains("we have decided ")
+        || lower.contains("the decision is ")
+        || lower.contains("we will use ")
+        || lower.contains("we are using ")
+        || lower.contains("we should ")
+        || lower.contains("we need to ")
+        || lower.contains("going forward ")
+        || lower.contains("we will not ")
+        || lower.contains("we must not ")
+}
+
+fn extract_decision_candidates(
+    records: Vec<backscroll::core::IndexedRecord>,
+    since_filter: &Option<String>,
+) -> Vec<DecisionCandidate> {
+    use std::collections::BTreeMap;
+
+    let mut candidates_by_cluster: BTreeMap<String, (f64, Vec<CandidateEvidence>)> =
+        BTreeMap::new();
+
+    for record in records {
+        // Apply since filter if provided
+        if let Some(since) = since_filter {
+            if let Some(ref timestamp) = record.timestamp {
+                if timestamp < since {
+                    continue;
+                }
+            } else {
+                // Skip records without timestamp if since filter is active
+                continue;
+            }
+        }
+
+        // Process each line in the record text
+        for line in record.text.lines() {
+            let trimmed = line.trim();
+
+            // Skip lines that are too short or too long
+            if trimmed.len() < 20 || trimmed.len() > 500 {
+                continue;
+            }
+
+            // Check if line matches decision patterns
+            if !matches_decision_pattern(trimmed) {
+                continue;
+            }
+
+            let confidence = get_confidence_for_snippet(trimmed);
+            if confidence <= 0.0 {
+                continue;
+            }
+
+            let statement = extract_statement_from_snippet(trimmed);
+            let cluster_id = compute_cluster_id(&statement);
+
+            let evidence = CandidateEvidence {
+                source_path: record.source_path.clone(),
+                snippet: trimmed.to_string(),
+                timestamp: record.timestamp.clone(),
+            };
+
+            candidates_by_cluster
+                .entry(cluster_id.clone())
+                .and_modify(|(max_conf, _)| {
+                    if confidence > *max_conf {
+                        *max_conf = confidence;
+                    }
+                })
+                .or_insert((confidence, Vec::new()));
+
+            candidates_by_cluster
+                .get_mut(&cluster_id)
+                .unwrap()
+                .1
+                .push(evidence);
+        }
+    }
+
+    // Convert to DecisionCandidate vec, one per cluster
+    candidates_by_cluster
+        .into_iter()
+        .map(|(cluster_id, (confidence, evidence))| {
+            let statement = evidence
+                .first()
+                .map(|e| extract_statement_from_snippet(&e.snippet))
+                .unwrap_or_default();
+
+            DecisionCandidate {
+                statement,
+                status: "candidate".to_string(),
+                confidence,
+                cluster_id,
+                evidence,
+            }
+        })
+        .collect()
+}
+
 fn handle_decisions_command(command: &DecisionsCommands, config: &Config) -> Result<()> {
     match command {
+        DecisionsCommands::Extract {
+            project,
+            all_projects,
+            since,
+            limit,
+            jsonl: _,
+            indexed_only,
+        } => {
+            let engine = if *indexed_only {
+                create_indexed_only_engine(config)?
+            } else {
+                create_engine(config)?
+            };
+
+            let effective_project = if *all_projects {
+                None
+            } else {
+                match project {
+                    Some(p) => Some(p.clone()),
+                    None => std::env::current_dir()
+                        .ok()
+                        .map(|p| p.to_string_lossy().replace('/', "-")),
+                }
+            };
+
+            // Query all session records (not decision records)
+            let query = backscroll::core::IndexedRecordQuery {
+                project: effective_project,
+                source: Some("session".to_string()),
+                source_path: None,
+                after: None,
+                before: None,
+                limit: 0,
+            };
+
+            let records = engine.query_indexed_records(&query)?;
+            let mut candidates = extract_decision_candidates(records, since);
+
+            // Sort by confidence descending, then by cluster_id
+            candidates.sort_by(|a, b| {
+                b.confidence
+                    .partial_cmp(&a.confidence)
+                    .unwrap_or(std::cmp::Ordering::Equal)
+                    .then_with(|| a.cluster_id.cmp(&b.cluster_id))
+            });
+
+            // Apply limit if specified
+            if *limit > 0 {
+                candidates.truncate(*limit);
+            }
+
+            // Output as JSONL
+            for candidate in candidates {
+                println!(
+                    "{}",
+                    serde_json::to_string(&candidate).map_err(|err| {
+                        miette::miette!("Failed to serialize decision candidate: {}", err)
+                    })?
+                );
+            }
+        }
         DecisionsCommands::Query {
             project,
             all_projects,
@@ -588,11 +864,7 @@ fn handle_decisions_command(command: &DecisionsCommands, config: &Config) -> Res
                 }
 
                 // Truncate excerpt to first 200 chars
-                let excerpt = record
-                    .text
-                    .chars()
-                    .take(200)
-                    .collect::<String>();
+                let excerpt = record.text.chars().take(200).collect::<String>();
 
                 let decision = DecisionRecord {
                     id: id.clone(),
@@ -2011,5 +2283,135 @@ mod tests {
 
         assert_eq!(db.get_stats()?.file_count, 0);
         Ok(())
+    }
+
+    #[test]
+    fn extract_candidates_finds_decided_statement() {
+        let records = vec![backscroll::core::IndexedRecord {
+            schema_version: 1,
+            source: "session".to_string(),
+            source_path: "session-abc.jsonl".to_string(),
+            ordinal: 1,
+            role: "assistant".to_string(),
+            text: "we decided to use ESM modules for all TypeScript code".to_string(),
+            project: None,
+            uuid: None,
+            timestamp: Some("2026-05-01T10:00:00Z".to_string()),
+            content_type: "text".to_string(),
+        }];
+
+        let candidates = extract_decision_candidates(records, &None);
+        assert_eq!(candidates.len(), 1);
+        let cand = &candidates[0];
+        assert!(cand.confidence >= 0.9);
+        assert_eq!(cand.status, "candidate");
+        assert_eq!(cand.evidence.len(), 1);
+    }
+
+    #[test]
+    fn extract_candidates_deduplicates_same_statement() {
+        let records = vec![
+            backscroll::core::IndexedRecord {
+                schema_version: 1,
+                source: "session".to_string(),
+                source_path: "session-abc.jsonl".to_string(),
+                ordinal: 1,
+                role: "assistant".to_string(),
+                text: "we decided to use ESM modules for all TypeScript code".to_string(),
+                project: None,
+                uuid: None,
+                timestamp: Some("2026-05-01T10:00:00Z".to_string()),
+                content_type: "text".to_string(),
+            },
+            backscroll::core::IndexedRecord {
+                schema_version: 1,
+                source: "session".to_string(),
+                source_path: "session-def.jsonl".to_string(),
+                ordinal: 2,
+                role: "assistant".to_string(),
+                text: "we decided to use ESM modules for all TypeScript code".to_string(),
+                project: None,
+                uuid: None,
+                timestamp: Some("2026-05-02T11:00:00Z".to_string()),
+                content_type: "text".to_string(),
+            },
+        ];
+
+        let candidates = extract_decision_candidates(records, &None);
+        assert_eq!(candidates.len(), 1);
+        assert_eq!(candidates[0].evidence.len(), 2);
+    }
+
+    #[test]
+    fn extract_candidates_skips_short_lines() {
+        let records = vec![backscroll::core::IndexedRecord {
+            schema_version: 1,
+            source: "session".to_string(),
+            source_path: "session-abc.jsonl".to_string(),
+            ordinal: 1,
+            role: "assistant".to_string(),
+            text: "we decided".to_string(),
+            project: None,
+            uuid: None,
+            timestamp: Some("2026-05-01T10:00:00Z".to_string()),
+            content_type: "text".to_string(),
+        }];
+
+        let candidates = extract_decision_candidates(records, &None);
+        assert_eq!(candidates.len(), 0);
+    }
+
+    #[test]
+    fn extract_candidates_proposed_status_in_output() {
+        let records = vec![backscroll::core::IndexedRecord {
+            schema_version: 1,
+            source: "session".to_string(),
+            source_path: "session-abc.jsonl".to_string(),
+            ordinal: 1,
+            role: "assistant".to_string(),
+            text: "we decided to use ESM modules for all TypeScript code".to_string(),
+            project: None,
+            uuid: None,
+            timestamp: Some("2026-05-01T10:00:00Z".to_string()),
+            content_type: "text".to_string(),
+        }];
+
+        let candidates = extract_decision_candidates(records, &None);
+        assert_eq!(candidates[0].status, "candidate");
+    }
+
+    #[test]
+    fn extract_candidates_since_filter_excludes_old_records() {
+        let records = vec![
+            backscroll::core::IndexedRecord {
+                schema_version: 1,
+                source: "session".to_string(),
+                source_path: "session-old.jsonl".to_string(),
+                ordinal: 1,
+                role: "assistant".to_string(),
+                text: "we decided to use old approach long ago".to_string(),
+                project: None,
+                uuid: None,
+                timestamp: Some("2026-04-01T10:00:00Z".to_string()),
+                content_type: "text".to_string(),
+            },
+            backscroll::core::IndexedRecord {
+                schema_version: 1,
+                source: "session".to_string(),
+                source_path: "session-new.jsonl".to_string(),
+                ordinal: 2,
+                role: "assistant".to_string(),
+                text: "we decided to use new approach recently".to_string(),
+                project: None,
+                uuid: None,
+                timestamp: Some("2026-05-01T10:00:00Z".to_string()),
+                content_type: "text".to_string(),
+            },
+        ];
+
+        let since_filter = Some("2026-05-01".to_string());
+        let candidates = extract_decision_candidates(records, &since_filter);
+        assert_eq!(candidates.len(), 1);
+        assert_eq!(candidates[0].evidence[0].source_path, "session-new.jsonl");
     }
 }
