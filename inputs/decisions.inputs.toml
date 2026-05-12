@@ -1,0 +1,27 @@
+# Architecture Decision Records (ADR) and decision sources preset.
+# Backscroll does not read files from this repository inputs/ directory at runtime;
+# copy this file into <config_dir>/backscroll/inputs/ (or set BACKSCROLL_CONFIG_DIR)
+# to enable indexing of architecture decision records.
+#
+# This preset discovers ADRs from docs/adr/ and docs/decisions/ directories
+# across configured project roots, parses YAML frontmatter (id, title, status, scope),
+# and indexes them with source = "decision" for decision-specific search and audit.
+#
+# Install: cp decisions.inputs.toml ~/.config/backscroll/inputs/
+# Then: backscroll sync
+#
+version = 1
+
+[[inputs]]
+id = "decisions"
+source = "decision"
+active = false
+
+[inputs.discover]
+roots = ["docs/adr", "docs/decisions"]
+include = ["**/*.md"]
+exclude = ["TEMPLATE.md", "template.md", "Template.md"]
+follow_symlinks = false
+
+[inputs.decode]
+format = "markdown_sections"
