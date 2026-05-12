@@ -2698,12 +2698,16 @@ mod tests {
             .prepare("SELECT id, source_path, event_type, snippet FROM session_events LIMIT 1")
             .unwrap();
 
-        // Verify schema version is 7
+        // Verify migration tracking uses the new schema_migrations table
         let version: i32 = db
             .conn
-            .query_row("SELECT version FROM schema_version", [], |row| row.get(0))
+            .query_row(
+                "SELECT version FROM schema_migrations ORDER BY version DESC LIMIT 1",
+                [],
+                |row| row.get(0),
+            )
             .unwrap();
-        assert_eq!(version, 7);
+        assert_eq!(version, 1);
     }
 
     #[test]
@@ -2817,6 +2821,127 @@ mod tests {
             },
         )?;
         assert!(!hybrid_results.is_empty(), "Hybrid should find results");
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_fresh_db_migration() -> miette::Result<()> {
+        let mut db = Database::open(":memory:")?;
+        db.setup_schema()?;
+
+        let count: i64 = db
+            .conn
+            .query_row(
+                "SELECT COUNT(*) FROM schema_migrations WHERE version = 1",
+                [],
+                |row| row.get(0),
+            )
+            .into_diagnostic()?;
+        assert_eq!(count, 1, "V1 should be recorded in schema_migrations");
+
+        let legacy: i64 = db
+            .conn
+            .query_row(
+                "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='schema_version'",
+                [],
+                |row| row.get(0),
+            )
+            .into_diagnostic()?;
+        assert_eq!(legacy, 0, "old schema_version table must not exist");
+
+        for table in &["indexed_files", "search_items", "session_events", "chunks"] {
+            let exists: i64 = db
+                .conn
+                .query_row(
+                    "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name=?1",
+                    [table],
+                    |row| row.get(0),
+                )
+                .into_diagnostic()?;
+            assert_eq!(exists, 1, "table {table} missing after migration");
+        }
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_legacy_db_v7_migration() -> miette::Result<()> {
+        let mut db = Database::open(":memory:")?;
+
+        // Simulate a legacy v7 database: full schema already in place + old tracking table
+        db.conn
+            .execute_batch(crate::storage::migrations::SQL_V1)
+            .into_diagnostic()?;
+        db.conn
+            .execute_batch(crate::storage::migrations::SQL_V1_VIRTUAL)
+            .into_diagnostic()?;
+        db.conn
+            .execute_batch(crate::storage::migrations::SQL_V1_TRIGGERS)
+            .into_diagnostic()?;
+        db.conn
+            .execute_batch(
+                "CREATE TABLE schema_version (version INTEGER NOT NULL);
+                 INSERT INTO schema_version (version) VALUES (7);",
+            )
+            .into_diagnostic()?;
+
+        // Pre-existing data must survive
+        db.conn
+            .execute(
+                "INSERT INTO search_items (source, source_path, ordinal, role, text)
+                 VALUES ('session', '/tmp/legacy.jsonl', 0, 'user', 'surviving data')",
+                [],
+            )
+            .into_diagnostic()?;
+
+        db.setup_schema()?;
+
+        // Old tracking table removed
+        let legacy: i64 = db
+            .conn
+            .query_row(
+                "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='schema_version'",
+                [],
+                |row| row.get(0),
+            )
+            .into_diagnostic()?;
+        assert_eq!(legacy, 0, "schema_version table must be dropped");
+
+        // V1 recorded in new tracking table
+        let tracked: i64 = db
+            .conn
+            .query_row(
+                "SELECT COUNT(*) FROM schema_migrations WHERE version = 1",
+                [],
+                |row| row.get(0),
+            )
+            .into_diagnostic()?;
+        assert_eq!(tracked, 1, "V1 must be recorded in schema_migrations");
+
+        // Pre-existing data intact
+        let rows: i64 = db
+            .conn
+            .query_row("SELECT COUNT(*) FROM search_items", [], |row| row.get(0))
+            .into_diagnostic()?;
+        assert_eq!(rows, 1, "pre-existing search_items data must survive");
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_migration_idempotent() -> miette::Result<()> {
+        let mut db = Database::open(":memory:")?;
+        db.setup_schema()?;
+        db.setup_schema()?; // second call must be a no-op
+
+        let count: i64 = db
+            .conn
+            .query_row("SELECT COUNT(*) FROM schema_migrations", [], |row| {
+                row.get(0)
+            })
+            .into_diagnostic()?;
+        assert_eq!(count, 1, "schema_migrations should have exactly 1 row");
 
         Ok(())
     }

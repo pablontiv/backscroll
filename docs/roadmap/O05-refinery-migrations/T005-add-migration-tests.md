@@ -1,5 +1,5 @@
 ---
-estado: Specified
+estado: Completed
 tipo: task
 ---
 # T005: Agregar tests: fresh DB, legacy DB v7, idempotencia

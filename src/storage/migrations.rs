@@ -18,7 +18,7 @@ impl Migration {
 
 // Complete v7 schema — all objects use IF NOT EXISTS so this is safe on both
 // new and existing databases. Existing tables/indexes/triggers are no-ops.
-const SQL_V1: &str = "
+pub(crate) const SQL_V1: &str = "
 CREATE TABLE IF NOT EXISTS indexed_files (
     path TEXT PRIMARY KEY,
     hash TEXT NOT NULL,
@@ -94,7 +94,7 @@ CREATE TABLE IF NOT EXISTS embedding_metadata (
 
 // Virtual tables and triggers cannot use IF NOT EXISTS universally across all
 // SQLite versions for TRIGGER, so we apply them conditionally via existence checks.
-const SQL_V1_VIRTUAL: &str = "
+pub(crate) const SQL_V1_VIRTUAL: &str = "
 CREATE VIRTUAL TABLE IF NOT EXISTS vec_embeddings USING vec0(
     embedding float[384] distance_metric=cosine
 );
@@ -109,7 +109,7 @@ CREATE VIRTUAL TABLE IF NOT EXISTS messages_fts USING fts5(
 CREATE VIRTUAL TABLE IF NOT EXISTS messages_vocab USING fts5vocab(messages_fts, row);
 ";
 
-const SQL_V1_TRIGGERS: &str = "
+pub(crate) const SQL_V1_TRIGGERS: &str = "
 CREATE TRIGGER IF NOT EXISTS search_items_ai AFTER INSERT ON search_items BEGIN
     INSERT INTO messages_fts(rowid, text) VALUES (new.id, new.text);
 END;
