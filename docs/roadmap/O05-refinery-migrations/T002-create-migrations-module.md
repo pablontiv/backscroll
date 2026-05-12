@@ -1,5 +1,5 @@
 ---
-estado: Specified
+estado: Completed
 tipo: task
 ---
 # T002: Crear src/storage/migrations.rs con SQL_V1 y run()

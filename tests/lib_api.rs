@@ -103,7 +103,7 @@ string = "$"
     .unwrap();
 
     // Step 1: Open database and setup schema (as a library consumer would)
-    let db = Database::open(db_path.to_str().unwrap()).unwrap();
+    let mut db = Database::open(db_path.to_str().unwrap()).unwrap();
     db.setup_schema().unwrap();
 
     // Step 2: Load manifests and parse through the generic input engine.
@@ -140,7 +140,7 @@ fn test_open_readonly_existing_db() {
 
     // Create and populate DB in read-write mode
     {
-        let db = Database::open(db_path.to_str().unwrap()).unwrap();
+        let mut db = Database::open(db_path.to_str().unwrap()).unwrap();
         db.setup_schema().unwrap();
     }
 
@@ -155,7 +155,7 @@ fn test_open_readonly_existing_db() {
 fn test_hybrid_search_pipeline() {
     let dir = tempfile::tempdir().unwrap();
     let db_path = dir.path().join("test.db");
-    let db = backscroll::storage::sqlite::Database::open(db_path.to_str().unwrap()).unwrap();
+    let mut db = backscroll::storage::sqlite::Database::open(db_path.to_str().unwrap()).unwrap();
     db.setup_schema().unwrap();
 
     let provider = backscroll::core::embedding::MockEmbeddingProvider::new(384);

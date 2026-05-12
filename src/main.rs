@@ -1644,7 +1644,7 @@ fn handle_projects_command(command: &ProjectsCommands) -> Result<()> {
 }
 
 fn create_engine(config: &Config) -> Result<Box<dyn SearchEngine>> {
-    let db = Database::open(&config.database_path)?;
+    let mut db = Database::open(&config.database_path)?;
     db.setup_schema()?;
     Ok(Box::new(db))
 }
@@ -2803,7 +2803,7 @@ mod tests {
 
         let db_dir = tempdir().unwrap();
         let db_path = db_dir.path().join("sync_manifest.db");
-        let db = Database::open(db_path.to_str().unwrap())?;
+        let mut db = Database::open(db_path.to_str().unwrap())?;
         db.setup_schema()?;
 
         sync_manifest_inputs(&db, &input_config)?;
@@ -2817,7 +2817,7 @@ mod tests {
     fn sync_manifest_inputs_does_not_use_implicit_inputs_when_empty() -> miette::Result<()> {
         let db_dir = tempdir().unwrap();
         let db_path = db_dir.path().join("sync_empty.db");
-        let db = Database::open(db_path.to_str().unwrap())?;
+        let mut db = Database::open(db_path.to_str().unwrap())?;
         db.setup_schema()?;
 
         sync_manifest_inputs(&db, &InputConfig::default())?;
@@ -2834,7 +2834,7 @@ mod tests {
 
         let db_dir = tempdir().unwrap();
         let db_path = db_dir.path().join("sync_inactive.db");
-        let db = Database::open(db_path.to_str().unwrap())?;
+        let mut db = Database::open(db_path.to_str().unwrap())?;
         db.setup_schema()?;
 
         sync_manifest_inputs(&db, &input_config)?;

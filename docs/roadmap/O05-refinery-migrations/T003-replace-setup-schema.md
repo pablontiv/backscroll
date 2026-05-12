@@ -1,5 +1,5 @@
 ---
-estado: Specified
+estado: Completed
 tipo: task
 ---
 # T003: Reemplazar cuerpo de setup_schema() en sqlite.rs

@@ -1,5 +1,5 @@
 ---
-estado: Specified
+estado: Completed
 tipo: task
 ---
 # T004: Actualizar callers de setup_schema en tests a &mut self

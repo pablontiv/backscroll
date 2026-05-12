@@ -135,422 +135,8 @@ impl Database {
             })
     }
 
-    pub fn setup_schema(&self) -> miette::Result<()> {
-        self.conn
-            .execute(
-                "CREATE TABLE IF NOT EXISTS schema_version (version INTEGER NOT NULL)",
-                [],
-            )
-            .into_diagnostic()?;
-
-        let count: i64 = self
-            .conn
-            .query_row("SELECT COUNT(*) FROM schema_version", [], |row| row.get(0))
-            .into_diagnostic()?;
-
-        if count == 0 {
-            // Initial v1 schema
-            self.conn
-                .execute(
-                    "CREATE TABLE IF NOT EXISTS indexed_files (
-                    path TEXT PRIMARY KEY,
-                    hash TEXT NOT NULL,
-                    last_indexed DATETIME DEFAULT CURRENT_TIMESTAMP
-                )",
-                    [],
-                )
-                .into_diagnostic()?;
-
-            self.conn
-                .execute(
-                    "CREATE VIRTUAL TABLE IF NOT EXISTS messages_fts USING fts5(
-                    path,
-                    role,
-                    content,
-                    project,
-                    tokenize='unicode61'
-                )",
-                    [],
-                )
-                .into_diagnostic()?;
-
-            self.conn
-                .execute("INSERT INTO schema_version (version) VALUES (1)", [])
-                .into_diagnostic()?;
-        }
-
-        let current_version: i64 = self
-            .conn
-            .query_row("SELECT version FROM schema_version", [], |row| row.get(0))
-            .into_diagnostic()?;
-
-        if current_version == 1 {
-            self.conn
-                .execute("BEGIN TRANSACTION", [])
-                .into_diagnostic()?;
-
-            self.conn
-                .execute(
-                    "CREATE TABLE IF NOT EXISTS search_items (
-                    id INTEGER PRIMARY KEY AUTOINCREMENT,
-                    source TEXT NOT NULL DEFAULT 'session',
-                    source_path TEXT NOT NULL,
-                    ordinal INTEGER NOT NULL,
-                    role TEXT NOT NULL,
-                    text TEXT NOT NULL,
-                    timestamp TEXT,
-                    uuid TEXT UNIQUE,
-                    project TEXT
-                )",
-                    [],
-                )
-                .into_diagnostic()?;
-
-            self.conn.execute("CREATE INDEX IF NOT EXISTS idx_search_items_source_path ON search_items(source_path)", []).into_diagnostic()?;
-            self.conn
-                .execute(
-                    "CREATE INDEX IF NOT EXISTS idx_search_items_project ON search_items(project)",
-                    [],
-                )
-                .into_diagnostic()?;
-
-            self.conn
-                .execute(
-                    "CREATE TABLE IF NOT EXISTS session_events (
-                    id INTEGER PRIMARY KEY AUTOINCREMENT,
-                    schema_version INTEGER NOT NULL DEFAULT 1,
-                    source TEXT NOT NULL DEFAULT 'session',
-                    source_path TEXT NOT NULL,
-                    project TEXT,
-                    ordinal INTEGER NOT NULL,
-                    timestamp TEXT,
-                    event_type TEXT NOT NULL,
-                    actor TEXT,
-                    role TEXT,
-                    tool_name TEXT,
-                    tool_id TEXT,
-                    command TEXT,
-                    cwd TEXT,
-                    exit_code INTEGER,
-                    is_error INTEGER,
-                    snippet TEXT NOT NULL
-                )",
-                    [],
-                )
-                .into_diagnostic()?;
-
-            self.conn.execute(
-                "CREATE INDEX IF NOT EXISTS idx_session_events_order ON session_events(source_path, ordinal, timestamp, id)",
-                [],
-            ).into_diagnostic()?;
-            self.conn.execute(
-                "CREATE INDEX IF NOT EXISTS idx_session_events_project ON session_events(project)",
-                [],
-            ).into_diagnostic()?;
-
-            self.conn
-                .execute("DROP TABLE IF EXISTS messages_fts", [])
-                .into_diagnostic()?;
-
-            self.conn
-                .execute(
-                    "CREATE VIRTUAL TABLE messages_fts USING fts5(
-                    text,
-                    content=search_items,
-                    content_rowid=id,
-                    tokenize='unicode61'
-                )",
-                    [],
-                )
-                .into_diagnostic()?;
-
-            self.conn
-                .execute(
-                    "
-                CREATE TRIGGER IF NOT EXISTS search_items_ai AFTER INSERT ON search_items BEGIN
-                    INSERT INTO messages_fts(rowid, text) VALUES (new.id, new.text);
-                END;
-            ",
-                    [],
-                )
-                .into_diagnostic()?;
-
-            self.conn.execute("
-                CREATE TRIGGER IF NOT EXISTS search_items_ad AFTER DELETE ON search_items BEGIN
-                    INSERT INTO messages_fts(messages_fts, rowid, text) VALUES('delete', old.id, old.text);
-                END;
-            ", []).into_diagnostic()?;
-
-            self.conn.execute("
-                CREATE TRIGGER IF NOT EXISTS search_items_au AFTER UPDATE ON search_items BEGIN
-                    INSERT INTO messages_fts(messages_fts, rowid, text) VALUES('delete', old.id, old.text);
-                    INSERT INTO messages_fts(rowid, text) VALUES (new.id, new.text);
-                END;
-            ", []).into_diagnostic()?;
-
-            self.conn
-                .execute("UPDATE schema_version SET version = 2", [])
-                .into_diagnostic()?;
-            self.conn.execute("COMMIT", []).into_diagnostic()?;
-        }
-
-        let current_version: i64 = self
-            .conn
-            .query_row("SELECT version FROM schema_version", [], |row| row.get(0))
-            .into_diagnostic()?;
-
-        if current_version == 2 {
-            self.conn
-                .execute(
-                    "CREATE VIRTUAL TABLE IF NOT EXISTS messages_vocab USING fts5vocab(messages_fts, row)",
-                    [],
-                )
-                .into_diagnostic()?;
-
-            self.conn
-                .execute("UPDATE schema_version SET version = 3", [])
-                .into_diagnostic()?;
-        }
-
-        let current_version: i64 = self
-            .conn
-            .query_row("SELECT version FROM schema_version", [], |row| row.get(0))
-            .into_diagnostic()?;
-
-        if current_version == 3 {
-            self.conn
-                .execute("BEGIN TRANSACTION", [])
-                .into_diagnostic()?;
-
-            // Add content_type column for content-type filtering
-            self.conn
-                .execute(
-                    "ALTER TABLE search_items ADD COLUMN content_type TEXT NOT NULL DEFAULT 'text'",
-                    [],
-                )
-                .into_diagnostic()?;
-
-            // Create session_tags table for auto-tagging
-            self.conn
-                .execute(
-                    "CREATE TABLE IF NOT EXISTS session_tags (
-                    source_path TEXT NOT NULL,
-                    tag TEXT NOT NULL,
-                    PRIMARY KEY (source_path, tag)
-                )",
-                    [],
-                )
-                .into_diagnostic()?;
-            self.conn
-                .execute(
-                    "CREATE INDEX IF NOT EXISTS idx_session_tags_tag ON session_tags(tag)",
-                    [],
-                )
-                .into_diagnostic()?;
-
-            // Recreate FTS5 with Porter stemmer tokenizer
-            self.conn
-                .execute("DROP TABLE IF EXISTS messages_vocab", [])
-                .into_diagnostic()?;
-            self.conn
-                .execute("DROP TRIGGER IF EXISTS search_items_ai", [])
-                .into_diagnostic()?;
-            self.conn
-                .execute("DROP TRIGGER IF EXISTS search_items_ad", [])
-                .into_diagnostic()?;
-            self.conn
-                .execute("DROP TRIGGER IF EXISTS search_items_au", [])
-                .into_diagnostic()?;
-            self.conn
-                .execute("DROP TABLE IF EXISTS messages_fts", [])
-                .into_diagnostic()?;
-
-            self.conn
-                .execute(
-                    "CREATE VIRTUAL TABLE messages_fts USING fts5(
-                    text,
-                    content=search_items,
-                    content_rowid=id,
-                    tokenize='porter unicode61'
-                )",
-                    [],
-                )
-                .into_diagnostic()?;
-
-            // Rebuild FTS index from existing data
-            self.conn
-                .execute(
-                    "INSERT INTO messages_fts(rowid, text) SELECT id, text FROM search_items",
-                    [],
-                )
-                .into_diagnostic()?;
-
-            // Recreate triggers
-            self.conn
-                .execute(
-                    "CREATE TRIGGER search_items_ai AFTER INSERT ON search_items BEGIN
-                    INSERT INTO messages_fts(rowid, text) VALUES (new.id, new.text);
-                END",
-                    [],
-                )
-                .into_diagnostic()?;
-
-            self.conn
-                .execute(
-                    "CREATE TRIGGER search_items_ad AFTER DELETE ON search_items BEGIN
-                    INSERT INTO messages_fts(messages_fts, rowid, text) VALUES('delete', old.id, old.text);
-                END",
-                    [],
-                )
-                .into_diagnostic()?;
-
-            self.conn
-                .execute(
-                    "CREATE TRIGGER search_items_au AFTER UPDATE ON search_items BEGIN
-                    INSERT INTO messages_fts(messages_fts, rowid, text) VALUES('delete', old.id, old.text);
-                    INSERT INTO messages_fts(rowid, text) VALUES (new.id, new.text);
-                END",
-                    [],
-                )
-                .into_diagnostic()?;
-
-            // Recreate vocab table
-            self.conn
-                .execute(
-                    "CREATE VIRTUAL TABLE messages_vocab USING fts5vocab(messages_fts, row)",
-                    [],
-                )
-                .into_diagnostic()?;
-
-            self.conn
-                .execute("UPDATE schema_version SET version = 4", [])
-                .into_diagnostic()?;
-            self.conn.execute("COMMIT", []).into_diagnostic()?;
-        }
-
-        let current_version: i64 = self
-            .conn
-            .query_row("SELECT version FROM schema_version", [], |row| row.get(0))
-            .into_diagnostic()?;
-
-        if current_version == 4 {
-            self.conn
-                .execute(
-                    "CREATE TABLE IF NOT EXISTS dynamic_stopwords (term TEXT PRIMARY KEY)",
-                    [],
-                )
-                .into_diagnostic()?;
-
-            self.conn
-                .execute("UPDATE schema_version SET version = 5", [])
-                .into_diagnostic()?;
-        }
-
-        let current_version: i64 = self
-            .conn
-            .query_row("SELECT version FROM schema_version", [], |row| row.get(0))
-            .into_diagnostic()?;
-
-        if current_version < 6 {
-            tracing::info!("Migrating schema to v6: source_metadata + embeddings");
-
-            self.conn
-                .execute(
-                    "ALTER TABLE search_items ADD COLUMN source_metadata TEXT DEFAULT NULL",
-                    [],
-                )
-                .into_diagnostic()?;
-
-            self.conn
-                .execute_batch(
-                    "CREATE TABLE IF NOT EXISTS chunks (
-                    id INTEGER PRIMARY KEY,
-                    source_item_id INTEGER NOT NULL,
-                    chunk_index INTEGER NOT NULL,
-                    chunk_text TEXT NOT NULL,
-                    FOREIGN KEY (source_item_id) REFERENCES search_items(id) ON DELETE CASCADE
-                );
-                CREATE INDEX IF NOT EXISTS idx_chunks_source_item_id ON chunks(source_item_id);",
-                )
-                .into_diagnostic()?;
-
-            self.conn
-                .execute(
-                    "CREATE VIRTUAL TABLE IF NOT EXISTS vec_embeddings USING vec0(
-                    embedding float[384] distance_metric=cosine
-                )",
-                    [],
-                )
-                .into_diagnostic()?;
-
-            self.conn
-                .execute_batch(
-                    "CREATE TABLE IF NOT EXISTS embedding_metadata (
-                    model_name TEXT NOT NULL,
-                    dimensions INTEGER NOT NULL,
-                    last_embedded_at TEXT NOT NULL
-                )",
-                )
-                .into_diagnostic()?;
-
-            self.conn
-                .execute("UPDATE schema_version SET version = 6", [])
-                .into_diagnostic()?;
-        }
-
-        let current_version: i64 = self
-            .conn
-            .query_row("SELECT version FROM schema_version", [], |row| row.get(0))
-            .into_diagnostic()?;
-
-        if current_version == 6 {
-            // session_events was initially placed in the v1→v2 block but existing DBs were
-            // already at v6 when it was introduced, so they skipped it. This v7 migration
-            // backfills the table for all existing databases.
-            self.conn
-                .execute(
-                    "CREATE TABLE IF NOT EXISTS session_events (
-                    id INTEGER PRIMARY KEY AUTOINCREMENT,
-                    schema_version INTEGER NOT NULL DEFAULT 1,
-                    source TEXT NOT NULL DEFAULT 'session',
-                    source_path TEXT NOT NULL,
-                    project TEXT,
-                    ordinal INTEGER NOT NULL,
-                    timestamp TEXT,
-                    event_type TEXT NOT NULL,
-                    actor TEXT,
-                    role TEXT,
-                    tool_name TEXT,
-                    tool_id TEXT,
-                    command TEXT,
-                    cwd TEXT,
-                    exit_code INTEGER,
-                    is_error INTEGER,
-                    snippet TEXT NOT NULL
-                )",
-                    [],
-                )
-                .into_diagnostic()?;
-
-            self.conn
-                .execute(
-                    "CREATE INDEX IF NOT EXISTS idx_session_events_order ON session_events(source_path, ordinal, timestamp, id)",
-                    [],
-                )
-                .into_diagnostic()?;
-            self.conn
-                .execute(
-                    "CREATE INDEX IF NOT EXISTS idx_session_events_project ON session_events(project)",
-                    [],
-                )
-                .into_diagnostic()?;
-
-            self.conn
-                .execute("UPDATE schema_version SET version = 7", [])
-                .into_diagnostic()?;
-        }
-
-        Ok(())
+    pub fn setup_schema(&mut self) -> miette::Result<()> {
+        super::migrations::run(&mut self.conn)
     }
 
     /// Compute high-frequency terms (>50% doc frequency) from the FTS5 vocab
@@ -1795,7 +1381,7 @@ mod tests {
 
     #[test]
     fn test_db_workflow() -> miette::Result<()> {
-        let db = Database::open(":memory:")?;
+        let mut db = Database::open(":memory:")?;
         db.setup_schema()?;
 
         let path = "test.json";
@@ -1838,7 +1424,7 @@ mod tests {
 
     #[test]
     fn test_get_session_id_with_uuid() -> miette::Result<()> {
-        let db = Database::open(":memory:")?;
+        let mut db = Database::open(":memory:")?;
         db.setup_schema()?;
 
         let file = ParsedFile {
@@ -1864,7 +1450,7 @@ mod tests {
 
     #[test]
     fn test_get_session_id_fallback_to_stem() -> miette::Result<()> {
-        let db = Database::open(":memory:")?;
+        let mut db = Database::open(":memory:")?;
         db.setup_schema()?;
 
         let file = ParsedFile {
@@ -1890,7 +1476,7 @@ mod tests {
 
     #[test]
     fn test_search_source_path_filter_exact_path() -> miette::Result<()> {
-        let db = Database::open(":memory:")?;
+        let mut db = Database::open(":memory:")?;
         db.setup_schema()?;
 
         db.sync_files(vec![
@@ -1927,7 +1513,7 @@ mod tests {
 
     #[test]
     fn test_search_source_path_filter_glob_pattern() -> miette::Result<()> {
-        let db = Database::open(":memory:")?;
+        let mut db = Database::open(":memory:")?;
         db.setup_schema()?;
 
         db.sync_files(vec![
@@ -1967,7 +1553,7 @@ mod tests {
 
     #[test]
     fn test_get_session_id_nonexistent_path() -> miette::Result<()> {
-        let db = Database::open(":memory:")?;
+        let mut db = Database::open(":memory:")?;
         db.setup_schema()?;
 
         let id = db.get_session_id("/does/not/exist.jsonl")?;
@@ -1977,7 +1563,7 @@ mod tests {
 
     #[test]
     fn test_plan_source_stored() -> miette::Result<()> {
-        let db = Database::open(":memory:")?;
+        let mut db = Database::open(":memory:")?;
         db.setup_schema()?;
 
         let file = ParsedFile {
@@ -2010,7 +1596,7 @@ mod tests {
 
     #[test]
     fn test_plan_sections_produce_multiple_rows() -> miette::Result<()> {
-        let db = Database::open(":memory:")?;
+        let mut db = Database::open(":memory:")?;
         db.setup_schema()?;
 
         let file = ParsedFile {
@@ -2053,7 +1639,7 @@ mod tests {
 
     #[test]
     fn test_plan_incremental_sync_skips_unchanged() -> miette::Result<()> {
-        let db = Database::open(":memory:")?;
+        let mut db = Database::open(":memory:")?;
         db.setup_schema()?;
 
         let file = ParsedFile {
@@ -2080,7 +1666,7 @@ mod tests {
 
     #[test]
     fn test_sync_updates_indexed_files_by_source_path() -> miette::Result<()> {
-        let db = Database::open(":memory:")?;
+        let mut db = Database::open(":memory:")?;
         db.setup_schema()?;
 
         let first = ParsedFile {
@@ -2144,7 +1730,7 @@ mod tests {
     #[test]
     fn test_session_events_store_message_and_normalized_tool_events_in_order() -> miette::Result<()>
     {
-        let db = Database::open(":memory:")?;
+        let mut db = Database::open(":memory:")?;
         db.setup_schema()?;
 
         db.sync_files(vec![ParsedFile {
@@ -2205,7 +1791,7 @@ mod tests {
 
     #[test]
     fn test_pi_fixture_preserves_tool_command_and_error_events() -> miette::Result<()> {
-        let db = Database::open(":memory:")?;
+        let mut db = Database::open(":memory:")?;
         db.setup_schema()?;
         let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
             .join("tests/fixtures/pi-tool-events.jsonl");
@@ -2247,7 +1833,7 @@ mod tests {
 
     #[test]
     fn test_claude_fixture_preserves_tool_command_and_error_events() -> miette::Result<()> {
-        let db = Database::open(":memory:")?;
+        let mut db = Database::open(":memory:")?;
         db.setup_schema()?;
         let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
             .join("tests/fixtures/claude-tool-events.jsonl");
@@ -2289,7 +1875,7 @@ mod tests {
 
     #[test]
     fn test_search_source_filter_plans_only() -> miette::Result<()> {
-        let db = Database::open(":memory:")?;
+        let mut db = Database::open(":memory:")?;
         db.setup_schema()?;
 
         db.sync_files(vec![
@@ -2338,7 +1924,7 @@ mod tests {
 
     #[test]
     fn test_search_source_filter_sessions_only() -> miette::Result<()> {
-        let db = Database::open(":memory:")?;
+        let mut db = Database::open(":memory:")?;
         db.setup_schema()?;
 
         db.sync_files(vec![
@@ -2387,7 +1973,7 @@ mod tests {
 
     #[test]
     fn test_search_source_filter_all() -> miette::Result<()> {
-        let db = Database::open(":memory:")?;
+        let mut db = Database::open(":memory:")?;
         db.setup_schema()?;
 
         db.sync_files(vec![
@@ -2434,7 +2020,7 @@ mod tests {
 
     #[test]
     fn test_search_source_filter_arbitrary_source_ke_only() -> miette::Result<()> {
-        let db = Database::open(":memory:")?;
+        let mut db = Database::open(":memory:")?;
         db.setup_schema()?;
 
         db.sync_files(vec![
@@ -2471,7 +2057,7 @@ mod tests {
 
     #[test]
     fn test_search_combined_generic_source_role_content_type_filters() -> miette::Result<()> {
-        let db = Database::open(":memory:")?;
+        let mut db = Database::open(":memory:")?;
         db.setup_schema()?;
 
         db.sync_files(vec![
@@ -2527,7 +2113,7 @@ mod tests {
     fn test_hybrid_search_applies_generic_filters_to_vector_results() -> miette::Result<()> {
         use crate::core::embedding::MockEmbeddingProvider;
 
-        let db = Database::open(":memory:")?;
+        let mut db = Database::open(":memory:")?;
         db.setup_schema()?;
         db.set_embedding_provider(Box::new(MockEmbeddingProvider::new(384)));
 
@@ -2565,7 +2151,7 @@ mod tests {
 
     #[test]
     fn test_list_sessions_intentionally_excludes_external_sources() -> miette::Result<()> {
-        let db = Database::open(":memory:")?;
+        let mut db = Database::open(":memory:")?;
         db.setup_schema()?;
 
         db.sync_files(vec![
@@ -2593,7 +2179,7 @@ mod tests {
 
     #[test]
     fn test_session_entries_not_affected_by_plan_sync() -> miette::Result<()> {
-        let db = Database::open(":memory:")?;
+        let mut db = Database::open(":memory:")?;
         db.setup_schema()?;
 
         let session = ParsedFile {
@@ -2650,7 +2236,7 @@ mod tests {
 
     #[test]
     fn test_get_topics_global() -> miette::Result<()> {
-        let db = Database::open(":memory:")?;
+        let mut db = Database::open(":memory:")?;
         db.setup_schema()?;
 
         // Use 5 documents so "kubernet" at 2/5 = 40% stays below the 50% stopword threshold.
@@ -2738,7 +2324,7 @@ mod tests {
 
     #[test]
     fn test_get_topics_project_filter() -> miette::Result<()> {
-        let db = Database::open(":memory:")?;
+        let mut db = Database::open(":memory:")?;
         db.setup_schema()?;
 
         db.sync_files(vec![
@@ -2783,7 +2369,7 @@ mod tests {
 
     #[test]
     fn test_get_topics_stopwords_excluded() -> miette::Result<()> {
-        let db = Database::open(":memory:")?;
+        let mut db = Database::open(":memory:")?;
         db.setup_schema()?;
 
         db.sync_files(vec![ParsedFile {
@@ -2811,7 +2397,7 @@ mod tests {
 
     #[test]
     fn test_list_sessions_global() -> miette::Result<()> {
-        let db = Database::open(":memory:")?;
+        let mut db = Database::open(":memory:")?;
         db.setup_schema()?;
 
         db.sync_files(vec![
@@ -2868,7 +2454,7 @@ mod tests {
 
     #[test]
     fn test_list_sessions_project_filter() -> miette::Result<()> {
-        let db = Database::open(":memory:")?;
+        let mut db = Database::open(":memory:")?;
         db.setup_schema()?;
 
         db.sync_files(vec![
@@ -2911,7 +2497,7 @@ mod tests {
 
     #[test]
     fn test_search_dynamic_stopword_removal() -> miette::Result<()> {
-        let db = Database::open(":memory:")?;
+        let mut db = Database::open(":memory:")?;
         db.setup_schema()?;
 
         // Create 10 documents that all contain "common" and "filler" words
@@ -2974,7 +2560,7 @@ mod tests {
 
     #[test]
     fn test_search_prefix_matching() -> miette::Result<()> {
-        let db = Database::open(":memory:")?;
+        let mut db = Database::open(":memory:")?;
         db.setup_schema()?;
 
         db.sync_files(vec![ParsedFile {
@@ -3012,7 +2598,7 @@ mod tests {
 
     #[test]
     fn test_get_project_breakdown() -> miette::Result<()> {
-        let db = Database::open(":memory:")?;
+        let mut db = Database::open(":memory:")?;
         db.setup_schema()?;
 
         db.sync_files(vec![
@@ -3087,7 +2673,7 @@ mod tests {
     fn test_schema_v6_migration() {
         let dir = tempfile::tempdir().unwrap();
         let db_path = dir.path().join("test.db");
-        let db = Database::open(db_path.to_str().unwrap()).unwrap();
+        let mut db = Database::open(db_path.to_str().unwrap()).unwrap();
         db.setup_schema().unwrap();
 
         // Verify source_metadata column is queryable
@@ -3124,7 +2710,7 @@ mod tests {
     fn test_sync_with_embeddings_creates_chunks() -> miette::Result<()> {
         use crate::core::embedding::MockEmbeddingProvider;
 
-        let db = Database::open(":memory:")?;
+        let mut db = Database::open(":memory:")?;
         db.setup_schema()?;
         db.set_embedding_provider(Box::new(MockEmbeddingProvider::new(384)));
 
@@ -3175,7 +2761,7 @@ mod tests {
     fn test_hybrid_search_returns_results() -> miette::Result<()> {
         use crate::core::embedding::MockEmbeddingProvider;
 
-        let db = Database::open(":memory:")?;
+        let mut db = Database::open(":memory:")?;
         db.setup_schema()?;
         db.set_embedding_provider(Box::new(MockEmbeddingProvider::new(384)));
 
