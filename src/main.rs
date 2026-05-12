@@ -464,6 +464,24 @@ enum DecisionsCommands {
         #[arg(long, default_value_t = false)]
         indexed_only: bool,
     },
+    /// Evaluate fixture coverage in indexed decision corpus
+    Replay {
+        /// Path to fixture file (JSON)
+        #[arg(long)]
+        fixture: PathBuf,
+        /// Filter by project (default: current directory)
+        #[arg(short, long)]
+        project: Option<String>,
+        /// Query all projects
+        #[arg(long, default_value_t = false)]
+        all_projects: bool,
+        /// Emit machine-readable JSON
+        #[arg(long, default_value_t = false)]
+        json: bool,
+        /// Read only the existing SQLite index (required for replay)
+        #[arg(long, default_value_t = false)]
+        indexed_only: bool,
+    },
 }
 
 #[derive(Serialize)]
@@ -508,6 +526,62 @@ struct ProposalInput {
     statement: String,
     status: Option<String>,
     scope: Option<String>,
+}
+
+#[derive(Serialize, Deserialize)]
+#[serde(crate = "serde")]
+struct FixtureDecision {
+    id: Option<String>,
+    statement: String,
+    status: Option<String>,
+}
+
+#[derive(Serialize, Deserialize)]
+#[serde(crate = "serde")]
+struct ReplayFixture {
+    expected_decisions: Vec<FixtureDecision>,
+}
+
+#[derive(Serialize)]
+struct CoveredDecision {
+    id: Option<String>,
+    statement: String,
+    source_path: String,
+}
+
+#[derive(Serialize)]
+struct MissedDecision {
+    id: Option<String>,
+    statement: String,
+}
+
+#[derive(Serialize)]
+struct StaleDecision {
+    id: Option<String>,
+    statement: String,
+    source_path: String,
+}
+
+#[derive(Serialize)]
+struct ConflictDecision {
+    id: Option<String>,
+    statement: String,
+    expected_status: String,
+    found_status: String,
+    source_path: String,
+}
+
+#[derive(Serialize)]
+struct ReplayReport {
+    fixture: String,
+    corpus_records: usize,
+    expected: usize,
+    covered: Vec<CoveredDecision>,
+    missed: Vec<MissedDecision>,
+    stale: Vec<StaleDecision>,
+    conflicts: Vec<ConflictDecision>,
+    source_counts: std::collections::BTreeMap<String, usize>,
+    coverage_pct: f64,
 }
 
 #[derive(Serialize)]
@@ -897,6 +971,117 @@ fn extract_decision_candidates(
         .collect()
 }
 
+fn run_replay(
+    fixture_path: &Path,
+    records: &[backscroll::core::IndexedRecord],
+    fixture_path_str: &str,
+) -> Result<ReplayReport> {
+    // Read and parse the fixture file
+    let fixture_content = std::fs::read_to_string(fixture_path)
+        .map_err(|err| miette::miette!("Failed to read fixture file: {}", err))?;
+    let fixture: ReplayFixture = serde_json::from_str(&fixture_content)
+        .map_err(|err| miette::miette!("Failed to parse fixture JSON: {}", err))?;
+
+    let mut covered = Vec::new();
+    let mut missed = Vec::new();
+    let mut stale = Vec::new();
+    let mut conflicts = Vec::new();
+    let mut source_counts: std::collections::BTreeMap<String, usize> =
+        std::collections::BTreeMap::new();
+
+    // Count records by source
+    for record in records {
+        *source_counts.entry(record.source.clone()).or_insert(0) += 1;
+    }
+
+    // Evaluate each expected decision
+    for expected in &fixture.expected_decisions {
+        let expected_normalized = normalize_statement(&expected.statement);
+        let mut found = false;
+        let mut found_source_path: Option<String> = None;
+        let mut found_status: Option<String> = None;
+
+        // Search the corpus for this statement
+        for record in records {
+            let record_text_normalized = normalize_statement(&record.text);
+            if record_text_normalized.contains(&expected_normalized) {
+                found = true;
+                found_source_path = Some(record.source_path.clone());
+
+                // Extract status from record if it's a decision
+                if record.source == "decision" {
+                    let (_, _, rec_status, _, _) =
+                        get_decision_metadata(&record.text, &record.source_path);
+                    found_status = Some(rec_status);
+                }
+
+                break;
+            }
+        }
+
+        if found {
+            // Check if it's stale (status is superseded)
+            if let Some(ref status) = found_status {
+                if status.to_lowercase() == "superseded" {
+                    stale.push(StaleDecision {
+                        id: expected.id.clone(),
+                        statement: expected.statement.clone(),
+                        source_path: found_source_path.unwrap_or_default(),
+                    });
+                    continue;
+                }
+            }
+
+            // Check for conflicts (expected status vs found status)
+            if let Some(expected_status) = &expected.status {
+                if let Some(found_st) = &found_status {
+                    if expected_status.to_lowercase() != found_st.to_lowercase() {
+                        conflicts.push(ConflictDecision {
+                            id: expected.id.clone(),
+                            statement: expected.statement.clone(),
+                            expected_status: expected_status.clone(),
+                            found_status: found_st.clone(),
+                            source_path: found_source_path.unwrap_or_default(),
+                        });
+                        continue;
+                    }
+                }
+            }
+
+            covered.push(CoveredDecision {
+                id: expected.id.clone(),
+                statement: expected.statement.clone(),
+                source_path: found_source_path.unwrap_or_default(),
+            });
+        } else {
+            missed.push(MissedDecision {
+                id: expected.id.clone(),
+                statement: expected.statement.clone(),
+            });
+        }
+    }
+
+    let expected_count = fixture.expected_decisions.len();
+    let covered_count = covered.len();
+    let coverage_pct = if expected_count == 0 {
+        100.0
+    } else {
+        (covered_count as f64 / expected_count as f64) * 100.0
+    };
+
+    Ok(ReplayReport {
+        fixture: fixture_path_str.to_string(),
+        corpus_records: records.len(),
+        expected: expected_count,
+        covered,
+        missed,
+        stale,
+        conflicts,
+        source_counts,
+        coverage_pct,
+    })
+}
+
 fn handle_decisions_command(command: &DecisionsCommands, config: &Config) -> Result<()> {
     match command {
         DecisionsCommands::Conflicts {
@@ -1272,6 +1457,115 @@ fn handle_decisions_command(command: &DecisionsCommands, config: &Config) -> Res
                         decision.status,
                         decision.scope.as_deref().unwrap_or("unspecified")
                     );
+                }
+            }
+        }
+        DecisionsCommands::Replay {
+            fixture,
+            project,
+            all_projects,
+            json: emit_json,
+            indexed_only: _,
+        } => {
+            // Always use indexed-only for replay
+            let engine = create_indexed_only_engine(config)?;
+
+            let effective_project = if *all_projects {
+                None
+            } else {
+                match project {
+                    Some(p) => Some(p.clone()),
+                    None => std::env::current_dir()
+                        .ok()
+                        .map(|p| p.to_string_lossy().replace('/', "-")),
+                }
+            };
+
+            // Query all indexed records for the project (all sources)
+            let query = backscroll::core::IndexedRecordQuery {
+                project: effective_project,
+                source: None,
+                source_path: None,
+                after: None,
+                before: None,
+                limit: 0,
+            };
+
+            let records = engine.query_indexed_records(&query)?;
+            let fixture_path_str = fixture.to_string_lossy().to_string();
+            let report = run_replay(fixture, &records, &fixture_path_str)?;
+
+            if *emit_json {
+                println!(
+                    "{}",
+                    serde_json::to_string(&report).map_err(|err| {
+                        miette::miette!("Failed to serialize replay report: {}", err)
+                    })?
+                );
+            } else {
+                println!("Replay Report: {}", report.fixture);
+                println!("Corpus records: {}", report.corpus_records);
+                println!("Expected decisions: {}", report.expected);
+                println!("Coverage: {:.1}%\n", report.coverage_pct);
+
+                if !report.covered.is_empty() {
+                    println!("Covered ({}):", report.covered.len());
+                    for decision in &report.covered {
+                        println!(
+                            "  - {}: {} ({})",
+                            decision.id.as_deref().unwrap_or("(no id)"),
+                            decision.statement,
+                            decision.source_path
+                        );
+                    }
+                    println!();
+                }
+
+                if !report.missed.is_empty() {
+                    println!("Missed ({}):", report.missed.len());
+                    for decision in &report.missed {
+                        println!(
+                            "  - {}: {}",
+                            decision.id.as_deref().unwrap_or("(no id)"),
+                            decision.statement
+                        );
+                    }
+                    println!();
+                }
+
+                if !report.stale.is_empty() {
+                    println!("Stale ({}):", report.stale.len());
+                    for decision in &report.stale {
+                        println!(
+                            "  - {}: {} ({})",
+                            decision.id.as_deref().unwrap_or("(no id)"),
+                            decision.statement,
+                            decision.source_path
+                        );
+                    }
+                    println!();
+                }
+
+                if !report.conflicts.is_empty() {
+                    println!("Conflicts ({}):", report.conflicts.len());
+                    for decision in &report.conflicts {
+                        println!(
+                            "  - {}: {} (expected: {}, found: {}) at {}",
+                            decision.id.as_deref().unwrap_or("(no id)"),
+                            decision.statement,
+                            decision.expected_status,
+                            decision.found_status,
+                            decision.source_path
+                        );
+                    }
+                    println!();
+                }
+
+                if !report.source_counts.is_empty() {
+                    println!("Source counts:");
+                    for (source, count) in &report.source_counts {
+                        println!("  {}: {}", source, count);
+                    }
                 }
             }
         }
@@ -2783,5 +3077,209 @@ mod tests {
     fn freshness_unknown_when_none() {
         let result = compute_freshness(None);
         assert_eq!(result, "unknown");
+    }
+
+    #[test]
+    fn replay_covered_decision_found() -> miette::Result<()> {
+        let fixture = ReplayFixture {
+            expected_decisions: vec![FixtureDecision {
+                id: Some("DEC-001".to_string()),
+                statement: "use ESM modules everywhere".to_string(),
+                status: Some("accepted".to_string()),
+            }],
+        };
+
+        let records = vec![backscroll::core::IndexedRecord {
+            schema_version: 1,
+            source: "session".to_string(),
+            source_path: "session-abc.jsonl".to_string(),
+            ordinal: 1,
+            role: "assistant".to_string(),
+            text: "we decided to use ESM modules everywhere".to_string(),
+            project: Some("test-project".to_string()),
+            uuid: None,
+            timestamp: Some("2026-05-11T10:00:00Z".to_string()),
+            content_type: "text".to_string(),
+        }];
+
+        let temp_file = tempdir().unwrap();
+        let fixture_path = temp_file.path().join("fixture.json");
+        let fixture_json = serde_json::to_string(&fixture)
+            .map_err(|err| miette::miette!("Failed to serialize fixture: {}", err))?;
+        fs::write(&fixture_path, &fixture_json)
+            .map_err(|err| miette::miette!("Failed to write fixture: {}", err))?;
+
+        let report = run_replay(&fixture_path, &records, "fixture.json")?;
+
+        assert_eq!(report.expected, 1);
+        assert_eq!(report.covered.len(), 1);
+        assert_eq!(report.missed.len(), 0);
+        assert_eq!(report.coverage_pct, 100.0);
+        assert_eq!(report.covered[0].id, Some("DEC-001".to_string()));
+        assert_eq!(report.covered[0].source_path, "session-abc.jsonl");
+
+        Ok(())
+    }
+
+    #[test]
+    fn replay_missed_decision_not_found() -> miette::Result<()> {
+        let fixture = ReplayFixture {
+            expected_decisions: vec![FixtureDecision {
+                id: Some("DEC-002".to_string()),
+                statement: "use typescript everywhere".to_string(),
+                status: Some("accepted".to_string()),
+            }],
+        };
+
+        let records = vec![backscroll::core::IndexedRecord {
+            schema_version: 1,
+            source: "session".to_string(),
+            source_path: "session-abc.jsonl".to_string(),
+            ordinal: 1,
+            role: "assistant".to_string(),
+            text: "we use javascript sometimes".to_string(),
+            project: Some("test-project".to_string()),
+            uuid: None,
+            timestamp: Some("2026-05-11T10:00:00Z".to_string()),
+            content_type: "text".to_string(),
+        }];
+
+        let temp_file = tempdir().unwrap();
+        let fixture_path = temp_file.path().join("fixture.json");
+        let fixture_json = serde_json::to_string(&fixture)
+            .map_err(|err| miette::miette!("Failed to serialize fixture: {}", err))?;
+        fs::write(&fixture_path, &fixture_json)
+            .map_err(|err| miette::miette!("Failed to write fixture: {}", err))?;
+
+        let report = run_replay(&fixture_path, &records, "fixture.json")?;
+
+        assert_eq!(report.expected, 1);
+        assert_eq!(report.covered.len(), 0);
+        assert_eq!(report.missed.len(), 1);
+        assert_eq!(report.coverage_pct, 0.0);
+        assert_eq!(report.missed[0].id, Some("DEC-002".to_string()));
+
+        Ok(())
+    }
+
+    #[test]
+    fn replay_stale_detection() -> miette::Result<()> {
+        let fixture = ReplayFixture {
+            expected_decisions: vec![FixtureDecision {
+                id: Some("DEC-001".to_string()),
+                statement: "use ESM modules".to_string(),
+                status: Some("accepted".to_string()),
+            }],
+        };
+
+        let records = vec![backscroll::core::IndexedRecord {
+            schema_version: 1,
+            source: "decision".to_string(),
+            source_path: "docs/adr/0001.md".to_string(),
+            ordinal: 1,
+            role: "assistant".to_string(),
+            text: "---\nid: DEC-001\nstatus: superseded\n---\nuse ESM modules".to_string(),
+            project: Some("test-project".to_string()),
+            uuid: None,
+            timestamp: Some("2026-05-11T10:00:00Z".to_string()),
+            content_type: "text".to_string(),
+        }];
+
+        let temp_file = tempdir().unwrap();
+        let fixture_path = temp_file.path().join("fixture.json");
+        let fixture_json = serde_json::to_string(&fixture)
+            .map_err(|err| miette::miette!("Failed to serialize fixture: {}", err))?;
+        fs::write(&fixture_path, &fixture_json)
+            .map_err(|err| miette::miette!("Failed to write fixture: {}", err))?;
+
+        let report = run_replay(&fixture_path, &records, "fixture.json")?;
+
+        assert_eq!(report.expected, 1);
+        assert_eq!(report.covered.len(), 0);
+        assert_eq!(report.stale.len(), 1);
+        assert_eq!(report.stale[0].id, Some("DEC-001".to_string()));
+
+        Ok(())
+    }
+
+    #[test]
+    fn replay_coverage_pct_correct() -> miette::Result<()> {
+        let fixture = ReplayFixture {
+            expected_decisions: vec![
+                FixtureDecision {
+                    id: Some("DEC-001".to_string()),
+                    statement: "use ESM modules".to_string(),
+                    status: Some("accepted".to_string()),
+                },
+                FixtureDecision {
+                    id: Some("DEC-002".to_string()),
+                    statement: "use bun for testing".to_string(),
+                    status: Some("accepted".to_string()),
+                },
+            ],
+        };
+
+        let records = vec![backscroll::core::IndexedRecord {
+            schema_version: 1,
+            source: "session".to_string(),
+            source_path: "session-abc.jsonl".to_string(),
+            ordinal: 1,
+            role: "assistant".to_string(),
+            text: "we decided to use ESM modules".to_string(),
+            project: Some("test-project".to_string()),
+            uuid: None,
+            timestamp: Some("2026-05-11T10:00:00Z".to_string()),
+            content_type: "text".to_string(),
+        }];
+
+        let temp_file = tempdir().unwrap();
+        let fixture_path = temp_file.path().join("fixture.json");
+        let fixture_json = serde_json::to_string(&fixture)
+            .map_err(|err| miette::miette!("Failed to serialize fixture: {}", err))?;
+        fs::write(&fixture_path, &fixture_json)
+            .map_err(|err| miette::miette!("Failed to write fixture: {}", err))?;
+
+        let report = run_replay(&fixture_path, &records, "fixture.json")?;
+
+        assert_eq!(report.expected, 2);
+        assert_eq!(report.covered.len(), 1);
+        assert_eq!(report.missed.len(), 1);
+        assert!((report.coverage_pct - 50.0).abs() < 0.01);
+
+        Ok(())
+    }
+
+    #[test]
+    fn replay_empty_fixture_returns_full_coverage() -> miette::Result<()> {
+        let fixture = ReplayFixture {
+            expected_decisions: vec![],
+        };
+
+        let records = vec![backscroll::core::IndexedRecord {
+            schema_version: 1,
+            source: "session".to_string(),
+            source_path: "session-abc.jsonl".to_string(),
+            ordinal: 1,
+            role: "assistant".to_string(),
+            text: "some content".to_string(),
+            project: Some("test-project".to_string()),
+            uuid: None,
+            timestamp: Some("2026-05-11T10:00:00Z".to_string()),
+            content_type: "text".to_string(),
+        }];
+
+        let temp_file = tempdir().unwrap();
+        let fixture_path = temp_file.path().join("fixture.json");
+        let fixture_json = serde_json::to_string(&fixture)
+            .map_err(|err| miette::miette!("Failed to serialize fixture: {}", err))?;
+        fs::write(&fixture_path, &fixture_json)
+            .map_err(|err| miette::miette!("Failed to write fixture: {}", err))?;
+
+        let report = run_replay(&fixture_path, &records, "fixture.json")?;
+
+        assert_eq!(report.expected, 0);
+        assert_eq!(report.coverage_pct, 100.0);
+
+        Ok(())
     }
 }
