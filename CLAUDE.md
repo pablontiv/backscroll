@@ -8,6 +8,8 @@ Backscroll is a Go CLI tool that indexes Claude Code sessions, plans, and extern
 
 **Status**: Go port in progress — `main` branch is the active Go implementation. The Rust implementation is frozen in the `v0` branch.
 
+Implemented so far: `internal/config`, `internal/diagnostics`, `internal/models`, `internal/output`, `internal/sync`, `internal/tagging`, `internal/plans`, `internal/sources`.
+
 Stack: cobra, go-toml/v2, goldmark, modernc.org/sqlite (pure Go, no CGO), stdlib testing.
 
 ## Build & Test Commands
