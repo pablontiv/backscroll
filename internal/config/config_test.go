@@ -279,36 +279,121 @@ session_dirs = ["/dir1", "/dir2", "/dir3"]
 }
 
 func TestDiscoverSessionDirs(t *testing.T) {
-	// Create a temporary home directory
-	tmpHome := t.TempDir()
-
-	// Create ~/.claude/projects with some subdirs
-	projectsDir := filepath.Join(tmpHome, ".claude", "projects")
-	if err := os.MkdirAll(projectsDir, 0755); err != nil {
-		t.Fatalf("failed to create projects dir: %v", err)
-	}
-
-	// Create some directories
-	if err := os.MkdirAll(filepath.Join(projectsDir, "project1"), 0755); err != nil {
-		t.Fatalf("failed to create project1: %v", err)
-	}
-	if err := os.MkdirAll(filepath.Join(projectsDir, "project2"), 0755); err != nil {
-		t.Fatalf("failed to create project2: %v", err)
-	}
-
-	// Create a file (should be ignored)
-	if err := os.WriteFile(filepath.Join(projectsDir, "readme.txt"), []byte("test"), 0644); err != nil {
-		t.Fatalf("failed to create file: %v", err)
-	}
-
-	// Test discovery - we can't easily override homeDir in tests, so we'll test the logic
-	// by checking that the function doesn't error on a missing directory
+	// Test discovery doesn't error even if directory doesn't exist
 	_, err := DiscoverSessionDirs()
-	if err == nil {
-		// The actual returned dirs will depend on the test environment,
-		// but we verified the function doesn't error on non-existent directory
+	if err != nil {
+		t.Errorf("DiscoverSessionDirs unexpectedly errored: %v", err)
+	}
+}
+
+func TestEnvVarSessionDirsMultiple(t *testing.T) {
+	oldDbPath := os.Getenv("BACKSCROLL_DATABASE_PATH")
+	oldSessionDirs := os.Getenv("BACKSCROLL_SESSION_DIRS")
+	defer func() {
+		if oldDbPath != "" {
+			os.Setenv("BACKSCROLL_DATABASE_PATH", oldDbPath)
+		} else {
+			os.Unsetenv("BACKSCROLL_DATABASE_PATH")
+		}
+		if oldSessionDirs != "" {
+			os.Setenv("BACKSCROLL_SESSION_DIRS", oldSessionDirs)
+		} else {
+			os.Unsetenv("BACKSCROLL_SESSION_DIRS")
+		}
+	}()
+
+	os.Setenv("BACKSCROLL_DATABASE_PATH", "/tmp/test.db")
+	os.Setenv("BACKSCROLL_SESSION_DIRS", "/dir/a:/dir/b:/dir/c")
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if len(cfg.SessionDirs) != 3 {
+		t.Errorf("expected 3 session dirs, got %d: %v", len(cfg.SessionDirs), cfg.SessionDirs)
+	}
+	if !cfg.SessionDirsExplicit {
+		t.Error("expected SessionDirsExplicit to be true")
+	}
+}
+
+func TestLoadConfigFileWithSources(t *testing.T) {
+	tmpdir := t.TempDir()
+	cfgPath := filepath.Join(tmpdir, "config.toml")
+
+	content := `
+database_path = "/tmp/mydb.db"
+session_dirs = ["/sessions"]
+
+[sources]
+ke = ["/sources/ke.md"]
+decisions = ["/sources/decisions.md"]
+memories = ["/sources/memories.md"]
+rules = ["/sources/rules.md"]
+specs = ["/sources/specs.md"]
+backlog = ["/sources/backlog.md"]
+`
+	if err := os.WriteFile(cfgPath, []byte(content), 0o644); err != nil {
+		t.Fatalf("write config: %v", err)
 	}
 
-	// For a more complete test, we'd need to be able to override homeDir()
-	// That's an implementation detail that would require refactoring
+	cfg := &Config{DatabasePath: "/default.db", SessionDirs: []string{"."}}
+	if err := loadConfigFile(cfgPath, cfg); err != nil {
+		t.Fatalf("loadConfigFile: %v", err)
+	}
+
+	if cfg.DatabasePath != "/tmp/mydb.db" {
+		t.Errorf("DatabasePath = %q, want /tmp/mydb.db", cfg.DatabasePath)
+	}
+	if len(cfg.Sources.KE) != 1 || cfg.Sources.KE[0] != "/sources/ke.md" {
+		t.Errorf("Sources.KE = %v", cfg.Sources.KE)
+	}
+	if len(cfg.Sources.Decisions) != 1 {
+		t.Errorf("Sources.Decisions = %v", cfg.Sources.Decisions)
+	}
+	if len(cfg.Sources.Memories) != 1 {
+		t.Errorf("Sources.Memories = %v", cfg.Sources.Memories)
+	}
+	if len(cfg.Sources.Rules) != 1 {
+		t.Errorf("Sources.Rules = %v", cfg.Sources.Rules)
+	}
+	if len(cfg.Sources.Specs) != 1 {
+		t.Errorf("Sources.Specs = %v", cfg.Sources.Specs)
+	}
+	if len(cfg.Sources.Backlog) != 1 {
+		t.Errorf("Sources.Backlog = %v", cfg.Sources.Backlog)
+	}
+}
+
+func TestLoadConfigFileInvalidTOML(t *testing.T) {
+	tmpdir := t.TempDir()
+	cfgPath := filepath.Join(tmpdir, "bad.toml")
+	if err := os.WriteFile(cfgPath, []byte("not valid toml ==="), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	cfg := &Config{DatabasePath: "/default.db"}
+	err := loadConfigFile(cfgPath, cfg)
+	if err == nil {
+		t.Error("expected error for invalid TOML, got nil")
+	}
+}
+
+func TestLoadConfigFileSessionDirSingular(t *testing.T) {
+	tmpdir := t.TempDir()
+	cfgPath := filepath.Join(tmpdir, "config.toml")
+	if err := os.WriteFile(cfgPath, []byte(`session_dir = "/single/dir"`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	cfg := &Config{DatabasePath: "/default.db", SessionDirs: []string{"."}}
+	if err := loadConfigFile(cfgPath, cfg); err != nil {
+		t.Fatalf("loadConfigFile: %v", err)
+	}
+	if len(cfg.SessionDirs) != 1 || cfg.SessionDirs[0] != "/single/dir" {
+		t.Errorf("SessionDirs = %v", cfg.SessionDirs)
+	}
+	if !cfg.SessionDirsExplicit {
+		t.Error("expected SessionDirsExplicit to be true")
+	}
 }

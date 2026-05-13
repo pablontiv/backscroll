@@ -150,6 +150,8 @@ CREATE VIRTUAL TABLE IF NOT EXISTS messages_fts USING fts5(
     content_rowid=id,
     tokenize='porter unicode61'
 );
+
+CREATE VIRTUAL TABLE IF NOT EXISTS messages_vocab USING fts5vocab(messages_fts, 'row');
 `
 
 const sqlV1Triggers = `

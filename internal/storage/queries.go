@@ -3,6 +3,8 @@ package storage
 import (
 	"database/sql"
 	"fmt"
+	"sort"
+	"strings"
 	"time"
 )
 
@@ -37,8 +39,14 @@ func (d *Database) GetStats() (Stats, error) {
 	}
 
 	if lastIndexed.Valid {
-		t, _ := time.Parse(time.RFC3339, lastIndexed.String)
-		stats.IndexedAt = t
+		// SQLite CURRENT_TIMESTAMP returns "YYYY-MM-DD HH:MM:SS"; also handle RFC3339.
+		formats := []string{time.RFC3339, "2006-01-02 15:04:05"}
+		for _, f := range formats {
+			if t, err := time.Parse(f, lastIndexed.String); err == nil {
+				stats.IndexedAt = t
+				break
+			}
+		}
 	}
 
 	return stats, nil
@@ -59,17 +67,71 @@ func (d *Database) GetTopics(project string, limit int) ([]TopicEntry, error) {
 		limit = 50
 	}
 
-	// For now, return an empty list
-	// In a production system, you could:
-	// 1. Build a term frequency map from search_items.text
-	// 2. Use FTS5's fts5vocab() function directly if available
-	// 3. Maintain a separate terms table
-	//
-	// This is acceptable as topics are informational and optional
-	_ = project // project parameter unused in simplified implementation
-	_ = limit   // limit parameter unused in simplified implementation
+	query := "SELECT text FROM search_items WHERE source = 'session'"
+	var args []interface{}
+	if project != "" {
+		query += " AND project = ?"
+		args = append(args, project)
+	}
 
-	return []TopicEntry{}, nil
+	rows, err := d.db.Query(query, args...)
+	if err != nil {
+		return nil, fmt.Errorf("query text: %w", err)
+	}
+	defer rows.Close()
+
+	freq := make(map[string]int)
+	for rows.Next() {
+		var text string
+		if err := rows.Scan(&text); err != nil {
+			continue
+		}
+		for _, word := range strings.Fields(strings.ToLower(text)) {
+			word = strings.Trim(word, ".,!?;:\"'()[]{}*/\\-_")
+			if len(word) >= 4 && !isCommonWord(word) {
+				freq[word]++
+			}
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate text: %w", err)
+	}
+
+	// Sort by frequency
+	type kv struct {
+		k string
+		v int
+	}
+	var sorted []kv
+	for k, v := range freq {
+		sorted = append(sorted, kv{k, v})
+	}
+	sort.Slice(sorted, func(i, j int) bool {
+		return sorted[i].v > sorted[j].v
+	})
+
+	var entries []TopicEntry
+	for _, item := range sorted {
+		if len(entries) >= limit {
+			break
+		}
+		entries = append(entries, TopicEntry{Term: item.k, Count: item.v})
+	}
+	return entries, nil
+}
+
+// isCommonWord returns true for very common English words that aren't useful as topics.
+func isCommonWord(w string) bool {
+	common := map[string]bool{
+		"this": true, "that": true, "with": true, "from": true,
+		"have": true, "will": true, "been": true, "were": true,
+		"they": true, "them": true, "their": true, "what": true,
+		"when": true, "where": true, "which": true, "more": true,
+		"also": true, "some": true, "than": true, "into": true,
+		"your": true, "there": true, "here": true, "would": true,
+		"could": true, "should": true, "about": true, "then": true,
+	}
+	return common[w]
 }
 
 // SessionEntry represents a session record.

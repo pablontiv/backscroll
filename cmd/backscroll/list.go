@@ -52,10 +52,15 @@ func runList(stdout, stderr io.Writer,
 		return fmt.Errorf("load config: %w", err)
 	}
 
-	// Open read-only database
+	// Open read-only database. If DB doesn't exist yet, return an empty list.
 	db, err := storage.OpenReadOnly(cfg.DatabasePath)
 	if err != nil {
-		return fmt.Errorf("open database: %w", err)
+		if jsonFormat {
+			fmt.Fprintf(stdout, "{\"count\":0,\"sessions\":[]}\n")
+		} else {
+			fmt.Fprintf(stdout, "No sessions found\n")
+		}
+		return nil
 	}
 	defer db.Close()
 
@@ -66,7 +71,11 @@ func runList(stdout, stderr io.Writer,
 	}
 
 	if len(sessions) == 0 {
-		fmt.Fprintf(stdout, "No sessions found\n")
+		if jsonFormat {
+			fmt.Fprintf(stdout, "{\"count\":0,\"sessions\":[]}\n")
+		} else {
+			fmt.Fprintf(stdout, "No sessions found\n")
+		}
 		return nil
 	}
 

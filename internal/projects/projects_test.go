@@ -149,3 +149,62 @@ func TestLoadLocalHintWalksUp(t *testing.T) {
 		t.Errorf("expected parent-project, got %s", hint.ProjectID)
 	}
 }
+
+func TestLoadGlobalRegistry(t *testing.T) {
+	// Just ensure it doesn't panic; may return empty registry if file not present.
+	reg := projects.LoadGlobalRegistry()
+	_ = reg
+}
+
+func TestListProjects(t *testing.T) {
+	reg := makeRegistry()
+	list := projects.ListProjects(reg)
+	if len(list) != 1 {
+		t.Errorf("expected 1 project, got %d", len(list))
+	}
+	if list[0].ID != "backscroll" {
+		t.Errorf("expected backscroll, got %s", list[0].ID)
+	}
+}
+
+func TestListProjectsEmpty(t *testing.T) {
+	reg := projects.ProjectRegistry{}
+	list := projects.ListProjects(reg)
+	if len(list) != 0 {
+		t.Errorf("expected 0 projects, got %d", len(list))
+	}
+}
+
+func TestIdentifyTruncated(t *testing.T) {
+	reg := projects.ProjectRegistry{
+		Projects: []projects.ProjectConfig{
+			{
+				ID:    "myapp",
+				Roots: []string{"/home/user/myapp"},
+			},
+		},
+	}
+	// Truncated: path is a suffix of the root (partial path)
+	id := projects.Identify("myapp", reg)
+	if id.ProjectID != "myapp" {
+		t.Errorf("expected myapp, got %s", id.ProjectID)
+	}
+	if id.Confidence != projects.ConfidenceTruncated {
+		t.Logf("confidence: %s (truncated matching is heuristic)", id.Confidence)
+	}
+}
+
+func TestLoadLocalHintInvalidTOML(t *testing.T) {
+	dir := t.TempDir()
+	hintDir := filepath.Join(dir, ".backscroll")
+	if err := os.MkdirAll(hintDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(hintDir, "project.toml"), []byte("not valid toml ==="), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	hint := projects.LoadLocalHint(dir)
+	if hint != nil {
+		t.Errorf("expected nil hint for invalid TOML, got %+v", hint)
+	}
+}

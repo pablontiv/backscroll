@@ -333,6 +333,61 @@ No frontmatter here.`,
 	}
 }
 
+func TestParseAllWithAllTypes(t *testing.T) {
+	tmpdir, err := os.MkdirTemp("", "sources_all_types_*")
+	if err != nil {
+		t.Fatalf("create tmpdir: %v", err)
+	}
+	defer os.RemoveAll(tmpdir)
+
+	writeFile := func(name, content string) string {
+		path := filepath.Join(tmpdir, name)
+		if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+			t.Fatalf("write %s: %v", name, err)
+		}
+		return path
+	}
+
+	ruleFile := writeFile("rule.md", "---\nid: RULE-001\n---\n## Rule One\nDo this.\n## Rule Two\nDo that.")
+	specFile := writeFile("spec.md", "---\nid: SPEC-001\n---\n## Spec One\nSpec detail.")
+	backlogFile := writeFile("backlog.md", "---\nid: BACK-001\n---\n## Task One\nDescription.")
+
+	cfg := SourceConfig{
+		Rules:   []string{ruleFile},
+		Specs:   []string{specFile},
+		Backlog: []string{backlogFile},
+	}
+
+	items, err := ParseAll(cfg)
+	if err != nil {
+		t.Fatalf("ParseAll: %v", err)
+	}
+
+	src := make(map[string]int)
+	for _, item := range items {
+		src[item.Source]++
+	}
+	if src["rule"] == 0 {
+		t.Error("expected at least one rule item")
+	}
+	if src["spec"] == 0 {
+		t.Error("expected at least one spec item")
+	}
+	if src["backlog"] == 0 {
+		t.Error("expected at least one backlog item")
+	}
+}
+
+func TestParseAllMissingFile(t *testing.T) {
+	cfg := SourceConfig{
+		KE: []string{"/nonexistent/ke.md"},
+	}
+	_, err := ParseAll(cfg)
+	if err == nil {
+		t.Error("expected error for missing file, got nil")
+	}
+}
+
 func TestFixtureFiles(t *testing.T) {
 	// Test with actual fixture files if they exist
 	fixtureDir := "/home/shared/backscroll/tests/fixtures"

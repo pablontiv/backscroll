@@ -50,10 +50,17 @@ func (d *Database) SyncFiles(files []IndexedFile) error {
 			return fmt.Errorf("delete old session_events for %s: %w", file.SourcePath, err)
 		}
 
-		// Insert new search_items
+		// Insert new search_items. Use OR IGNORE so that cross-file UUID
+		// collisions (rare) are silently skipped rather than aborting the
+		// transaction. Use nil (SQL NULL) when uuid is absent — SQLite's
+		// UNIQUE constraint allows multiple NULLs but not multiple "".
 		for _, msg := range file.Messages {
+			var uuidVal interface{}
+			if msg.UUID != "" {
+				uuidVal = msg.UUID
+			}
 			_, err := tx.Exec(`
-				INSERT INTO search_items
+				INSERT OR IGNORE INTO search_items
 				(source, source_path, ordinal, role, text, timestamp, uuid, project, content_type)
 				VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
 			`,
@@ -63,7 +70,7 @@ func (d *Database) SyncFiles(files []IndexedFile) error {
 				msg.Role,
 				msg.Text,
 				msg.Timestamp,
-				msg.UUID,
+				uuidVal,
 				file.Project,
 				msg.ContentType,
 			)
