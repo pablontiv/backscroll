@@ -4,85 +4,77 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-Backscroll is a Rust CLI tool that indexes Claude Code sessions, plans, and external knowledge sources into SQLite for hybrid search (BM25 + vector embeddings via sqlite-vec + RRF fusion). It treats sessions as an event store with incremental sync via SHA-256 deduplication.
+Backscroll is a Go CLI tool that indexes Claude Code sessions, plans, and external knowledge sources into SQLite for full-text search (BM25 via FTS5). It treats sessions as an event store with incremental sync via SHA-256 deduplication.
 
-**Status**: 1.0 — Hybrid search engine complete (BM25 + embeddings + RRF). External source types (KEs, decisions, memories, rules, specs, backlog). >95% test coverage. Requires Rust 1.85+.
+**Status**: Go port in progress — `main` branch is the active Go implementation. The Rust implementation is frozen in the `v0` branch.
+
+Stack: cobra, go-toml/v2, goldmark, modernc.org/sqlite (pure Go, no CGO), stdlib testing.
 
 ## Build & Test Commands
 
 ```bash
-just check              # rustfmt --check + clippy -D warnings + cargo check
-just test               # cargo test --all-features
-just fmt                # cargo fmt --all
-just build              # cargo build --release
-just static-build       # cargo zigbuild (Linux musl static binary)
-just coverage-summary   # LLVM coverage report
-just audit              # cargo deny check licenses bans
+just check              # gofmt --check + go vet
+just test               # go test ./...
+just fmt                # gofmt -w .
+just build              # go build -o backscroll ./cmd/backscroll
+just coverage-summary   # go test -cover ./...
+just audit              # go mod verify
 ```
 
-Run a single test: `cargo test test_name`
+Run a single test: `go test -run TestName ./internal/...`
 
-Tests use `assert_cmd` + `predicates` for CLI integration and `insta` for snapshot tests. Unit tests are co-located in each module. Integration tests in `tests/cli.rs`. Update snapshots with `cargo insta review`.
-
-Install script tests: `bash tests/test-install.sh` (bash) and `Invoke-Pester tests/test-install.ps1` (PowerShell). Both run in CI — static checks in `check-lint`, runtime PowerShell tests in a Windows job.
+Tests use stdlib `testing` + subprocess or direct `run()` invocation. Unit tests are co-located in each package. Integration tests in `tests/` directory.
 
 ## Architecture
 
 ### Module Layout
 
 ```
-main.rs (CLI: clap)
-├── config.rs          — Figment-based config (TOML files + env vars + discovery)
-├── output.rs          — Formats output (Text, JSON, Robot) and limits tokens
-├── core/
-│   ├── mod.rs         — SearchResult struct, SearchEngine trait (port)
-│   ├── models.rs      — SessionRecord wrapper, MessageContent untagged enum
-│   ├── plans.rs       — Markdown plan parser (split by ## headers)
-│   ├── reader.rs      — Direct reading of single filtered session files
-│   ├── sync.rs        — WalkDir, hashing, parsing JSONL with noise filtering
-│   ├── tagging.rs     — Heuristic session auto-tagging (regex-based category detection)
-│   ├── embedding.rs   — EmbeddingProvider trait, MockProvider, OnnxProvider
-│   ├── chunking.rs    — Text chunking pipeline (~512 tokens, sentence-aware)
-│   ├── sources.rs     — External source parsers (KE, decision, memory, rule, spec, backlog) + SourceRegistry
-│   ├── projects.rs    — Project identity registry: load_global_registry(), identify(), local hint support
-│   └── hybrid.rs      — Reciprocal Rank Fusion (RRF) for combining BM25 + vector rankings
-└── storage/
-    └── sqlite.rs      — SQLite adapter (FTS5 + sqlite-vec, hybrid search, embeddings)
+cmd/backscroll/
+├── main.go            — entrypoint; run(stdout, stderr, args) for testability
+├── sync.go            — sync command
+├── search.go          — search command
+├── read.go            — read command
+├── resume.go          — resume command
+├── list.go            — list command
+├── topics.go          — topics command
+├── insights.go        — insights command
+├── export.go          — export command
+├── reindex.go         — reindex command
+├── purge.go           — purge command
+├── validate.go        — validate command
+├── status.go          — status command
+├── decisions.go       — decisions subcommands
+└── projects.go        — projects subcommands
+internal/
+├── config/            — config resolution: backscroll.toml → ~/.config → env → defaults
+├── diagnostics/       — structured error reporting
+├── models/            — domain types: SessionRecord, MessageContent, ParsedFile, SearchResult, Stats
+├── output/            — output formatter: Text, JSON, Robot with token limiting
+├── sync/              — WalkDir, SHA-256 dedup, JSONL parsing, noise filtering, content-type classification
+├── tagging/           — heuristic auto-tagging (debugging, refactoring, feature, testing, docs, config)
+├── plans/             — Markdown plan parser (split by ## headers, goldmark)
+├── sources/           — external source parsers (ke, decision, memory, rule, spec, backlog) + SourceRegistry
+├── projects/          — project identity registry: LoadGlobalRegistry(), Identify(), LoadLocalHint()
+├── reader/            — direct reading and filtering of individual session files
+└── storage/           — SQLite adapter (FTS5, BM25, WAL mode, migrations, search_items, session_tags)
 ```
-
-- `main.rs` — CLI entrypoint (clap `Parser`/`Subcommand`), command dispatch, plan sync orchestration
-- `config.rs` — Figment-based config resolution (TOML files + env vars), multi-path session dirs, auto-discovery of `~/.claude/projects/`
-- `output.rs` — Output formatter (Text, JSON, Robot) with approximate token limiting
-- `core/mod.rs` — Domain types (`SearchResult`, `ParsedFile`, `Stats`) and `SearchEngine` trait (port)
-- `core/models.rs` — `SessionRecord` wrapper, `MessageContent` untagged enum for defensive parsing
-- `core/plans.rs` — Markdown plan parser: splits `~/.claude/plans/*.md` by `##` headers into indexable sections
-- `core/reader.rs` — Direct reading and filtering of individual session files
-- `core/sync.rs` — WalkDir traversal, SHA-256 hashing, JSONL parsing, noise filter regex (LazyLock), content-type classification
-- `core/tagging.rs` — Heuristic session auto-tagging: regex patterns detect categories (debugging, refactoring, feature, testing, docs, config)
-- `core/projects.rs` — Project identity registry: `load_global_registry()` reads `~/.config/backscroll/projects.toml`, `load_local_hint()` walks upward for `.backscroll/project.toml`, `identify()` resolves canonical project IDs with confidence levels (exact/pattern/hint/truncated/unknown)
-- `storage/sqlite.rs` — SQLite adapter (external FTS5 with Porter stemmer, triggers, BM25 ranking, WAL mode, source-aware filtering, session tags)
 
 Thirteen CLI commands: `sync [--path] [--include-agents] [--no-plans] [--optimize]`, `search <query> [--project] [--all-projects] [--json] [--robot] [--fields] [--max-tokens] [--source] [--after] [--before] [--role] [--limit] [--offset] [--content-type] [--tag]`, `read <path>`, `resume <query> [--project] [--all-projects] [--robot] [--source]`, `topics [--project] [--all-projects] [--limit] [--json] [--robot]`, `list [--project] [--all-projects] [--recent] [--json] [--robot]`, `insights [--project] [--all-projects] [--json] [--robot]`, `export <query> [--format markdown|csv] [--project] [--all-projects]`, `reindex`, `purge --before <date>`, `validate`, `status`.
 
-The `SearchEngine` trait is the port; `storage::sqlite` is the adapter. Database is opened lazily. `Database::open_readonly()` provides read-only access for external consumers (e.g., kedral) via `SQLITE_OPEN_READ_ONLY` — fails fast if DB file missing.
+The `SearchEngine` interface is the port; `internal/storage` is the adapter. Database opened lazily. `OpenReadOnly()` provides read-only access for external consumers.
 
 ### Core Pipeline
 
 ```
-JSONL files → WalkDir → SHA-256 dedup → parse_sessions() ─┐
-Markdown plans → discover_plan_files() → parse_plan() ─────┤
-External sources → SourceRegistry::parse_all() ─────────────┤
-                                                            ▼
-                                              sync_files() → SQLite FTS5
-                                                           → chunk_text() → embed() → sqlite-vec
+JSONL files → fs.WalkDir → SHA-256 dedup → ParseSessions() ─┐
+Markdown plans → DiscoverPlanFiles() → ParsePlan() ──────────┤
+External sources → SourceRegistry.ParseAll() ─────────────────┤
+                                                              ▼
+                                              SyncFiles() → SQLite FTS5
                                                             │
-CLI query → search() → BM25 ──────────────┐
-                     → embed(query) → KNN ─┤→ RRF fusion → format_results()
+CLI query → Search() → BM25 → format_results()
 ```
-
-### Hybrid Search
-
-Search defaults to hybrid mode (BM25 + vector + RRF). Use `--lexical-only` for BM25-only. Embedding provider is configurable via `EmbeddingProvider` trait (default: all-MiniLM-L6-v2 via ONNX Runtime, download-on-first-use).
 
 ### External Source Types
 
@@ -90,48 +82,42 @@ Configurable in `[sources]` section of `backscroll.toml`. Source types: `ke`, `d
 
 ### Key Design Decisions
 
-- **Defensive parsing**: `SessionRecord` wrapper format extraction handles legacy schemas and noise.
+- **Defensive parsing**: `SessionRecord` wrapper with `json.RawMessage` for fields handles legacy schemas and noise.
 - **Noise filtering**: Excludes `system-reminder`, `task-notification`, and subagent sessions by default.
 - **External FTS5**: Uses `search_items` as content table with SQLite triggers, `snippet()` extraction, and Porter stemmer tokenizer for morphological matching.
 - **Incremental sync**: SHA-256 hash per file stored in `indexed_files` table; unchanged files are skipped.
 - **Plan indexing**: Markdown plans from `~/.claude/plans/` split by `##` headers, each section indexed as a separate search item with `source='plan'`.
 - **Source filtering**: `search_items.source` column distinguishes sessions from plans; `--source` flag filters at query time.
 - **Date filtering**: `--after`/`--before` flags filter by `search_items.timestamp` with NULL-safe guards; `--before` uses exclusive `<` comparison.
-- **Multi-path config**: `session_dirs: Vec<String>` with backward-compatible `session_dir` alias and auto-discovery of `~/.claude/projects/`.
-- **Auto-tagging**: Regex heuristics in `core/tagging.rs` detect session categories (debugging, refactoring, feature, testing, docs, config) during sync; stored in `session_tags` table.
-- **Content-type classification**: Messages classified as `text`/`code`/`tool` based on `MessageContent::Blocks` types during sync.
-- **Bundled SQLite**: `rusqlite` with `bundled` feature — no system SQLite dependency.
-- **Rust edition 2024** with strict linting: clippy nursery + pedantic enabled, `-D warnings` in CI.
-- **Schema migration rule**: Every new table or column MUST be introduced as a new migration version (increment the version number and add a new `if current_version == N` block in `setup_schema()`). Never modify existing migration blocks — existing databases that already passed that version will never re-run them, causing the table/column to silently not exist.
+- **Multi-path config**: `SessionDirs []string` with backward-compatible `session_dir` alias and auto-discovery of `~/.claude/projects/`.
+- **Auto-tagging**: Regex heuristics in `internal/tagging` detect session categories (debugging, refactoring, feature, testing, docs, config) during sync; stored in `session_tags` table.
+- **Content-type classification**: Messages classified as `text`/`code`/`tool` based on message content types during sync.
+- **Pure Go SQLite**: `modernc.org/sqlite` — no CGO, trivially cross-compilable.
+- **Schema migration rule**: Every new table or column MUST be introduced as a new migration version (increment the version number and add a new `if currentVersion == N` block in `setupSchema()`). Never modify existing migration blocks — existing databases that already passed that version will never re-run them.
 
 ## Dependencies
 
-- `clap 4.5` — CLI argument parsing with derive macros
-- `rusqlite 0.39` (bundled, load_extension) — SQLite with FTS5, WAL mode, sqlite-vec support
-- `sqlite-vec 0.1` — Vector similarity search extension for SQLite
-- `ort =2.0.0-rc.10` — ONNX Runtime for embedding inference (load-dynamic)
-- `tokenizers 0.21` — HuggingFace tokenizer for model-agnostic text encoding
-- `ndarray 0.16` — N-dimensional arrays for tensor operations
-- `figment 0.10` — Layered config resolution (TOML + env vars)
-- `serde` / `serde_json` — Defensive JSONL deserialization with `untagged` enums
-- `sha2` / `hex` — SHA-256 hashing for incremental sync deduplication
-- `walkdir 2.5` — Recursive directory traversal for session discovery
-- `regex 1.12` — Noise filter patterns (LazyLock compiled)
-- `miette 7.6` — User-facing diagnostic error reporting
-- `tracing` / `tracing-subscriber` — Structured logging with `RUST_LOG` env filter
-- `insta` (dev) — Snapshot testing for output stability
+- `github.com/spf13/cobra` — CLI argument parsing with subcommands
+- `modernc.org/sqlite` — Pure Go SQLite with FTS5, WAL mode (no CGO)
+- `github.com/pelletier/go-toml/v2` — TOML config parsing
+- `github.com/yuin/goldmark` — Markdown parsing for plan indexing
+- `crypto/sha256` (stdlib) — SHA-256 hashing for incremental sync deduplication
+- `io/fs` + `path/filepath` (stdlib) — Recursive directory traversal
+- `regexp` (stdlib) — Noise filter patterns (compiled at init)
+- `encoding/json` (stdlib) — Defensive JSONL deserialization with RawMessage
 
 ## Project Documentation
 
-- `docs/research/` — Structured research documents (hypothesize method): original feasibility study and Rust architecture pivot
-- `docs/epics/` — Roadmap decomposition (E01–E12): epics, features, stories, tasks with frontmatter metadata
+- `docs/research/` — Structured research documents: feasibility study and architecture decisions
+- `docs/roadmap/` — Roadmap decomposition (O01–O06): outcomes and tasks with frontmatter metadata
 - `.claude/skills/backscroll/` — Claude Code skill for `/backscroll` (distributed to `~/.claude/skills/` via pre-push hook)
-- Documentation is written in a mix of Spanish and English (field names like `estado`, `tipo`, `ejecutable_en` are in Spanish)
+- Documentation is written in a mix of Spanish and English (roadmap fields like `estado`, `tipo` are in Spanish)
 
 ## Code Style
 
-- `rustfmt.toml`: edition 2024, Unix newlines, `use_field_init_shorthand`, `use_try_shorthand`
-- Clippy nursery + pedantic lints active (`.clippy.toml`)
+- `gofmt` for formatting
+- `go vet` for static analysis
+- Standard Go conventions: exported identifiers documented, unexported identifiers clear from context
 
 ## Commit Convention
 
@@ -149,33 +135,11 @@ Commits follow [Conventional Commits](https://www.conventionalcommits.org/) (`ty
 
 Breaking changes use `!` suffix (e.g., `feat!:`) for major version bumps.
 
-### Pre-1.0 Version Strategy
-
-While in v0.x, semver bumps follow pre-1.0 convention:
-
-| Commit type | Bump | Example |
-|---|---|---|
-| `fix`, `perf`, `feat` | patch | v0.1.0 → v0.1.1 |
-| `feat!`, `fix!` (breaking) | minor | v0.1.0 → v0.2.0 |
-
-After v1.0: `feat` bumps minor, breaking bumps major (standard semver).
-
 ## Release Flow
 
-Releases are fully automated via CI. On every push to master, CI analyzes conventional commits since the last tag, calculates the next semver version, claims it via atomic `git push origin <tag>`, injects the version into binaries at build time, builds multi-platform binaries, and creates a GitHub Release. The git tag is the source of truth for the release version — `Cargo.toml` version is only used for development. Concurrent CI runs that compute the same version lose the tag-push race and skip gracefully.
+Releases are fully automated via CI. On every push to `main`, CI analyzes conventional commits since the last tag, calculates the next semver version, claims it via atomic `git push origin <tag>`, injects the version into binaries at build time via `-ldflags "-X main.version={{.Version}}"`, builds multi-platform binaries via goreleaser, and creates a GitHub Release.
 
-No manual release steps are needed — just push to master with conventional commit messages. Tags follow `v{VERSION}` format.
-
-Release assets use platform-specific names to avoid GitHub Releases asset name collisions:
-
-| Asset | Platform |
-|---|---|
-| `backscroll-linux-x86_64` | Linux x86_64 (glibc, native) |
-| `backscroll-linux-x86_64-musl` | Linux x86_64 (musl, static) |
-| `backscroll-macos-aarch64` | macOS Apple Silicon |
-| `backscroll-windows-x86_64.exe` | Windows x86_64 |
-
-The Justfile contains only development recipes (`check`, `test`, `build`, `fmt`, `audit`). Release logic lives exclusively in CI to avoid duplication.
+No manual release steps are needed — just push to `main` with conventional commit messages. Tags follow `v{VERSION}` format.
 
 ## CI/CD
 
@@ -183,7 +147,7 @@ Workflows delegate to [pablontiv/crossbeam](https://github.com/pablontiv/crossbe
 
 | Workflow | Crossbeam caller |
 |---|---|
-| `ci.yml` | `rust-ci.yml`, `gitleaks.yml`, `rust-release.yml` |
+| `ci.yml` | `go-ci.yml`, `gitleaks.yml`, `go-release.yml` |
 | `codeql.yml` | `codeql.yml` |
 | `scorecard.yml` | `scorecard.yml` |
 
@@ -194,23 +158,19 @@ Workflows delegate to [pablontiv/crossbeam](https://github.com/pablontiv/crossbe
 3. Environment variables: `BACKSCROLL_DATABASE_PATH`, `BACKSCROLL_SESSION_DIRS`
 4. Defaults: `~/.backscroll.db`, current directory
 
-## Crate Path
+## Package Layout
 
 ```
-backscroll (library crate) — Public API for programmatic use
-backscroll::config         — Config structs (EmbeddingConfig, SourcesConfig)
-backscroll::core           — Domain types and SearchEngine trait
-backscroll::core::sync     — Session parsing and noise filtering
-backscroll::core::plans    — Markdown plan parsing
-backscroll::core::tagging  — Heuristic session auto-tagging
-backscroll::core::sources  — External source parsers + SourceRegistry
-backscroll::storage        — SQLite FTS5 + sqlite-vec adapter (hybrid search)
-
-Internal modules (pub(crate)):
-core::embedding            — EmbeddingProvider trait + OnnxProvider + MockProvider
-core::chunking             — Text chunking pipeline
-core::hybrid               — RRF fusion logic
-
-Binary-only modules:
-output                     — Output formatting
+github.com/pablontiv/backscroll/cmd/backscroll  — CLI entrypoint
+github.com/pablontiv/backscroll/internal/config  — Config structs and resolution
+github.com/pablontiv/backscroll/internal/models  — Domain types and SearchEngine interface
+github.com/pablontiv/backscroll/internal/sync    — Session parsing and noise filtering
+github.com/pablontiv/backscroll/internal/plans   — Markdown plan parsing
+github.com/pablontiv/backscroll/internal/tagging — Heuristic session auto-tagging
+github.com/pablontiv/backscroll/internal/sources — External source parsers + SourceRegistry
+github.com/pablontiv/backscroll/internal/storage — SQLite FTS5 adapter
+github.com/pablontiv/backscroll/internal/projects — Project identity registry
+github.com/pablontiv/backscroll/internal/reader  — Direct session file reader
+github.com/pablontiv/backscroll/internal/output  — Output formatting
+github.com/pablontiv/backscroll/internal/diagnostics — Structured error reporting
 ```

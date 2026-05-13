@@ -1,16 +1,17 @@
 #!/usr/bin/env bash
-# Pre-commit: lint, format check, and secret scan
+# Pre-commit: format check, vet, and secret scan
 
-# Rust quality checks (equivalent to rootline's golangci-lint + gofmt)
-echo "Running cargo fmt --check..."
-if ! cargo fmt --all -- --check 2>&1; then
-  echo "ERROR: Code not formatted. Run: cargo fmt --all"
+echo "Running gofmt --check..."
+unformatted=$(gofmt -l .)
+if [ -n "$unformatted" ]; then
+  echo "ERROR: Unformatted Go files. Run: gofmt -w ."
+  echo "$unformatted"
   exit 1
 fi
 
-echo "Running cargo clippy..."
-if ! cargo clippy --all-targets --all-features -- -D warnings 2>&1; then
-  echo "ERROR: Clippy warnings found. Fix before committing."
+echo "Running go vet..."
+if ! go vet ./... 2>&1; then
+  echo "ERROR: go vet found issues. Fix before committing."
   exit 1
 fi
 

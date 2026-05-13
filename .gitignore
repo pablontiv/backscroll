@@ -1,14 +1,16 @@
-/target
-/zig-linux-x86_64-0.13.0
-lcov.info
-session_test.json
-**/*.snap.new
+# Build artifacts
+/backscroll
+/dist/
 
 # Runtime databases
 *.db
 *.db-shm
 *.db-wal
 
+# Test artifacts
+session_test.json
+
 # Skill eval workspace (local artifacts)
 .claude/skills/backscroll-workspace/iteration-*/
 cartyx-out/
+graphify-out/

@@ -1,3 +1,0 @@
-[env]
-# sqlite-vec uses BSD u_int* types not available in musl; map them to stdint equivalents
-CFLAGS_x86_64_unknown_linux_musl = "-Du_int8_t=uint8_t -Du_int16_t=uint16_t -Du_int64_t=uint64_t"

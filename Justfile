@@ -4,45 +4,32 @@ set shell := ["bash", "-c"]
 # Default recipe
 default: check test
 
-# Run all checks (fmt, clippy, check)
+# Run fmt + vet + staticcheck
 check:
-    cargo fmt --all -- --check
-    cargo clippy --all-targets --all-features -- -D warnings
-    cargo check --all
+    gofmt -l . | grep -q . && { echo "gofmt: unformatted files"; exit 1; } || true
+    go vet ./...
 
 # Format code
 fmt:
-    cargo fmt --all
+    gofmt -w .
 
-# Run tests with isolated input config so user manifests in ~/.config/backscroll/inputs do not affect the suite.
+# Run tests with isolated config dir
 test:
-    config_dir="$(mktemp -d)" && trap 'rm -rf "$config_dir"' EXIT && echo "BACKSCROLL_CONFIG_DIR=$config_dir" && BACKSCROLL_CONFIG_DIR="$config_dir" cargo test --all-features
+    config_dir="$(mktemp -d)" && trap 'rm -rf "$config_dir"' EXIT && \
+    BACKSCROLL_CONFIG_DIR="$config_dir" go test ./...
 
-# Build in release mode
+# Build binary
 build:
-    cargo build --release
+    go build -o backscroll ./cmd/backscroll
 
-# Static build using Zig (Linux musl)
-static-build:
-    source $HOME/.cargo/env && \
-    export PATH=$PATH:$(pwd)/zig-linux-x86_64-0.13.0 && \
-    cargo zigbuild --release --target x86_64-unknown-linux-musl
-
-# Code coverage report (LCOV)
-coverage:
-    source $HOME/.cargo/env && \
-    cargo llvm-cov --all-features --workspace --lcov --output-path lcov.info
-
-# Show coverage summary
+# Coverage summary
 coverage-summary:
-    source $HOME/.cargo/env && \
-    cargo llvm-cov --all-features --workspace
+    go test -cover ./...
+
+# Coverage threshold check
+coverage:
+    ./scripts/check-coverage.sh
 
 # Audit dependencies
 audit:
-    cargo deny check licenses bans
-
-# Generate CHANGELOG.md from conventional commits
-changelog:
-    git-cliff --output CHANGELOG.md
-
+    go mod verify

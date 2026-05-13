@@ -12,20 +12,21 @@ concurrency:
 
 jobs:
   ci:
-    uses: pablontiv/crossbeam/.github/workflows/rust-ci.yml@v1
+    uses: pablontiv/crossbeam/.github/workflows/go-ci.yml@v1
+    with:
+      go-version-file: go.mod
+      coverage-threshold: 85
 
   gitleaks:
     uses: pablontiv/crossbeam/.github/workflows/gitleaks.yml@v1
 
   release:
-    uses: pablontiv/crossbeam/.github/workflows/rust-release.yml@v1
+    uses: pablontiv/crossbeam/.github/workflows/go-release.yml@v1
     needs: [ci, gitleaks]
     if: github.event_name == 'push'
     with:
       quality-gate-jobs: '["ci","gitleaks"]'
       binary-name: backscroll
-      platforms: 'linux,macos,windows'
-      changelog-tool: git-cliff
     permissions:
       contents: write
       id-token: write
