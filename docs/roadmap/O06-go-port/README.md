@@ -1,5 +1,6 @@
 ---
 tipo: outcome
+estado: Completed
 ---
 # Port a Go
 
