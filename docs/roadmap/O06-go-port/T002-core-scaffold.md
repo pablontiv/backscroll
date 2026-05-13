@@ -1,5 +1,5 @@
 ---
-estado: In Progress
+estado: Completed
 tipo: task
 ---
 # T002: Scaffold de módulos core

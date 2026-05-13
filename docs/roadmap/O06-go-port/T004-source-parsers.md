@@ -1,5 +1,5 @@
 ---
-estado: In Progress
+estado: Completed
 tipo: task
 ---
 # T004: Parsers de sources y tagging
