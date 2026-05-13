@@ -166,6 +166,15 @@ Releases are fully automated via CI. On every push to master, CI analyzes conven
 
 No manual release steps are needed — just push to master with conventional commit messages. Tags follow `v{VERSION}` format.
 
+Release assets use platform-specific names to avoid GitHub Releases asset name collisions:
+
+| Asset | Platform |
+|---|---|
+| `backscroll-linux-x86_64` | Linux x86_64 (glibc, native) |
+| `backscroll-linux-x86_64-musl` | Linux x86_64 (musl, static) |
+| `backscroll-macos-aarch64` | macOS Apple Silicon |
+| `backscroll-windows-x86_64.exe` | Windows x86_64 |
+
 The Justfile contains only development recipes (`check`, `test`, `build`, `fmt`, `audit`). Release logic lives exclusively in CI to avoid duplication.
 
 ## CI/CD
