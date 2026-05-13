@@ -4,6 +4,8 @@ import (
 	"fmt"
 	"io"
 	"os"
+
+	"github.com/spf13/cobra"
 )
 
 var version = "dev"
@@ -15,7 +17,37 @@ func main() {
 	}
 }
 
-func run(stdout, _ io.Writer, _ []string) error {
-	fmt.Fprintln(stdout, "backscroll "+version)
-	return nil
+func run(stdout, stderr io.Writer, args []string) error {
+	rootCmd := buildRootCmd(stdout, stderr)
+	rootCmd.SetArgs(args)
+	return rootCmd.Execute()
+}
+
+func buildRootCmd(stdout, stderr io.Writer) *cobra.Command {
+	root := &cobra.Command{
+		Use:   "backscroll",
+		Short: "Index and search Claude Code sessions",
+		Long: `Backscroll is a CLI tool that indexes Claude Code sessions into SQLite
+for hybrid full-text search (BM25 + vector embeddings) with RRF fusion.`,
+		Version: version,
+	}
+	root.SetOut(stdout)
+	root.SetErr(stderr)
+
+	root.AddCommand(
+		newSyncCmd(stdout, stderr),
+		newSearchCmd(stdout, stderr),
+		newReadCmd(stdout, stderr),
+		newResumeCmd(stdout, stderr),
+		newListCmd(stdout, stderr),
+		newTopicsCmd(stdout, stderr),
+		newInsightsCmd(stdout, stderr),
+		newExportCmd(stdout, stderr),
+		newReindexCmd(stdout, stderr),
+		newPurgeCmd(stdout, stderr),
+		newValidateCmd(stdout, stderr),
+		newStatusCmd(stdout, stderr),
+	)
+
+	return root
 }
