@@ -29,7 +29,6 @@ install_input_presets() {
 }
 
 # Install project skills to the Claude user scope.
-# Pi is configured by .pi/settings.json to discover ~/.claude/skills.
 SKILLS_DEST="$HOME/.claude/skills"
 mkdir -p "$SKILLS_DEST"
 for skill in backscroll; do
@@ -45,12 +44,10 @@ install_backscroll_binary() {
   local tmp
   tmp="$(mktemp)"
 
-  if ! cargo build --release --manifest-path "$REPO_ROOT/Cargo.toml" 2>&1; then
+  if ! go build -o "$tmp" ./cmd/backscroll 2>&1; then
     rm -f "$tmp"
     return 1
   fi
-
-  cp "$REPO_ROOT/target/release/backscroll" "$tmp"
 
   if [ -w "$BACKSCROLL_BIN" ] || { [ ! -e "$BACKSCROLL_BIN" ] && [ -w "$(dirname "$BACKSCROLL_BIN")" ]; }; then
     install -m 0755 "$tmp" "$BACKSCROLL_BIN"
@@ -67,13 +64,13 @@ install_backscroll_binary() {
 
 echo "Rebuilding backscroll..."
 if install_backscroll_binary; then
-  echo "backscroll rebuilt: $("$BACKSCROLL_BIN" --version)"
+  echo "backscroll rebuilt: $("$BACKSCROLL_BIN" --version 2>/dev/null || echo "unknown")"
   if command -v backscroll >/dev/null 2>&1 && [ "$(command -v backscroll)" != "$BACKSCROLL_BIN" ]; then
     echo "Warning: $(command -v backscroll) shadows $BACKSCROLL_BIN in PATH"
   fi
 
   # Propagate aggregate values after merge (fix stale parent READMEs)
-  rootline fix --all "$REPO_ROOT/docs/epics/" 2>/dev/null || true
+  rootline fix --all "$REPO_ROOT/docs/roadmap/" 2>/dev/null || true
 else
   echo "Warning: backscroll rebuild failed"
 fi

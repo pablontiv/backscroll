@@ -5,7 +5,6 @@ remote="$1"
 REPO_ROOT="$(git rev-parse --show-toplevel)"
 
 while read local_ref local_sha remote_ref remote_sha; do
-  # Skip delete pushes
   [ "$local_sha" = "0000000000000000000000000000000000000000" ] && continue
 
   if [ "$remote_sha" = "0000000000000000000000000000000000000000" ]; then
@@ -14,42 +13,41 @@ while read local_ref local_sha remote_ref remote_sha; do
     range="$remote_sha..$local_sha"
   fi
 
-  # Validate docs/epics/ if changed and directory exists
-  if git diff --name-only "$range" -- docs/epics/ 2>/dev/null | grep -q . && [ -d docs/epics/ ]; then
-    echo "Validating docs/epics/ before push..."
+  # Validate docs/roadmap/ if changed and directory exists
+  if git diff --name-only "$range" -- docs/roadmap/ 2>/dev/null | grep -q . && [ -d docs/roadmap/ ]; then
+    echo "Validating docs/roadmap/ before push..."
     if command -v rootline &>/dev/null; then
-      if ! rootline validate --all docs/epics/ > /dev/null 2>&1; then
-        echo "rootline validate --all docs/epics/ failed. Fix errors before pushing."
-        echo "Run: rootline validate --all docs/epics/"
-        echo "Or:  rootline fix --all docs/epics/"
+      if ! rootline validate --all docs/roadmap/ > /dev/null 2>&1; then
+        echo "rootline validate --all docs/roadmap/ failed. Fix errors before pushing."
+        echo "Run: rootline validate --all docs/roadmap/"
         exit 1
       fi
-      echo "docs/epics/ validation passed"
+      echo "docs/roadmap/ validation passed"
     else
       echo "Warning: rootline not installed, skipping docs validation"
     fi
   fi
 
-  # Check if src/ code changed but docs weren't updated
-  if git diff --name-only "$range" -- src/ 2>/dev/null | grep -q .; then
+  # Check if Go source changed but docs weren't updated
+  if git diff --name-only "$range" -- internal/ cmd/ 2>/dev/null | grep -q .; then
     if ! git diff --name-only "$range" -- docs/ README.md CLAUDE.md 2>/dev/null | grep -q .; then
-      echo "src/ code changed but docs were not updated."
+      echo "Go source changed but docs were not updated."
       echo "Update docs/, README.md, or CLAUDE.md before pushing."
       exit 1
     fi
   fi
 
-  # Check if modules were added/removed in src/ — requires CLAUDE.md update
-  if git diff --diff-filter=AD --name-only "$range" -- 'src/**/*.rs' 2>/dev/null | grep -q .; then
+  # Check if packages were added/removed — requires CLAUDE.md update
+  if git diff --diff-filter=AD --name-only "$range" -- 'internal/**/*.go' 'cmd/**/*.go' 2>/dev/null | grep -q .; then
     if ! git diff --name-only "$range" -- CLAUDE.md 2>/dev/null | grep -q .; then
-      echo "Module added/removed in src/ but CLAUDE.md not updated."
-      echo "Update the Module Layout and Crate Path sections in CLAUDE.md."
+      echo "Package added/removed but CLAUDE.md not updated."
+      echo "Update the Module Layout and Package Layout sections in CLAUDE.md."
       exit 1
     fi
   fi
 
   # Check if CI, install scripts, or build config changed but docs weren't updated
-  if git diff --name-only "$range" -- .github/ install.sh install.ps1 Justfile Cargo.toml 2>/dev/null | grep -q .; then
+  if git diff --name-only "$range" -- .github/ install.sh install.ps1 Justfile go.mod .goreleaser.yml 2>/dev/null | grep -q .; then
     if ! git diff --name-only "$range" -- README.md docs/ CLAUDE.md 2>/dev/null | grep -q .; then
       echo "CI/scripts/config changed but docs were not updated."
       echo "Update README.md, docs/, or CLAUDE.md before pushing."
@@ -82,7 +80,6 @@ install_input_presets() {
 }
 
 # Install project skills to the Claude user scope.
-# Pi is configured by .pi/settings.json to discover ~/.claude/skills.
 SKILLS_DEST="$HOME/.claude/skills"
 mkdir -p "$SKILLS_DEST"
 for skill in backscroll; do
@@ -99,12 +96,10 @@ install_backscroll_binary() {
   local tmp
   tmp="$(mktemp)"
 
-  if ! cargo build --release --manifest-path "$REPO_ROOT/Cargo.toml" 2>&1; then
+  if ! go build -o "$tmp" ./cmd/backscroll 2>&1; then
     rm -f "$tmp"
     return 1
   fi
-
-  cp "$REPO_ROOT/target/release/backscroll" "$tmp"
 
   if [ -w "$BACKSCROLL_BIN" ] || { [ ! -e "$BACKSCROLL_BIN" ] && [ -w "$(dirname "$BACKSCROLL_BIN")" ]; }; then
     install -m 0755 "$tmp" "$BACKSCROLL_BIN"
@@ -121,7 +116,7 @@ install_backscroll_binary() {
 
 echo "Rebuilding backscroll..."
 if install_backscroll_binary; then
-  echo "backscroll rebuilt: $("$BACKSCROLL_BIN" --version)"
+  echo "backscroll rebuilt: $("$BACKSCROLL_BIN" --version 2>/dev/null || echo "unknown")"
   if command -v backscroll >/dev/null 2>&1 && [ "$(command -v backscroll)" != "$BACKSCROLL_BIN" ]; then
     echo "Warning: $(command -v backscroll) shadows $BACKSCROLL_BIN in PATH"
   fi
