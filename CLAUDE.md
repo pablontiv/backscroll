@@ -25,7 +25,7 @@ just audit              # go mod verify
 
 Run a single test: `go test -run TestName ./internal/...`
 
-Tests use stdlib `testing` + subprocess or direct `run()` invocation. Unit tests are co-located in each package. Integration tests in `tests/` directory.
+Tests use stdlib `testing` + subprocess or direct `run()` invocation. Unit tests are co-located in each package. Integration tests in `cmd/backscroll/main_test.go` (CLI integration via direct `run()` invocation). Additional unit tests: `internal/storage/unit_test.go`, `internal/sync/noise_test.go`. Coverage gate ≥85% enforced by `scripts/check-coverage.sh` and CI (`just coverage`).
 
 ## Architecture
 
