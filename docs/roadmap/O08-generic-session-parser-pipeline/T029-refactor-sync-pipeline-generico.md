@@ -1,7 +1,7 @@
 ---
 id: T029
 tipo: task
-estado: Pending
+estado: Completed
 titulo: Refactor sync command para usar pipeline genérico
 outcome: O08
 dependencias: [T024, T026, T027, T028, T019]

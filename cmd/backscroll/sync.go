@@ -9,11 +9,13 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/pablontiv/backscroll/internal/config"
+	"github.com/pablontiv/backscroll/internal/input_config"
 	"github.com/pablontiv/backscroll/internal/plans"
 	"github.com/pablontiv/backscroll/internal/projects"
+	"github.com/pablontiv/backscroll/internal/readers"
 	"github.com/pablontiv/backscroll/internal/sources"
 	"github.com/pablontiv/backscroll/internal/storage"
-	"github.com/pablontiv/backscroll/internal/sync"
+	bsync "github.com/pablontiv/backscroll/internal/sync"
 	"github.com/pablontiv/backscroll/internal/tagging"
 )
 
@@ -73,10 +75,24 @@ func runSync(stdout, stderr io.Writer, path string, includeAgents, noPlans, opti
 		return fmt.Errorf("get file hashes: %w", err)
 	}
 
-	// Walk session directories
-	sessionFiles, err := sync.WalkSessionDirs(cfg.SessionDirs, includeAgents)
-	if err != nil {
-		return fmt.Errorf("walk session dirs: %w", err)
+	// Build reader registry
+	reg := readers.NewRegistry()
+	reg.Register(&readers.JsonlReader{})
+	reg.Register(&readers.OpenCodeReader{})
+
+	// Resolve active inputs.
+	// When --path is given, bypass declarative manifests and use a legacy
+	// manifest pointing only to the override path.
+	var defs []input_config.InputDefinition
+	var mode input_config.InputMode
+	if path != "" {
+		defs = []input_config.InputDefinition{input_config.SessionDirsToManifest(cfg.SessionDirs)}
+		mode = input_config.ModeLegacy
+	} else {
+		defs, mode, err = input_config.ActiveInputs(cfg.SessionDirs)
+		if err != nil {
+			return fmt.Errorf("resolve inputs: %w", err)
+		}
 	}
 
 	// Load project registry
@@ -86,59 +102,72 @@ func runSync(stdout, stderr io.Writer, path string, includeAgents, noPlans, opti
 	var indexedFiles []storage.IndexedFile
 	var syncedCount int
 
-	// Process session files
-	for _, sessionPath := range sessionFiles {
-		hash, err := sync.HashFile(sessionPath)
+	// Process sessions via reader registry
+	for _, def := range defs {
+		if def.Source == "" {
+			def.Source = "session"
+		}
+		// --include-agents: remove subagents exclude from legacy manifests
+		if includeAgents && mode == input_config.ModeLegacy {
+			def.Discover.Exclude = nil
+		}
+
+		reader, err := reg.ForDef(def)
 		if err != nil {
-			_, _ = fmt.Fprintf(stderr, "warning: hash file %s: %v\n", sessionPath, err)
+			_, _ = fmt.Fprintf(stderr, "warning: no reader for input %s: %v\n", def.ID, err)
 			continue
 		}
 
-		// Skip if hash matches
-		if existingHashes[sessionPath] == hash {
-			continue
-		}
-
-		// Parse session
-		messages, err := sync.ParseSessions(sessionPath)
+		refs, err := reader.Discover(def)
 		if err != nil {
-			_, _ = fmt.Fprintf(stderr, "warning: parse session %s: %v\n", sessionPath, err)
+			_, _ = fmt.Fprintf(stderr, "warning: discover input %s: %v\n", def.ID, err)
 			continue
 		}
 
-		// Identify project
-		ident := projects.Identify(sessionPath, registry)
+		for _, ref := range refs {
+			hash, err := reader.Hash(ref)
+			if err != nil {
+				_, _ = fmt.Fprintf(stderr, "warning: hash %s: %v\n", ref, err)
+				continue
+			}
 
-		// Collect session text for tagging
-		var sessionText string
-		for _, msg := range messages {
-			sessionText += msg.Content + "\n"
-		}
+			if existingHashes[ref] == hash {
+				continue
+			}
 
-		// Tag the session
-		sessionTags := tagging.Tag(sessionText)
+			pf, err := reader.Parse(ref, def)
+			if err != nil {
+				_, _ = fmt.Fprintf(stderr, "warning: parse %s: %v\n", ref, err)
+				continue
+			}
 
-		// Convert messages to IndexedMessage
-		var indexedMsgs []storage.IndexedMessage
-		for ordinal, msg := range messages {
-			indexedMsgs = append(indexedMsgs, storage.IndexedMessage{
-				Ordinal:     ordinal,
-				Role:        msg.Role,
-				Text:        msg.Content,
-				Timestamp:   msg.Timestamp.Format("2006-01-02T15:04:05Z07:00"),
-				ContentType: msg.ContentType,
+			ident := projects.Identify(ref, registry)
+
+			var sessionText string
+			var indexedMsgs []storage.IndexedMessage
+			for ordinal, msg := range pf.Records {
+				sessionText += msg.Content + "\n"
+				indexedMsgs = append(indexedMsgs, storage.IndexedMessage{
+					Ordinal:     ordinal,
+					Role:        msg.Role,
+					Text:        msg.Content,
+					Timestamp:   msg.Timestamp.Format("2006-01-02T15:04:05Z07:00"),
+					ContentType: msg.ContentType,
+				})
+			}
+
+			sessionTags := tagging.Tag(sessionText)
+
+			indexedFiles = append(indexedFiles, storage.IndexedFile{
+				SourcePath: ref,
+				Source:     def.Source,
+				Hash:       pf.Hash,
+				Project:    ident.ProjectID,
+				Messages:   indexedMsgs,
+				Tags:       sessionTags,
 			})
+			syncedCount++
 		}
-
-		indexedFiles = append(indexedFiles, storage.IndexedFile{
-			SourcePath: sessionPath,
-			Source:     "session",
-			Hash:       hash,
-			Project:    ident.ProjectID,
-			Messages:   indexedMsgs,
-			Tags:       sessionTags,
-		})
-		syncedCount++
 	}
 
 	// Process external sources
@@ -160,7 +189,7 @@ func runSync(stdout, stderr io.Writer, path string, includeAgents, noPlans, opti
 		}
 
 		for _, sourcePath := range sourcePaths {
-			hash, err := sync.HashFile(sourcePath)
+			hash, err := bsync.HashFile(sourcePath)
 			if err != nil {
 				_, _ = fmt.Fprintf(stderr, "warning: hash source file %s: %v\n", sourcePath, err)
 				continue
@@ -210,7 +239,7 @@ func runSync(stdout, stderr io.Writer, path string, includeAgents, noPlans, opti
 		planFiles, err := plans.DiscoverPlanFiles(planDir)
 		if err == nil {
 			for _, planPath := range planFiles {
-				hash, err := sync.HashFile(planPath)
+				hash, err := bsync.HashFile(planPath)
 				if err != nil {
 					_, _ = fmt.Fprintf(stderr, "warning: hash plan file %s: %v\n", planPath, err)
 					continue
