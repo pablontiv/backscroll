@@ -1,7 +1,7 @@
 ---
 id: O07
 tipo: outcome
-estado: Pending
+estado: Completed
 titulo: Input Manifest Engine en Go
 descripcion: Port del motor declarativo de inputs TOML (src/input_config.rs) al Go port. Permite definir fuentes de sesiones via *.inputs.toml en lugar de session_dirs hardcodeados.
 ---
