@@ -1,5 +1,5 @@
 ---
-estado: Specified
+estado: Completed
 tipo: task
 ---
 # T012: Cerrar PRs huérfanos de deps Rust y limpiar dependabot
