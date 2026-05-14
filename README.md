@@ -8,8 +8,6 @@ A **full-text search engine** for AI assistant sessions — Claude Code, Pi, and
 
 Backscroll treats your local AI sessions as a searchable archive: it indexes conversation logs incrementally, strips machine-generated noise, and provides instant full-text search with relevance ranking.
 
-> **Status**: Core CLI commands functional — sync, search, inputs, and status.
-
 ---
 
 ## Table of Contents
