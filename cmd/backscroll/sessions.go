@@ -1,0 +1,185 @@
+package main
+
+import (
+	"encoding/json"
+	"fmt"
+	"io"
+
+	"github.com/spf13/cobra"
+
+	"github.com/pablontiv/backscroll/internal/config"
+	"github.com/pablontiv/backscroll/internal/storage"
+)
+
+func newSessionsCmd(stdout, stderr io.Writer) *cobra.Command {
+	cmd := &cobra.Command{
+		Use:   "sessions",
+		Short: "Inspect and query indexed sessions",
+	}
+	cmd.AddCommand(
+		newSessionsListCmd(stdout, stderr),
+		newSessionsValidateCmd(stdout, stderr),
+		newSessionsQueryCmd(stdout, stderr),
+	)
+	return cmd
+}
+
+// newSessionsListCmd delegates to the same logic as the top-level list command.
+func newSessionsListCmd(stdout, stderr io.Writer) *cobra.Command {
+	var (
+		project     string
+		allProjects bool
+		recent      bool
+		jsonOut     bool
+		robot       bool
+	)
+
+	cmd := &cobra.Command{
+		Use:   "list",
+		Short: "List indexed sessions (alias for backscroll list)",
+		RunE: func(cmd *cobra.Command, args []string) error {
+			return runList(stdout, stderr, project, allProjects, recent, jsonOut, robot)
+		},
+	}
+	cmd.Flags().StringVar(&project, "project", "", "Filter by project")
+	cmd.Flags().BoolVar(&allProjects, "all-projects", false, "Show sessions from all projects")
+	cmd.Flags().BoolVar(&recent, "recent", false, "Show most recent sessions")
+	cmd.Flags().BoolVar(&jsonOut, "json", false, "Output as JSON")
+	cmd.Flags().BoolVar(&robot, "robot", false, "Output optimized for LLM")
+	return cmd
+}
+
+// newSessionsValidateCmd delegates to the same logic as the top-level validate command.
+func newSessionsValidateCmd(stdout, stderr io.Writer) *cobra.Command {
+	var (
+		project     string
+		allProjects bool
+	)
+
+	cmd := &cobra.Command{
+		Use:   "validate",
+		Short: "Validate indexed sessions (alias for backscroll validate)",
+		RunE: func(cmd *cobra.Command, args []string) error {
+			_ = project
+			_ = allProjects
+			return runValidate(stdout, stderr)
+		},
+	}
+	cmd.Flags().StringVar(&project, "project", "", "Filter by project (reserved)")
+	cmd.Flags().BoolVar(&allProjects, "all-projects", false, "Validate all projects (reserved)")
+	return cmd
+}
+
+// newSessionsQueryCmd queries sessions by metadata filters (after/before/source/project).
+func newSessionsQueryCmd(stdout, stderr io.Writer) *cobra.Command {
+	var (
+		project     string
+		allProjects bool
+		after       string
+		before      string
+		source      string
+		jsonOut     bool
+		limit       int
+	)
+
+	cmd := &cobra.Command{
+		Use:   "query",
+		Short: "Query indexed sessions by metadata filters",
+		RunE: func(cmd *cobra.Command, args []string) error {
+			return runSessionsQuery(stdout, stderr, project, allProjects, after, before, source, jsonOut, limit)
+		},
+	}
+	cmd.Flags().StringVar(&project, "project", "", "Filter by project")
+	cmd.Flags().BoolVar(&allProjects, "all-projects", false, "Query sessions from all projects")
+	cmd.Flags().StringVar(&after, "after", "", "Filter sessions after date (ISO 8601)")
+	cmd.Flags().StringVar(&before, "before", "", "Filter sessions before date (ISO 8601)")
+	cmd.Flags().StringVar(&source, "source", "session", "Source type to query")
+	cmd.Flags().BoolVar(&jsonOut, "json", false, "Output as JSON")
+	cmd.Flags().IntVar(&limit, "limit", 50, "Maximum sessions to return")
+	return cmd
+}
+
+func runSessionsQuery(stdout, stderr io.Writer, project string, allProjects bool, after, before, source string, jsonOut bool, limit int) error {
+	cfg, err := config.Load()
+	if err != nil {
+		return fmt.Errorf("load config: %w", err)
+	}
+
+	db, err := storage.OpenReadOnly(cfg.DatabasePath)
+	if err != nil {
+		return fmt.Errorf("open database: %w", err)
+	}
+	defer func() { _ = db.Close() }()
+
+	var proj *string
+	if project != "" && !allProjects {
+		proj = &project
+	}
+	var afterPtr, beforePtr, sourcePtr *string
+	if after != "" {
+		afterPtr = &after
+	}
+	if before != "" {
+		beforePtr = &before
+	}
+	normalizedSource := source
+	if normalizedSource == "sessions" {
+		normalizedSource = "session"
+	}
+	if normalizedSource != "" {
+		sourcePtr = &normalizedSource
+	}
+
+	records, err := db.QueryIndexedRecords(storage.IndexedRecordQuery{
+		Project: proj,
+		Source:  sourcePtr,
+		After:   afterPtr,
+		Before:  beforePtr,
+		Limit:   limit,
+	})
+	if err != nil {
+		return fmt.Errorf("query sessions: %w", err)
+	}
+
+	seen := map[string]bool{}
+	for _, r := range records {
+		if seen[r.SourcePath] {
+			continue
+		}
+		seen[r.SourcePath] = true
+
+		if jsonOut {
+			data := map[string]interface{}{
+				"source_path": r.SourcePath,
+				"source":      r.Source,
+			}
+			if r.Project != nil {
+				data["project"] = *r.Project
+			}
+			if r.Timestamp != nil {
+				data["timestamp"] = *r.Timestamp
+			}
+			if encErr := encodeJSON(stdout, data); encErr != nil {
+				return encErr
+			}
+		} else {
+			ts := ""
+			if r.Timestamp != nil {
+				ts = *r.Timestamp
+			}
+			proj := ""
+			if r.Project != nil {
+				proj = *r.Project
+			}
+			_, _ = fmt.Fprintf(stdout, "%s\t%s\t%s\n", r.SourcePath, proj, ts)
+		}
+	}
+
+	return nil
+}
+
+func encodeJSON(w io.Writer, v interface{}) error {
+	enc := json.NewEncoder(w)
+	enc.SetEscapeHTML(false)
+	return enc.Encode(v)
+}

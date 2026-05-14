@@ -97,3 +97,149 @@ func (d *Database) QueryIndexedRecords(q IndexedRecordQuery) ([]IndexedRecord, e
 	}
 	return records, rows.Err()
 }
+
+// SessionEvent represents a single event from session_events.
+type SessionEvent struct {
+	ID         int64
+	Source     string
+	SourcePath string
+	Project    *string
+	Ordinal    int64
+	Timestamp  *string
+	EventType  string
+	Actor      *string
+	Role       *string
+	ToolName   *string
+	ToolID     *string
+	Command    *string
+	ExitCode   *int64
+	IsError    *bool
+	Snippet    string
+}
+
+// SessionEventQuery defines filter parameters for QuerySessionEvents.
+type SessionEventQuery struct {
+	SourcePath string
+	Role       string
+	After      string
+	Before     string
+	Limit      int
+}
+
+// QuerySessionEvents returns events from session_events matching the query.
+func (d *Database) QuerySessionEvents(q SessionEventQuery) ([]SessionEvent, error) {
+	baseQuery := `
+		SELECT id, source, source_path, project, ordinal, timestamp, event_type,
+		       actor, role, tool_name, tool_id, command, exit_code, is_error, snippet
+		FROM session_events`
+
+	var where []string
+	var args []interface{}
+
+	if q.SourcePath != "" {
+		where = append(where, "source_path = ?")
+		args = append(args, q.SourcePath)
+	}
+	if q.Role != "" {
+		where = append(where, "role = ?")
+		args = append(args, q.Role)
+	}
+	if q.After != "" {
+		where = append(where, "timestamp >= ?")
+		args = append(args, q.After)
+	}
+	if q.Before != "" {
+		where = append(where, "timestamp < ?")
+		args = append(args, q.Before)
+	}
+
+	if len(where) > 0 {
+		baseQuery += " WHERE " + strings.Join(where, " AND ")
+	}
+	baseQuery += " ORDER BY source_path, ordinal, id"
+	if q.Limit > 0 {
+		baseQuery += fmt.Sprintf(" LIMIT %d", q.Limit)
+	}
+
+	rows, err := d.db.Query(baseQuery, args...)
+	if err != nil {
+		return nil, fmt.Errorf("query session events: %w", err)
+	}
+	defer func() { _ = rows.Close() }()
+
+	var events []SessionEvent
+	for rows.Next() {
+		var e SessionEvent
+		var project, timestamp, actor, role, toolName, toolID, command sql.NullString
+		var exitCode sql.NullInt64
+		var isError sql.NullInt64
+		if err := rows.Scan(
+			&e.ID, &e.Source, &e.SourcePath, &project, &e.Ordinal,
+			&timestamp, &e.EventType, &actor, &role, &toolName, &toolID,
+			&command, &exitCode, &isError, &e.Snippet,
+		); err != nil {
+			return nil, fmt.Errorf("scan event: %w", err)
+		}
+		if project.Valid {
+			e.Project = &project.String
+		}
+		if timestamp.Valid {
+			e.Timestamp = &timestamp.String
+		}
+		if actor.Valid {
+			e.Actor = &actor.String
+		}
+		if role.Valid {
+			e.Role = &role.String
+		}
+		if toolName.Valid {
+			e.ToolName = &toolName.String
+		}
+		if toolID.Valid {
+			e.ToolID = &toolID.String
+		}
+		if command.Valid {
+			e.Command = &command.String
+		}
+		if exitCode.Valid {
+			e.ExitCode = &exitCode.Int64
+		}
+		if isError.Valid {
+			b := isError.Int64 != 0
+			e.IsError = &b
+		}
+		events = append(events, e)
+	}
+	return events, rows.Err()
+}
+
+// ResolveSessionPath looks up a session source_path by file path fragment or UUID.
+// Returns the first match or empty string if not found.
+func (d *Database) ResolveSessionPath(query string) (string, error) {
+	// Try exact match first
+	var path string
+	err := d.db.QueryRow(
+		"SELECT path FROM indexed_files WHERE path = ? LIMIT 1", query,
+	).Scan(&path)
+	if err == nil {
+		return path, nil
+	}
+
+	// Try path contains query
+	err = d.db.QueryRow(
+		"SELECT path FROM indexed_files WHERE path LIKE ? LIMIT 1", "%"+query+"%",
+	).Scan(&path)
+	if err == nil {
+		return path, nil
+	}
+
+	// Try UUID in search_items
+	err = d.db.QueryRow(
+		"SELECT source_path FROM search_items WHERE uuid = ? LIMIT 1", query,
+	).Scan(&path)
+	if err == nil {
+		return path, nil
+	}
+
+	return "", nil
+}

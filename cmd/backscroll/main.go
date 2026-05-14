@@ -50,6 +50,8 @@ for hybrid full-text search (BM25 + vector embeddings) with RRF fusion.`,
 		newDecisionsCmd(stdout, stderr),
 		newProjectsCmd(stdout, stderr),
 		newInputsCmd(stdout, stderr),
+		newEventsCmd(stdout, stderr),
+		newSessionsCmd(stdout, stderr),
 	)
 
 	return root

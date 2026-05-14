@@ -744,3 +744,95 @@ func TestEmbeddingPipeline_WithMockProvider(t *testing.T) {
 		t.Errorf("after re-sync: expected 0 embeddings (CASCADE deleted), got %d", embedCount)
 	}
 }
+
+func TestQuerySessionEvents(t *testing.T) {
+	db, cleanup := newTestDB(t)
+	defer cleanup()
+
+	// Sync a file to populate session_events
+	if err := db.SyncFiles([]IndexedFile{
+		{
+			SourcePath: "/test/sess.jsonl",
+			Source:     "session",
+			Hash:       "abc",
+			Project:    "proj",
+			Messages: []IndexedMessage{
+				{Ordinal: 0, Role: "user", Text: "hello world", Timestamp: "2024-06-01T10:00:00Z", ContentType: "text"},
+				{Ordinal: 1, Role: "assistant", Text: "hi there", Timestamp: "2024-06-01T10:01:00Z", ContentType: "text"},
+			},
+		},
+	}); err != nil {
+		t.Fatalf("SyncFiles: %v", err)
+	}
+
+	events, err := db.QuerySessionEvents(SessionEventQuery{SourcePath: "/test/sess.jsonl"})
+	if err != nil {
+		t.Fatalf("QuerySessionEvents: %v", err)
+	}
+	if len(events) != 2 {
+		t.Errorf("expected 2 events, got %d", len(events))
+	}
+
+	// Filter by role
+	userEvents, err := db.QuerySessionEvents(SessionEventQuery{SourcePath: "/test/sess.jsonl", Role: "user"})
+	if err != nil {
+		t.Fatalf("QuerySessionEvents role filter: %v", err)
+	}
+	if len(userEvents) != 1 {
+		t.Errorf("expected 1 user event, got %d", len(userEvents))
+	}
+
+	// Filter by limit
+	limited, err := db.QuerySessionEvents(SessionEventQuery{SourcePath: "/test/sess.jsonl", Limit: 1})
+	if err != nil {
+		t.Fatalf("QuerySessionEvents limit: %v", err)
+	}
+	if len(limited) != 1 {
+		t.Errorf("expected 1 event with limit=1, got %d", len(limited))
+	}
+}
+
+func TestResolveSessionPath(t *testing.T) {
+	db, cleanup := newTestDB(t)
+	defer cleanup()
+
+	if err := db.SyncFiles([]IndexedFile{
+		{
+			SourcePath: "/home/user/.claude/projects/proj/session.jsonl",
+			Source:     "session",
+			Hash:       "abc",
+			Messages: []IndexedMessage{
+				{Ordinal: 0, Role: "user", Text: "test", ContentType: "text"},
+			},
+		},
+	}); err != nil {
+		t.Fatalf("SyncFiles: %v", err)
+	}
+
+	// Exact match
+	path, err := db.ResolveSessionPath("/home/user/.claude/projects/proj/session.jsonl")
+	if err != nil {
+		t.Fatalf("ResolveSessionPath exact: %v", err)
+	}
+	if path == "" {
+		t.Error("expected non-empty path for exact match")
+	}
+
+	// Fragment match
+	path, err = db.ResolveSessionPath("proj/session.jsonl")
+	if err != nil {
+		t.Fatalf("ResolveSessionPath fragment: %v", err)
+	}
+	if path == "" {
+		t.Error("expected non-empty path for fragment match")
+	}
+
+	// No match
+	path, err = db.ResolveSessionPath("nonexistent-uuid-12345")
+	if err != nil {
+		t.Fatalf("ResolveSessionPath not found: %v", err)
+	}
+	if path != "" {
+		t.Errorf("expected empty path for no match, got %q", path)
+	}
+}

@@ -1,7 +1,7 @@
 ---
 id: T037
 tipo: task
-estado: Pending
+estado: Completed
 titulo: Tests del sistema de embeddings (mock provider)
 outcome: O09
 dependencias: [T036]

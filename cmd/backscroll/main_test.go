@@ -1778,6 +1778,202 @@ func embeddingCfgForTest() config.EmbeddingConfig {
 	}
 }
 
+func TestEventsQuery(t *testing.T) {
+	_, cleanup := testEnv(t)
+	defer cleanup()
+
+	// Sync the claude-preset fixture to populate session_events
+	fixtureDir := filepath.Join(fixturesDir(), "claude-preset", "projects")
+	_, _, err := runCmd("sync", "--path", fixtureDir)
+	if err != nil {
+		t.Fatalf("sync error: %v", err)
+	}
+
+	// Query non-existent session — should be graceful (no error, no output)
+	out, _, err := runCmd("events", "query", "nonexistent-session-id")
+	if err != nil {
+		t.Fatalf("events query error: %v", err)
+	}
+	_ = out
+}
+
+func TestEventsQueryJSON(t *testing.T) {
+	_, cleanup := testEnv(t)
+	defer cleanup()
+
+	// Sync the claude-preset fixture
+	fixtureDir := filepath.Join(fixturesDir(), "claude-preset", "projects")
+	_, _, err := runCmd("sync", "--path", fixtureDir)
+	if err != nil {
+		t.Fatalf("sync error: %v", err)
+	}
+
+	// Discover what was actually indexed so we can query it
+	sessionPath := filepath.Join(fixtureDir, "project-a", "session-main.jsonl")
+
+	out, _, err := runCmd("events", "query", "--json", sessionPath)
+	if err != nil {
+		t.Fatalf("events query --json error: %v", err)
+	}
+	// If session had events, verify valid JSON output
+	if out != "" {
+		for _, line := range strings.Split(strings.TrimSpace(out), "\n") {
+			if line == "" {
+				continue
+			}
+			var obj map[string]interface{}
+			if jsonErr := json.Unmarshal([]byte(line), &obj); jsonErr != nil {
+				t.Errorf("invalid JSON: %v\n%s", jsonErr, line)
+			}
+			// Verify key fields present
+			if _, ok := obj["snippet"]; !ok {
+				t.Errorf("JSON missing 'snippet' field: %s", line)
+			}
+		}
+	}
+
+	// Also test --robot output
+	_, _, err = runCmd("events", "query", "--robot", sessionPath)
+	if err != nil {
+		t.Fatalf("events query --robot error: %v", err)
+	}
+}
+
+func TestEventsQueryDirect(t *testing.T) {
+	dbPath, cleanup := testEnv(t)
+	defer cleanup()
+
+	// Directly populate the DB via storage to ensure known state
+	db, err := storage.Open(dbPath)
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	_ = db.SyncFiles([]storage.IndexedFile{
+		{
+			SourcePath: "/tmp/test-session.jsonl",
+			Source:     "session",
+			Hash:       "testhash",
+			Messages: []storage.IndexedMessage{
+				{Ordinal: 0, Role: "user", Text: "hello events", Timestamp: "2024-06-01T10:00:00Z", ContentType: "text"},
+				{Ordinal: 1, Role: "assistant", Text: "hi there", Timestamp: "2024-06-01T10:01:00Z", ContentType: "text"},
+			},
+		},
+	})
+	_ = db.Close()
+
+	// Test plain output
+	out, _, err := runCmd("events", "query", "/tmp/test-session.jsonl")
+	if err != nil {
+		t.Fatalf("events query error: %v", err)
+	}
+	if !strings.Contains(out, "hello events") {
+		t.Errorf("expected 'hello events' in output, got: %s", out)
+	}
+
+	// Test JSON output
+	out, _, err = runCmd("events", "query", "--json", "/tmp/test-session.jsonl")
+	if err != nil {
+		t.Fatalf("events query --json error: %v", err)
+	}
+	if out == "" {
+		t.Fatal("expected JSON output, got empty")
+	}
+	for _, line := range strings.Split(strings.TrimSpace(out), "\n") {
+		if line == "" {
+			continue
+		}
+		var obj map[string]interface{}
+		if jsonErr := json.Unmarshal([]byte(line), &obj); jsonErr != nil {
+			t.Errorf("invalid JSON: %v\n%s", jsonErr, line)
+		}
+		if obj["snippet"] == nil {
+			t.Errorf("JSON missing 'snippet': %s", line)
+		}
+	}
+
+	// Test --robot output
+	out, _, err = runCmd("events", "query", "--robot", "/tmp/test-session.jsonl")
+	if err != nil {
+		t.Fatalf("events query --robot error: %v", err)
+	}
+	if !strings.Contains(out, "hello events") {
+		t.Errorf("expected 'hello events' in robot output, got: %s", out)
+	}
+
+	// Test --role filter
+	out, _, err = runCmd("events", "query", "--role", "user", "/tmp/test-session.jsonl")
+	if err != nil {
+		t.Fatalf("events query --role error: %v", err)
+	}
+	if strings.Contains(out, "hi there") {
+		t.Errorf("expected no assistant messages with --role user, got: %s", out)
+	}
+}
+
+func TestSessionsList(t *testing.T) {
+	_, cleanup := testEnv(t)
+	defer cleanup()
+
+	fixture := filepath.Join(fixturesDir(), "claude.jsonl")
+	_, _, _ = runCmd("sync", "--path", filepath.Dir(fixture))
+
+	out, _, err := runCmd("sessions", "list")
+	if err != nil {
+		t.Fatalf("sessions list error: %v", err)
+	}
+	_ = out
+}
+
+func TestSessionsValidate(t *testing.T) {
+	_, cleanup := testEnv(t)
+	defer cleanup()
+
+	out, _, err := runCmd("sessions", "validate")
+	if err != nil {
+		t.Fatalf("sessions validate error: %v", err)
+	}
+	_ = out
+}
+
+func TestSessionsQuery(t *testing.T) {
+	_, cleanup := testEnv(t)
+	defer cleanup()
+
+	fixture := filepath.Join(fixturesDir(), "claude.jsonl")
+	_, _, _ = runCmd("sync", "--path", filepath.Dir(fixture))
+
+	out, _, err := runCmd("sessions", "query")
+	if err != nil {
+		t.Fatalf("sessions query error: %v", err)
+	}
+	_ = out
+}
+
+func TestSessionsQueryJSON(t *testing.T) {
+	_, cleanup := testEnv(t)
+	defer cleanup()
+
+	fixture := filepath.Join(fixturesDir(), "claude.jsonl")
+	_, _, _ = runCmd("sync", "--path", filepath.Dir(fixture))
+
+	out, _, err := runCmd("sessions", "query", "--json")
+	if err != nil {
+		t.Fatalf("sessions query --json error: %v", err)
+	}
+	if out != "" {
+		// Verify valid JSONL
+		for _, line := range strings.Split(strings.TrimSpace(out), "\n") {
+			if line == "" {
+				continue
+			}
+			var obj map[string]interface{}
+			if jsonErr := json.Unmarshal([]byte(line), &obj); jsonErr != nil {
+				t.Errorf("invalid JSON line: %v\n%s", jsonErr, line)
+			}
+		}
+	}
+}
+
 func init() {
 	// Suppress cobra's default behavior of writing to os.Stderr on error
 	_ = fmt.Sprintf // keep fmt import
