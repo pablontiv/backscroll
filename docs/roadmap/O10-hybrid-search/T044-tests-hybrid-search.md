@@ -1,7 +1,7 @@
 ---
 id: T044
 tipo: task
-estado: Pending
+estado: Obsolete
 titulo: Tests de búsqueda híbrida (mock embeddings)
 outcome: O10
 dependencias: [T042, T043]

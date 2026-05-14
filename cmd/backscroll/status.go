@@ -9,6 +9,7 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/pablontiv/backscroll/internal/config"
+	"github.com/pablontiv/backscroll/internal/input_config"
 	"github.com/pablontiv/backscroll/internal/storage"
 )
 
@@ -62,6 +63,9 @@ func runStatus(stdout, stderr io.Writer, jsonFormat bool) error {
 		}
 	}
 
+	// Resolve active inputs for status display
+	activeInputNames, usingDeclarative := resolveInputsForStatus(cfg.SessionDirs)
+
 	// Get database file size
 	var dbSize int64
 	if dbExists {
@@ -88,7 +92,9 @@ func runStatus(stdout, stderr io.Writer, jsonFormat bool) error {
 				"total_embeddings": stats.TotalEmbeddings,
 			},
 			"config": map[string]interface{}{
-				"session_dirs": cfg.SessionDirs,
+				"session_dirs":             cfg.SessionDirs,
+				"active_inputs":            activeInputNames,
+				"using_declarative_inputs": usingDeclarative,
 			},
 		}
 		if err := json.NewEncoder(stdout).Encode(data); err != nil {
@@ -121,11 +127,34 @@ func runStatus(stdout, stderr io.Writer, jsonFormat bool) error {
 		}
 
 		_, _ = fmt.Fprintf(stdout, "\nConfiguration:\n")
-		_, _ = fmt.Fprintf(stdout, "  Session directories:\n")
-		for _, dir := range cfg.SessionDirs {
-			_, _ = fmt.Fprintf(stdout, "    - %s\n", dir)
+		if usingDeclarative {
+			_, _ = fmt.Fprintf(stdout, "  Inputs: %d active (declarative)\n", len(activeInputNames))
+			for _, name := range activeInputNames {
+				_, _ = fmt.Fprintf(stdout, "    - %s\n", name)
+			}
+		} else {
+			_, _ = fmt.Fprintf(stdout, "  Inputs: legacy (session_dirs)\n")
+			for _, dir := range cfg.SessionDirs {
+				_, _ = fmt.Fprintf(stdout, "    - %s\n", dir)
+			}
 		}
 	}
 
 	return nil
+}
+
+// resolveInputsForStatus returns the list of active input IDs and whether
+// declarative inputs (*.inputs.toml) are in use.
+func resolveInputsForStatus(sessionDirs []string) ([]string, bool) {
+	defs, mode, err := input_config.ActiveInputs(sessionDirs)
+	if err != nil || mode != input_config.ModeDeclarative {
+		return []string{}, false
+	}
+	names := make([]string, 0, len(defs))
+	for _, d := range defs {
+		if d.ID != "" {
+			names = append(names, d.ID)
+		}
+	}
+	return names, true
 }

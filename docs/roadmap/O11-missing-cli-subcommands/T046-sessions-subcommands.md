@@ -1,7 +1,7 @@
 ---
 id: T046
 tipo: task
-estado: Pending
+estado: Completed
 titulo: sessions query/list/validate subcommands bajo namespace sessions
 outcome: O11
 ---

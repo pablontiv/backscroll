@@ -1,7 +1,7 @@
 ---
 id: T038
 tipo: task
-estado: Pending
+estado: Obsolete
 titulo: ReciprocatRankFusion() en internal/hybrid/
 outcome: O10
 ---

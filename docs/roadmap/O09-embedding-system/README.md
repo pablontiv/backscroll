@@ -1,7 +1,7 @@
 ---
 id: O09
 tipo: outcome
-estado: Pending
+estado: Completed
 titulo: Embedding System en Go
 descripcion: Port del sistema de embeddings vectoriales (EmbeddingProvider trait, OnnxProvider, ChunkText) del v0 Rust al Go port. Habilita búsqueda semántica y es prerequisito de O10.
 ---

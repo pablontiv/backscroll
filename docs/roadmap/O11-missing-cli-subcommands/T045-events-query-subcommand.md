@@ -1,7 +1,7 @@
 ---
 id: T045
 tipo: task
-estado: Pending
+estado: Completed
 titulo: events query subcommand
 outcome: O11
 dependencias: [T028]

@@ -1,7 +1,7 @@
 ---
 id: T040
 tipo: task
-estado: Pending
+estado: Obsolete
 titulo: Schema migration — vec_embeddings virtual table (384-dim)
 outcome: O10
 dependencias: [T039, T035]

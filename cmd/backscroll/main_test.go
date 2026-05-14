@@ -1839,6 +1839,43 @@ func TestEventsQueryJSON(t *testing.T) {
 	}
 }
 
+func TestStatusJSONHasInputFields(t *testing.T) {
+	_, cleanup := testEnv(t)
+	defer cleanup()
+
+	out, _, err := runCmd("status", "--json")
+	if err != nil {
+		t.Fatalf("status --json error: %v", err)
+	}
+
+	var result map[string]interface{}
+	if err := json.Unmarshal([]byte(strings.TrimSpace(out)), &result); err != nil {
+		t.Fatalf("parse JSON: %v\n%s", err, out)
+	}
+
+	cfg, ok := result["config"].(map[string]interface{})
+	if !ok {
+		t.Fatalf("config field missing or wrong type: %v", result)
+	}
+	if _, ok := cfg["active_inputs"]; !ok {
+		t.Error("config.active_inputs missing from status --json")
+	}
+	if _, ok := cfg["using_declarative_inputs"]; !ok {
+		t.Error("config.using_declarative_inputs missing from status --json")
+	}
+
+	idx, ok := result["index"].(map[string]interface{})
+	if !ok {
+		t.Fatalf("index field missing: %v", result)
+	}
+	if _, ok := idx["total_chunks"]; !ok {
+		t.Error("index.total_chunks missing from status --json")
+	}
+	if _, ok := idx["total_embeddings"]; !ok {
+		t.Error("index.total_embeddings missing from status --json")
+	}
+}
+
 func TestEventsQueryDirect(t *testing.T) {
 	dbPath, cleanup := testEnv(t)
 	defer cleanup()
