@@ -1,7 +1,7 @@
 ---
 id: T018
 tipo: task
-estado: Pending
+estado: Completed
 titulo: Text transforms declarativos
 outcome: O07
 dependencias: [T014]
