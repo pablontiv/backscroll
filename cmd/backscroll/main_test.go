@@ -1947,6 +1947,62 @@ func TestEventsQueryDirect(t *testing.T) {
 	}
 }
 
+func TestEventsQueryNewFlags(t *testing.T) {
+	dbPath, cleanup := testEnv(t)
+	defer cleanup()
+
+	db, err := storage.Open(dbPath)
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	_ = db.SyncFiles([]storage.IndexedFile{
+		{
+			SourcePath: "/tmp/ev-flags-session.jsonl",
+			Source:     "session",
+			Hash:       "ev-flags-hash",
+			Messages: []storage.IndexedMessage{
+				{Ordinal: 0, Role: "user", Text: "test event", Timestamp: "2024-06-01T10:00:00Z", ContentType: "text"},
+			},
+		},
+	})
+	_ = db.Close()
+
+	// --source session flag accepted
+	out, _, err := runCmd("events", "query", "--source", "session", "--all-projects", "/tmp/ev-flags-session.jsonl")
+	if err != nil {
+		t.Fatalf("events query --source error: %v", err)
+	}
+	_ = out
+
+	// --source-path flag accepted (LIKE glob pattern)
+	out, _, err = runCmd("events", "query", "--source-path", "*.jsonl", "--all-projects")
+	if err != nil {
+		t.Fatalf("events query --source-path error: %v", err)
+	}
+	_ = out
+
+	// --event-type flag accepted
+	out, _, err = runCmd("events", "query", "--event-type", "message", "--all-projects")
+	if err != nil {
+		t.Fatalf("events query --event-type error: %v", err)
+	}
+	_ = out
+
+	// --indexed-only flag accepted
+	out, _, err = runCmd("events", "query", "--indexed-only", "--all-projects")
+	if err != nil {
+		t.Fatalf("events query --indexed-only error: %v", err)
+	}
+	_ = out
+
+	// --project flag accepted
+	out, _, err = runCmd("events", "query", "--project", "myproject")
+	if err != nil {
+		t.Fatalf("events query --project error: %v", err)
+	}
+	_ = out
+}
+
 func TestSessionsList(t *testing.T) {
 	_, cleanup := testEnv(t)
 	defer cleanup()

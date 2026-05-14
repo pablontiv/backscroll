@@ -3,8 +3,11 @@ package main
 import (
 	"encoding/json"
 	"fmt"
-	"github.com/spf13/cobra"
 	"io"
+	"os"
+	"strings"
+
+	"github.com/spf13/cobra"
 
 	"github.com/pablontiv/backscroll/internal/config"
 	"github.com/pablontiv/backscroll/internal/storage"
@@ -21,34 +24,54 @@ func newEventsCmd(stdout, stderr io.Writer) *cobra.Command {
 
 func newEventsQueryCmd(stdout, stderr io.Writer) *cobra.Command {
 	var (
-		jsonOut bool
-		robot   bool
-		role    string
-		after   string
-		before  string
-		limit   int
+		jsonOut     bool
+		robot       bool
+		project     string
+		allProjects bool
+		source      string
+		sourcePath  string
+		eventType   string
+		role        string
+		after       string
+		before      string
+		limit       int
+		indexedOnly bool
 	)
 
 	cmd := &cobra.Command{
-		Use:   "query <session-path-or-id>",
-		Short: "Emit events from a session",
-		Args:  cobra.ExactArgs(1),
+		Use:   "query [session-path-or-id]",
+		Short: "Emit events from sessions in deterministic order",
+		Args:  cobra.MaximumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			return runEventsQuery(stdout, stderr, args[0], jsonOut, robot, role, after, before, limit)
+			sessionArg := ""
+			if len(args) > 0 {
+				sessionArg = args[0]
+			}
+			return runEventsQuery(stdout, stderr, sessionArg,
+				jsonOut, robot, project, allProjects, source, sourcePath, eventType, role, after, before, limit, indexedOnly)
 		},
 	}
 
 	cmd.Flags().BoolVar(&jsonOut, "json", false, "Output as JSONL")
 	cmd.Flags().BoolVar(&robot, "robot", false, "Output optimized for LLM (plain text)")
+	cmd.Flags().StringVar(&project, "project", "", "Filter by project (default: derived from cwd)")
+	cmd.Flags().BoolVar(&allProjects, "all-projects", false, "Query all projects")
+	cmd.Flags().StringVar(&source, "source", "session", "Filter by source type (session, plan, ke, etc.; 'all' = no filter)")
+	cmd.Flags().StringVar(&sourcePath, "source-path", "", "Filter by source path (exact or * glob pattern)")
+	cmd.Flags().StringVar(&eventType, "event-type", "", "Filter by event type (message, tool_call, tool_result, command, etc.)")
 	cmd.Flags().StringVar(&role, "role", "", "Filter by role (user|assistant)")
 	cmd.Flags().StringVar(&after, "after", "", "Filter events after date (ISO 8601)")
 	cmd.Flags().StringVar(&before, "before", "", "Filter events before date (ISO 8601)")
-	cmd.Flags().IntVar(&limit, "limit", 100, "Maximum events to return")
+	cmd.Flags().IntVar(&limit, "limit", 100, "Maximum events to return (0 = no limit)")
+	cmd.Flags().BoolVar(&indexedOnly, "indexed-only", false, "Read existing index without auto-sync")
 
 	return cmd
 }
 
-func runEventsQuery(stdout, stderr io.Writer, sessionArg string, jsonOut, robot bool, role, after, before string, limit int) error {
+func runEventsQuery(stdout, stderr io.Writer, sessionArg string,
+	jsonOut, robot bool, project string, allProjects bool,
+	source, sourcePath, eventType, role, after, before string, limit int, indexedOnly bool) error {
+
 	cfg, err := config.Load()
 	if err != nil {
 		return fmt.Errorf("load config: %w", err)
@@ -60,23 +83,51 @@ func runEventsQuery(stdout, stderr io.Writer, sessionArg string, jsonOut, robot 
 	}
 	defer func() { _ = db.Close() }()
 
-	// Resolve session identifier to source_path
-	sourcePath, err := db.ResolveSessionPath(sessionArg)
-	if err != nil {
-		return fmt.Errorf("resolve session: %w", err)
-	}
-	if sourcePath == "" {
-		_, _ = fmt.Fprintf(stderr, "warning: session not found: %s\n", sessionArg)
-		sourcePath = sessionArg
+	// Build the query
+	q := storage.SessionEventQuery{
+		Role:   role,
+		After:  after,
+		Before: before,
+		Limit:  limit,
 	}
 
-	events, err := db.QuerySessionEvents(storage.SessionEventQuery{
-		SourcePath: sourcePath,
-		Role:       role,
-		After:      after,
-		Before:     before,
-		Limit:      limit,
-	})
+	// Source filter: "all" → nil
+	if source != "" && source != "all" {
+		q.Source = &source
+	}
+
+	// EventType filter
+	if eventType != "" {
+		q.EventType = &eventType
+	}
+
+	// Project filter
+	if !allProjects {
+		if project != "" {
+			q.Project = &project
+		} else if sessionArg == "" && sourcePath == "" {
+			// Derive project from cwd only when no explicit session/path provided
+			if cwd, cwdErr := os.Getwd(); cwdErr == nil {
+				derived := strings.ReplaceAll(cwd, "/", "-")
+				q.Project = &derived
+			}
+		}
+	}
+
+	// SourcePath: positional arg takes precedence if provided
+	if sessionArg != "" && sourcePath == "" {
+		resolved, resolveErr := db.ResolveSessionPath(sessionArg)
+		if resolveErr != nil || resolved == "" {
+			_, _ = fmt.Fprintf(stderr, "warning: session not found: %s\n", sessionArg)
+			q.SourcePath = sessionArg
+		} else {
+			q.SourcePath = resolved
+		}
+	} else if sourcePath != "" {
+		q.SourcePath = sourcePath
+	}
+
+	events, err := db.QuerySessionEvents(q)
 	if err != nil {
 		return fmt.Errorf("query events: %w", err)
 	}

@@ -1,10 +1,10 @@
 ---
-id: T051
-tipo: task
-estado: Pending
-titulo: events query — filtros faltantes
-outcome: O13
 dependencias: []
+estado: Completed
+id: T051
+outcome: O13
+tipo: task
+titulo: events query — filtros faltantes
 ---
 
 # T051 — `events query` filtros faltantes

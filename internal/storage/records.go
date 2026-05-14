@@ -48,8 +48,13 @@ func (d *Database) QueryIndexedRecords(q IndexedRecordQuery) ([]IndexedRecord, e
 		args = append(args, *q.Project)
 	}
 	if q.SourcePath != nil && *q.SourcePath != "" {
-		whereClauses = append(whereClauses, "source_path = ?")
-		args = append(args, *q.SourcePath)
+		if strings.ContainsAny(*q.SourcePath, "*%") {
+			whereClauses = append(whereClauses, "source_path LIKE ?")
+			args = append(args, strings.ReplaceAll(*q.SourcePath, "*", "%"))
+		} else {
+			whereClauses = append(whereClauses, "source_path = ?")
+			args = append(args, *q.SourcePath)
+		}
 	}
 	if q.After != nil && *q.After != "" {
 		whereClauses = append(whereClauses, "timestamp >= ?")
@@ -119,7 +124,10 @@ type SessionEvent struct {
 
 // SessionEventQuery defines filter parameters for QuerySessionEvents.
 type SessionEventQuery struct {
-	SourcePath string
+	Project    *string // nil = all projects
+	Source     *string // nil = all sources; "all" is normalized to nil
+	SourcePath string  // supports * glob (converted to SQL LIKE %)
+	EventType  *string // nil = all event types
 	Role       string
 	After      string
 	Before     string
@@ -136,9 +144,26 @@ func (d *Database) QuerySessionEvents(q SessionEventQuery) ([]SessionEvent, erro
 	var where []string
 	var args []interface{}
 
+	if q.Project != nil {
+		where = append(where, "project = ?")
+		args = append(args, *q.Project)
+	}
+	if q.Source != nil {
+		where = append(where, "source = ?")
+		args = append(args, *q.Source)
+	}
 	if q.SourcePath != "" {
-		where = append(where, "source_path = ?")
-		args = append(args, q.SourcePath)
+		if strings.ContainsAny(q.SourcePath, "*%") {
+			where = append(where, "source_path LIKE ?")
+			args = append(args, strings.ReplaceAll(q.SourcePath, "*", "%"))
+		} else {
+			where = append(where, "source_path = ?")
+			args = append(args, q.SourcePath)
+		}
+	}
+	if q.EventType != nil {
+		where = append(where, "event_type = ?")
+		args = append(args, *q.EventType)
 	}
 	if q.Role != "" {
 		where = append(where, "role = ?")
