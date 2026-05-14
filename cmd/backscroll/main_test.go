@@ -1387,6 +1387,200 @@ func TestSyncWithPlansDir(t *testing.T) {
 	}
 }
 
+func TestInputsHelp(t *testing.T) {
+	out, _, err := runCmd("inputs", "--help")
+	if err != nil {
+		t.Fatalf("inputs --help error: %v", err)
+	}
+	for _, sub := range []string{"list", "aliases", "identify", "test"} {
+		if !strings.Contains(out, sub) {
+			t.Errorf("inputs --help missing subcommand %q", sub)
+		}
+	}
+}
+
+func TestInputsList(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("BACKSCROLL_CONFIG_DIR", dir)
+
+	// No inputs configured — should use legacy mode
+	_, cleanup := testEnv(t)
+	defer cleanup()
+
+	out, _, err := runCmd("inputs", "list")
+	if err != nil {
+		t.Fatalf("inputs list error: %v", err)
+	}
+	if !strings.Contains(out, "mode:") {
+		t.Errorf("inputs list output missing 'mode:': %s", out)
+	}
+}
+
+func TestInputsListJSON(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("BACKSCROLL_CONFIG_DIR", dir)
+
+	_, cleanup := testEnv(t)
+	defer cleanup()
+
+	out, _, err := runCmd("inputs", "list", "--json")
+	if err != nil {
+		t.Fatalf("inputs list --json error: %v", err)
+	}
+	var result map[string]any
+	if err := json.Unmarshal([]byte(out), &result); err != nil {
+		t.Fatalf("invalid JSON: %v\noutput: %s", err, out)
+	}
+	if _, ok := result["mode"]; !ok {
+		t.Error("JSON missing 'mode' field")
+	}
+	if _, ok := result["inputs"]; !ok {
+		t.Error("JSON missing 'inputs' field")
+	}
+}
+
+func TestInputsAliases(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("BACKSCROLL_CONFIG_DIR", dir)
+
+	_, cleanup := testEnv(t)
+	defer cleanup()
+
+	// aliases with no session_dirs — should run without crash
+	_, _, err := runCmd("inputs", "aliases")
+	if err != nil {
+		t.Fatalf("inputs aliases error: %v", err)
+	}
+}
+
+func TestInputsIdentify(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("BACKSCROLL_CONFIG_DIR", dir)
+
+	_, cleanup := testEnv(t)
+	defer cleanup()
+
+	// identify a file that doesn't match any input — should say "no match"
+	out, _, err := runCmd("inputs", "identify", "/nonexistent/path/file.jsonl")
+	if err != nil {
+		t.Fatalf("inputs identify error: %v", err)
+	}
+	if !strings.Contains(out, "no match") {
+		t.Errorf("expected 'no match', got: %s", out)
+	}
+}
+
+func TestInputsTestNoMatch(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("BACKSCROLL_CONFIG_DIR", dir)
+
+	_, cleanup := testEnv(t)
+	defer cleanup()
+
+	_, _, err := runCmd("inputs", "test", "/nonexistent/path/file.jsonl")
+	if err == nil {
+		t.Error("expected error for unmatched path")
+	}
+}
+
+// setupInputsPreset writes a claude.inputs.toml pointing to fixtureProjects in cfgDir.
+func setupInputsPreset(t *testing.T, cfgDir, fixtureProjects string) {
+	t.Helper()
+	inputsDir := filepath.Join(cfgDir, "backscroll", "inputs")
+	if err := os.MkdirAll(inputsDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	toml := fmt.Sprintf(`version = 1
+[[inputs]]
+id = "claude"
+source = "session"
+active = true
+[inputs.discover]
+roots = [%q]
+include = ["**/*.jsonl"]
+exclude = ["**/subagents/**"]
+[inputs.decode]
+format = "jsonl"
+[inputs.record]
+selector = "$"
+include_when = [{selector = "$.type", op = "in", value = ["user", "assistant"]}]
+exclude_when = [{selector = "$.isMeta", op = "eq", value = true}]
+[inputs.map]
+role = "$.message.role"
+uuid = "$.uuid"
+timestamp = "$.timestamp"
+session_id = "$.sessionId"
+[inputs.content]
+selector = "$.message.content"
+blocks = "$.message.content[*]"
+block_text = "$.text"
+include_when = [{selector = "$.type", op = "eq", value = "text"}]
+[inputs.text]
+trim = true
+drop_empty = true
+`, fixtureProjects)
+	if err := os.WriteFile(filepath.Join(inputsDir, "claude.inputs.toml"), []byte(toml), 0o644); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestInputsTestWithFixture(t *testing.T) {
+	_, cleanup := testEnv(t)
+	defer cleanup()
+
+	presetDir := filepath.Join(fixturesDir(), "claude-preset")
+	cfgDir := t.TempDir()
+	setupInputsPreset(t, cfgDir, filepath.Join(presetDir, "projects"))
+	t.Setenv("BACKSCROLL_CONFIG_DIR", cfgDir)
+
+	fixture := filepath.Join(presetDir, "projects", "project-a", "session-main.jsonl")
+	out, _, err := runCmd("inputs", "test", fixture)
+	if err != nil {
+		t.Logf("inputs test output: %s", out)
+		t.Fatalf("inputs test error: %v", err)
+	}
+	if !strings.Contains(out, "input:") {
+		t.Errorf("expected 'input:' in output, got: %s", out)
+	}
+}
+
+func TestInputsAliasesWithPreset(t *testing.T) {
+	_, cleanup := testEnv(t)
+	defer cleanup()
+
+	presetDir := filepath.Join(fixturesDir(), "claude-preset")
+	cfgDir := t.TempDir()
+	setupInputsPreset(t, cfgDir, filepath.Join(presetDir, "projects"))
+	t.Setenv("BACKSCROLL_CONFIG_DIR", cfgDir)
+
+	out, _, err := runCmd("inputs", "aliases")
+	if err != nil {
+		t.Fatalf("inputs aliases error: %v", err)
+	}
+	if !strings.Contains(out, "claude") {
+		t.Errorf("expected 'claude' in aliases output, got: %s", out)
+	}
+}
+
+func TestInputsIdentifyWithPreset(t *testing.T) {
+	_, cleanup := testEnv(t)
+	defer cleanup()
+
+	presetDir := filepath.Join(fixturesDir(), "claude-preset")
+	cfgDir := t.TempDir()
+	setupInputsPreset(t, cfgDir, filepath.Join(presetDir, "projects"))
+	t.Setenv("BACKSCROLL_CONFIG_DIR", cfgDir)
+
+	fixture := filepath.Join(presetDir, "projects", "project-a", "session-main.jsonl")
+	out, _, err := runCmd("inputs", "identify", fixture)
+	if err != nil {
+		t.Fatalf("inputs identify error: %v", err)
+	}
+	if !strings.Contains(out, "matched") {
+		t.Errorf("expected 'matched' in output, got: %s", out)
+	}
+}
+
 func TestHelpListsAllCommands(t *testing.T) {
 	out, _, err := runCmd("--help")
 	if err != nil {
@@ -1395,7 +1589,7 @@ func TestHelpListsAllCommands(t *testing.T) {
 	for _, cmd := range []string{
 		"sync", "search", "read", "resume", "list", "topics",
 		"insights", "export", "reindex", "purge", "validate", "status",
-		"decisions", "projects",
+		"decisions", "projects", "inputs",
 	} {
 		if !strings.Contains(out, cmd) {
 			t.Errorf("--help missing command %q", cmd)

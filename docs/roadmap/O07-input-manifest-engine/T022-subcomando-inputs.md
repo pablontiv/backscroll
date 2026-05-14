@@ -1,7 +1,7 @@
 ---
 id: T022
 tipo: task
-estado: Pending
+estado: Completed
 titulo: Subcomando inputs (list, aliases, identify, test)
 outcome: O07
 dependencias: [T015, T016, T019]

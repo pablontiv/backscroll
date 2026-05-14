@@ -49,6 +49,7 @@ for hybrid full-text search (BM25 + vector embeddings) with RRF fusion.`,
 		newStatusCmd(stdout, stderr),
 		newDecisionsCmd(stdout, stderr),
 		newProjectsCmd(stdout, stderr),
+		newInputsCmd(stdout, stderr),
 	)
 
 	return root
