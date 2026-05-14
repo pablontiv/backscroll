@@ -6,6 +6,93 @@ import (
 	"testing"
 )
 
+func TestEmbeddingConfig_Defaults(t *testing.T) {
+	_ = os.Unsetenv("BACKSCROLL_DATABASE_PATH")
+	_ = os.Unsetenv("BACKSCROLL_SESSION_DIRS")
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if cfg.Embedding.Enabled {
+		t.Error("Embedding.Enabled default should be false")
+	}
+	if cfg.Embedding.ModelName != "all-MiniLM-L6-v2" {
+		t.Errorf("ModelName = %q, want all-MiniLM-L6-v2", cfg.Embedding.ModelName)
+	}
+	if cfg.Embedding.SimilarityThreshold != 0.7 {
+		t.Errorf("SimilarityThreshold = %v, want 0.7", cfg.Embedding.SimilarityThreshold)
+	}
+	if cfg.Embedding.TopK != 10 {
+		t.Errorf("TopK = %d, want 10", cfg.Embedding.TopK)
+	}
+}
+
+func TestEmbeddingConfig_LoadFromTOML(t *testing.T) {
+	dir := t.TempDir()
+	toml := `[embedding]
+enabled = true
+model_name = "custom-model"
+model_path = "/path/to/model.onnx"
+similarity_threshold = 0.85
+top_k = 20
+`
+	tomlPath := filepath.Join(dir, "backscroll.toml")
+	if err := os.WriteFile(tomlPath, []byte(toml), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	orig, _ := os.Getwd()
+	_ = os.Chdir(dir)
+	defer func() { _ = os.Chdir(orig) }()
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if !cfg.Embedding.Enabled {
+		t.Error("Embedding.Enabled should be true")
+	}
+	if cfg.Embedding.ModelName != "custom-model" {
+		t.Errorf("ModelName = %q", cfg.Embedding.ModelName)
+	}
+	if cfg.Embedding.ModelPath != "/path/to/model.onnx" {
+		t.Errorf("ModelPath = %q", cfg.Embedding.ModelPath)
+	}
+	if cfg.Embedding.SimilarityThreshold != 0.85 {
+		t.Errorf("SimilarityThreshold = %v", cfg.Embedding.SimilarityThreshold)
+	}
+	if cfg.Embedding.TopK != 20 {
+		t.Errorf("TopK = %d", cfg.Embedding.TopK)
+	}
+}
+
+func TestEmbeddingConfig_LegacyTOMLUnaffected(t *testing.T) {
+	dir := t.TempDir()
+	// No [embedding] section
+	toml := `database_path = "/tmp/test.db"
+`
+	tomlPath := filepath.Join(dir, "backscroll.toml")
+	if err := os.WriteFile(tomlPath, []byte(toml), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	orig, _ := os.Getwd()
+	_ = os.Chdir(dir)
+	defer func() { _ = os.Chdir(orig) }()
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if cfg.Embedding.Enabled {
+		t.Error("Embedding.Enabled should default to false when not in TOML")
+	}
+	if cfg.Embedding.TopK != 10 {
+		t.Errorf("TopK should default to 10, got %d", cfg.Embedding.TopK)
+	}
+}
+
 func TestLoadDefaults(t *testing.T) {
 	// Save current env vars
 	oldDbPath := os.Getenv("BACKSCROLL_DATABASE_PATH")
