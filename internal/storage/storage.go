@@ -23,10 +23,6 @@ func Open(path string) (*Database, error) {
 		return nil, fmt.Errorf("opening database %s: %w", path, err)
 	}
 
-	// SQLite is single-writer; limit pool to 1 connection to prevent VACUUM
-	// from blocking indefinitely on idle WAL readers from other pool connections.
-	db.SetMaxOpenConns(1)
-
 	// Test the connection
 	if err := db.Ping(); err != nil {
 		_ = db.Close()

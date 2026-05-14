@@ -387,17 +387,12 @@ func (d *Database) Purge(before string) (int64, error) {
 }
 
 // OptimizeFTS optimizes the FTS5 index for better query performance.
+// Note: VACUUM was intentionally removed; it requires an exclusive WAL lock
+// and hangs indefinitely when other connections (or pool connections) exist.
 func (d *Database) OptimizeFTS() error {
 	_, err := d.db.Exec("INSERT INTO messages_fts(messages_fts, rank) VALUES('optimize', 0)")
 	if err != nil {
 		return fmt.Errorf("optimize FTS5: %w", err)
 	}
-
-	// VACUUM to reclaim space
-	_, err = d.db.Exec("VACUUM")
-	if err != nil {
-		return fmt.Errorf("vacuum database: %w", err)
-	}
-
 	return nil
 }
