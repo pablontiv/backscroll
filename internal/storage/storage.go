@@ -22,13 +22,13 @@ func Open(path string) (*Database, error) {
 
 	// Test the connection
 	if err := db.Ping(); err != nil {
-		db.Close()
+		_ = db.Close()
 		return nil, fmt.Errorf("ping database %s: %w", path, err)
 	}
 
 	d := &Database{db: db}
 	if err := d.SetupSchema(); err != nil {
-		db.Close()
+		_ = db.Close()
 		return nil, err
 	}
 
@@ -50,7 +50,7 @@ func OpenReadOnly(path string) (*Database, error) {
 
 	// Test the connection
 	if err := db.Ping(); err != nil {
-		db.Close()
+		_ = db.Close()
 		return nil, fmt.Errorf("ping readonly database %s: %w", path, err)
 	}
 

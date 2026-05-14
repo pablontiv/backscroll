@@ -43,7 +43,7 @@ func (d *Database) applyV1Migration() error {
 	if err != nil {
 		return fmt.Errorf("begin transaction: %w", err)
 	}
-	defer tx.Rollback()
+	defer func() { _ = tx.Rollback() }()
 
 	// Define the core DDL for this migration (for checksum)
 	coreDDL := sqlV1CoreDDL

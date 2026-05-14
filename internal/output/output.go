@@ -59,9 +59,9 @@ func (f *Formatter) WriteJSON(w io.Writer, v any) error {
 func (f *Formatter) writeText(w io.Writer, results []models.SearchResult) error {
 	for _, result := range results {
 		// Write result header
-		fmt.Fprintf(w, "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n")
-		fmt.Fprintf(w, "Rank: %d | Source: %s | Role: %s | Score: %.2f\n", result.Rank, result.Source, result.Role, result.Score)
-		fmt.Fprintf(w, "Path: %s\n", result.FilePath)
+		_, _ = fmt.Fprintf(w, "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n")
+		_, _ = fmt.Fprintf(w, "Rank: %d | Source: %s | Role: %s | Score: %.2f\n", result.Rank, result.Source, result.Role, result.Score)
+		_, _ = fmt.Fprintf(w, "Path: %s\n", result.FilePath)
 		if !result.Timestamp.IsZero() {
 			fmt.Fprintf(w, "Time: %s\n", result.Timestamp.Format("2006-01-02 15:04:05"))
 		}

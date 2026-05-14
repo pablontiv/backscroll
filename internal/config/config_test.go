@@ -12,26 +12,28 @@ func TestLoadDefaults(t *testing.T) {
 	oldSessionDirs := os.Getenv("BACKSCROLL_SESSION_DIRS")
 	defer func() {
 		if oldDbPath != "" {
-			os.Setenv("BACKSCROLL_DATABASE_PATH", oldDbPath)
+			_ = os.Setenv("BACKSCROLL_DATABASE_PATH", oldDbPath)
 		} else {
-			os.Unsetenv("BACKSCROLL_DATABASE_PATH")
+			_ = os.Unsetenv("BACKSCROLL_DATABASE_PATH")
 		}
 		if oldSessionDirs != "" {
-			os.Setenv("BACKSCROLL_SESSION_DIRS", oldSessionDirs)
+			_ = os.Setenv("BACKSCROLL_SESSION_DIRS", oldSessionDirs)
 		} else {
-			os.Unsetenv("BACKSCROLL_SESSION_DIRS")
+			_ = os.Unsetenv("BACKSCROLL_SESSION_DIRS")
 		}
 	}()
 
 	// Clear env vars
-	os.Unsetenv("BACKSCROLL_DATABASE_PATH")
-	os.Unsetenv("BACKSCROLL_SESSION_DIRS")
+	_ = os.Unsetenv("BACKSCROLL_DATABASE_PATH")
+	_ = os.Unsetenv("BACKSCROLL_SESSION_DIRS")
 
 	// Change to temp dir with no backscroll.toml
 	tmpDir := t.TempDir()
 	oldCwd, _ := os.Getwd()
-	os.Chdir(tmpDir)
-	defer os.Chdir(oldCwd)
+	if err := os.Chdir(tmpDir); err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = os.Chdir(oldCwd) }()
 
 	cfg, err := Load()
 	if err != nil {
@@ -56,26 +58,28 @@ func TestEnvVarDatabasePath(t *testing.T) {
 	oldSessionDirs := os.Getenv("BACKSCROLL_SESSION_DIRS")
 	defer func() {
 		if oldDbPath != "" {
-			os.Setenv("BACKSCROLL_DATABASE_PATH", oldDbPath)
+			_ = os.Setenv("BACKSCROLL_DATABASE_PATH", oldDbPath)
 		} else {
-			os.Unsetenv("BACKSCROLL_DATABASE_PATH")
+			_ = os.Unsetenv("BACKSCROLL_DATABASE_PATH")
 		}
 		if oldSessionDirs != "" {
-			os.Setenv("BACKSCROLL_SESSION_DIRS", oldSessionDirs)
+			_ = os.Setenv("BACKSCROLL_SESSION_DIRS", oldSessionDirs)
 		} else {
-			os.Unsetenv("BACKSCROLL_SESSION_DIRS")
+			_ = os.Unsetenv("BACKSCROLL_SESSION_DIRS")
 		}
 	}()
 
 	// Set env var
-	os.Setenv("BACKSCROLL_DATABASE_PATH", "/tmp/test.db")
-	os.Unsetenv("BACKSCROLL_SESSION_DIRS")
+	_ = os.Setenv("BACKSCROLL_DATABASE_PATH", "/tmp/test.db")
+	_ = os.Unsetenv("BACKSCROLL_SESSION_DIRS")
 
 	// Change to temp dir with no backscroll.toml
 	tmpDir := t.TempDir()
 	oldCwd, _ := os.Getwd()
-	os.Chdir(tmpDir)
-	defer os.Chdir(oldCwd)
+	if err := os.Chdir(tmpDir); err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = os.Chdir(oldCwd) }()
 
 	cfg, err := Load()
 	if err != nil {
@@ -93,26 +97,28 @@ func TestEnvVarSessionDirs(t *testing.T) {
 	oldSessionDirs := os.Getenv("BACKSCROLL_SESSION_DIRS")
 	defer func() {
 		if oldDbPath != "" {
-			os.Setenv("BACKSCROLL_DATABASE_PATH", oldDbPath)
+			_ = os.Setenv("BACKSCROLL_DATABASE_PATH", oldDbPath)
 		} else {
-			os.Unsetenv("BACKSCROLL_DATABASE_PATH")
+			_ = os.Unsetenv("BACKSCROLL_DATABASE_PATH")
 		}
 		if oldSessionDirs != "" {
-			os.Setenv("BACKSCROLL_SESSION_DIRS", oldSessionDirs)
+			_ = os.Setenv("BACKSCROLL_SESSION_DIRS", oldSessionDirs)
 		} else {
-			os.Unsetenv("BACKSCROLL_SESSION_DIRS")
+			_ = os.Unsetenv("BACKSCROLL_SESSION_DIRS")
 		}
 	}()
 
 	// Set env var (colon-separated)
-	os.Unsetenv("BACKSCROLL_DATABASE_PATH")
-	os.Setenv("BACKSCROLL_SESSION_DIRS", "/path/one:/path/two:/path/three")
+	_ = os.Unsetenv("BACKSCROLL_DATABASE_PATH")
+	_ = os.Setenv("BACKSCROLL_SESSION_DIRS", "/path/one:/path/two:/path/three")
 
 	// Change to temp dir with no backscroll.toml
 	tmpDir := t.TempDir()
 	oldCwd, _ := os.Getwd()
-	os.Chdir(tmpDir)
-	defer os.Chdir(oldCwd)
+	if err := os.Chdir(tmpDir); err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = os.Chdir(oldCwd) }()
 
 	cfg, err := Load()
 	if err != nil {
@@ -136,25 +142,27 @@ func TestLocalConfigOverridesGlobal(t *testing.T) {
 	oldSessionDirs := os.Getenv("BACKSCROLL_SESSION_DIRS")
 	defer func() {
 		if oldDbPath != "" {
-			os.Setenv("BACKSCROLL_DATABASE_PATH", oldDbPath)
+			_ = os.Setenv("BACKSCROLL_DATABASE_PATH", oldDbPath)
 		} else {
-			os.Unsetenv("BACKSCROLL_DATABASE_PATH")
+			_ = os.Unsetenv("BACKSCROLL_DATABASE_PATH")
 		}
 		if oldSessionDirs != "" {
-			os.Setenv("BACKSCROLL_SESSION_DIRS", oldSessionDirs)
+			_ = os.Setenv("BACKSCROLL_SESSION_DIRS", oldSessionDirs)
 		} else {
-			os.Unsetenv("BACKSCROLL_SESSION_DIRS")
+			_ = os.Unsetenv("BACKSCROLL_SESSION_DIRS")
 		}
 	}()
 
-	os.Unsetenv("BACKSCROLL_DATABASE_PATH")
-	os.Unsetenv("BACKSCROLL_SESSION_DIRS")
+	_ = os.Unsetenv("BACKSCROLL_DATABASE_PATH")
+	_ = os.Unsetenv("BACKSCROLL_SESSION_DIRS")
 
 	// Create temp dir
 	tmpDir := t.TempDir()
 	oldCwd, _ := os.Getwd()
-	os.Chdir(tmpDir)
-	defer os.Chdir(oldCwd)
+	if err := os.Chdir(tmpDir); err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = os.Chdir(oldCwd) }()
 
 	// Create local backscroll.toml
 	localConfig := `database_path = "/local/test.db"
@@ -190,25 +198,27 @@ func TestSessionDirSingularAlias(t *testing.T) {
 	oldSessionDirs := os.Getenv("BACKSCROLL_SESSION_DIRS")
 	defer func() {
 		if oldDbPath != "" {
-			os.Setenv("BACKSCROLL_DATABASE_PATH", oldDbPath)
+			_ = os.Setenv("BACKSCROLL_DATABASE_PATH", oldDbPath)
 		} else {
-			os.Unsetenv("BACKSCROLL_DATABASE_PATH")
+			_ = os.Unsetenv("BACKSCROLL_DATABASE_PATH")
 		}
 		if oldSessionDirs != "" {
-			os.Setenv("BACKSCROLL_SESSION_DIRS", oldSessionDirs)
+			_ = os.Setenv("BACKSCROLL_SESSION_DIRS", oldSessionDirs)
 		} else {
-			os.Unsetenv("BACKSCROLL_SESSION_DIRS")
+			_ = os.Unsetenv("BACKSCROLL_SESSION_DIRS")
 		}
 	}()
 
-	os.Unsetenv("BACKSCROLL_DATABASE_PATH")
-	os.Unsetenv("BACKSCROLL_SESSION_DIRS")
+	_ = os.Unsetenv("BACKSCROLL_DATABASE_PATH")
+	_ = os.Unsetenv("BACKSCROLL_SESSION_DIRS")
 
 	// Create temp dir
 	tmpDir := t.TempDir()
 	oldCwd, _ := os.Getwd()
-	os.Chdir(tmpDir)
-	defer os.Chdir(oldCwd)
+	if err := os.Chdir(tmpDir); err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = os.Chdir(oldCwd) }()
 
 	// Create local backscroll.toml with session_dir (singular)
 	localConfig := `database_path = "/local/test.db"
@@ -234,25 +244,27 @@ func TestSessionDirsArray(t *testing.T) {
 	oldSessionDirs := os.Getenv("BACKSCROLL_SESSION_DIRS")
 	defer func() {
 		if oldDbPath != "" {
-			os.Setenv("BACKSCROLL_DATABASE_PATH", oldDbPath)
+			_ = os.Setenv("BACKSCROLL_DATABASE_PATH", oldDbPath)
 		} else {
-			os.Unsetenv("BACKSCROLL_DATABASE_PATH")
+			_ = os.Unsetenv("BACKSCROLL_DATABASE_PATH")
 		}
 		if oldSessionDirs != "" {
-			os.Setenv("BACKSCROLL_SESSION_DIRS", oldSessionDirs)
+			_ = os.Setenv("BACKSCROLL_SESSION_DIRS", oldSessionDirs)
 		} else {
-			os.Unsetenv("BACKSCROLL_SESSION_DIRS")
+			_ = os.Unsetenv("BACKSCROLL_SESSION_DIRS")
 		}
 	}()
 
-	os.Unsetenv("BACKSCROLL_DATABASE_PATH")
-	os.Unsetenv("BACKSCROLL_SESSION_DIRS")
+	_ = os.Unsetenv("BACKSCROLL_DATABASE_PATH")
+	_ = os.Unsetenv("BACKSCROLL_SESSION_DIRS")
 
 	// Create temp dir
 	tmpDir := t.TempDir()
 	oldCwd, _ := os.Getwd()
-	os.Chdir(tmpDir)
-	defer os.Chdir(oldCwd)
+	if err := os.Chdir(tmpDir); err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = os.Chdir(oldCwd) }()
 
 	// Create local backscroll.toml with session_dirs (array)
 	localConfig := `database_path = "/local/test.db"
@@ -291,19 +303,19 @@ func TestEnvVarSessionDirsMultiple(t *testing.T) {
 	oldSessionDirs := os.Getenv("BACKSCROLL_SESSION_DIRS")
 	defer func() {
 		if oldDbPath != "" {
-			os.Setenv("BACKSCROLL_DATABASE_PATH", oldDbPath)
+			_ = os.Setenv("BACKSCROLL_DATABASE_PATH", oldDbPath)
 		} else {
-			os.Unsetenv("BACKSCROLL_DATABASE_PATH")
+			_ = os.Unsetenv("BACKSCROLL_DATABASE_PATH")
 		}
 		if oldSessionDirs != "" {
-			os.Setenv("BACKSCROLL_SESSION_DIRS", oldSessionDirs)
+			_ = os.Setenv("BACKSCROLL_SESSION_DIRS", oldSessionDirs)
 		} else {
-			os.Unsetenv("BACKSCROLL_SESSION_DIRS")
+			_ = os.Unsetenv("BACKSCROLL_SESSION_DIRS")
 		}
 	}()
 
-	os.Setenv("BACKSCROLL_DATABASE_PATH", "/tmp/test.db")
-	os.Setenv("BACKSCROLL_SESSION_DIRS", "/dir/a:/dir/b:/dir/c")
+	_ = os.Setenv("BACKSCROLL_DATABASE_PATH", "/tmp/test.db")
+	_ = os.Setenv("BACKSCROLL_SESSION_DIRS", "/dir/a:/dir/b:/dir/c")
 
 	cfg, err := Load()
 	if err != nil {

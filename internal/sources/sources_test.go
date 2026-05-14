@@ -58,12 +58,12 @@ Rules are plain markdown with instructions.`,
 			if err != nil {
 				t.Fatalf("failed to create temp file: %v", err)
 			}
-			defer os.Remove(tmpfile.Name())
+			defer func() { _ = os.Remove(tmpfile.Name()) }()
 
 			if _, err := tmpfile.WriteString(tt.content); err != nil {
 				t.Fatalf("failed to write to temp file: %v", err)
 			}
-			tmpfile.Close()
+			_ = tmpfile.Close()
 
 			// Parse the file
 			item, err := ParseDocument(tmpfile.Name(), tt.sourceType)
@@ -153,12 +153,12 @@ Investigation needed for test purposes.`,
 			if err != nil {
 				t.Fatalf("failed to create temp file: %v", err)
 			}
-			defer os.Remove(tmpfile.Name())
+			defer func() { _ = os.Remove(tmpfile.Name()) }()
 
 			if _, err := tmpfile.WriteString(tt.content); err != nil {
 				t.Fatalf("failed to write to temp file: %v", err)
 			}
-			tmpfile.Close()
+			_ = tmpfile.Close()
 
 			// Parse the file
 			items, err := ParseSectioned(tmpfile.Name(), tt.sourceType)

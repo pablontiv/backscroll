@@ -23,7 +23,7 @@ func ParseSessions(path string) ([]models.Message, error) {
 	if err != nil {
 		return nil, fmt.Errorf("open session file: %w", err)
 	}
-	defer file.Close()
+	defer func() { _ = file.Close() }()
 
 	var messages []models.Message
 	scanner := bufio.NewScanner(file)
@@ -83,7 +83,7 @@ func HashFile(path string) (string, error) {
 	if err != nil {
 		return "", fmt.Errorf("open file for hashing: %w", err)
 	}
-	defer file.Close()
+	defer func() { _ = file.Close() }()
 
 	hash := sha256.New()
 	if _, err := io.Copy(hash, file); err != nil {
@@ -148,11 +148,7 @@ func IsNoiseRecord(r rawRecord) bool {
 
 	// Filter records where content extraction yields nothing
 	content, _ := extractContent(r.Message.Content)
-	if content == "" {
-		return true
-	}
-
-	return false
+	return content == ""
 }
 
 // rawRecord covers both Claude and Pi formats defensively
@@ -310,9 +306,7 @@ func cleanContent(content string) string {
 	}
 
 	// Remove "Caveat: " prefix and "Request interrupted" patterns
-	if strings.HasPrefix(content, "Caveat: ") {
-		content = strings.TrimPrefix(content, "Caveat: ")
-	}
+	content = strings.TrimPrefix(content, "Caveat: ")
 	content = strings.ReplaceAll(content, "Request interrupted", "")
 
 	// Clean extra whitespace

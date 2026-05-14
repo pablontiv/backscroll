@@ -131,7 +131,7 @@ func TestOpenReadOnlyCreated(t *testing.T) {
 	if err != nil {
 		t.Fatalf("OpenReadOnly: %v", err)
 	}
-	defer rodb.Close()
+	defer func() { _ = rodb.Close() }()
 
 	stats, err := rodb.GetStats()
 	if err != nil {

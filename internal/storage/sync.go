@@ -37,7 +37,7 @@ func (d *Database) SyncFiles(files []IndexedFile) error {
 	if err != nil {
 		return fmt.Errorf("begin transaction: %w", err)
 	}
-	defer tx.Rollback()
+	defer func() { _ = tx.Rollback() }()
 
 	for _, file := range files {
 		// Delete old search_items for this source_path

@@ -349,7 +349,7 @@ func newDecisionsQueryCmd(stdout io.Writer) *cobra.Command {
 			}
 
 			if !jsonOut && count == 0 {
-				fmt.Fprintln(stdout, "No decisions found.")
+				_, _ = fmt.Fprintln(stdout, "No decisions found.")
 			}
 			return nil
 		},
@@ -798,7 +798,7 @@ func newDecisionsConflictsCmd(stdout io.Writer) *cobra.Command {
 				return json.NewEncoder(stdout).Encode(hints)
 			}
 			if len(hints) == 0 {
-				fmt.Fprintln(stdout, "No conflicts found.")
+				_, _ = fmt.Fprintln(stdout, "No conflicts found.")
 				return nil
 			}
 			scopeStr := "unspecified"
@@ -1016,21 +1016,21 @@ func newDecisionsReplayCmd(stdout io.Writer) *cobra.Command {
 				for _, d := range report.Covered {
 					fmt.Fprintf(stdout, "  + %s\n", d.Statement)
 				}
-				fmt.Fprintln(stdout)
+				_, _ = fmt.Fprintln(stdout)
 			}
 			if len(report.Missed) > 0 {
 				fmt.Fprintf(stdout, "Missed (%d):\n", len(report.Missed))
 				for _, d := range report.Missed {
 					fmt.Fprintf(stdout, "  - %s\n", d.Statement)
 				}
-				fmt.Fprintln(stdout)
+				_, _ = fmt.Fprintln(stdout)
 			}
 			if len(report.Stale) > 0 {
 				fmt.Fprintf(stdout, "Stale (%d):\n", len(report.Stale))
 				for _, d := range report.Stale {
 					fmt.Fprintf(stdout, "  ~ %s\n", d.Statement)
 				}
-				fmt.Fprintln(stdout)
+				_, _ = fmt.Fprintln(stdout)
 			}
 			if len(report.Conflicts) > 0 {
 				fmt.Fprintf(stdout, "Conflicts (%d):\n", len(report.Conflicts))

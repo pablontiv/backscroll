@@ -216,12 +216,6 @@ func TestDetectConflicts(t *testing.T) {
 		Scope:     strPtr("technical"),
 	}
 
-	type exEntry struct {
-		id, text, status string
-		scope            *string
-		sourcePath       string
-	}
-
 	existing := []struct {
 		id, text, status string
 		scope            *string

@@ -78,7 +78,7 @@ func (d *Database) GetTopics(project string, limit int) ([]TopicEntry, error) {
 	if err != nil {
 		return nil, fmt.Errorf("query text: %w", err)
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 
 	freq := make(map[string]int)
 	for rows.Next() {
@@ -168,7 +168,7 @@ func (d *Database) ListSessions(project string, recent bool) ([]SessionEntry, er
 	if err != nil {
 		return nil, fmt.Errorf("query sessions: %w", err)
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 
 	var sessions []SessionEntry
 	for rows.Next() {
@@ -193,12 +193,12 @@ func (d *Database) ListSessions(project string, recent bool) ([]SessionEntry, er
 		for tagRows.Next() {
 			var tag string
 			if err := tagRows.Scan(&tag); err != nil {
-				tagRows.Close()
+				_ = tagRows.Close()
 				return nil, fmt.Errorf("scan tag: %w", err)
 			}
 			entry.Tags = append(entry.Tags, tag)
 		}
-		tagRows.Close()
+		_ = tagRows.Close()
 
 		sessions = append(sessions, entry)
 	}
@@ -279,7 +279,7 @@ func (d *Database) Purge(before string) (int64, error) {
 	if err != nil {
 		return 0, fmt.Errorf("begin transaction: %w", err)
 	}
-	defer tx.Rollback()
+	defer func() { _ = tx.Rollback() }()
 
 	// Find source_paths to delete
 	rows, err := tx.Query(`
@@ -294,12 +294,12 @@ func (d *Database) Purge(before string) (int64, error) {
 	for rows.Next() {
 		var sp string
 		if err := rows.Scan(&sp); err != nil {
-			rows.Close()
+			_ = rows.Close()
 			return 0, err
 		}
 		sourcePaths = append(sourcePaths, sp)
 	}
-	rows.Close()
+	_ = rows.Close()
 
 	// Delete from search_items
 	result, err := tx.Exec(`

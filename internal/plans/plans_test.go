@@ -58,12 +58,12 @@ More content`,
 			if err != nil {
 				t.Fatalf("failed to create temp file: %v", err)
 			}
-			defer os.Remove(tmpfile.Name())
+			defer func() { _ = os.Remove(tmpfile.Name()) }()
 
 			if _, err := tmpfile.WriteString(tt.content); err != nil {
 				t.Fatalf("failed to write to temp file: %v", err)
 			}
-			tmpfile.Close()
+			_ = tmpfile.Close()
 
 			// Parse the file
 			sections, err := ParsePlan(tmpfile.Name())
@@ -100,7 +100,7 @@ func TestDiscoverPlanFiles(t *testing.T) {
 	if err != nil {
 		t.Fatalf("failed to create temp dir: %v", err)
 	}
-	defer os.RemoveAll(tmpdir)
+	defer func() { _ = os.RemoveAll(tmpdir) }()
 
 	// Create some test files
 	testFiles := []string{"plan1.md", "plan2.md", "notes.txt", "README.md"}
@@ -136,7 +136,7 @@ func TestDiscoverPlanFilesEmpty(t *testing.T) {
 	if err != nil {
 		t.Fatalf("failed to create temp dir: %v", err)
 	}
-	defer os.RemoveAll(tmpdir)
+	defer func() { _ = os.RemoveAll(tmpdir) }()
 
 	// Discover files
 	files, err := DiscoverPlanFiles(tmpdir)
@@ -149,19 +149,13 @@ func TestDiscoverPlanFilesEmpty(t *testing.T) {
 	}
 }
 
-// Helper function to check if a path has a given extension
-func hasExtension(path, ext string) bool {
-	return filepath.Ext(path) == ext
-}
-
-// Adjust the test to use the correct check
 func TestDiscoverPlanFilesVerifyMd(t *testing.T) {
 	// Create temp directory
 	tmpdir, err := os.MkdirTemp("", "plans_verify_*")
 	if err != nil {
 		t.Fatalf("failed to create temp dir: %v", err)
 	}
-	defer os.RemoveAll(tmpdir)
+	defer func() { _ = os.RemoveAll(tmpdir) }()
 
 	// Create test files
 	testFiles := []string{"plan1.md", "plan2.md", "notes.txt"}

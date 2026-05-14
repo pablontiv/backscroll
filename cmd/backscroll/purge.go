@@ -27,7 +27,7 @@ Example: backscroll purge --before 2024-01-01`,
 	}
 
 	cmd.Flags().StringVar(&before, "before", "", "Delete records before this date (YYYY-MM-DD)")
-	cmd.MarkFlagRequired("before")
+	_ = cmd.MarkFlagRequired("before")
 
 	return cmd
 }

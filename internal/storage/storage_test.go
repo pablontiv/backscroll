@@ -556,14 +556,14 @@ func TestMigrationsIdempotent(t *testing.T) {
 	if err != nil {
 		t.Fatalf("first open failed: %v", err)
 	}
-	db1.Close()
+	_ = db1.Close()
 
 	// Open again (should not error)
 	db2, err := Open(dbPath)
 	if err != nil {
 		t.Fatalf("second open failed: %v", err)
 	}
-	db2.Close()
+	_ = db2.Close()
 
 	// Verify schema is intact
 	db3, err := Open(dbPath)
