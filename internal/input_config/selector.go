@@ -52,6 +52,17 @@ func traverse(current any, parts []string) (any, bool) {
 		}
 		return traverse(child, rest)
 	case []any:
+		// Wildcard: map over all elements
+		if key == "*" {
+			var out []any
+			for _, elem := range v {
+				val, ok := traverse(elem, rest)
+				if ok {
+					out = append(out, val)
+				}
+			}
+			return out, len(out) > 0
+		}
 		// Numeric index
 		idx := 0
 		for _, c := range key {

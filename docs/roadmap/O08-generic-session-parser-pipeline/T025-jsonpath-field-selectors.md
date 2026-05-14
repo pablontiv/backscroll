@@ -1,7 +1,7 @@
 ---
 id: T025
 tipo: task
-estado: Pending
+estado: Completed
 titulo: JSONPath-based field selectors
 outcome: O08
 dependencias: [T014]
