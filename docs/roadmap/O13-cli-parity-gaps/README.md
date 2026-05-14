@@ -1,7 +1,7 @@
 ---
 id: O13
 tipo: outcome
-estado: Pending
+estado: Completed
 titulo: CLI parity gaps vs v0 Rust
 descripcion: Cerrar las brechas funcionales restantes entre el Go port y el v0 Rust — flags faltantes en events/sessions/list/status, subcomando inputs validate ausente, y rename de --no-embed a --no-embeddings.
 ---
