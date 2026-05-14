@@ -1,7 +1,7 @@
 ---
 id: T047
 tipo: task
-estado: Pending
+estado: Completed
 titulo: Mejora status --json con embedding stats e inputs activos
 outcome: O11
 dependencias: [T043, T019]

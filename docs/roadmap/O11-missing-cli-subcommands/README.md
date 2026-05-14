@@ -1,7 +1,7 @@
 ---
 id: O11
 tipo: outcome
-estado: Pending
+estado: Completed
 titulo: CLI Subcomandos Faltantes en Go
 descripcion: Port de los subcomandos ausentes en el Go port respecto a v0 Rust — events query, sessions namespace, status mejorado con embedding stats. Nota: dynamic_stopwords y FTS5 vocab ya están implementados en migrations.go.
 ---

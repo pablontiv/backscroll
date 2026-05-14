@@ -1,7 +1,7 @@
 ---
 id: T048
 tipo: task
-estado: Pending
+estado: Completed
 titulo: Tests de integración para nuevos subcomandos
 outcome: O11
 dependencias: [T045, T046, T047]
