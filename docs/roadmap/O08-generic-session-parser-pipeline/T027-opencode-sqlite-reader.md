@@ -1,7 +1,7 @@
 ---
 id: T027
 tipo: task
-estado: Pending
+estado: Completed
 titulo: OpenCodeReader — reader SQLite para .opencode/opencode.db
 outcome: O08
 dependencias: [T023]
