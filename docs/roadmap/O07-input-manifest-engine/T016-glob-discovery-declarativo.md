@@ -1,7 +1,7 @@
 ---
 id: T016
 tipo: task
-estado: Pending
+estado: Completed
 titulo: Glob discovery declarativo
 outcome: O07
 dependencias: [T014, T015]
