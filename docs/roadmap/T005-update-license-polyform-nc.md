@@ -1,5 +1,5 @@
 ---
-estado: Pending
+estado: Completed
 tipo: task
 ---
 # T005: Update license from MIT to PolyForm Noncommercial 1.0.0

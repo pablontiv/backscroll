@@ -8,7 +8,7 @@ jobs:
   codeql:
     uses: pablontiv/crossbeam/.github/workflows/codeql.yml@v1
     with:
-      language: rust
+      language: go
     permissions:
       security-events: write
       contents: read
