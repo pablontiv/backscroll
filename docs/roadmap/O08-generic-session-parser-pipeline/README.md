@@ -1,7 +1,7 @@
 ---
 id: O08
 tipo: outcome
-estado: Pending
+estado: Completed
 titulo: Generic Session Parser Pipeline en Go
 descripcion: Interfaz SessionReader + registry de parsers. Permite agregar nuevos formatos (JSONL, SQLite) sin modificar el core de sync. Habilita Pi declarativo y OpenCode como primer parser SQLite nativo.
 ---

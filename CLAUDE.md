@@ -8,7 +8,7 @@ Backscroll is a Go CLI tool that indexes Claude Code sessions, plans, and extern
 
 **Status**: Go port complete — `main` branch is the active Go implementation. The Rust implementation is frozen in the `v0` branch.
 
-Implemented: `internal/config`, `internal/diagnostics`, `internal/models`, `internal/output`, `internal/sync`, `internal/tagging`, `internal/plans`, `internal/sources`, `internal/storage`, `internal/projects`, `internal/reader`. CLI commands in `cmd/backscroll/` (all 13 commands via cobra).
+Implemented: `internal/config`, `internal/diagnostics`, `internal/input_config`, `internal/models`, `internal/output`, `internal/readers`, `internal/sync`, `internal/tagging`, `internal/plans`, `internal/sources`, `internal/storage`, `internal/projects`, `internal/reader`. CLI commands in `cmd/backscroll/` (15 commands via cobra).
 
 Stack: cobra, go-toml/v2, goldmark, modernc.org/sqlite (pure Go, no CGO), stdlib testing.
 
@@ -61,6 +61,7 @@ internal/
 ├── sources/           — external source parsers (ke, decision, memory, rule, spec, backlog) + SourceRegistry
 ├── projects/          — project identity registry: LoadGlobalRegistry(), Identify(), LoadLocalHint()
 ├── reader/            — direct reading and filtering of individual session files
+├── readers/           — SessionReader interface, Registry, JsonlReader, OpenCodeReader
 └── storage/           — SQLite adapter (FTS5, BM25, WAL mode, migrations, search_items, session_tags)
 ```
 
@@ -176,6 +177,7 @@ github.com/pablontiv/backscroll/internal/sources       — External source parse
 github.com/pablontiv/backscroll/internal/storage       — SQLite FTS5 adapter
 github.com/pablontiv/backscroll/internal/projects      — Project identity registry
 github.com/pablontiv/backscroll/internal/reader        — Direct session file reader
+github.com/pablontiv/backscroll/internal/readers       — SessionReader interface, Registry, JsonlReader, OpenCodeReader
 github.com/pablontiv/backscroll/internal/output        — Output formatting
 github.com/pablontiv/backscroll/internal/diagnostics   — Structured error reporting
 ```
