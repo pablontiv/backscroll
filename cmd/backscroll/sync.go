@@ -52,7 +52,7 @@ Use --optimize to rebuild the FTS5 index after syncing.`,
 	cmd.Flags().BoolVar(&includeAgents, "include-agents", false, "Include agent-generated sessions")
 	cmd.Flags().BoolVar(&noPlans, "no-plans", false, "Skip indexing markdown plans")
 	cmd.Flags().BoolVar(&optimize, "optimize", false, "Optimize FTS5 index after sync")
-	cmd.Flags().BoolVar(&noEmbed, "no-embed", false, "Skip embedding generation this run")
+	cmd.Flags().BoolVar(&noEmbed, "no-embeddings", false, "Skip embedding generation this run")
 
 	return cmd
 }

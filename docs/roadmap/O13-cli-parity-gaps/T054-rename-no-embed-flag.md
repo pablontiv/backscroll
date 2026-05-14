@@ -1,10 +1,10 @@
 ---
-id: T054
-tipo: task
-estado: Pending
-titulo: Rename --no-embed → --no-embeddings en sync y reindex
-outcome: O13
 dependencias: []
+estado: Completed
+id: T054
+outcome: O13
+tipo: task
+titulo: Rename --no-embed → --no-embeddings en sync y reindex
 ---
 
 # T054 — Rename `--no-embed` → `--no-embeddings`
