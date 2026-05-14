@@ -1,7 +1,7 @@
 ---
 id: O10
 tipo: outcome
-estado: Pending
+estado: Completed
 titulo: Hybrid Search (BM25 + Vector + RRF) en Go
 descripcion: Port de src/core/hybrid.rs. Combina búsqueda lexical FTS5/BM25 con búsqueda vectorial via sqlite-vec usando Reciprocal Rank Fusion. Requiere O09 (embeddings).
 ---
