@@ -1,7 +1,7 @@
 ---
 id: T015
 tipo: task
-estado: Pending
+estado: Completed
 titulo: Loader de ~/.config/backscroll/inputs/
 outcome: O07
 dependencias: [T014]
