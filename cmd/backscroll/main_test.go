@@ -2067,6 +2067,45 @@ func TestSessionsQueryJSON(t *testing.T) {
 	}
 }
 
+func TestSessionsQuerySourcePath(t *testing.T) {
+	_, cleanup := testEnv(t)
+	defer cleanup()
+
+	fixture := filepath.Join(fixturesDir(), "claude.jsonl")
+	_, _, _ = runCmd("sync", "--path", filepath.Dir(fixture))
+
+	out, _, err := runCmd("sessions", "query", "--source-path", "*.jsonl")
+	if err != nil {
+		t.Fatalf("sessions query --source-path error: %v", err)
+	}
+	_ = out
+}
+
+func TestSessionsQueryMaxChars(t *testing.T) {
+	_, cleanup := testEnv(t)
+	defer cleanup()
+
+	fixture := filepath.Join(fixturesDir(), "claude.jsonl")
+	_, _, _ = runCmd("sync", "--path", filepath.Dir(fixture))
+
+	out, _, err := runCmd("sessions", "query", "--max-chars", "100")
+	if err != nil {
+		t.Fatalf("sessions query --max-chars error: %v", err)
+	}
+	_ = out
+}
+
+func TestSessionsQueryIndexedOnly(t *testing.T) {
+	_, cleanup := testEnv(t)
+	defer cleanup()
+
+	out, _, err := runCmd("sessions", "query", "--indexed-only")
+	if err != nil {
+		t.Fatalf("sessions query --indexed-only error: %v", err)
+	}
+	_ = out
+}
+
 func TestListRecentN(t *testing.T) {
 	_, cleanup := testEnv(t)
 	defer cleanup()

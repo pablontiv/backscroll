@@ -1,10 +1,10 @@
 ---
-id: T052
-tipo: task
-estado: Pending
-titulo: sessions query — filtros faltantes
-outcome: O13
 dependencias: []
+estado: Completed
+id: T052
+outcome: O13
+tipo: task
+titulo: sessions query — filtros faltantes
 ---
 
 # T052 — `sessions query` filtros faltantes

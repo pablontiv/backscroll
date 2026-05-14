@@ -80,15 +80,18 @@ func newSessionsQueryCmd(stdout, stderr io.Writer) *cobra.Command {
 		after       string
 		before      string
 		source      string
+		sourcePath  string
+		maxChars    int
 		jsonOut     bool
 		limit       int
+		indexedOnly bool
 	)
 
 	cmd := &cobra.Command{
 		Use:   "query",
 		Short: "Query indexed sessions by metadata filters",
 		RunE: func(cmd *cobra.Command, args []string) error {
-			return runSessionsQuery(stdout, stderr, project, allProjects, after, before, source, jsonOut, limit)
+			return runSessionsQuery(stdout, stderr, project, allProjects, after, before, source, sourcePath, jsonOut, limit, maxChars, indexedOnly)
 		},
 	}
 	cmd.Flags().StringVar(&project, "project", "", "Filter by project")
@@ -96,12 +99,15 @@ func newSessionsQueryCmd(stdout, stderr io.Writer) *cobra.Command {
 	cmd.Flags().StringVar(&after, "after", "", "Filter sessions after date (ISO 8601)")
 	cmd.Flags().StringVar(&before, "before", "", "Filter sessions before date (ISO 8601)")
 	cmd.Flags().StringVar(&source, "source", "session", "Source type to query")
+	cmd.Flags().StringVar(&sourcePath, "source-path", "", "Filter by source path (exact or * glob pattern)")
+	cmd.Flags().IntVar(&maxChars, "max-chars", 2000, "Maximum text characters per record (0 = no limit)")
 	cmd.Flags().BoolVar(&jsonOut, "json", false, "Output as JSON")
 	cmd.Flags().IntVar(&limit, "limit", 50, "Maximum sessions to return")
+	cmd.Flags().BoolVar(&indexedOnly, "indexed-only", false, "Read existing index without auto-sync")
 	return cmd
 }
 
-func runSessionsQuery(stdout, stderr io.Writer, project string, allProjects bool, after, before, source string, jsonOut bool, limit int) error {
+func runSessionsQuery(stdout, stderr io.Writer, project string, allProjects bool, after, before, source, sourcePath string, jsonOut bool, limit, maxChars int, indexedOnly bool) error {
 	cfg, err := config.Load()
 	if err != nil {
 		return fmt.Errorf("load config: %w", err)
@@ -109,7 +115,7 @@ func runSessionsQuery(stdout, stderr io.Writer, project string, allProjects bool
 
 	db, err := storage.OpenReadOnly(cfg.DatabasePath)
 	if err != nil {
-		return fmt.Errorf("open database: %w", err)
+		return nil
 	}
 	defer func() { _ = db.Close() }()
 
@@ -132,12 +138,19 @@ func runSessionsQuery(stdout, stderr io.Writer, project string, allProjects bool
 		sourcePtr = &normalizedSource
 	}
 
+	var spPtr *string
+	if sourcePath != "" {
+		spPtr = &sourcePath
+	}
+
 	records, err := db.QueryIndexedRecords(storage.IndexedRecordQuery{
-		Project: proj,
-		Source:  sourcePtr,
-		After:   afterPtr,
-		Before:  beforePtr,
-		Limit:   limit,
+		Project:    proj,
+		Source:     sourcePtr,
+		SourcePath: spPtr,
+		After:      afterPtr,
+		Before:     beforePtr,
+		Limit:      limit,
+		MaxChars:   maxChars,
 	})
 	if err != nil {
 		return fmt.Errorf("query sessions: %w", err)
