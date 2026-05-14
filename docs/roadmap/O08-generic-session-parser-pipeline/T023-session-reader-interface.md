@@ -1,7 +1,7 @@
 ---
 id: T023
 tipo: task
-estado: Pending
+estado: Completed
 titulo: SessionReader interface + registry
 outcome: O08
 dependencias: [T014]
