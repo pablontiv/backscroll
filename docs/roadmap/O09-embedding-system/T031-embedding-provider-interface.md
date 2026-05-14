@@ -1,7 +1,7 @@
 ---
 id: T031
 tipo: task
-estado: Pending
+estado: Completed
 titulo: EmbeddingProvider interface + MockEmbeddingProvider
 outcome: O09
 ---
