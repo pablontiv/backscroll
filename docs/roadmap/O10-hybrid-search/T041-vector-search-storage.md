@@ -1,10 +1,12 @@
 ---
+dependencias:
+  - T040
+  - T031
+estado: Completed
 id: T041
-tipo: task
-estado: Pending
-titulo: Vector search en internal/storage/
 outcome: O10
-dependencias: [T040, T031]
+tipo: task
+titulo: Vector search en internal/storage/
 ---
 
 # T041 — Vector search en `internal/storage/`
