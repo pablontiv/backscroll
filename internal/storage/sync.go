@@ -176,6 +176,9 @@ func (d *Database) refreshStopwords() error {
 		}
 		stopwords = append(stopwords, term)
 	}
+	// Close rows before issuing INSERT; SetMaxOpenConns(1) would deadlock if
+	// we held the rows cursor open while acquiring a second connection.
+	_ = rows.Close()
 
 	// Insert stopwords
 	for _, term := range stopwords {
