@@ -140,6 +140,87 @@ func TestV2MigrationTablesExist(t *testing.T) {
 	}
 }
 
+func TestInsertChunks(t *testing.T) {
+	db, cleanup := newTestDB(t)
+	defer cleanup()
+
+	chunks := []ChunkRecord{
+		{ChunkIdx: 0, Content: "hello world", TokenCount: 3},
+		{ChunkIdx: 1, Content: "foo bar baz", TokenCount: 3},
+	}
+	ids, err := db.InsertChunks("source/path.jsonl", chunks, 1234567890)
+	if err != nil {
+		t.Fatalf("InsertChunks: %v", err)
+	}
+	if len(ids) != 2 {
+		t.Errorf("expected 2 chunk IDs, got %d", len(ids))
+	}
+
+	count, err := db.GetChunkCount()
+	if err != nil {
+		t.Fatalf("GetChunkCount: %v", err)
+	}
+	if count != 2 {
+		t.Errorf("expected 2 chunks, got %d", count)
+	}
+
+	// Re-inserting replaces old chunks
+	ids2, err := db.InsertChunks("source/path.jsonl", chunks[:1], 1234567891)
+	if err != nil {
+		t.Fatalf("InsertChunks replace: %v", err)
+	}
+	if len(ids2) != 1 {
+		t.Errorf("expected 1 chunk ID after replace, got %d", len(ids2))
+	}
+	count, _ = db.GetChunkCount()
+	if count != 1 {
+		t.Errorf("expected 1 chunk after replace, got %d", count)
+	}
+}
+
+func TestInsertEmbeddingMetadata(t *testing.T) {
+	db, cleanup := newTestDB(t)
+	defer cleanup()
+
+	chunks := []ChunkRecord{{ChunkIdx: 0, Content: "hello", TokenCount: 2}}
+	ids, err := db.InsertChunks("source/em.jsonl", chunks, 1234567890)
+	if err != nil {
+		t.Fatalf("InsertChunks: %v", err)
+	}
+
+	if err := db.InsertEmbeddingMetadata(ids[0], "all-MiniLM-L6-v2", "v1", 384, 1234567890); err != nil {
+		t.Fatalf("InsertEmbeddingMetadata: %v", err)
+	}
+
+	count, err := db.GetEmbeddingCount()
+	if err != nil {
+		t.Fatalf("GetEmbeddingCount: %v", err)
+	}
+	if count != 1 {
+		t.Errorf("expected 1 embedding, got %d", count)
+	}
+}
+
+func TestGetStatsChunksAndEmbeddings(t *testing.T) {
+	db, cleanup := newTestDB(t)
+	defer cleanup()
+
+	chunks := []ChunkRecord{{ChunkIdx: 0, Content: "text", TokenCount: 1}}
+	ids, _ := db.InsertChunks("path", chunks, 1)
+	_ = db.InsertEmbeddingMetadata(ids[0], "model", "v1", 384, 1)
+
+	stats, err := db.GetStats()
+	if err != nil {
+		t.Fatalf("GetStats: %v", err)
+	}
+	if stats.TotalChunks != 1 {
+		t.Errorf("TotalChunks = %d, want 1", stats.TotalChunks)
+	}
+	if stats.TotalEmbeddings != 1 {
+		t.Errorf("TotalEmbeddings = %d, want 1", stats.TotalEmbeddings)
+	}
+}
+
 func TestOpenReadOnlyCreated(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "ro.db")

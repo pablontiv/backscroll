@@ -3,9 +3,9 @@ package chunking
 
 import "strings"
 
-// tokenCount estimates the number of tokens in text.
+// TokenCount estimates the number of tokens in text.
 // Approximation: 1 token ≈ 0.75 words (GPT/BERT-family models).
-func tokenCount(text string) int {
+func TokenCount(text string) int {
 	words := len(strings.Fields(text))
 	if words == 0 {
 		return 0
@@ -13,6 +13,8 @@ func tokenCount(text string) int {
 	// ceil(words / 0.75) = ceil(words * 4 / 3)
 	return (words*4 + 2) / 3
 }
+
+func tokenCount(text string) int { return TokenCount(text) }
 
 // ChunkText splits text into chunks of at most maxTokens tokens each, with
 // optional token overlap between consecutive chunks.

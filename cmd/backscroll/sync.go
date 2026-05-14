@@ -1,14 +1,18 @@
 package main
 
 import (
+	"errors"
 	"fmt"
 	"io"
 	"os"
 	"path/filepath"
+	"time"
 
 	"github.com/spf13/cobra"
 
+	"github.com/pablontiv/backscroll/internal/chunking"
 	"github.com/pablontiv/backscroll/internal/config"
+	"github.com/pablontiv/backscroll/internal/embedding"
 	"github.com/pablontiv/backscroll/internal/input_config"
 	"github.com/pablontiv/backscroll/internal/plans"
 	"github.com/pablontiv/backscroll/internal/projects"
@@ -25,6 +29,7 @@ func newSyncCmd(stdout, stderr io.Writer) *cobra.Command {
 		includeAgents bool
 		noPlans       bool
 		optimize      bool
+		noEmbed       bool
 	)
 
 	cmd := &cobra.Command{
@@ -39,7 +44,7 @@ Use --include-agents to include agent-generated sessions (filtered by default).
 Use --no-plans to skip indexing markdown plans.
 Use --optimize to rebuild the FTS5 index after syncing.`,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			return runSync(stdout, stderr, path, includeAgents, noPlans, optimize)
+			return runSync(stdout, stderr, path, includeAgents, noPlans, optimize, noEmbed)
 		},
 	}
 
@@ -47,11 +52,12 @@ Use --optimize to rebuild the FTS5 index after syncing.`,
 	cmd.Flags().BoolVar(&includeAgents, "include-agents", false, "Include agent-generated sessions")
 	cmd.Flags().BoolVar(&noPlans, "no-plans", false, "Skip indexing markdown plans")
 	cmd.Flags().BoolVar(&optimize, "optimize", false, "Optimize FTS5 index after sync")
+	cmd.Flags().BoolVar(&noEmbed, "no-embed", false, "Skip embedding generation this run")
 
 	return cmd
 }
 
-func runSync(stdout, stderr io.Writer, path string, includeAgents, noPlans, optimize bool) error {
+func runSync(stdout, stderr io.Writer, path string, includeAgents, noPlans, optimize, noEmbed bool) error {
 	cfg, err := config.Load()
 	if err != nil {
 		return fmt.Errorf("load config: %w", err)
@@ -291,6 +297,11 @@ func runSync(stdout, stderr io.Writer, path string, includeAgents, noPlans, opti
 		}
 	}
 
+	// Chunk and embed newly synced content when embedding is enabled
+	if cfg.Embedding.Enabled && !noEmbed && len(indexedFiles) > 0 {
+		runEmbedPipeline(stdout, stderr, db, cfg.Embedding, indexedFiles)
+	}
+
 	// Optimize if requested
 	if optimize {
 		if err := db.OptimizeFTS(); err != nil {
@@ -316,4 +327,65 @@ func runSync(stdout, stderr io.Writer, path string, includeAgents, noPlans, opti
 func homeDir() string {
 	home, _ := os.UserHomeDir()
 	return home
+}
+
+// runEmbedPipeline chunks and embeds each newly synced file.
+// Provider errors are logged as warnings and do not abort sync.
+func runEmbedPipeline(stdout, stderr io.Writer, db *storage.Database, cfg config.EmbeddingConfig, files []storage.IndexedFile) {
+	provider, err := embedding.NewOnnxProvider(cfg.ModelPath)
+	if err != nil {
+		if errors.Is(err, embedding.ErrOnnxNotAvailable) {
+			_, _ = fmt.Fprintf(stderr, "warning: embedding provider not available (%v); storing chunks only\n", err)
+		} else {
+			_, _ = fmt.Fprintf(stderr, "warning: embedding provider init failed: %v; storing chunks only\n", err)
+		}
+		provider = nil
+	}
+
+	now := time.Now().Unix()
+	var totalChunks int
+
+	for _, f := range files {
+		// Build full text from all messages in this file
+		var full string
+		for _, msg := range f.Messages {
+			if msg.Text != "" {
+				full += msg.Text + "\n"
+			}
+		}
+		if full == "" {
+			continue
+		}
+
+		texts := chunking.ChunkText(full, 512, 50)
+		records := make([]storage.ChunkRecord, len(texts))
+		for i, t := range texts {
+			records[i] = storage.ChunkRecord{
+				ChunkIdx:   i,
+				Content:    t,
+				TokenCount: chunking.TokenCount(t),
+			}
+		}
+
+		chunkIDs, err := db.InsertChunks(f.SourcePath, records, now)
+		if err != nil {
+			_, _ = fmt.Fprintf(stderr, "warning: store chunks for %s: %v\n", f.SourcePath, err)
+			continue
+		}
+		totalChunks += len(chunkIDs)
+
+		if provider == nil {
+			continue
+		}
+
+		for i, id := range chunkIDs {
+			if err := db.InsertEmbeddingMetadata(id, cfg.ModelName, "", provider.Dimensions(), now); err != nil {
+				_, _ = fmt.Fprintf(stderr, "warning: store embedding metadata chunk %d: %v\n", i, err)
+			}
+		}
+	}
+
+	if totalChunks > 0 {
+		_, _ = fmt.Fprintf(stdout, "Stored %d chunks\n", totalChunks)
+	}
 }

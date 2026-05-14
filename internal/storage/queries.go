@@ -10,9 +10,11 @@ import (
 
 // Stats represents indexing statistics.
 type Stats struct {
-	TotalFiles    int
-	TotalMessages int
-	IndexedAt     time.Time
+	TotalFiles      int
+	TotalMessages   int
+	IndexedAt       time.Time
+	TotalChunks     int
+	TotalEmbeddings int
 }
 
 // GetStats returns indexing statistics.
@@ -48,6 +50,10 @@ func (d *Database) GetStats() (Stats, error) {
 			}
 		}
 	}
+
+	// Get chunk and embedding counts (V2 tables — present after migration)
+	_ = d.db.QueryRow("SELECT COUNT(*) FROM chunks").Scan(&stats.TotalChunks)
+	_ = d.db.QueryRow("SELECT COUNT(*) FROM embedding_metadata").Scan(&stats.TotalEmbeddings)
 
 	return stats, nil
 }

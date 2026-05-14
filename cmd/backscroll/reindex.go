@@ -49,5 +49,5 @@ func runReindex(stdout, stderr io.Writer) error {
 	_, _ = fmt.Fprintf(stdout, "Index cleared. Running full sync...\n")
 
 	// Now run sync (this will re-index everything)
-	return runSync(stdout, stderr, "", false, false, true)
+	return runSync(stdout, stderr, "", false, false, true, false)
 }

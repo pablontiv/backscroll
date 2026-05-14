@@ -81,9 +81,11 @@ func runStatus(stdout, stderr io.Writer, jsonFormat bool) error {
 				"size":   dbSize,
 			},
 			"index": map[string]interface{}{
-				"total_files":    stats.TotalFiles,
-				"total_messages": stats.TotalMessages,
-				"indexed_at":     stats.IndexedAt,
+				"total_files":      stats.TotalFiles,
+				"total_messages":   stats.TotalMessages,
+				"indexed_at":       stats.IndexedAt,
+				"total_chunks":     stats.TotalChunks,
+				"total_embeddings": stats.TotalEmbeddings,
 			},
 			"config": map[string]interface{}{
 				"session_dirs": cfg.SessionDirs,
@@ -109,6 +111,8 @@ func runStatus(stdout, stderr io.Writer, jsonFormat bool) error {
 			_, _ = fmt.Fprintf(stdout, "\nIndex:\n")
 			_, _ = fmt.Fprintf(stdout, "  Files indexed:    %d\n", stats.TotalFiles)
 			_, _ = fmt.Fprintf(stdout, "  Messages indexed: %d\n", stats.TotalMessages)
+			_, _ = fmt.Fprintf(stdout, "  Chunks stored:    %d\n", stats.TotalChunks)
+			_, _ = fmt.Fprintf(stdout, "  Embeddings:       %d\n", stats.TotalEmbeddings)
 			if !stats.IndexedAt.IsZero() {
 				_, _ = fmt.Fprintf(stdout, "  Last indexed:     %s\n", stats.IndexedAt.Format("2006-01-02 15:04:05 MST"))
 			}

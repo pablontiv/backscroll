@@ -11,6 +11,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/pablontiv/backscroll/internal/config"
 	"github.com/pablontiv/backscroll/internal/storage"
 	_ "modernc.org/sqlite"
 )
@@ -1707,6 +1708,73 @@ func createOpenCodeTestDB(t *testing.T, path, content string) {
 		"m1", "s1", "user", string(parts), now+1000, now+1000)
 	if err != nil {
 		t.Fatalf("insert message: %v", err)
+	}
+}
+
+func TestRunEmbedPipeline_StoresChunks(t *testing.T) {
+	dir := t.TempDir()
+	db, err := storage.Open(filepath.Join(dir, "test.db"))
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	defer func() { _ = db.Close() }()
+
+	files := []storage.IndexedFile{
+		{
+			SourcePath: "test/session.jsonl",
+			Source:     "session",
+			Hash:       "abc123",
+			Messages: []storage.IndexedMessage{
+				{Ordinal: 0, Role: "user", Text: "hello world foo bar baz"},
+				{Ordinal: 1, Role: "assistant", Text: "some response text here"},
+			},
+		},
+	}
+
+	var stdout, stderr bytes.Buffer
+	runEmbedPipeline(&stdout, &stderr, db, embeddingCfgForTest(), files)
+
+	// ONNX unavailable — warning should be in stderr, chunks should still be stored
+	if !strings.Contains(stderr.String(), "warning") {
+		t.Errorf("expected warning about ONNX unavailable, stderr: %s", stderr.String())
+	}
+
+	count, err := db.GetChunkCount()
+	if err != nil {
+		t.Fatalf("GetChunkCount: %v", err)
+	}
+	if count == 0 {
+		t.Error("expected chunks to be stored even without embedding provider")
+	}
+}
+
+func TestRunEmbedPipeline_SkipsEmptyFiles(t *testing.T) {
+	dir := t.TempDir()
+	db, err := storage.Open(filepath.Join(dir, "test.db"))
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	defer func() { _ = db.Close() }()
+
+	files := []storage.IndexedFile{
+		{SourcePath: "empty.jsonl", Messages: []storage.IndexedMessage{}},
+	}
+
+	var stdout, stderr bytes.Buffer
+	runEmbedPipeline(&stdout, &stderr, db, embeddingCfgForTest(), files)
+
+	count, _ := db.GetChunkCount()
+	if count != 0 {
+		t.Errorf("expected 0 chunks for empty file, got %d", count)
+	}
+}
+
+// embeddingCfgForTest returns a minimal EmbeddingConfig for pipeline tests.
+func embeddingCfgForTest() config.EmbeddingConfig {
+	return config.EmbeddingConfig{
+		ModelName:           "all-MiniLM-L6-v2",
+		SimilarityThreshold: 0.7,
+		TopK:                10,
 	}
 }
 
