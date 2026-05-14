@@ -155,7 +155,7 @@ type SessionEntry struct {
 // If recent > 0, returns the N most recent sessions ordered by timestamp descending.
 func (d *Database) ListSessions(project string, recent int) ([]SessionEntry, error) {
 	query := `
-		SELECT DISTINCT si.source_path, si.project, MAX(si.timestamp) as ts
+		SELECT si.source_path, si.project, MAX(si.timestamp) as ts
 		FROM search_items si
 		WHERE si.source = 'session'
 	`
@@ -178,14 +178,17 @@ func (d *Database) ListSessions(project string, recent int) ([]SessionEntry, err
 	if err != nil {
 		return nil, fmt.Errorf("query sessions: %w", err)
 	}
-	defer func() { _ = rows.Close() }()
 
+	// Collect sessions first, then close rows before issuing the tags query.
+	// With SetMaxOpenConns(1), keeping rows open while issuing a second query
+	// would deadlock on the single connection.
 	var sessions []SessionEntry
 	for rows.Next() {
 		var entry SessionEntry
 		var ts sql.NullString
 
 		if err := rows.Scan(&entry.Path, &entry.Project, &ts); err != nil {
+			_ = rows.Close()
 			return nil, fmt.Errorf("scan session: %w", err)
 		}
 
@@ -194,27 +197,47 @@ func (d *Database) ListSessions(project string, recent int) ([]SessionEntry, err
 			entry.Timestamp = t
 		}
 
-		// Load tags for this session
-		tagRows, err := d.db.Query("SELECT tag FROM session_tags WHERE source_path = ? ORDER BY tag", entry.Path)
-		if err != nil {
-			return nil, fmt.Errorf("query tags for %s: %w", entry.Path, err)
-		}
-
-		for tagRows.Next() {
-			var tag string
-			if err := tagRows.Scan(&tag); err != nil {
-				_ = tagRows.Close()
-				return nil, fmt.Errorf("scan tag: %w", err)
-			}
-			entry.Tags = append(entry.Tags, tag)
-		}
-		_ = tagRows.Close()
-
 		sessions = append(sessions, entry)
 	}
-
-	if err := rows.Err(); err != nil {
+	if err := rows.Close(); err != nil {
 		return nil, fmt.Errorf("iterate sessions: %w", err)
+	}
+
+	// Load tags for all sessions in one pass using GROUP_CONCAT.
+	if len(sessions) == 0 {
+		return sessions, nil
+	}
+
+	paths := make([]interface{}, len(sessions))
+	for i, s := range sessions {
+		paths[i] = s.Path
+	}
+	placeholder := strings.Repeat("?,", len(paths))
+	placeholder = placeholder[:len(placeholder)-1]
+
+	tagRows, err := d.db.Query(
+		"SELECT source_path, tag FROM session_tags WHERE source_path IN ("+placeholder+") ORDER BY source_path, tag",
+		paths...,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("query tags: %w", err)
+	}
+	defer func() { _ = tagRows.Close() }()
+
+	tagsByPath := make(map[string][]string)
+	for tagRows.Next() {
+		var path, tag string
+		if err := tagRows.Scan(&path, &tag); err != nil {
+			return nil, fmt.Errorf("scan tag: %w", err)
+		}
+		tagsByPath[path] = append(tagsByPath[path], tag)
+	}
+	if err := tagRows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate tags: %w", err)
+	}
+
+	for i := range sessions {
+		sessions[i].Tags = tagsByPath[sessions[i].Path]
 	}
 
 	return sessions, nil

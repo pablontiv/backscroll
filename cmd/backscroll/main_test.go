@@ -17,18 +17,26 @@ import (
 )
 
 // testEnv creates an isolated environment for CLI tests.
-// It sets BACKSCROLL_DATABASE_PATH to a temp file and returns a cleanup func.
+// Sets BACKSCROLL_DATABASE_PATH to a temp file and BACKSCROLL_CONFIG_DIR to a
+// temp dir so tests never load the user's real ~/.config/backscroll/inputs/.
 func testEnv(t *testing.T) (dbPath string, cleanup func()) {
 	t.Helper()
 	dir := t.TempDir()
 	dbPath = filepath.Join(dir, "test.db")
-	orig := os.Getenv("BACKSCROLL_DATABASE_PATH")
+	origDB := os.Getenv("BACKSCROLL_DATABASE_PATH")
+	origCfg := os.Getenv("BACKSCROLL_CONFIG_DIR")
 	_ = os.Setenv("BACKSCROLL_DATABASE_PATH", dbPath)
+	_ = os.Setenv("BACKSCROLL_CONFIG_DIR", dir)
 	return dbPath, func() {
-		if orig == "" {
+		if origDB == "" {
 			_ = os.Unsetenv("BACKSCROLL_DATABASE_PATH")
 		} else {
-			_ = os.Setenv("BACKSCROLL_DATABASE_PATH", orig)
+			_ = os.Setenv("BACKSCROLL_DATABASE_PATH", origDB)
+		}
+		if origCfg == "" {
+			_ = os.Unsetenv("BACKSCROLL_CONFIG_DIR")
+		} else {
+			_ = os.Setenv("BACKSCROLL_CONFIG_DIR", origCfg)
 		}
 	}
 }
