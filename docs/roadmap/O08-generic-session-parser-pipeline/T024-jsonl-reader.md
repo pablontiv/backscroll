@@ -1,7 +1,7 @@
 ---
 id: T024
 tipo: task
-estado: Pending
+estado: Completed
 titulo: JsonlReader (refactor del sync actual; implementa SessionReader)
 outcome: O08
 dependencias: [T023, T016]
