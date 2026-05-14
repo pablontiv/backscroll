@@ -1,7 +1,7 @@
 ---
 id: T017
 tipo: task
-estado: Pending
+estado: Completed
 titulo: Sistema de predicados (eq, ne, in, exists, missing)
 outcome: O07
 dependencias: [T014]
