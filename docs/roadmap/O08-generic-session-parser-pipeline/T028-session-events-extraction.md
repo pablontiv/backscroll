@@ -1,7 +1,7 @@
 ---
 id: T028
 tipo: task
-estado: Pending
+estado: Completed
 titulo: Extracción de session events (timestamp por mensaje)
 outcome: O08
 dependencias: [T023]
