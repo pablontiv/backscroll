@@ -4,7 +4,7 @@
 [![Go](https://img.shields.io/badge/Go-1.22+-00ADD8?logo=go&logoColor=white)](https://go.dev)
 [![License: PolyForm NC](https://img.shields.io/badge/License-PolyForm%20NC-blue.svg)](LICENSE)
 
-A **full-text search engine** for Claude Code sessions.
+A **full-text search engine** for AI assistant sessions — Claude Code, Pi, and any source with an input manifest.
 
 Backscroll treats your local AI sessions as a searchable archive: it indexes conversation logs incrementally, strips machine-generated noise, and provides instant full-text search with relevance ranking.
 
@@ -138,7 +138,7 @@ backscroll status
 
 ## Core Idea
 
-Claude Code produces valuable reasoning logs, but they are scattered across session files with no built-in way to search across them. Backscroll makes them **searchable**, **persistent**, and **fast**.
+AI assistants like Claude Code and Pi produce valuable reasoning logs, but they are scattered across session files with no built-in way to search across them. Backscroll makes them **searchable**, **persistent**, and **fast**.
 
 - Sessions are indexed incrementally — only changed files are re-processed
 - Noise is stripped automatically — system-reminders, task-notifications, subagent chatter
@@ -151,7 +151,7 @@ Backscroll does not modify your logs. It **indexes** them.
 
 ## The Session Index
 
-Claude Code stores each conversation as a JSONL file — one JSON record per line, alternating between user messages, assistant responses, and system metadata.
+Each AI assistant stores conversations in its own format. Backscroll normalizes them via input manifests — the shipped Claude and Pi presets handle their respective JSONL formats, and any source with a compatible manifest is supported.
 
 Backscroll reads these files and extracts the **conversation**: user and assistant messages only. Everything else — tool calls, system-reminders, task-notifications, local command output — is stripped as noise.
 
