@@ -106,7 +106,7 @@ Move-Item backscroll.exe "$env:LOCALAPPDATA\backscroll\bin\"
 ### From Source
 
 ```bash
-cargo install --git https://github.com/pablontiv/backscroll.git
+go install github.com/pablontiv/backscroll/cmd/backscroll@latest
 ```
 
 ---
@@ -299,18 +299,18 @@ See [Configuration docs](docs/configuration.md) for the full resolution order an
 | [Configuration](docs/configuration.md) | Config resolution, TOML format, environment variables |
 | [Generic Input Contract](docs/input-contract.md) | Global `*.inputs.toml` contract for provider-neutral ingestion |
 | [Session Search Research](docs/research/backscroll-session-search-cli.md) | Feasibility study: axioms, evidence tables, capabilities matrix |
-| [Rust Architecture](docs/research/backscroll-rust-architecture-2026.md) | Stack decision: why Rust over Go, risk resolution, design patterns |
 
 ---
 
 ## Development
 
 ```bash
-just check              # Run rustfmt and clippy
-just test               # Run all unit and CLI integration tests
-just coverage-summary   # Generate LLVM coverage report
-just audit              # Audit supply chain for vulnerabilities
-just static-build       # Build statically linked Linux binary using Zig
+just check              # gofmt --check + go vet
+just test               # Run all tests
+just fmt                # Auto-format code (gofmt -w)
+just build              # Build binary
+just coverage-summary   # Go test coverage report
+just audit              # go mod verify
 ```
 
 Commits follow [Conventional Commits](https://www.conventionalcommits.org/) (`type(scope): description`).
@@ -319,4 +319,4 @@ Commits follow [Conventional Commits](https://www.conventionalcommits.org/) (`ty
 
 ## License
 
-[MIT](Cargo.toml) — free and open source.
+[PolyForm Noncommercial 1.0.0](LICENSE) — free for non-commercial use.
