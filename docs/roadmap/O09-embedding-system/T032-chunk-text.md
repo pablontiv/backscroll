@@ -1,7 +1,7 @@
 ---
 id: T032
 tipo: task
-estado: Pending
+estado: Completed
 titulo: ChunkText() token-aware en internal/chunking/
 outcome: O09
 ---
