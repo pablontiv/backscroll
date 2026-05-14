@@ -1,7 +1,7 @@
 ---
 id: T030
 tipo: task
-estado: Pending
+estado: Completed
 titulo: Tests de integración del pipeline
 outcome: O08
 dependencias: [T029]

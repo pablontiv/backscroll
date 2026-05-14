@@ -2,14 +2,17 @@ package main
 
 import (
 	"bytes"
+	"database/sql"
 	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/pablontiv/backscroll/internal/storage"
+	_ "modernc.org/sqlite"
 )
 
 // testEnv creates an isolated environment for CLI tests.
@@ -1594,6 +1597,116 @@ func TestHelpListsAllCommands(t *testing.T) {
 		if !strings.Contains(out, cmd) {
 			t.Errorf("--help missing command %q", cmd)
 		}
+	}
+}
+
+// TestSyncOpenCode verifies that the sync command indexes OpenCode SQLite sessions
+// using a declarative opencode.inputs.toml manifest.
+func TestSyncOpenCode(t *testing.T) {
+	_, cleanup := testEnv(t)
+	defer cleanup()
+
+	// Create temp config dir with opencode.inputs.toml
+	configDir := t.TempDir()
+	inputsDir := filepath.Join(configDir, "backscroll", "inputs")
+	if err := os.MkdirAll(inputsDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	// Create a temp OpenCode project with .opencode/opencode.db
+	projectDir := t.TempDir()
+	dbDir := filepath.Join(projectDir, ".opencode")
+	if err := os.MkdirAll(dbDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	dbPath := filepath.Join(dbDir, "opencode.db")
+	createOpenCodeTestDB(t, dbPath, "opencode integration content")
+
+	// Write opencode.inputs.toml pointing to the project dir
+	tomlContent := `version = 1
+
+[[inputs]]
+id = "opencode-test"
+source = "session"
+active = true
+
+[inputs.discover]
+roots = ["` + projectDir + `"]
+include = ["**/.opencode/opencode.db"]
+
+[inputs.decode]
+format = "opencode"
+`
+	if err := os.WriteFile(filepath.Join(inputsDir, "opencode.inputs.toml"), []byte(tomlContent), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	// Set config dir so ActiveInputs reads our manifest
+	origConfigDir := os.Getenv("BACKSCROLL_CONFIG_DIR")
+	_ = os.Setenv("BACKSCROLL_CONFIG_DIR", configDir)
+	defer func() {
+		if origConfigDir == "" {
+			_ = os.Unsetenv("BACKSCROLL_CONFIG_DIR")
+		} else {
+			_ = os.Setenv("BACKSCROLL_CONFIG_DIR", origConfigDir)
+		}
+	}()
+
+	out, stderr, err := runCmd("sync")
+	if err != nil {
+		t.Fatalf("sync error: %v\nstderr: %s", err, stderr)
+	}
+	if !strings.Contains(out, "Synced") {
+		t.Errorf("unexpected sync output: %s", out)
+	}
+
+	// Search for the indexed content
+	searchOut, _, err := runCmd("search", "opencode integration content")
+	if err != nil {
+		t.Fatalf("search error: %v", err)
+	}
+	if !strings.Contains(searchOut, "opencode integration content") {
+		t.Errorf("OpenCode content not found in search results: %s", searchOut)
+	}
+}
+
+// createOpenCodeTestDB creates a minimal OpenCode SQLite DB with one message.
+func createOpenCodeTestDB(t *testing.T, path, content string) {
+	t.Helper()
+	db, err := sql.Open("sqlite", path)
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	defer func() { _ = db.Close() }()
+
+	_, err = db.Exec(`
+		CREATE TABLE sessions (id TEXT PRIMARY KEY, title TEXT NOT NULL, message_count INTEGER NOT NULL DEFAULT 0,
+			prompt_tokens INTEGER NOT NULL DEFAULT 0, completion_tokens INTEGER NOT NULL DEFAULT 0,
+			cost REAL NOT NULL DEFAULT 0.0, updated_at INTEGER NOT NULL, created_at INTEGER NOT NULL);
+		CREATE TABLE messages (id TEXT PRIMARY KEY, session_id TEXT NOT NULL, role TEXT NOT NULL,
+			parts TEXT NOT NULL DEFAULT '[]', model TEXT, created_at INTEGER NOT NULL,
+			updated_at INTEGER NOT NULL, finished_at INTEGER);
+	`)
+	if err != nil {
+		t.Fatalf("create schema: %v", err)
+	}
+
+	now := time.Now().UnixMilli()
+	_, err = db.Exec(`INSERT INTO sessions (id, title, updated_at, created_at) VALUES (?, ?, ?, ?)`,
+		"s1", "Test Session", now, now)
+	if err != nil {
+		t.Fatalf("insert session: %v", err)
+	}
+
+	type part struct {
+		Type string `json:"type"`
+		Data any    `json:"data"`
+	}
+	parts, _ := json.Marshal([]part{{Type: "text", Data: map[string]string{"text": content}}})
+	_, err = db.Exec(`INSERT INTO messages (id, session_id, role, parts, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?)`,
+		"m1", "s1", "user", string(parts), now+1000, now+1000)
+	if err != nil {
+		t.Fatalf("insert message: %v", err)
 	}
 }
 
