@@ -65,7 +65,7 @@ func runInsights(stdout, stderr io.Writer,
 	}
 
 	// Get sessions for count
-	sessions, err := db.ListSessions(project, false)
+	sessions, err := db.ListSessions(project, 0)
 	if err != nil {
 		return fmt.Errorf("list sessions: %w", err)
 	}

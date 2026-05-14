@@ -663,7 +663,7 @@ func TestListSessionsAfterSync(t *testing.T) {
 	}
 
 	// List all sessions
-	sessions, err := db.ListSessions("", true)
+	sessions, err := db.ListSessions("", 5)
 	if err != nil {
 		t.Fatalf("ListSessions: %v", err)
 	}
@@ -672,14 +672,14 @@ func TestListSessionsAfterSync(t *testing.T) {
 	}
 
 	// List with project filter
-	sessions, err = db.ListSessions("myproject", false)
+	sessions, err = db.ListSessions("myproject", 0)
 	if err != nil {
 		t.Fatalf("ListSessions with project: %v", err)
 	}
 	_ = sessions
 
 	// List with non-matching project
-	sessions, err = db.ListSessions("unknown", false)
+	sessions, err = db.ListSessions("unknown", 0)
 	if err != nil {
 		t.Fatalf("ListSessions with unknown project: %v", err)
 	}

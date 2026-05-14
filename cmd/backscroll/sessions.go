@@ -29,21 +29,23 @@ func newSessionsListCmd(stdout, stderr io.Writer) *cobra.Command {
 	var (
 		project     string
 		allProjects bool
-		recent      bool
+		recent      int
 		jsonOut     bool
 		robot       bool
+		indexedOnly bool
 	)
 
 	cmd := &cobra.Command{
 		Use:   "list",
 		Short: "List indexed sessions (alias for backscroll list)",
 		RunE: func(cmd *cobra.Command, args []string) error {
-			return runList(stdout, stderr, project, allProjects, recent, jsonOut, robot)
+			return runList(stdout, stderr, project, allProjects, recent, jsonOut, robot, indexedOnly)
 		},
 	}
 	cmd.Flags().StringVar(&project, "project", "", "Filter by project")
 	cmd.Flags().BoolVar(&allProjects, "all-projects", false, "Show sessions from all projects")
-	cmd.Flags().BoolVar(&recent, "recent", false, "Show most recent sessions")
+	cmd.Flags().IntVar(&recent, "recent", 0, "Show N most recent sessions (0 = all)")
+	cmd.Flags().BoolVar(&indexedOnly, "indexed-only", false, "Read existing index without auto-sync")
 	cmd.Flags().BoolVar(&jsonOut, "json", false, "Output as JSON")
 	cmd.Flags().BoolVar(&robot, "robot", false, "Output optimized for LLM")
 	return cmd

@@ -1,10 +1,10 @@
 ---
-id: T053
-tipo: task
-estado: Pending
-titulo: list --recent N (int) + --indexed-only en list y status
-outcome: O13
 dependencias: []
+estado: Completed
+id: T053
+outcome: O13
+tipo: task
+titulo: list --recent N (int) + --indexed-only en list y status
 ---
 
 # T053 — `list --recent N` semántica correcta + `--indexed-only`

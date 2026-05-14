@@ -15,7 +15,8 @@ import (
 
 func newStatusCmd(stdout, stderr io.Writer) *cobra.Command {
 	var (
-		jsonFormat bool
+		jsonFormat  bool
+		indexedOnly bool
 	)
 
 	cmd := &cobra.Command{
@@ -27,18 +28,20 @@ func newStatusCmd(stdout, stderr io.Writer) *cobra.Command {
 - Last indexing timestamp
 - Configuration
 
-Use --json to output as JSON.`,
+Use --json to output as JSON.
+Use --indexed-only to skip auto-sync (read existing index only).`,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			return runStatus(stdout, stderr, jsonFormat)
+			return runStatus(stdout, stderr, jsonFormat, indexedOnly)
 		},
 	}
 
 	cmd.Flags().BoolVar(&jsonFormat, "json", false, "Output as JSON")
+	cmd.Flags().BoolVar(&indexedOnly, "indexed-only", false, "Read existing index without auto-sync")
 
 	return cmd
 }
 
-func runStatus(stdout, stderr io.Writer, jsonFormat bool) error {
+func runStatus(stdout, stderr io.Writer, jsonFormat, indexedOnly bool) error {
 	cfg, err := config.Load()
 	if err != nil {
 		return fmt.Errorf("load config: %w", err)

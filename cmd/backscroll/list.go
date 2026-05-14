@@ -15,9 +15,10 @@ func newListCmd(stdout, stderr io.Writer) *cobra.Command {
 	var (
 		project     string
 		allProjects bool
-		recent      bool
+		recent      int
 		jsonFormat  bool
 		robotFormat bool
+		indexedOnly bool
 	)
 
 	cmd := &cobra.Command{
@@ -27,17 +28,19 @@ func newListCmd(stdout, stderr io.Writer) *cobra.Command {
 
 Use --project to filter to a single project.
 Use --all-projects to list across all projects.
-Use --recent to sort by most recent first.
+Use --recent N to show N most recent sessions.
+Use --indexed-only to skip auto-sync (read existing index only).
 Use --json to output as JSON.
 Use --robot to output in robot format.`,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			return runList(stdout, stderr, project, allProjects, recent, jsonFormat, robotFormat)
+			return runList(stdout, stderr, project, allProjects, recent, jsonFormat, robotFormat, indexedOnly)
 		},
 	}
 
 	cmd.Flags().StringVar(&project, "project", "", "Filter to project")
 	cmd.Flags().BoolVar(&allProjects, "all-projects", false, "List all projects")
-	cmd.Flags().BoolVar(&recent, "recent", false, "Sort by most recent first")
+	cmd.Flags().IntVar(&recent, "recent", 0, "Show N most recent sessions (0 = all)")
+	cmd.Flags().BoolVar(&indexedOnly, "indexed-only", false, "Read existing index without auto-sync")
 	cmd.Flags().BoolVar(&jsonFormat, "json", false, "Output as JSON")
 	cmd.Flags().BoolVar(&robotFormat, "robot", false, "Output in robot format")
 
@@ -45,14 +48,15 @@ Use --robot to output in robot format.`,
 }
 
 func runList(stdout, stderr io.Writer,
-	project string, allProjects, recent, jsonFormat, robotFormat bool) error {
+	project string, allProjects bool, recent int, jsonFormat, robotFormat, indexedOnly bool) error {
 
 	cfg, err := config.Load()
 	if err != nil {
 		return fmt.Errorf("load config: %w", err)
 	}
 
-	// Open read-only database. If DB doesn't exist yet, return an empty list.
+	// Open read-only database (--indexed-only is default behavior for list).
+	// If DB doesn't exist yet, return an empty list.
 	db, err := storage.OpenReadOnly(cfg.DatabasePath)
 	if err != nil {
 		if jsonFormat {

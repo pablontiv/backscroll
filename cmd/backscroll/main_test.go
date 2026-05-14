@@ -2011,6 +2011,45 @@ func TestSessionsQueryJSON(t *testing.T) {
 	}
 }
 
+func TestListRecentN(t *testing.T) {
+	_, cleanup := testEnv(t)
+	defer cleanup()
+
+	piDir := filepath.Dir(filepath.Join(fixturesDir(), "pi-session.jsonl"))
+	_, _, _ = runCmd("sync", "--path", piDir)
+
+	// --recent 1 should work without error
+	out, _, err := runCmd("list", "--recent", "1")
+	if err != nil {
+		t.Fatalf("list --recent 1 error: %v", err)
+	}
+	_ = out
+}
+
+func TestListIndexedOnly(t *testing.T) {
+	_, cleanup := testEnv(t)
+	defer cleanup()
+
+	out, _, err := runCmd("list", "--indexed-only")
+	if err != nil {
+		t.Fatalf("list --indexed-only error: %v", err)
+	}
+	_ = out
+}
+
+func TestStatusIndexedOnly(t *testing.T) {
+	_, cleanup := testEnv(t)
+	defer cleanup()
+
+	out, _, err := runCmd("status", "--indexed-only")
+	if err != nil {
+		t.Fatalf("status --indexed-only error: %v", err)
+	}
+	if !strings.Contains(out, "Backscroll Status") {
+		t.Errorf("status --indexed-only missing header: %s", out)
+	}
+}
+
 func TestInputsValidate(t *testing.T) {
 	dir := t.TempDir()
 	t.Setenv("BACKSCROLL_CONFIG_DIR", dir)

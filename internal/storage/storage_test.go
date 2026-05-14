@@ -515,7 +515,7 @@ func TestListSessions(t *testing.T) {
 	}
 
 	// List sessions
-	sessions, err := db.ListSessions("", false)
+	sessions, err := db.ListSessions("", 0)
 	if err != nil {
 		t.Fatalf("failed to list sessions: %v", err)
 	}

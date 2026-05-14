@@ -148,8 +148,9 @@ type SessionEntry struct {
 	Tags      []string
 }
 
-// ListSessions lists all indexed sessions, optionally filtered by project.
-func (d *Database) ListSessions(project string, recent bool) ([]SessionEntry, error) {
+// ListSessions lists indexed sessions, optionally filtered by project.
+// If recent > 0, returns the N most recent sessions ordered by timestamp descending.
+func (d *Database) ListSessions(project string, recent int) ([]SessionEntry, error) {
 	query := `
 		SELECT DISTINCT si.source_path, si.project, MAX(si.timestamp) as ts
 		FROM search_items si
@@ -166,8 +167,8 @@ func (d *Database) ListSessions(project string, recent bool) ([]SessionEntry, er
 		GROUP BY si.source_path, si.project
 	`
 
-	if recent {
-		query += " ORDER BY ts DESC"
+	if recent > 0 {
+		query += fmt.Sprintf(" ORDER BY ts DESC LIMIT %d", recent)
 	}
 
 	rows, err := d.db.Query(query, args...)
