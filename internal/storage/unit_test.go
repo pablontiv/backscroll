@@ -489,6 +489,52 @@ func TestQueryIndexedRecords(t *testing.T) {
 	}
 }
 
+func TestPurgeWithISODateFormat(t *testing.T) {
+	db, cleanup := newTestDB(t)
+	defer cleanup()
+
+	// Sync old and new data
+	if err := db.SyncFiles([]IndexedFile{
+		{
+			SourcePath: "/old/session.jsonl",
+			Source:     "session",
+			Hash:       "h-old",
+			Project:    "test",
+			Tags:       []string{"old-tag"},
+			Messages: []IndexedMessage{
+				{Ordinal: 0, Role: "user", Text: "old message content", UUID: getTestUUID(), Timestamp: "2019-06-01T00:00:00Z", ContentType: "text"},
+			},
+		},
+		{
+			SourcePath: "/new/session.jsonl",
+			Source:     "session",
+			Hash:       "h-new",
+			Project:    "test",
+			Messages: []IndexedMessage{
+				{Ordinal: 0, Role: "user", Text: "new message content", UUID: getTestUUID(), Timestamp: "2024-01-01T00:00:00Z", ContentType: "text"},
+			},
+		},
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	// Purge with ISO date format (exercises the RFC3339-fail → ISO-success path)
+	deleted, err := db.Purge("2020-01-01")
+	if err != nil {
+		t.Fatalf("Purge ISO date: %v", err)
+	}
+	if deleted == 0 {
+		t.Error("expected at least 1 record deleted")
+	}
+
+	// Purge with RFC3339 format (exercises the direct RFC3339-success path with real deletions)
+	deleted2, err := db.Purge("2025-01-01T00:00:00Z")
+	if err != nil {
+		t.Fatalf("Purge RFC3339: %v", err)
+	}
+	_ = deleted2
+}
+
 func TestListSessionsAfterSync(t *testing.T) {
 	db, cleanup := newTestDB(t)
 	defer cleanup()

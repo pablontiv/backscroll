@@ -1359,6 +1359,34 @@ func TestDecisionsReplayJSON(t *testing.T) {
 
 // ---- help completeness check ----
 
+func TestSyncWithPlansDir(t *testing.T) {
+	_, cleanup := testEnv(t)
+	defer cleanup()
+
+	// Build a temp HOME with .claude/plans/ containing a plan file
+	tmpHome := t.TempDir()
+	plansDir := filepath.Join(tmpHome, ".claude", "plans")
+	if err := os.MkdirAll(plansDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	planContent := "# Test Plan\n\n## Step 1\n\nDo this step.\n\n## Step 2\n\nDo that step.\n"
+	if err := os.WriteFile(filepath.Join(plansDir, "test-plan.md"), []byte(planContent), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	// Temporarily redirect HOME so homeDir() finds our plans dir
+	oldHome := os.Getenv("HOME")
+	_ = os.Setenv("HOME", tmpHome)
+	defer func() { _ = os.Setenv("HOME", oldHome) }()
+
+	// Sync session files from fixture AND let plan indexing run (no --no-plans)
+	piDir := filepath.Dir(filepath.Join(fixturesDir(), "pi-session.jsonl"))
+	_, _, err := runCmd("sync", "--path", piDir)
+	if err != nil {
+		t.Fatalf("sync with plans dir error: %v", err)
+	}
+}
+
 func TestHelpListsAllCommands(t *testing.T) {
 	out, _, err := runCmd("--help")
 	if err != nil {
