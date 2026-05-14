@@ -1,7 +1,7 @@
 ---
 id: T021
 tipo: task
-estado: Pending
+estado: Completed
 titulo: Pi preset funcional en runtime
 outcome: O07
 dependencias: [T016, T017, T018, T019]
