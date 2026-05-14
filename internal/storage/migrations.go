@@ -46,6 +46,18 @@ func (d *Database) SetupSchema() error {
 		}
 	}
 
+	// Check if version 3 is already applied
+	err = d.db.QueryRow("SELECT COUNT(*) FROM schema_migrations WHERE version = 3").Scan(&count)
+	if err != nil {
+		return fmt.Errorf("check migration version 3: %w", err)
+	}
+
+	if count == 0 {
+		if err := d.applyV3Migration(); err != nil {
+			return err
+		}
+	}
+
 	return nil
 }
 
@@ -120,6 +132,38 @@ func (d *Database) applyV2Migration() error {
 
 	if err := tx.Commit(); err != nil {
 		return fmt.Errorf("commit migration v2: %w", err)
+	}
+
+	return nil
+}
+
+// applyV3Migration adds an embedding BLOB column to chunks for pure-Go vector search.
+// Decision (T039): sqlite-vec requires CGO; we store embedding bytes directly in chunks
+// and perform cosine similarity in Go (linear scan).
+func (d *Database) applyV3Migration() error {
+	tx, err := d.db.Begin()
+	if err != nil {
+		return fmt.Errorf("begin transaction: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	if _, err := tx.Exec(sqlV3); err != nil {
+		return fmt.Errorf("add embedding column: %w", err)
+	}
+
+	checksum := sha256.Sum256([]byte(sqlV3))
+	checksumHex := fmt.Sprintf("%x", checksum)
+
+	_, err = tx.Exec(`
+		INSERT INTO schema_migrations (version, name, applied_on, checksum)
+		VALUES (3, 'V3 embedding blob column', CURRENT_TIMESTAMP, ?)
+	`, checksumHex)
+	if err != nil {
+		return fmt.Errorf("record migration v3: %w", err)
+	}
+
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("commit migration v3: %w", err)
 	}
 
 	return nil
@@ -233,6 +277,10 @@ CREATE TABLE IF NOT EXISTS embedding_metadata (
     created_at INTEGER NOT NULL
 );
 `
+
+// sqlV3 adds an embedding BLOB column to chunks for pure-Go cosine similarity search.
+// This replaces the sqlite-vec virtual table approach (which requires CGO).
+const sqlV3 = `ALTER TABLE chunks ADD COLUMN embedding BLOB;`
 
 // sqlV1CoreDDL is the core DDL string used for computing the migration checksum.
 // This must match the Rust version's SQL_V1 for compatibility.

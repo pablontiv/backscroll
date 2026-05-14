@@ -1,10 +1,12 @@
 ---
+dependencias:
+  - T039
+  - T035
+estado: Completed
 id: T040
-tipo: task
-estado: Pending
-titulo: Schema migration — vec_embeddings virtual table (384-dim)
 outcome: O10
-dependencias: [T039, T035]
+tipo: task
+titulo: Schema migration — vec_embeddings virtual table (384-dim)
 ---
 
 # T040 — Schema migration: `vec_embeddings` virtual table
