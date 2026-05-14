@@ -1,7 +1,7 @@
 ---
 id: T042
 tipo: task
-estado: Obsolete
+estado: Pending
 titulo: Wire hybrid search en comando search
 outcome: O10
 dependencias: [T041, T038, T034]

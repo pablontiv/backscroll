@@ -1,7 +1,7 @@
 ---
 id: T041
 tipo: task
-estado: Obsolete
+estado: Pending
 titulo: Vector search en internal/storage/
 outcome: O10
 dependencias: [T040, T031]

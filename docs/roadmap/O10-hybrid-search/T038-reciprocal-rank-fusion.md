@@ -1,9 +1,9 @@
 ---
+estado: Completed
 id: T038
-tipo: task
-estado: Obsolete
-titulo: ReciprocatRankFusion() en internal/hybrid/
 outcome: O10
+tipo: task
+titulo: ReciprocatRankFusion() en internal/hybrid/
 ---
 
 # T038 — `ReciprocatRankFusion()` en `internal/hybrid/`

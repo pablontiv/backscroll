@@ -1,7 +1,7 @@
 ---
 id: T039
 tipo: task
-estado: Obsolete
+estado: Pending
 titulo: Evaluar e integrar sqlite-vec (pure Go vs CGO)
 outcome: O10
 dependencias: [T038]

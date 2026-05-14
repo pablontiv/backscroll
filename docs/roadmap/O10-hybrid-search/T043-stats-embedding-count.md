@@ -1,7 +1,7 @@
 ---
 id: T043
 tipo: task
-estado: Obsolete
+estado: Pending
 titulo: get_stats() / status con embedding count
 outcome: O10
 dependencias: [T041]
