@@ -47,10 +47,12 @@ cmd/backscroll/
 ├── validate.go        — validate command
 ├── status.go          — status command
 ├── decisions.go       — decisions subcommands
-└── projects.go        — projects subcommands
+├── projects.go        — projects subcommands
+└── inputs.go          — inputs subcommands (list, aliases, identify, test)
 internal/
 ├── config/            — config resolution: backscroll.toml → ~/.config → env → defaults
 ├── diagnostics/       — structured error reporting
+├── input_config/      — declarative input manifest engine: types, loader, discovery, predicates, transforms
 ├── models/            — domain types: SessionRecord, MessageContent, ParsedFile, SearchResult, Stats
 ├── output/            — output formatter: Text, JSON, Robot with token limiting
 ├── sync/              — WalkDir, SHA-256 dedup, JSONL parsing, noise filtering, content-type classification
@@ -62,7 +64,7 @@ internal/
 └── storage/           — SQLite adapter (FTS5, BM25, WAL mode, migrations, search_items, session_tags)
 ```
 
-Fourteen CLI commands: `sync [--path] [--include-agents] [--no-plans] [--optimize]`, `search <query> [--project] [--all-projects] [--json] [--robot] [--fields] [--max-tokens] [--source] [--after] [--before] [--role] [--limit] [--offset] [--content-type] [--tag]`, `read <path>`, `resume <query> [--project] [--all-projects] [--robot] [--source]`, `topics [--project] [--all-projects] [--limit] [--json] [--robot]`, `list [--project] [--all-projects] [--recent] [--json] [--robot]`, `insights [--project] [--all-projects] [--json] [--robot]`, `export <query> [--format markdown|csv] [--project] [--all-projects]`, `reindex`, `purge --before <date>`, `validate`, `status`, `decisions <query|context|extract|conflicts|replay>`, `projects <identify|list|aliases>`.
+Fifteen CLI commands: `sync [--path] [--include-agents] [--no-plans] [--optimize]`, `search <query> [--project] [--all-projects] [--json] [--robot] [--fields] [--max-tokens] [--source] [--after] [--before] [--role] [--limit] [--offset] [--content-type] [--tag]`, `read <path>`, `resume <query> [--project] [--all-projects] [--robot] [--source]`, `topics [--project] [--all-projects] [--limit] [--json] [--robot]`, `list [--project] [--all-projects] [--recent] [--json] [--robot]`, `insights [--project] [--all-projects] [--json] [--robot]`, `export <query> [--format markdown|csv] [--project] [--all-projects]`, `reindex`, `purge --before <date>`, `validate`, `status`, `decisions <query|context|extract|conflicts|replay>`, `projects <identify|list|aliases>`, `inputs <list|aliases|identify|test> [--json]`.
 
 The `SearchEngine` interface is the port; `internal/storage` is the adapter. Database opened lazily. `OpenReadOnly()` provides read-only access for external consumers.
 
@@ -163,16 +165,17 @@ Workflows delegate to [pablontiv/crossbeam](https://github.com/pablontiv/crossbe
 ## Package Layout
 
 ```
-github.com/pablontiv/backscroll/cmd/backscroll  — CLI entrypoint
-github.com/pablontiv/backscroll/internal/config  — Config structs and resolution
-github.com/pablontiv/backscroll/internal/models  — Domain types and SearchEngine interface
-github.com/pablontiv/backscroll/internal/sync    — Session parsing and noise filtering
-github.com/pablontiv/backscroll/internal/plans   — Markdown plan parsing
-github.com/pablontiv/backscroll/internal/tagging — Heuristic session auto-tagging
-github.com/pablontiv/backscroll/internal/sources — External source parsers + SourceRegistry
-github.com/pablontiv/backscroll/internal/storage — SQLite FTS5 adapter
-github.com/pablontiv/backscroll/internal/projects — Project identity registry
-github.com/pablontiv/backscroll/internal/reader  — Direct session file reader
-github.com/pablontiv/backscroll/internal/output  — Output formatting
-github.com/pablontiv/backscroll/internal/diagnostics — Structured error reporting
+github.com/pablontiv/backscroll/cmd/backscroll         — CLI entrypoint
+github.com/pablontiv/backscroll/internal/config        — Config structs and resolution
+github.com/pablontiv/backscroll/internal/input_config  — Declarative input manifest engine (*.inputs.toml)
+github.com/pablontiv/backscroll/internal/models        — Domain types and SearchEngine interface
+github.com/pablontiv/backscroll/internal/sync          — Session parsing and noise filtering
+github.com/pablontiv/backscroll/internal/plans         — Markdown plan parsing
+github.com/pablontiv/backscroll/internal/tagging       — Heuristic session auto-tagging
+github.com/pablontiv/backscroll/internal/sources       — External source parsers + SourceRegistry
+github.com/pablontiv/backscroll/internal/storage       — SQLite FTS5 adapter
+github.com/pablontiv/backscroll/internal/projects      — Project identity registry
+github.com/pablontiv/backscroll/internal/reader        — Direct session file reader
+github.com/pablontiv/backscroll/internal/output        — Output formatting
+github.com/pablontiv/backscroll/internal/diagnostics   — Structured error reporting
 ```
