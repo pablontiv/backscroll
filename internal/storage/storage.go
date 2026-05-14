@@ -6,11 +6,14 @@ import (
 	"os"
 
 	_ "modernc.org/sqlite"
+
+	"github.com/pablontiv/backscroll/internal/embedding"
 )
 
 // Database represents a SQLite database connection with FTS5 support.
 type Database struct {
-	db *sql.DB
+	db                *sql.DB
+	embeddingProvider embedding.EmbeddingProvider
 }
 
 // Open opens or creates a new SQLite database at the given path with FTS5 and WAL mode enabled.

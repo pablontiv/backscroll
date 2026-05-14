@@ -15,20 +15,22 @@ import (
 
 func newSearchCmd(stdout, stderr io.Writer) *cobra.Command {
 	var (
-		project     string
-		allProjects bool
-		jsonFormat  bool
-		robotFormat bool
-		source      string
-		after       string
-		before      string
-		role        string
-		limit       int
-		offset      int
-		contentType string
-		tag         string
-		fields      string
-		maxTokens   int
+		project             string
+		allProjects         bool
+		jsonFormat          bool
+		robotFormat         bool
+		source              string
+		after               string
+		before              string
+		role                string
+		limit               int
+		offset              int
+		contentType         string
+		tag                 string
+		fields              string
+		maxTokens           int
+		lexicalOnly         bool
+		similarityThreshold float64
 	)
 
 	cmd := &cobra.Command{
@@ -51,7 +53,8 @@ Use --max-tokens to limit output size (approximate token count).`,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			return runSearch(stdout, stderr, args[0],
 				project, allProjects, jsonFormat, robotFormat,
-				source, after, before, role, limit, offset, contentType, tag, maxTokens)
+				source, after, before, role, limit, offset, contentType, tag, maxTokens,
+				lexicalOnly, similarityThreshold)
 		},
 	}
 
@@ -69,6 +72,8 @@ Use --max-tokens to limit output size (approximate token count).`,
 	cmd.Flags().StringVar(&tag, "tag", "", "Filter sessions by tag")
 	cmd.Flags().StringVar(&fields, "fields", "", "Fields to display (comma-separated)")
 	cmd.Flags().IntVar(&maxTokens, "max-tokens", 0, "Max tokens in output (0=unlimited)")
+	cmd.Flags().BoolVar(&lexicalOnly, "lexical-only", false, "Use BM25 only, skip vector search")
+	cmd.Flags().Float64Var(&similarityThreshold, "similarity-threshold", 0, "Minimum cosine similarity for vector results (0=no threshold)")
 
 	return cmd
 }
@@ -77,7 +82,8 @@ func runSearch(stdout, stderr io.Writer,
 	query string,
 	project string, allProjects bool, jsonFormat, robotFormat bool,
 	source, after, before, role string,
-	limit, offset int, contentType, tag string, maxTokens int) error {
+	limit, offset int, contentType, tag string, maxTokens int,
+	lexicalOnly bool, similarityThreshold float64) error {
 
 	cfg, err := config.Load()
 	if err != nil {
@@ -110,20 +116,22 @@ func runSearch(stdout, stderr io.Writer,
 
 	// Build search options
 	opts := models.SearchOptions{
-		Project:     project,
-		AllProjects: allProjects,
-		Source:      source,
-		After:       afterTime,
-		Before:      beforeTime,
-		Role:        role,
-		Limit:       limit,
-		Offset:      offset,
-		ContentType: contentType,
-		Tag:         tag,
+		Project:             project,
+		AllProjects:         allProjects,
+		Source:              source,
+		After:               afterTime,
+		Before:              beforeTime,
+		Role:                role,
+		Limit:               limit,
+		Offset:              offset,
+		ContentType:         contentType,
+		Tag:                 tag,
+		LexicalOnly:         lexicalOnly,
+		SimilarityThreshold: similarityThreshold,
 	}
 
-	// Execute search
-	results, err := db.Search(query, opts)
+	// Execute search — HybridSearch falls back to BM25 when no provider/vectors
+	results, err := db.HybridSearch(query, opts)
 	if err != nil {
 		return fmt.Errorf("search: %w", err)
 	}

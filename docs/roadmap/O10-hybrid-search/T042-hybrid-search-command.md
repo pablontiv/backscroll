@@ -1,10 +1,13 @@
 ---
+dependencias:
+  - T041
+  - T038
+  - T034
+estado: Completed
 id: T042
-tipo: task
-estado: Pending
-titulo: Wire hybrid search en comando search
 outcome: O10
-dependencias: [T041, T038, T034]
+tipo: task
+titulo: Wire hybrid search en comando search
 ---
 
 # T042 — Wire hybrid search en comando `search`
