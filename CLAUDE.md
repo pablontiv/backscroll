@@ -6,7 +6,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 Backscroll is a Go CLI tool that indexes Claude Code sessions, plans, and external knowledge sources into SQLite for full-text search (BM25 via FTS5). It treats sessions as an event store with incremental sync via SHA-256 deduplication.
 
-**Status**: Go port in progress — `main` branch is the active Go implementation. The Rust implementation is frozen in the `v0` branch.
+**Status**: Go port complete — `main` branch is the active Go implementation. The Rust implementation is frozen in the `v0` branch.
 
 Implemented: `internal/config`, `internal/diagnostics`, `internal/models`, `internal/output`, `internal/sync`, `internal/tagging`, `internal/plans`, `internal/sources`, `internal/storage`, `internal/projects`, `internal/reader`. CLI commands in `cmd/backscroll/` (all 13 commands via cobra).
 
@@ -25,7 +25,7 @@ just audit              # go mod verify
 
 Run a single test: `go test -run TestName ./internal/...`
 
-Tests use stdlib `testing` + subprocess or direct `run()` invocation. Unit tests are co-located in each package. Integration tests in `cmd/backscroll/main_test.go` (CLI integration via direct `run()` invocation). Additional unit tests: `internal/storage/unit_test.go`, `internal/sync/noise_test.go`. Coverage gate ≥85% enforced by `scripts/check-coverage.sh` and CI (`just coverage`).
+Tests use stdlib `testing` + subprocess or direct `run()` invocation. Unit tests are co-located in each package. Integration tests in `cmd/backscroll/main_test.go` (CLI integration via direct `run()` invocation). Decision helper unit tests in `cmd/backscroll/decisions_test.go`. Additional unit tests: `internal/storage/unit_test.go`, `internal/sync/noise_test.go`. Coverage gate ≥85% enforced by `scripts/check-coverage.sh` and CI (`just coverage`).
 
 ## Architecture
 
@@ -62,7 +62,7 @@ internal/
 └── storage/           — SQLite adapter (FTS5, BM25, WAL mode, migrations, search_items, session_tags)
 ```
 
-Thirteen CLI commands: `sync [--path] [--include-agents] [--no-plans] [--optimize]`, `search <query> [--project] [--all-projects] [--json] [--robot] [--fields] [--max-tokens] [--source] [--after] [--before] [--role] [--limit] [--offset] [--content-type] [--tag]`, `read <path>`, `resume <query> [--project] [--all-projects] [--robot] [--source]`, `topics [--project] [--all-projects] [--limit] [--json] [--robot]`, `list [--project] [--all-projects] [--recent] [--json] [--robot]`, `insights [--project] [--all-projects] [--json] [--robot]`, `export <query> [--format markdown|csv] [--project] [--all-projects]`, `reindex`, `purge --before <date>`, `validate`, `status`.
+Fourteen CLI commands: `sync [--path] [--include-agents] [--no-plans] [--optimize]`, `search <query> [--project] [--all-projects] [--json] [--robot] [--fields] [--max-tokens] [--source] [--after] [--before] [--role] [--limit] [--offset] [--content-type] [--tag]`, `read <path>`, `resume <query> [--project] [--all-projects] [--robot] [--source]`, `topics [--project] [--all-projects] [--limit] [--json] [--robot]`, `list [--project] [--all-projects] [--recent] [--json] [--robot]`, `insights [--project] [--all-projects] [--json] [--robot]`, `export <query> [--format markdown|csv] [--project] [--all-projects]`, `reindex`, `purge --before <date>`, `validate`, `status`, `decisions <query|context|extract|conflicts|replay>`, `projects <identify|list|aliases>`.
 
 The `SearchEngine` interface is the port; `internal/storage` is the adapter. Database opened lazily. `OpenReadOnly()` provides read-only access for external consumers.
 

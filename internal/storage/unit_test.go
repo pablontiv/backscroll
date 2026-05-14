@@ -380,6 +380,115 @@ func TestGetStatsWithContent(t *testing.T) {
 	}
 }
 
+func TestQueryIndexedRecords(t *testing.T) {
+	db, cleanup := newTestDB(t)
+	defer cleanup()
+
+	files := []IndexedFile{
+		{
+			SourcePath: "/sessions/s1.jsonl",
+			Source:     "session",
+			Hash:       "h1",
+			Project:    "projA",
+			Messages: []IndexedMessage{
+				{Ordinal: 0, Role: "user", Text: "we decided to use Go", UUID: getTestUUID(), Timestamp: "2026-01-01T10:00:00Z", ContentType: "text"},
+				{Ordinal: 1, Role: "assistant", Text: "great choice", UUID: getTestUUID(), Timestamp: "2026-01-01T10:01:00Z", ContentType: "text"},
+			},
+		},
+		{
+			SourcePath: "/decisions/d1.md",
+			Source:     "decision",
+			Hash:       "h2",
+			Project:    "projA",
+			Messages: []IndexedMessage{
+				{Ordinal: 0, Role: "user", Text: "---\nstatus: accepted\nscope: technical\n---\n# Use Go\nWe use Go.", UUID: getTestUUID(), Timestamp: "2026-01-02T00:00:00Z", ContentType: "text"},
+			},
+		},
+		{
+			SourcePath: "/sessions/s2.jsonl",
+			Source:     "session",
+			Hash:       "h3",
+			Project:    "projB",
+			Messages: []IndexedMessage{
+				{Ordinal: 0, Role: "user", Text: "hello from projB", UUID: getTestUUID(), Timestamp: "2026-01-03T00:00:00Z", ContentType: "text"},
+			},
+		},
+	}
+	if err := db.SyncFiles(files); err != nil {
+		t.Fatalf("SyncFiles: %v", err)
+	}
+
+	// All records (no filters)
+	all, err := db.QueryIndexedRecords(IndexedRecordQuery{})
+	if err != nil {
+		t.Fatalf("QueryIndexedRecords all: %v", err)
+	}
+	if len(all) != 4 {
+		t.Errorf("expected 4 records, got %d", len(all))
+	}
+
+	// Filter by source
+	src := "decision"
+	decisions, err := db.QueryIndexedRecords(IndexedRecordQuery{Source: &src})
+	if err != nil {
+		t.Fatalf("QueryIndexedRecords decision: %v", err)
+	}
+	if len(decisions) != 1 {
+		t.Errorf("expected 1 decision record, got %d", len(decisions))
+	}
+	if decisions[0].Source != "decision" {
+		t.Errorf("expected source=decision, got %s", decisions[0].Source)
+	}
+
+	// Filter by project
+	proj := "projA"
+	projARecords, err := db.QueryIndexedRecords(IndexedRecordQuery{Project: &proj})
+	if err != nil {
+		t.Fatalf("QueryIndexedRecords projA: %v", err)
+	}
+	if len(projARecords) != 3 {
+		t.Errorf("expected 3 projA records, got %d", len(projARecords))
+	}
+
+	// Filter by source + project
+	sessA, err := db.QueryIndexedRecords(IndexedRecordQuery{Source: &[]string{"session"}[0], Project: &proj})
+	if err != nil {
+		t.Fatalf("QueryIndexedRecords session+projA: %v", err)
+	}
+	if len(sessA) != 2 {
+		t.Errorf("expected 2 session records for projA, got %d", len(sessA))
+	}
+
+	// Filter by after date
+	after := "2026-01-02"
+	afterRecords, err := db.QueryIndexedRecords(IndexedRecordQuery{After: &after})
+	if err != nil {
+		t.Fatalf("QueryIndexedRecords after: %v", err)
+	}
+	if len(afterRecords) == 0 {
+		t.Error("expected records after 2026-01-02")
+	}
+
+	// Limit
+	limited, err := db.QueryIndexedRecords(IndexedRecordQuery{Limit: 2})
+	if err != nil {
+		t.Fatalf("QueryIndexedRecords limit: %v", err)
+	}
+	if len(limited) != 2 {
+		t.Errorf("expected 2 records with limit=2, got %d", len(limited))
+	}
+
+	// Source path filter
+	sp := "/decisions/d1.md"
+	byPath, err := db.QueryIndexedRecords(IndexedRecordQuery{SourcePath: &sp})
+	if err != nil {
+		t.Fatalf("QueryIndexedRecords source_path: %v", err)
+	}
+	if len(byPath) != 1 {
+		t.Errorf("expected 1 record for source_path filter, got %d", len(byPath))
+	}
+}
+
 func TestListSessionsAfterSync(t *testing.T) {
 	db, cleanup := newTestDB(t)
 	defer cleanup()

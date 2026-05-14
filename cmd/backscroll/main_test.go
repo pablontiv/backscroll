@@ -8,6 +8,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/pablontiv/backscroll/internal/storage"
 )
 
 // testEnv creates an isolated environment for CLI tests.
@@ -779,6 +781,598 @@ func TestInsightsAllProjects(t *testing.T) {
 		t.Fatalf("insights --all-projects error: %v", err)
 	}
 	_ = out
+}
+
+// seedDecisions opens the test DB and inserts decision + session records directly.
+func seedDecisions(t *testing.T, dbPath string) {
+	t.Helper()
+	db, err := storage.Open(dbPath)
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	defer db.Close()
+	files := []storage.IndexedFile{
+		{
+			SourcePath: "/decisions/d001.md",
+			Source:     "decision",
+			Hash:       "h-d001",
+			Project:    "testproj",
+			Messages: []storage.IndexedMessage{
+				{
+					Ordinal:     0,
+					Role:        "user",
+					Text:        "---\nid: D001\nstatus: accepted\nscope: technical\n---\n# Use Go\nWe decided to use Go for all backend services.",
+					UUID:        "uuid-d001",
+					Timestamp:   "2026-01-01T10:00:00Z",
+					ContentType: "text",
+				},
+			},
+		},
+		{
+			SourcePath: "/decisions/d002.md",
+			Source:     "decision",
+			Hash:       "h-d002",
+			Project:    "testproj",
+			Messages: []storage.IndexedMessage{
+				{
+					Ordinal:     0,
+					Role:        "user",
+					Text:        "---\nid: D002\nstatus: proposed\nscope: organizational\n---\n# Daily standups\nWe should have daily standups.",
+					UUID:        "uuid-d002",
+					Timestamp:   "2026-01-02T10:00:00Z",
+					ContentType: "text",
+				},
+			},
+		},
+		{
+			SourcePath: "/sessions/s001.jsonl",
+			Source:     "session",
+			Hash:       "h-s001",
+			Project:    "testproj",
+			Messages: []storage.IndexedMessage{
+				{Ordinal: 0, Role: "user", Text: "we decided to use Go for performance", UUID: "uuid-s001a", Timestamp: "2026-01-03T10:00:00Z", ContentType: "text"},
+				{Ordinal: 1, Role: "assistant", Text: "decision: adopt Go as the backend language", UUID: "uuid-s001b", Timestamp: "2026-01-03T10:01:00Z", ContentType: "text"},
+			},
+			Tags: []string{"feature"},
+		},
+	}
+	if err := db.SyncFiles(files); err != nil {
+		t.Fatalf("SyncFiles: %v", err)
+	}
+}
+
+func TestDecisionsQueryWithData(t *testing.T) {
+	dbPath, cleanup := testEnv(t)
+	defer cleanup()
+
+	seedDecisions(t, dbPath)
+
+	// Text output
+	out, _, err := runCmd("decisions", "query", "--all-projects")
+	if err != nil {
+		t.Fatalf("decisions query error: %v", err)
+	}
+	if !strings.Contains(out, "Use Go") && !strings.Contains(out, "accepted") {
+		t.Errorf("expected decision record in output: %s", out)
+	}
+
+	// JSON output
+	out, _, err = runCmd("decisions", "query", "--all-projects", "--json")
+	if err != nil {
+		t.Fatalf("decisions query --json error: %v", err)
+	}
+	lines := strings.Split(strings.TrimSpace(out), "\n")
+	if len(lines) == 0 {
+		t.Error("expected at least one JSON line")
+	}
+	var rec map[string]interface{}
+	if err := json.Unmarshal([]byte(lines[0]), &rec); err != nil {
+		t.Fatalf("invalid JSON line: %v", err)
+	}
+	if rec["title"] == nil {
+		t.Error("missing title in JSON output")
+	}
+
+	// Status filter
+	out, _, err = runCmd("decisions", "query", "--all-projects", "--status", "accepted")
+	if err != nil {
+		t.Fatalf("decisions query --status error: %v", err)
+	}
+	if !strings.Contains(out, "Use Go") {
+		t.Errorf("expected accepted decision in output: %s", out)
+	}
+
+	// Scope filter
+	out, _, err = runCmd("decisions", "query", "--all-projects", "--scope", "technical")
+	if err != nil {
+		t.Fatalf("decisions query --scope error: %v", err)
+	}
+	if !strings.Contains(out, "Use Go") {
+		t.Errorf("expected technical-scoped decision in output: %s", out)
+	}
+
+	// Project filter (explicit)
+	out, _, err = runCmd("decisions", "query", "--project", "testproj")
+	if err != nil {
+		t.Fatalf("decisions query --project error: %v", err)
+	}
+	_ = out
+}
+
+func TestDecisionsContextWithData(t *testing.T) {
+	dbPath, cleanup := testEnv(t)
+	defer cleanup()
+
+	seedDecisions(t, dbPath)
+
+	// Text output
+	out, _, err := runCmd("decisions", "context", "--all-projects")
+	if err != nil {
+		t.Fatalf("decisions context error: %v", err)
+	}
+	if !strings.Contains(out, "Decision Context") {
+		t.Errorf("expected 'Decision Context' in output: %s", out)
+	}
+	if !strings.Contains(out, "Use Go") {
+		t.Errorf("expected decision title in context output: %s", out)
+	}
+
+	// JSON output
+	out, _, err = runCmd("decisions", "context", "--all-projects", "--json")
+	if err != nil {
+		t.Fatalf("decisions context --json error: %v", err)
+	}
+	var ctx map[string]interface{}
+	if err := json.Unmarshal([]byte(out), &ctx); err != nil {
+		t.Fatalf("context --json invalid JSON: %v\nout: %s", err, out)
+	}
+	decisions, ok := ctx["decisions"].([]interface{})
+	if !ok || len(decisions) == 0 {
+		t.Errorf("expected decisions in context output: %v", ctx)
+	}
+
+	// Max tokens limit
+	out, _, err = runCmd("decisions", "context", "--all-projects", "--max-tokens", "10")
+	if err != nil {
+		t.Fatalf("decisions context --max-tokens error: %v", err)
+	}
+	_ = out
+}
+
+func TestDecisionsExtractWithData(t *testing.T) {
+	dbPath, cleanup := testEnv(t)
+	defer cleanup()
+
+	seedDecisions(t, dbPath)
+
+	out, _, err := runCmd("decisions", "extract", "--all-projects")
+	if err != nil {
+		t.Fatalf("decisions extract error: %v", err)
+	}
+	// Should have at least one candidate (from session records with decision patterns)
+	if out != "" {
+		var candidate map[string]interface{}
+		firstLine := strings.Split(strings.TrimSpace(out), "\n")[0]
+		if err := json.Unmarshal([]byte(firstLine), &candidate); err != nil {
+			t.Fatalf("extract output not valid JSON: %v\nline: %s", err, firstLine)
+		}
+		if candidate["statement"] == nil {
+			t.Error("missing statement in candidate")
+		}
+	}
+
+	// With limit
+	out, _, err = runCmd("decisions", "extract", "--all-projects", "--limit", "1")
+	if err != nil {
+		t.Fatalf("decisions extract --limit error: %v", err)
+	}
+	lines := strings.Split(strings.TrimSpace(out), "\n")
+	if out != "" && len(lines) > 1 {
+		t.Errorf("expected at most 1 candidate with --limit 1, got %d", len(lines))
+	}
+
+	// With since filter
+	out, _, err = runCmd("decisions", "extract", "--all-projects", "--since", "2026-01-01")
+	if err != nil {
+		t.Fatalf("decisions extract --since error: %v", err)
+	}
+	_ = out
+}
+
+func TestDecisionsConflictsWithData(t *testing.T) {
+	dbPath, cleanup := testEnv(t)
+	defer cleanup()
+
+	seedDecisions(t, dbPath)
+
+	// Duplicate proposal — should detect conflict
+	proposal := `{"id":"D001","statement":"we decided to use Go for all backend services","scope":"technical"}`
+	out, _, err := runCmd("decisions", "conflicts", "--all-projects", "--proposal-json", proposal)
+	if err != nil {
+		t.Fatalf("decisions conflicts error: %v", err)
+	}
+	// With data present, should find duplicate or potential conflict
+	_ = out
+
+	// JSON output
+	out, _, err = runCmd("decisions", "conflicts", "--all-projects", "--proposal-json", proposal, "--json")
+	if err != nil {
+		t.Fatalf("decisions conflicts --json error: %v", err)
+	}
+	var hints []interface{}
+	if err := json.Unmarshal([]byte(out), &hints); err != nil {
+		t.Fatalf("conflicts --json invalid JSON: %v\nout: %s", err, out)
+	}
+}
+
+func TestDecisionsReplayWithData(t *testing.T) {
+	dbPath, cleanup := testEnv(t)
+	defer cleanup()
+
+	seedDecisions(t, dbPath)
+
+	dir := t.TempDir()
+
+	// Fixture with covered + missed decisions
+	fixturePath := filepath.Join(dir, "fixture.json")
+	fixtureContent := `{"expected_decisions":[
+		{"id":"D001","statement":"we decided to use Go for all backend services","status":"accepted"},
+		{"statement":"we decided to use Rust instead"}
+	]}`
+	if err := os.WriteFile(fixturePath, []byte(fixtureContent), 0644); err != nil {
+		t.Fatalf("write fixture: %v", err)
+	}
+
+	// Text output
+	out, _, err := runCmd("decisions", "replay", "--fixture", fixturePath, "--all-projects")
+	if err != nil {
+		t.Fatalf("decisions replay error: %v", err)
+	}
+	if !strings.Contains(out, "Replay Report") {
+		t.Errorf("expected 'Replay Report' in output: %s", out)
+	}
+	if !strings.Contains(out, "Coverage") {
+		t.Errorf("expected 'Coverage' in output: %s", out)
+	}
+
+	// JSON output
+	out, _, err = runCmd("decisions", "replay", "--fixture", fixturePath, "--all-projects", "--json")
+	if err != nil {
+		t.Fatalf("decisions replay --json error: %v", err)
+	}
+	var report map[string]interface{}
+	if err := json.Unmarshal([]byte(out), &report); err != nil {
+		t.Fatalf("replay --json invalid JSON: %v\nout: %s", err, out)
+	}
+	if _, ok := report["coverage_pct"]; !ok {
+		t.Error("missing coverage_pct in replay JSON")
+	}
+	if _, ok := report["missed"]; !ok {
+		t.Error("missing missed in replay JSON")
+	}
+}
+
+// ---- projects command tests ----
+
+func TestProjectsHelp(t *testing.T) {
+	out, _, err := runCmd("projects", "--help")
+	if err != nil {
+		t.Fatalf("projects --help error: %v", err)
+	}
+	for _, sub := range []string{"identify", "list", "aliases"} {
+		if !strings.Contains(out, sub) {
+			t.Errorf("projects --help missing subcommand %q", sub)
+		}
+	}
+}
+
+func TestProjectsIdentify(t *testing.T) {
+	out, _, err := runCmd("projects", "identify")
+	if err != nil {
+		t.Fatalf("projects identify error: %v", err)
+	}
+	if !strings.Contains(out, "project:") {
+		t.Errorf("projects identify missing 'project:': %s", out)
+	}
+}
+
+func TestProjectsIdentifyJSON(t *testing.T) {
+	out, _, err := runCmd("projects", "identify", "--json")
+	if err != nil {
+		t.Fatalf("projects identify --json error: %v", err)
+	}
+	var result map[string]string
+	if err := json.Unmarshal([]byte(out), &result); err != nil {
+		t.Fatalf("projects identify --json invalid JSON: %v\nout: %s", err, out)
+	}
+	if _, ok := result["project_id"]; !ok {
+		t.Errorf("missing project_id in output: %v", result)
+	}
+	if _, ok := result["confidence"]; !ok {
+		t.Errorf("missing confidence in output: %v", result)
+	}
+}
+
+func TestProjectsIdentifyWithCwd(t *testing.T) {
+	dir := t.TempDir()
+	out, _, err := runCmd("projects", "identify", "--cwd", dir)
+	if err != nil {
+		t.Fatalf("projects identify --cwd error: %v", err)
+	}
+	if !strings.Contains(out, "project:") {
+		t.Errorf("projects identify --cwd missing 'project:': %s", out)
+	}
+}
+
+func TestProjectsList(t *testing.T) {
+	// Registry may be empty in test environment — that's fine, just no error
+	_, _, err := runCmd("projects", "list")
+	if err != nil {
+		t.Fatalf("projects list error: %v", err)
+	}
+}
+
+func TestProjectsListJSON(t *testing.T) {
+	out, _, err := runCmd("projects", "list", "--json")
+	if err != nil {
+		t.Fatalf("projects list --json error: %v", err)
+	}
+	var result map[string]interface{}
+	if err := json.Unmarshal([]byte(out), &result); err != nil {
+		t.Fatalf("projects list --json invalid JSON: %v\nout: %s", err, out)
+	}
+	if _, ok := result["count"]; !ok {
+		t.Errorf("missing count in projects list output: %v", result)
+	}
+}
+
+func TestProjectsAliasesMissingFlag(t *testing.T) {
+	_, _, err := runCmd("projects", "aliases")
+	if err == nil {
+		t.Error("expected error when --project-id not provided")
+	}
+}
+
+func TestProjectsAliasesJSON(t *testing.T) {
+	out, _, err := runCmd("projects", "aliases", "--project-id", "nonexistent", "--json")
+	if err != nil {
+		t.Fatalf("projects aliases --json error: %v", err)
+	}
+	var result map[string]interface{}
+	if err := json.Unmarshal([]byte(out), &result); err != nil {
+		t.Fatalf("projects aliases --json invalid JSON: %v\nout: %s", err, out)
+	}
+	if result["project_id"] != "nonexistent" {
+		t.Errorf("expected project_id=nonexistent, got %v", result["project_id"])
+	}
+}
+
+// ---- decisions command tests ----
+
+func TestDecisionsHelp(t *testing.T) {
+	out, _, err := runCmd("decisions", "--help")
+	if err != nil {
+		t.Fatalf("decisions --help error: %v", err)
+	}
+	for _, sub := range []string{"query", "context", "extract", "conflicts", "replay"} {
+		if !strings.Contains(out, sub) {
+			t.Errorf("decisions --help missing subcommand %q", sub)
+		}
+	}
+}
+
+func TestDecisionsQueryEmptyDB(t *testing.T) {
+	_, cleanup := testEnv(t)
+	defer cleanup()
+
+	_, _, _ = runCmd("validate")
+
+	out, _, err := runCmd("decisions", "query", "--all-projects")
+	if err != nil {
+		t.Fatalf("decisions query error: %v", err)
+	}
+	if !strings.Contains(out, "No decisions found") {
+		t.Errorf("expected 'No decisions found', got: %s", out)
+	}
+}
+
+func TestDecisionsQueryJSONEmptyDB(t *testing.T) {
+	_, cleanup := testEnv(t)
+	defer cleanup()
+
+	_, _, _ = runCmd("validate")
+
+	// Should not error even with --json and empty result
+	_, _, err := runCmd("decisions", "query", "--all-projects", "--json")
+	if err != nil {
+		t.Fatalf("decisions query --json error: %v", err)
+	}
+}
+
+func TestDecisionsContextEmptyDB(t *testing.T) {
+	_, cleanup := testEnv(t)
+	defer cleanup()
+
+	_, _, _ = runCmd("validate")
+
+	out, _, err := runCmd("decisions", "context", "--all-projects")
+	if err != nil {
+		t.Fatalf("decisions context error: %v", err)
+	}
+	if !strings.Contains(out, "Decision Context") {
+		t.Errorf("expected 'Decision Context' in output: %s", out)
+	}
+}
+
+func TestDecisionsContextJSON(t *testing.T) {
+	_, cleanup := testEnv(t)
+	defer cleanup()
+
+	_, _, _ = runCmd("validate")
+
+	out, _, err := runCmd("decisions", "context", "--all-projects", "--json")
+	if err != nil {
+		t.Fatalf("decisions context --json error: %v", err)
+	}
+	var result map[string]interface{}
+	if err := json.Unmarshal([]byte(out), &result); err != nil {
+		t.Fatalf("decisions context --json invalid JSON: %v\nout: %s", err, out)
+	}
+	if _, ok := result["decisions"]; !ok {
+		t.Errorf("missing 'decisions' in context output")
+	}
+}
+
+func TestDecisionsExtractEmptyDB(t *testing.T) {
+	_, cleanup := testEnv(t)
+	defer cleanup()
+
+	_, _, _ = runCmd("validate")
+
+	// Empty corpus → no output, no error
+	out, _, err := runCmd("decisions", "extract", "--all-projects")
+	if err != nil {
+		t.Fatalf("decisions extract error: %v", err)
+	}
+	_ = out
+}
+
+func TestDecisionsExtractFromSessions(t *testing.T) {
+	_, cleanup := testEnv(t)
+	defer cleanup()
+
+	fixtureSession := filepath.Join(fixturesDir(), "claude-preset", "projects")
+	_, _, _ = runCmd("sync", "--path", fixtureSession)
+
+	out, _, err := runCmd("decisions", "extract", "--all-projects")
+	if err != nil {
+		t.Fatalf("decisions extract error: %v", err)
+	}
+	_ = out // may or may not find candidates depending on fixture content
+}
+
+func TestDecisionsConflictsMissingInput(t *testing.T) {
+	_, cleanup := testEnv(t)
+	defer cleanup()
+
+	_, _, _ = runCmd("validate")
+
+	// --proposal-json with invalid JSON should error
+	_, _, err := runCmd("decisions", "conflicts", "--proposal-json", "not-json", "--all-projects")
+	if err == nil {
+		t.Error("expected error for invalid proposal JSON")
+	}
+}
+
+func TestDecisionsConflictsValidProposal(t *testing.T) {
+	_, cleanup := testEnv(t)
+	defer cleanup()
+
+	_, _, _ = runCmd("validate")
+
+	proposal := `{"statement":"we should use Go for all new services","scope":"technical"}`
+	out, _, err := runCmd("decisions", "conflicts", "--proposal-json", proposal, "--all-projects")
+	if err != nil {
+		t.Fatalf("decisions conflicts error: %v", err)
+	}
+	if !strings.Contains(out, "No conflicts found") && !strings.Contains(out, "Conflict") {
+		t.Errorf("unexpected output: %s", out)
+	}
+}
+
+func TestDecisionsConflictsJSON(t *testing.T) {
+	_, cleanup := testEnv(t)
+	defer cleanup()
+
+	_, _, _ = runCmd("validate")
+
+	proposal := `{"statement":"we decided to use SQLite","scope":"technical"}`
+	out, _, err := runCmd("decisions", "conflicts", "--proposal-json", proposal, "--all-projects", "--json")
+	if err != nil {
+		t.Fatalf("decisions conflicts --json error: %v", err)
+	}
+	// Should be a JSON array
+	var result []interface{}
+	if err := json.Unmarshal([]byte(out), &result); err != nil {
+		t.Fatalf("decisions conflicts --json invalid JSON: %v\nout: %s", err, out)
+	}
+}
+
+func TestDecisionsReplayMissingFixture(t *testing.T) {
+	_, cleanup := testEnv(t)
+	defer cleanup()
+
+	_, _, err := runCmd("decisions", "replay", "--fixture", "/nonexistent/fixture.json")
+	if err == nil {
+		t.Error("expected error for missing fixture file")
+	}
+}
+
+func TestDecisionsReplayValidFixture(t *testing.T) {
+	_, cleanup := testEnv(t)
+	defer cleanup()
+
+	_, _, _ = runCmd("validate")
+
+	// Create a minimal fixture file
+	dir := t.TempDir()
+	fixturePath := filepath.Join(dir, "fixture.json")
+	fixtureContent := `{"expected_decisions":[{"statement":"we decided to use Go","status":"accepted"}]}`
+	if err := os.WriteFile(fixturePath, []byte(fixtureContent), 0644); err != nil {
+		t.Fatalf("write fixture: %v", err)
+	}
+
+	out, _, err := runCmd("decisions", "replay", "--fixture", fixturePath, "--all-projects")
+	if err != nil {
+		t.Fatalf("decisions replay error: %v", err)
+	}
+	if !strings.Contains(out, "Replay Report") {
+		t.Errorf("expected 'Replay Report' in output: %s", out)
+	}
+}
+
+func TestDecisionsReplayJSON(t *testing.T) {
+	_, cleanup := testEnv(t)
+	defer cleanup()
+
+	_, _, _ = runCmd("validate")
+
+	dir := t.TempDir()
+	fixturePath := filepath.Join(dir, "fixture.json")
+	fixtureContent := `{"expected_decisions":[]}`
+	if err := os.WriteFile(fixturePath, []byte(fixtureContent), 0644); err != nil {
+		t.Fatalf("write fixture: %v", err)
+	}
+
+	out, _, err := runCmd("decisions", "replay", "--fixture", fixturePath, "--all-projects", "--json")
+	if err != nil {
+		t.Fatalf("decisions replay --json error: %v", err)
+	}
+	var result map[string]interface{}
+	if err := json.Unmarshal([]byte(out), &result); err != nil {
+		t.Fatalf("decisions replay --json invalid JSON: %v\nout: %s", err, out)
+	}
+	if _, ok := result["coverage_pct"]; !ok {
+		t.Errorf("missing coverage_pct in replay output")
+	}
+}
+
+// ---- help completeness check ----
+
+func TestHelpListsAllCommands(t *testing.T) {
+	out, _, err := runCmd("--help")
+	if err != nil {
+		t.Fatalf("--help error: %v", err)
+	}
+	for _, cmd := range []string{
+		"sync", "search", "read", "resume", "list", "topics",
+		"insights", "export", "reindex", "purge", "validate", "status",
+		"decisions", "projects",
+	} {
+		if !strings.Contains(out, cmd) {
+			t.Errorf("--help missing command %q", cmd)
+		}
+	}
 }
 
 func init() {
