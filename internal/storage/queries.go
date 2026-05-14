@@ -15,6 +15,7 @@ type Stats struct {
 	IndexedAt       time.Time
 	TotalChunks     int
 	TotalEmbeddings int
+	TotalVectors    int // chunks with embedding vector stored (V3)
 }
 
 // GetStats returns indexing statistics.
@@ -54,6 +55,8 @@ func (d *Database) GetStats() (Stats, error) {
 	// Get chunk and embedding counts (V2 tables — present after migration)
 	_ = d.db.QueryRow("SELECT COUNT(*) FROM chunks").Scan(&stats.TotalChunks)
 	_ = d.db.QueryRow("SELECT COUNT(*) FROM embedding_metadata").Scan(&stats.TotalEmbeddings)
+	// V3: chunks with embedding vector blob
+	_ = d.db.QueryRow("SELECT COUNT(*) FROM chunks WHERE embedding IS NOT NULL").Scan(&stats.TotalVectors)
 
 	return stats, nil
 }

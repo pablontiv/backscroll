@@ -93,6 +93,7 @@ func runStatus(stdout, stderr io.Writer, jsonFormat, indexedOnly bool) error {
 				"indexed_at":       stats.IndexedAt,
 				"total_chunks":     stats.TotalChunks,
 				"total_embeddings": stats.TotalEmbeddings,
+				"total_vectors":    stats.TotalVectors,
 			},
 			"config": map[string]interface{}{
 				"session_dirs":             cfg.SessionDirs,
@@ -122,6 +123,7 @@ func runStatus(stdout, stderr io.Writer, jsonFormat, indexedOnly bool) error {
 			_, _ = fmt.Fprintf(stdout, "  Messages indexed: %d\n", stats.TotalMessages)
 			_, _ = fmt.Fprintf(stdout, "  Chunks stored:    %d\n", stats.TotalChunks)
 			_, _ = fmt.Fprintf(stdout, "  Embeddings:       %d\n", stats.TotalEmbeddings)
+			_, _ = fmt.Fprintf(stdout, "  Vectors stored:   %d\n", stats.TotalVectors)
 			if !stats.IndexedAt.IsZero() {
 				_, _ = fmt.Fprintf(stdout, "  Last indexed:     %s\n", stats.IndexedAt.Format("2006-01-02 15:04:05 MST"))
 			}

@@ -1,10 +1,10 @@
 ---
+dependencias: '- T041'
+estado: Completed
 id: T043
-tipo: task
-estado: Pending
-titulo: get_stats() / status con embedding count
 outcome: O10
-dependencias: [T041]
+tipo: task
+titulo: get_stats() / status con embedding count
 ---
 
 # T043 — `get_stats()` / `status` con embedding count
