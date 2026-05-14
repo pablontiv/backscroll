@@ -1,10 +1,10 @@
 ---
+dependencias: '- T038'
+estado: Completed
 id: T039
-tipo: task
-estado: Pending
-titulo: Evaluar e integrar sqlite-vec (pure Go vs CGO)
 outcome: O10
-dependencias: [T038]
+tipo: task
+titulo: Evaluar e integrar sqlite-vec (pure Go vs CGO)
 ---
 
 # T039 — Evaluar e integrar sqlite-vec
