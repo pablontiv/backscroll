@@ -57,7 +57,7 @@ func runTopics(stdout, stderr io.Writer,
 	if err != nil {
 		return fmt.Errorf("open database: %w", err)
 	}
-	defer db.Close()
+	defer func() { _ = db.Close() }()
 
 	// Get topics
 	topics, err := db.GetTopics(project, limit)
@@ -66,7 +66,7 @@ func runTopics(stdout, stderr io.Writer,
 	}
 
 	if len(topics) == 0 {
-		fmt.Fprintf(stdout, "No topics found\n")
+		_, _ = fmt.Fprintf(stdout, "No topics found\n")
 		return nil
 	}
 
@@ -82,18 +82,18 @@ func runTopics(stdout, stderr io.Writer,
 		}
 	} else if robotFormat {
 		// Robot format
-		fmt.Fprintf(stdout, "*** Topics ***\n")
+		_, _ = fmt.Fprintf(stdout, "*** Topics ***\n")
 		for i, t := range topics {
-			fmt.Fprintf(stdout, "%d. %s (%d)\n", i+1, t.Term, t.Count)
+			_, _ = fmt.Fprintf(stdout, "%d. %s (%d)\n", i+1, t.Term, t.Count)
 		}
-		fmt.Fprintf(stdout, "*** Total: %d topics ***\n", len(topics))
+		_, _ = fmt.Fprintf(stdout, "*** Total: %d topics ***\n", len(topics))
 	} else {
 		// Text output
-		fmt.Fprintf(stdout, "Common Topics:\n")
+		_, _ = fmt.Fprintf(stdout, "Common Topics:\n")
 		for i, t := range topics {
-			fmt.Fprintf(stdout, "%d. %s (%d occurrences)\n", i+1, t.Term, t.Count)
+			_, _ = fmt.Fprintf(stdout, "%d. %s (%d occurrences)\n", i+1, t.Term, t.Count)
 		}
-		fmt.Fprintf(stdout, "\nTotal: %d topics\n", len(topics))
+		_, _ = fmt.Fprintf(stdout, "\nTotal: %d topics\n", len(topics))
 	}
 
 	return nil

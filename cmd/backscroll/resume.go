@@ -53,7 +53,7 @@ func runResume(stdout, stderr io.Writer,
 	if err != nil {
 		return fmt.Errorf("open database: %w", err)
 	}
-	defer db.Close()
+	defer func() { _ = db.Close() }()
 
 	// Search with higher limit to find the most recent
 	opts := models.SearchOptions{
@@ -71,7 +71,7 @@ func runResume(stdout, stderr io.Writer,
 	}
 
 	if len(results) == 0 {
-		fmt.Fprintf(stdout, "No relevant sessions found for: %s\n", query)
+		_, _ = fmt.Fprintf(stdout, "No relevant sessions found for: %s\n", query)
 		return nil
 	}
 

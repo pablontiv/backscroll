@@ -56,7 +56,7 @@ func runInsights(stdout, stderr io.Writer,
 	if err != nil {
 		return fmt.Errorf("open database: %w", err)
 	}
-	defer db.Close()
+	defer func() { _ = db.Close() }()
 
 	// Get stats
 	stats, err := db.GetStats()
@@ -84,22 +84,22 @@ func runInsights(stdout, stderr io.Writer,
 		}
 	} else if robotFormat {
 		// Robot format
-		fmt.Fprintf(stdout, "*** Insights ***\n")
-		fmt.Fprintf(stdout, "Total Files: %d\n", stats.TotalFiles)
-		fmt.Fprintf(stdout, "Total Messages: %d\n", stats.TotalMessages)
-		fmt.Fprintf(stdout, "Total Sessions: %d\n", len(sessions))
+		_, _ = fmt.Fprintf(stdout, "*** Insights ***\n")
+		_, _ = fmt.Fprintf(stdout, "Total Files: %d\n", stats.TotalFiles)
+		_, _ = fmt.Fprintf(stdout, "Total Messages: %d\n", stats.TotalMessages)
+		_, _ = fmt.Fprintf(stdout, "Total Sessions: %d\n", len(sessions))
 		if !stats.IndexedAt.IsZero() {
-			fmt.Fprintf(stdout, "Last Indexed: %s\n", stats.IndexedAt.Format("2006-01-02 15:04:05 MST"))
+			_, _ = fmt.Fprintf(stdout, "Last Indexed: %s\n", stats.IndexedAt.Format("2006-01-02 15:04:05 MST"))
 		}
-		fmt.Fprintf(stdout, "*** End Insights ***\n")
+		_, _ = fmt.Fprintf(stdout, "*** End Insights ***\n")
 	} else {
 		// Text output
-		fmt.Fprintf(stdout, "Indexing Insights:\n")
-		fmt.Fprintf(stdout, "  Total files:    %d\n", stats.TotalFiles)
-		fmt.Fprintf(stdout, "  Total messages: %d\n", stats.TotalMessages)
-		fmt.Fprintf(stdout, "  Total sessions: %d\n", len(sessions))
+		_, _ = fmt.Fprintf(stdout, "Indexing Insights:\n")
+		_, _ = fmt.Fprintf(stdout, "  Total files:    %d\n", stats.TotalFiles)
+		_, _ = fmt.Fprintf(stdout, "  Total messages: %d\n", stats.TotalMessages)
+		_, _ = fmt.Fprintf(stdout, "  Total sessions: %d\n", len(sessions))
 		if !stats.IndexedAt.IsZero() {
-			fmt.Fprintf(stdout, "  Last indexed:   %s\n", stats.IndexedAt.Format("2006-01-02 15:04:05 MST"))
+			_, _ = fmt.Fprintf(stdout, "  Last indexed:   %s\n", stats.IndexedAt.Format("2006-01-02 15:04:05 MST"))
 		}
 	}
 

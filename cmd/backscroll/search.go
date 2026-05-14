@@ -89,7 +89,7 @@ func runSearch(stdout, stderr io.Writer,
 	if err != nil {
 		return fmt.Errorf("open database: %w", err)
 	}
-	defer db.Close()
+	defer func() { _ = db.Close() }()
 
 	// Parse dates
 	var afterTime, beforeTime *time.Time

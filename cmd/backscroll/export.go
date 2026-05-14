@@ -53,7 +53,7 @@ func runExport(stdout, stderr io.Writer,
 	if err != nil {
 		return fmt.Errorf("open database: %w", err)
 	}
-	defer db.Close()
+	defer func() { _ = db.Close() }()
 
 	// Search
 	opts := models.SearchOptions{
@@ -69,7 +69,7 @@ func runExport(stdout, stderr io.Writer,
 	}
 
 	if len(results) == 0 {
-		fmt.Fprintf(stdout, "No results found for: %s\n", query)
+		_, _ = fmt.Fprintf(stdout, "No results found for: %s\n", query)
 		return nil
 	}
 
@@ -85,17 +85,17 @@ func runExport(stdout, stderr io.Writer,
 }
 
 func exportMarkdown(stdout io.Writer, results []storage.SearchResult) error {
-	fmt.Fprintf(stdout, "# Export Results\n\n")
-	fmt.Fprintf(stdout, "**Total: %d results**\n\n", len(results))
+	_, _ = fmt.Fprintf(stdout, "# Export Results\n\n")
+	_, _ = fmt.Fprintf(stdout, "**Total: %d results**\n\n", len(results))
 
 	for i, r := range results {
-		fmt.Fprintf(stdout, "## Result %d\n\n", i+1)
-		fmt.Fprintf(stdout, "**Source:** `%s` (%s)\n", r.SourcePath, r.Source)
-		fmt.Fprintf(stdout, "**Project:** %s\n", r.Project)
-		fmt.Fprintf(stdout, "**Role:** %s\n", r.Role)
-		fmt.Fprintf(stdout, "**Score:** %.2f\n", r.Score)
-		fmt.Fprintf(stdout, "**Timestamp:** %s\n\n", r.Timestamp.Format("2006-01-02 15:04:05 MST"))
-		fmt.Fprintf(stdout, "```\n%s\n```\n\n", r.Text)
+		_, _ = fmt.Fprintf(stdout, "## Result %d\n\n", i+1)
+		_, _ = fmt.Fprintf(stdout, "**Source:** `%s` (%s)\n", r.SourcePath, r.Source)
+		_, _ = fmt.Fprintf(stdout, "**Project:** %s\n", r.Project)
+		_, _ = fmt.Fprintf(stdout, "**Role:** %s\n", r.Role)
+		_, _ = fmt.Fprintf(stdout, "**Score:** %.2f\n", r.Score)
+		_, _ = fmt.Fprintf(stdout, "**Timestamp:** %s\n\n", r.Timestamp.Format("2006-01-02 15:04:05 MST"))
+		_, _ = fmt.Fprintf(stdout, "```\n%s\n```\n\n", r.Text)
 	}
 
 	return nil
@@ -103,7 +103,7 @@ func exportMarkdown(stdout io.Writer, results []storage.SearchResult) error {
 
 func exportCSV(stdout io.Writer, results []storage.SearchResult) error {
 	// Write header
-	fmt.Fprintf(stdout, "source_path,source,project,role,timestamp,score,content\n")
+	_, _ = fmt.Fprintf(stdout, "source_path,source,project,role,timestamp,score,content\n")
 
 	// Write rows
 	for _, r := range results {
@@ -114,7 +114,7 @@ func exportCSV(stdout io.Writer, results []storage.SearchResult) error {
 		content := escapeCSV(r.Text)
 		timestamp := r.Timestamp.Format("2006-01-02 15:04:05 MST")
 
-		fmt.Fprintf(stdout, "\"%s\",\"%s\",\"%s\",\"%s\",\"%s\",%.2f,\"%s\"\n",
+		_, _ = fmt.Fprintf(stdout, "\"%s\",\"%s\",\"%s\",\"%s\",\"%s\",%.2f,\"%s\"\n",
 			sourcePath, r.Source, project, role, timestamp, r.Score, content)
 	}
 

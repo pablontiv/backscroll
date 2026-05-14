@@ -14,8 +14,6 @@ Backscroll is the retrieval binary for indexed AI history and declared inputs. A
 
 ```bash
 command -v backscroll >/dev/null 2>&1
-backscroll inputs validate
-backscroll inputs list --json
 backscroll status
 ```
 
@@ -24,11 +22,10 @@ If `backscroll` is missing:
 ```bash
 # Installer installs binary + presets into input dir
 curl -fsSL https://raw.githubusercontent.com/pablontiv/backscroll/master/install.sh | bash
-# Alternative source install: install binary, then copy shipped presets
-cargo install --git https://github.com/pablontiv/backscroll.git
+# Alternative: copy shipped input presets after binary is in PATH
 config_dir="${BACKSCROLL_CONFIG_DIR:-${XDG_CONFIG_HOME:-$HOME/.config}}"
 mkdir -p "$config_dir/backscroll/inputs"
-cp -n inputs/claude.inputs.toml inputs/pi.inputs.toml "$config_dir/backscroll/inputs/"
+cp -n inputs/claude.inputs.toml inputs/decisions.inputs.toml "$config_dir/backscroll/inputs/"
 ```
 
 ## 2) Canonical input location
@@ -53,7 +50,6 @@ When invoked as `/skill:backscroll`:
 | `/skill:backscroll QUERY` | Search indexed sessions; if `QUERY` matches UUID pattern, use `search --source-path '*UUID*'` |
 | `/skill:backscroll --topics` | `backscroll topics --all-projects --robot` |
 | `/skill:backscroll --recent N` | `backscroll list --recent N --all-projects --robot` |
-| `/skill:backscroll --inputs` | `backscroll inputs validate` then `backscroll inputs list --json` |
 | `/skill:backscroll --context` | `Backscroll` context retrieval first, then optional `ref-context-mode.md` Rootline steps |
 
 ### 3.1) UUID/session-id path lookup
@@ -98,7 +94,7 @@ backscroll export "QUERY" --all-projects --format markdown
 ## 5) Command validity (hard constraints)
 
 - `--robot` applies to: `search`, `list`, `topics`, `insights`, `resume`.
-- `--json` applies to: `search`, `list`, `inputs list`, `inputs validate`.
+- `--json` applies to: `search`, `list`.
 - Do not add these flags to `status`, `validate`, `sync`, `reindex`, `export`.
 
 ## 6) Source and role behavior
@@ -113,21 +109,14 @@ backscroll export "QUERY" --all-projects --format markdown
 Use this order:
 
 ```bash
-backscroll inputs validate
-backscroll inputs list --json
 backscroll status
+backscroll validate
 ```
 
-Then validate one real sample from the expected path:
+If status and validate pass but no results appear:
 
 ```bash
-# INPUT_ID comes from backscroll inputs list --json
-test -f PATH
-backscroll inputs test --input INPUT_ID --file PATH --json
+backscroll sync
 ```
 
-Interpretation:
-- `inputs test` checks parse + normalization only.
-- Discovery is validated by manifests (`roots/include/exclude`), not by `inputs test` alone.
-- If valid manifest + passing sample + proper discovery, run:
-  `backscroll sync` then retry the exact search.
+Then retry the exact search. If still no results, check that the session/source files exist at the configured paths shown by `backscroll status`.

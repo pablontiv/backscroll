@@ -54,7 +54,7 @@ func runStatus(stdout, stderr io.Writer, jsonFormat bool) error {
 		if err != nil {
 			return fmt.Errorf("open database: %w", err)
 		}
-		defer db.Close()
+		defer func() { _ = db.Close() }()
 
 		stats, err = db.GetStats()
 		if err != nil {
@@ -94,32 +94,32 @@ func runStatus(stdout, stderr io.Writer, jsonFormat bool) error {
 		}
 	} else {
 		// Text output
-		fmt.Fprintf(stdout, "Backscroll Status\n")
-		fmt.Fprintf(stdout, "=================\n\n")
+		_, _ = fmt.Fprintf(stdout, "Backscroll Status\n")
+		_, _ = fmt.Fprintf(stdout, "=================\n\n")
 
-		fmt.Fprintf(stdout, "Database:\n")
+		_, _ = fmt.Fprintf(stdout, "Database:\n")
 		if dbExists {
-			fmt.Fprintf(stdout, "  Path: %s\n", cfg.DatabasePath)
-			fmt.Fprintf(stdout, "  Size: %.2f MB\n", float64(dbSize)/1024/1024)
+			_, _ = fmt.Fprintf(stdout, "  Path: %s\n", cfg.DatabasePath)
+			_, _ = fmt.Fprintf(stdout, "  Size: %.2f MB\n", float64(dbSize)/1024/1024)
 		} else {
-			fmt.Fprintf(stdout, "  Path: %s (not yet created)\n", cfg.DatabasePath)
+			_, _ = fmt.Fprintf(stdout, "  Path: %s (not yet created)\n", cfg.DatabasePath)
 		}
 
 		if dbExists {
-			fmt.Fprintf(stdout, "\nIndex:\n")
-			fmt.Fprintf(stdout, "  Files indexed:    %d\n", stats.TotalFiles)
-			fmt.Fprintf(stdout, "  Messages indexed: %d\n", stats.TotalMessages)
+			_, _ = fmt.Fprintf(stdout, "\nIndex:\n")
+			_, _ = fmt.Fprintf(stdout, "  Files indexed:    %d\n", stats.TotalFiles)
+			_, _ = fmt.Fprintf(stdout, "  Messages indexed: %d\n", stats.TotalMessages)
 			if !stats.IndexedAt.IsZero() {
-				fmt.Fprintf(stdout, "  Last indexed:     %s\n", stats.IndexedAt.Format("2006-01-02 15:04:05 MST"))
+				_, _ = fmt.Fprintf(stdout, "  Last indexed:     %s\n", stats.IndexedAt.Format("2006-01-02 15:04:05 MST"))
 			}
 		} else {
-			fmt.Fprintf(stdout, "\nIndex: Not yet created\n")
+			_, _ = fmt.Fprintf(stdout, "\nIndex: Not yet created\n")
 		}
 
-		fmt.Fprintf(stdout, "\nConfiguration:\n")
-		fmt.Fprintf(stdout, "  Session directories:\n")
+		_, _ = fmt.Fprintf(stdout, "\nConfiguration:\n")
+		_, _ = fmt.Fprintf(stdout, "  Session directories:\n")
 		for _, dir := range cfg.SessionDirs {
-			fmt.Fprintf(stdout, "    - %s\n", dir)
+			_, _ = fmt.Fprintf(stdout, "    - %s\n", dir)
 		}
 	}
 

@@ -32,14 +32,14 @@ func runRead(stdout, stderr io.Writer, path string) error {
 
 	// Format and print
 	for i, msg := range messages {
-		fmt.Fprintf(stdout, "=== Message %d ===\n", i+1)
-		fmt.Fprintf(stdout, "Role: %s\n", msg.Role)
-		fmt.Fprintf(stdout, "ContentType: %s\n", msg.ContentType)
-		fmt.Fprintf(stdout, "Timestamp: %s\n", msg.Timestamp.Format("2006-01-02 15:04:05 MST"))
-		fmt.Fprintf(stdout, "\n%s\n\n", msg.Content)
+		_, _ = fmt.Fprintf(stdout, "=== Message %d ===\n", i+1)
+		_, _ = fmt.Fprintf(stdout, "Role: %s\n", msg.Role)
+		_, _ = fmt.Fprintf(stdout, "ContentType: %s\n", msg.ContentType)
+		_, _ = fmt.Fprintf(stdout, "Timestamp: %s\n", msg.Timestamp.Format("2006-01-02 15:04:05 MST"))
+		_, _ = fmt.Fprintf(stdout, "\n%s\n\n", msg.Content)
 	}
 
-	fmt.Fprintf(stdout, "Total messages: %d\n", len(messages))
+	_, _ = fmt.Fprintf(stdout, "Total messages: %d\n", len(messages))
 
 	return nil
 }

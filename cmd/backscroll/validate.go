@@ -39,18 +39,18 @@ func runValidate(stdout, stderr io.Writer) error {
 	if err != nil {
 		return fmt.Errorf("open database: %w", err)
 	}
-	defer db.Close()
+	defer func() { _ = db.Close() }()
 
 	// Validate
 	if err := db.Validate(); err != nil {
-		fmt.Fprintf(stdout, "❌ Validation failed: %v\n", err)
+		_, _ = fmt.Fprintf(stdout, "❌ Validation failed: %v\n", err)
 		return err
 	}
 
-	fmt.Fprintf(stdout, "✓ Index validation passed\n")
-	fmt.Fprintf(stdout, "✓ All required tables exist\n")
-	fmt.Fprintf(stdout, "✓ FTS5 virtual table is set up correctly\n")
-	fmt.Fprintf(stdout, "✓ No orphaned records found\n")
+	_, _ = fmt.Fprintf(stdout, "✓ Index validation passed\n")
+	_, _ = fmt.Fprintf(stdout, "✓ All required tables exist\n")
+	_, _ = fmt.Fprintf(stdout, "✓ FTS5 virtual table is set up correctly\n")
+	_, _ = fmt.Fprintf(stdout, "✓ No orphaned records found\n")
 
 	return nil
 }

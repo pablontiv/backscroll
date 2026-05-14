@@ -47,7 +47,7 @@ func runPurge(stdout, stderr io.Writer, before string) error {
 	if err != nil {
 		return fmt.Errorf("open database: %w", err)
 	}
-	defer db.Close()
+	defer func() { _ = db.Close() }()
 
 	// Purge records
 	deleted, err := db.Purge(before)
@@ -55,7 +55,7 @@ func runPurge(stdout, stderr io.Writer, before string) error {
 		return fmt.Errorf("purge records: %w", err)
 	}
 
-	fmt.Fprintf(stdout, "Deleted %d indexed items before %s\n", deleted, before)
+	_, _ = fmt.Fprintf(stdout, "Deleted %d indexed items before %s\n", deleted, before)
 
 	return nil
 }

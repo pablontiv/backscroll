@@ -12,7 +12,7 @@ var version = "dev"
 
 func main() {
 	if err := run(os.Stdout, os.Stderr, os.Args[1:]); err != nil {
-		fmt.Fprintln(os.Stderr, err)
+		_, _ = fmt.Fprintln(os.Stderr, err)
 		os.Exit(1)
 	}
 }

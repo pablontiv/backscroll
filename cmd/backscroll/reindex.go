@@ -37,16 +37,16 @@ func runReindex(stdout, stderr io.Writer) error {
 	if err != nil {
 		return fmt.Errorf("open database: %w", err)
 	}
-	defer db.Close()
+	defer func() { _ = db.Close() }()
 
 	// Purge all records (before date far in future)
-	fmt.Fprintf(stdout, "Clearing index...\n")
+	_, _ = fmt.Fprintf(stdout, "Clearing index...\n")
 	_, err = db.Purge("2099-12-31")
 	if err != nil {
 		return fmt.Errorf("purge database: %w", err)
 	}
 
-	fmt.Fprintf(stdout, "Index cleared. Running full sync...\n")
+	_, _ = fmt.Fprintf(stdout, "Index cleared. Running full sync...\n")
 
 	// Now run sync (this will re-index everything)
 	return runSync(stdout, stderr, "", false, false, true)

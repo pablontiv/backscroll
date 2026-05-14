@@ -50,7 +50,7 @@ func newProjectsIdentifyCmd(stdout io.Writer) *cobra.Command {
 					"cwd":        cwd,
 				})
 			}
-			fmt.Fprintf(stdout, "project: %s (confidence: %s)\n", result.ProjectID, result.Confidence)
+			_, _ = fmt.Fprintf(stdout, "project: %s (confidence: %s)\n", result.ProjectID, result.Confidence)
 			return nil
 		},
 	}
@@ -73,7 +73,7 @@ func newProjectsListCmd(stdout io.Writer) *cobra.Command {
 				})
 			}
 			for _, p := range registry.Projects {
-				fmt.Fprintf(stdout, "%s — roots: %v  patterns: %v  aliases: %v\n",
+				_, _ = fmt.Fprintf(stdout, "%s — roots: %v  patterns: %v  aliases: %v\n",
 					p.ID, p.Roots, p.WorktreePatterns, p.Aliases)
 			}
 			return nil

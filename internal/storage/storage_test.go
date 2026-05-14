@@ -80,7 +80,7 @@ func TestOpenReadOnly(t *testing.T) {
 	if err != nil {
 		t.Fatalf("failed to open database in read-only mode: %v", err)
 	}
-	defer db.Close()
+	defer func() { _ = db.Close() }()
 
 	// Verify we can read
 	var count int

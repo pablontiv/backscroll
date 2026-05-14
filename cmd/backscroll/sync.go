@@ -65,7 +65,7 @@ func runSync(stdout, stderr io.Writer, path string, includeAgents, noPlans, opti
 	if err != nil {
 		return fmt.Errorf("open database: %w", err)
 	}
-	defer db.Close()
+	defer func() { _ = db.Close() }()
 
 	// Get existing file hashes
 	existingHashes, err := db.GetFileHashes()
@@ -90,7 +90,7 @@ func runSync(stdout, stderr io.Writer, path string, includeAgents, noPlans, opti
 	for _, sessionPath := range sessionFiles {
 		hash, err := sync.HashFile(sessionPath)
 		if err != nil {
-			fmt.Fprintf(stderr, "warning: hash file %s: %v\n", sessionPath, err)
+			_, _ = fmt.Fprintf(stderr, "warning: hash file %s: %v\n", sessionPath, err)
 			continue
 		}
 
@@ -102,7 +102,7 @@ func runSync(stdout, stderr io.Writer, path string, includeAgents, noPlans, opti
 		// Parse session
 		messages, err := sync.ParseSessions(sessionPath)
 		if err != nil {
-			fmt.Fprintf(stderr, "warning: parse session %s: %v\n", sessionPath, err)
+			_, _ = fmt.Fprintf(stderr, "warning: parse session %s: %v\n", sessionPath, err)
 			continue
 		}
 
@@ -162,7 +162,7 @@ func runSync(stdout, stderr io.Writer, path string, includeAgents, noPlans, opti
 		for _, sourcePath := range sourcePaths {
 			hash, err := sync.HashFile(sourcePath)
 			if err != nil {
-				fmt.Fprintf(stderr, "warning: hash source file %s: %v\n", sourcePath, err)
+				_, _ = fmt.Fprintf(stderr, "warning: hash source file %s: %v\n", sourcePath, err)
 				continue
 			}
 
@@ -173,7 +173,7 @@ func runSync(stdout, stderr io.Writer, path string, includeAgents, noPlans, opti
 			// Parse source file
 			sourceItems, err := sources.ParseSectioned(sourcePath, sourceType)
 			if err != nil {
-				fmt.Fprintf(stderr, "warning: parse source file %s: %v\n", sourcePath, err)
+				_, _ = fmt.Fprintf(stderr, "warning: parse source file %s: %v\n", sourcePath, err)
 				continue
 			}
 
@@ -212,7 +212,7 @@ func runSync(stdout, stderr io.Writer, path string, includeAgents, noPlans, opti
 			for _, planPath := range planFiles {
 				hash, err := sync.HashFile(planPath)
 				if err != nil {
-					fmt.Fprintf(stderr, "warning: hash plan file %s: %v\n", planPath, err)
+					_, _ = fmt.Fprintf(stderr, "warning: hash plan file %s: %v\n", planPath, err)
 					continue
 				}
 
@@ -223,7 +223,7 @@ func runSync(stdout, stderr io.Writer, path string, includeAgents, noPlans, opti
 				// Parse plan
 				sections, err := plans.ParsePlan(planPath)
 				if err != nil {
-					fmt.Fprintf(stderr, "warning: parse plan file %s: %v\n", planPath, err)
+					_, _ = fmt.Fprintf(stderr, "warning: parse plan file %s: %v\n", planPath, err)
 					continue
 				}
 
@@ -265,7 +265,7 @@ func runSync(stdout, stderr io.Writer, path string, includeAgents, noPlans, opti
 	// Optimize if requested
 	if optimize {
 		if err := db.OptimizeFTS(); err != nil {
-			fmt.Fprintf(stderr, "warning: optimize FTS5: %v\n", err)
+			_, _ = fmt.Fprintf(stderr, "warning: optimize FTS5: %v\n", err)
 		}
 	}
 
@@ -275,10 +275,10 @@ func runSync(stdout, stderr io.Writer, path string, includeAgents, noPlans, opti
 		return fmt.Errorf("get stats: %w", err)
 	}
 
-	fmt.Fprintf(stdout, "Synced %d files\n", syncedCount)
-	fmt.Fprintf(stdout, "Total indexed: %d files, %d messages\n", stats.TotalFiles, stats.TotalMessages)
+	_, _ = fmt.Fprintf(stdout, "Synced %d files\n", syncedCount)
+	_, _ = fmt.Fprintf(stdout, "Total indexed: %d files, %d messages\n", stats.TotalFiles, stats.TotalMessages)
 	if !stats.IndexedAt.IsZero() {
-		fmt.Fprintf(stdout, "Last indexed: %s\n", stats.IndexedAt.Format("2006-01-02 15:04:05 MST"))
+		_, _ = fmt.Fprintf(stdout, "Last indexed: %s\n", stats.IndexedAt.Format("2006-01-02 15:04:05 MST"))
 	}
 
 	return nil

@@ -790,7 +790,7 @@ func seedDecisions(t *testing.T, dbPath string) {
 	if err != nil {
 		t.Fatalf("open db: %v", err)
 	}
-	defer db.Close()
+	defer func() { _ = db.Close() }()
 	files := []storage.IndexedFile{
 		{
 			SourcePath: "/decisions/d001.md",

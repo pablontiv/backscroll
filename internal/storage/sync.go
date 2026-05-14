@@ -166,7 +166,7 @@ func (d *Database) refreshStopwords() error {
 		// If messages_vocab doesn't exist yet or is empty, just return
 		return nil
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 
 	var stopwords []string
 	for rows.Next() {
@@ -193,7 +193,7 @@ func (d *Database) GetFileHashes() (map[string]string, error) {
 	if err != nil {
 		return nil, fmt.Errorf("query file hashes: %w", err)
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 
 	hashes := make(map[string]string)
 	for rows.Next() {

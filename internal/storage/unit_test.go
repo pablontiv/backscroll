@@ -124,7 +124,7 @@ func TestOpenReadOnlyCreated(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Open: %v", err)
 	}
-	db.Close()
+	_ = db.Close()
 
 	// Now open read-only
 	rodb, err := OpenReadOnly(path)
@@ -151,7 +151,7 @@ func TestOpenReadOnlyNotSQLite(t *testing.T) {
 	if err != nil {
 		return
 	}
-	defer db.Close()
+	defer func() { _ = db.Close() }()
 }
 
 func TestSyncFilesEmptySlice(t *testing.T) {

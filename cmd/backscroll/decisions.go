@@ -275,7 +275,7 @@ func newDecisionsQueryCmd(stdout io.Writer) *cobra.Command {
 			if err != nil {
 				return err
 			}
-			defer db.Close()
+			defer func() { _ = db.Close() }()
 
 			proj := effectiveProject(project, allProjects)
 			var projPtr *string
@@ -342,7 +342,7 @@ func newDecisionsQueryCmd(stdout io.Writer) *cobra.Command {
 					if scope != nil {
 						scopeStr = *scope
 					}
-					fmt.Fprintf(stdout, "%s %s\n   Status: %s | Scope: %s | Freshness: %s | %s\n\n",
+					_, _ = fmt.Fprintf(stdout, "%s %s\n   Status: %s | Scope: %s | Freshness: %s | %s\n\n",
 						indicator, title, status, scopeStr, freshness, rec.SourcePath)
 				}
 				count++
@@ -390,7 +390,7 @@ func newDecisionsContextCmd(stdout io.Writer) *cobra.Command {
 			if err != nil {
 				return err
 			}
-			defer db.Close()
+			defer func() { _ = db.Close() }()
 
 			proj := effectiveProject(project, allProjects)
 			var projPtr *string
@@ -461,9 +461,9 @@ func newDecisionsContextCmd(stdout io.Writer) *cobra.Command {
 			if projPtr != nil {
 				projLabel = *projPtr
 			}
-			fmt.Fprintf(stdout, "Decision Context (approx %d tokens)\n", totalTokens)
-			fmt.Fprintf(stdout, "Project: %s\n", projLabel)
-			fmt.Fprintf(stdout, "Decisions: %d\n\n", len(decisions))
+			_, _ = fmt.Fprintf(stdout, "Decision Context (approx %d tokens)\n", totalTokens)
+			_, _ = fmt.Fprintf(stdout, "Project: %s\n", projLabel)
+			_, _ = fmt.Fprintf(stdout, "Decisions: %d\n\n", len(decisions))
 			for _, d := range decisions {
 				indicator := "[ ]"
 				if d.IsAccepted {
@@ -473,7 +473,7 @@ func newDecisionsContextCmd(stdout io.Writer) *cobra.Command {
 				if d.Scope != nil {
 					scopeStr = *d.Scope
 				}
-				fmt.Fprintf(stdout, "%s %s\n   Status: %s | Scope: %s\n\n",
+				_, _ = fmt.Fprintf(stdout, "%s %s\n   Status: %s | Scope: %s\n\n",
 					indicator, d.Title, d.Status, scopeStr)
 			}
 			return nil
@@ -521,7 +521,7 @@ func newDecisionsExtractCmd(stdout io.Writer) *cobra.Command {
 			if err != nil {
 				return err
 			}
-			defer db.Close()
+			defer func() { _ = db.Close() }()
 
 			proj := effectiveProject(project, allProjects)
 			var projPtr *string
@@ -756,7 +756,7 @@ func newDecisionsConflictsCmd(stdout io.Writer) *cobra.Command {
 			if err != nil {
 				return err
 			}
-			defer db.Close()
+			defer func() { _ = db.Close() }()
 
 			proj := effectiveProject(project, allProjects)
 			var projPtr *string
@@ -805,14 +805,14 @@ func newDecisionsConflictsCmd(stdout io.Writer) *cobra.Command {
 			if proposal.Scope != nil {
 				scopeStr = *proposal.Scope
 			}
-			fmt.Fprintf(stdout, "Conflict Analysis:\nProposal: %s (scope: %s)\n\n",
+			_, _ = fmt.Fprintf(stdout, "Conflict Analysis:\nProposal: %s (scope: %s)\n\n",
 				proposal.Statement, scopeStr)
 			for i, h := range hints {
 				idStr := "(no id)"
 				if h.ExistingDecisionID != nil {
 					idStr = *h.ExistingDecisionID
 				}
-				fmt.Fprintf(stdout, "%d. [%s] %s at %s\n   Statement: %s\n   Status: %s\n   Note: %s\n\n",
+				_, _ = fmt.Fprintf(stdout, "%d. [%s] %s at %s\n   Statement: %s\n   Status: %s\n   Note: %s\n\n",
 					i+1, strings.ToUpper(h.ConflictType), idStr, h.SourcePath,
 					h.ExistingStatement, h.ExistingStatus, h.Explanation)
 			}
@@ -894,7 +894,7 @@ func newDecisionsReplayCmd(stdout io.Writer) *cobra.Command {
 			if err != nil {
 				return err
 			}
-			defer db.Close()
+			defer func() { _ = db.Close() }()
 
 			proj := effectiveProject(project, allProjects)
 			var projPtr *string
@@ -1006,36 +1006,36 @@ func newDecisionsReplayCmd(stdout io.Writer) *cobra.Command {
 			if jsonOut {
 				return json.NewEncoder(stdout).Encode(report)
 			}
-			fmt.Fprintf(stdout, "Replay Report: %s\n", report.Fixture)
-			fmt.Fprintf(stdout, "Corpus records: %d\n", report.CorpusRecords)
-			fmt.Fprintf(stdout, "Expected decisions: %d\n", report.Expected)
-			fmt.Fprintf(stdout, "Coverage: %.1f%%\n\n", report.CoveragePct)
+			_, _ = fmt.Fprintf(stdout, "Replay Report: %s\n", report.Fixture)
+			_, _ = fmt.Fprintf(stdout, "Corpus records: %d\n", report.CorpusRecords)
+			_, _ = fmt.Fprintf(stdout, "Expected decisions: %d\n", report.Expected)
+			_, _ = fmt.Fprintf(stdout, "Coverage: %.1f%%\n\n", report.CoveragePct)
 
 			if len(report.Covered) > 0 {
-				fmt.Fprintf(stdout, "Covered (%d):\n", len(report.Covered))
+				_, _ = fmt.Fprintf(stdout, "Covered (%d):\n", len(report.Covered))
 				for _, d := range report.Covered {
-					fmt.Fprintf(stdout, "  + %s\n", d.Statement)
+					_, _ = fmt.Fprintf(stdout, "  + %s\n", d.Statement)
 				}
 				_, _ = fmt.Fprintln(stdout)
 			}
 			if len(report.Missed) > 0 {
-				fmt.Fprintf(stdout, "Missed (%d):\n", len(report.Missed))
+				_, _ = fmt.Fprintf(stdout, "Missed (%d):\n", len(report.Missed))
 				for _, d := range report.Missed {
-					fmt.Fprintf(stdout, "  - %s\n", d.Statement)
+					_, _ = fmt.Fprintf(stdout, "  - %s\n", d.Statement)
 				}
 				_, _ = fmt.Fprintln(stdout)
 			}
 			if len(report.Stale) > 0 {
-				fmt.Fprintf(stdout, "Stale (%d):\n", len(report.Stale))
+				_, _ = fmt.Fprintf(stdout, "Stale (%d):\n", len(report.Stale))
 				for _, d := range report.Stale {
-					fmt.Fprintf(stdout, "  ~ %s\n", d.Statement)
+					_, _ = fmt.Fprintf(stdout, "  ~ %s\n", d.Statement)
 				}
 				_, _ = fmt.Fprintln(stdout)
 			}
 			if len(report.Conflicts) > 0 {
-				fmt.Fprintf(stdout, "Conflicts (%d):\n", len(report.Conflicts))
+				_, _ = fmt.Fprintf(stdout, "Conflicts (%d):\n", len(report.Conflicts))
 				for _, d := range report.Conflicts {
-					fmt.Fprintf(stdout, "  ! %s (expected: %s, found: %s)\n",
+					_, _ = fmt.Fprintf(stdout, "  ! %s (expected: %s, found: %s)\n",
 						d.Statement, d.ExpectedStatus, d.FoundStatus)
 				}
 			}
