@@ -157,6 +157,29 @@ func TestChunkText_TableDriven(t *testing.T) {
 	}
 }
 
+func TestSplitSentences_Punctuation(t *testing.T) {
+	cases := []struct {
+		name  string
+		input string
+		want  int // number of sentences
+	}{
+		{"period", "Hello world. How are you.", 2},
+		{"exclamation", "Hello! How are you!", 2},
+		{"question", "Who are you? Where am I?", 2},
+		{"newline", "Line one\nLine two", 2},
+		{"empty", "", 0},
+		{"no break", "No punctuation here", 1},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got := splitSentences(tc.input)
+			if len(got) != tc.want {
+				t.Errorf("splitSentences(%q) = %d sentences, want %d: %v", tc.input, len(got), tc.want, got)
+			}
+		})
+	}
+}
+
 func TestTokenCount(t *testing.T) {
 	cases := []struct {
 		text string

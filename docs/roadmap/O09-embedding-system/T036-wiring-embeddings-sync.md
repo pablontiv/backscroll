@@ -1,7 +1,7 @@
 ---
 id: T036
 tipo: task
-estado: Pending
+estado: Completed
 titulo: Wiring embeddings en sync pipeline
 outcome: O09
 dependencias: [T032, T033, T035, T029]

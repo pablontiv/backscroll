@@ -1,11 +1,13 @@
 package storage
 
 import (
+	"context"
 	"os"
 	"path/filepath"
 	"testing"
 	"time"
 
+	"github.com/pablontiv/backscroll/internal/embedding"
 	"github.com/pablontiv/backscroll/internal/models"
 )
 
@@ -683,5 +685,62 @@ func TestListSessionsAfterSync(t *testing.T) {
 	}
 	if len(sessions) != 0 {
 		t.Errorf("expected 0 sessions for unknown project, got %d", len(sessions))
+	}
+}
+
+func TestEmbeddingPipeline_WithMockProvider(t *testing.T) {
+	db, cleanup := newTestDB(t)
+	defer cleanup()
+
+	provider := embedding.NewMockProvider(384)
+	defer func() { _ = provider.Close() }()
+
+	sourcePath := "test/session.jsonl"
+	text := "hello world. this is a test paragraph. it has multiple sentences!"
+	chunks := []ChunkRecord{
+		{ChunkIdx: 0, Content: text, TokenCount: 12},
+	}
+	now := time.Now().Unix()
+
+	ids, err := db.InsertChunks(sourcePath, chunks, now)
+	if err != nil {
+		t.Fatalf("InsertChunks: %v", err)
+	}
+
+	for _, id := range ids {
+		vec, err := provider.Embed(context.Background(), text)
+		if err != nil {
+			t.Fatalf("Embed: %v", err)
+		}
+		if len(vec) != provider.Dimensions() {
+			t.Errorf("vector length %d != dimensions %d", len(vec), provider.Dimensions())
+		}
+		if err := db.InsertEmbeddingMetadata(id, "mock", "v1", provider.Dimensions(), now); err != nil {
+			t.Fatalf("InsertEmbeddingMetadata: %v", err)
+		}
+	}
+
+	count, _ := db.GetChunkCount()
+	if count != 1 {
+		t.Errorf("expected 1 chunk, got %d", count)
+	}
+	embedCount, _ := db.GetEmbeddingCount()
+	if embedCount != 1 {
+		t.Errorf("expected 1 embedding, got %d", embedCount)
+	}
+
+	// Re-sync same source replaces chunks (dedup via InsertChunks delete+insert)
+	_, err = db.InsertChunks(sourcePath, chunks, now+1)
+	if err != nil {
+		t.Fatalf("InsertChunks re-sync: %v", err)
+	}
+	count, _ = db.GetChunkCount()
+	if count != 1 {
+		t.Errorf("after re-sync: expected 1 chunk, got %d", count)
+	}
+	// embedding_metadata CASCADE deletes when chunk deleted
+	embedCount, _ = db.GetEmbeddingCount()
+	if embedCount != 0 {
+		t.Errorf("after re-sync: expected 0 embeddings (CASCADE deleted), got %d", embedCount)
 	}
 }

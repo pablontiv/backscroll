@@ -26,6 +26,12 @@ func Open(path string) (*Database, error) {
 		return nil, fmt.Errorf("ping database %s: %w", path, err)
 	}
 
+	// Enable FK enforcement (required for ON DELETE CASCADE in V2 schema)
+	if _, err := db.Exec("PRAGMA foreign_keys = ON"); err != nil {
+		_ = db.Close()
+		return nil, fmt.Errorf("enable foreign keys: %w", err)
+	}
+
 	d := &Database{db: db}
 	if err := d.SetupSchema(); err != nil {
 		_ = db.Close()
