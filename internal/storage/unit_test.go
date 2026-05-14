@@ -115,6 +115,31 @@ func TestSetupSchemaIdempotent(t *testing.T) {
 	}
 }
 
+func TestV2MigrationTablesExist(t *testing.T) {
+	db, cleanup := newTestDB(t)
+	defer cleanup()
+
+	tables := []string{"chunks", "embedding_metadata"}
+	for _, tbl := range tables {
+		var name string
+		err := db.DB().QueryRow(
+			"SELECT name FROM sqlite_master WHERE type='table' AND name=?", tbl,
+		).Scan(&name)
+		if err != nil {
+			t.Errorf("table %q not found after V2 migration: %v", tbl, err)
+		}
+	}
+
+	// Verify version 2 was recorded
+	var count int
+	if err := db.DB().QueryRow("SELECT COUNT(*) FROM schema_migrations WHERE version=2").Scan(&count); err != nil {
+		t.Fatalf("query schema_migrations: %v", err)
+	}
+	if count != 1 {
+		t.Errorf("expected 1 row for version=2, got %d", count)
+	}
+}
+
 func TestOpenReadOnlyCreated(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "ro.db")

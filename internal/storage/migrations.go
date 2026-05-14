@@ -34,6 +34,18 @@ func (d *Database) SetupSchema() error {
 		}
 	}
 
+	// Check if version 2 is already applied
+	err = d.db.QueryRow("SELECT COUNT(*) FROM schema_migrations WHERE version = 2").Scan(&count)
+	if err != nil {
+		return fmt.Errorf("check migration version 2: %w", err)
+	}
+
+	if count == 0 {
+		if err := d.applyV2Migration(); err != nil {
+			return err
+		}
+	}
+
 	return nil
 }
 
@@ -78,6 +90,36 @@ func (d *Database) applyV1Migration() error {
 
 	if err := tx.Commit(); err != nil {
 		return fmt.Errorf("commit migration: %w", err)
+	}
+
+	return nil
+}
+
+// applyV2Migration adds tables for the embedding system: chunks and embedding_metadata.
+func (d *Database) applyV2Migration() error {
+	tx, err := d.db.Begin()
+	if err != nil {
+		return fmt.Errorf("begin transaction: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	if _, err := tx.Exec(sqlV2); err != nil {
+		return fmt.Errorf("create embedding tables: %w", err)
+	}
+
+	checksum := sha256.Sum256([]byte(sqlV2))
+	checksumHex := fmt.Sprintf("%x", checksum)
+
+	_, err = tx.Exec(`
+		INSERT INTO schema_migrations (version, name, applied_on, checksum)
+		VALUES (2, 'V2 embedding tables', CURRENT_TIMESTAMP, ?)
+	`, checksumHex)
+	if err != nil {
+		return fmt.Errorf("record migration v2: %w", err)
+	}
+
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("commit migration v2: %w", err)
 	}
 
 	return nil
@@ -167,6 +209,29 @@ CREATE TRIGGER IF NOT EXISTS search_items_au AFTER UPDATE ON search_items BEGIN
     INSERT INTO messages_fts(messages_fts, rowid, text) VALUES('delete', old.id, old.text);
     INSERT INTO messages_fts(rowid, text) VALUES (new.id, new.text);
 END;
+`
+
+const sqlV2 = `
+CREATE TABLE IF NOT EXISTS chunks (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    source_id TEXT NOT NULL,
+    chunk_idx INTEGER NOT NULL,
+    content TEXT NOT NULL,
+    token_count INTEGER NOT NULL,
+    created_at INTEGER NOT NULL,
+    UNIQUE(source_id, chunk_idx)
+);
+
+CREATE INDEX IF NOT EXISTS idx_chunks_source_id ON chunks (source_id);
+
+CREATE TABLE IF NOT EXISTS embedding_metadata (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    chunk_id INTEGER NOT NULL REFERENCES chunks(id) ON DELETE CASCADE,
+    model_name TEXT NOT NULL,
+    model_version TEXT NOT NULL,
+    dimensions INTEGER NOT NULL,
+    created_at INTEGER NOT NULL
+);
 `
 
 // sqlV1CoreDDL is the core DDL string used for computing the migration checksum.
