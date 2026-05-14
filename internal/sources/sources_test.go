@@ -191,7 +191,7 @@ func TestParseAll(t *testing.T) {
 	if err != nil {
 		t.Fatalf("failed to create temp dir: %v", err)
 	}
-	defer os.RemoveAll(tmpdir)
+	defer func() { _ = os.RemoveAll(tmpdir) }()
 
 	// Create test files
 	keContent := `---
@@ -338,7 +338,7 @@ func TestParseAllWithAllTypes(t *testing.T) {
 	if err != nil {
 		t.Fatalf("create tmpdir: %v", err)
 	}
-	defer os.RemoveAll(tmpdir)
+	defer func() { _ = os.RemoveAll(tmpdir) }()
 
 	writeFile := func(name, content string) string {
 		path := filepath.Join(tmpdir, name)

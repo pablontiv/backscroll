@@ -110,7 +110,7 @@ func newProjectsAliasesCmd(stdout io.Writer) *cobra.Command {
 				})
 			}
 			for _, alias := range aliases {
-				fmt.Fprintln(stdout, alias)
+				_, _ = fmt.Fprintln(stdout, alias)
 			}
 			return nil
 		},

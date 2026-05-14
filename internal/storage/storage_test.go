@@ -29,8 +29,8 @@ func newTestDB(t *testing.T) (*Database, func()) {
 	}
 
 	cleanup := func() {
-		db.Close()
-		os.Remove(dbPath)
+		_ = db.Close()
+		_ = os.Remove(dbPath)
 	}
 
 	return db, cleanup
@@ -66,14 +66,14 @@ func TestOpenReadOnly(t *testing.T) {
 
 	// Close the write connection
 	dbPath := filepath.Join(os.TempDir(), "test_readonly.db")
-	db.Close()
+	_ = db.Close()
 
 	// Create a fresh database for read-only test
 	db, err := Open(dbPath)
 	if err != nil {
 		t.Fatalf("failed to create test database: %v", err)
 	}
-	db.Close()
+	_ = db.Close()
 
 	// Try opening in read-only mode
 	db, err = OpenReadOnly(dbPath)
@@ -570,7 +570,7 @@ func TestMigrationsIdempotent(t *testing.T) {
 	if err != nil {
 		t.Fatalf("third open failed: %v", err)
 	}
-	defer db3.Close()
+	defer func() { _ = db3.Close() }()
 
 	err = db3.Validate()
 	if err != nil {

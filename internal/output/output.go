@@ -63,18 +63,18 @@ func (f *Formatter) writeText(w io.Writer, results []models.SearchResult) error 
 		_, _ = fmt.Fprintf(w, "Rank: %d | Source: %s | Role: %s | Score: %.2f\n", result.Rank, result.Source, result.Role, result.Score)
 		_, _ = fmt.Fprintf(w, "Path: %s\n", result.FilePath)
 		if !result.Timestamp.IsZero() {
-			fmt.Fprintf(w, "Time: %s\n", result.Timestamp.Format("2006-01-02 15:04:05"))
+			_, _ = fmt.Fprintf(w, "Time: %s\n", result.Timestamp.Format("2006-01-02 15:04:05"))
 		}
 		if result.SessionID != "" {
-			fmt.Fprintf(w, "Session: %s\n", result.SessionID)
+			_, _ = fmt.Fprintf(w, "Session: %s\n", result.SessionID)
 		}
 		if result.ProjectPath != "" {
-			fmt.Fprintf(w, "Project: %s\n", result.ProjectPath)
+			_, _ = fmt.Fprintf(w, "Project: %s\n", result.ProjectPath)
 		}
 		if len(result.Tags) > 0 {
-			fmt.Fprintf(w, "Tags: %s\n", strings.Join(result.Tags, ", "))
+			_, _ = fmt.Fprintf(w, "Tags: %s\n", strings.Join(result.Tags, ", "))
 		}
-		fmt.Fprintf(w, "\n%s\n", result.Content)
+		_, _ = fmt.Fprintf(w, "\n%s\n", result.Content)
 	}
 	return nil
 }
@@ -87,21 +87,21 @@ func (f *Formatter) writeJSON(w io.Writer, v any) error {
 
 func (f *Formatter) writeRobot(w io.Writer, results []models.SearchResult) error {
 	for i, result := range results {
-		fmt.Fprintf(w, "result_%d_source=%s\n", i, result.Source)
-		fmt.Fprintf(w, "result_%d_role=%s\n", i, result.Role)
-		fmt.Fprintf(w, "result_%d_filepath=%s\n", i, result.FilePath)
-		fmt.Fprintf(w, "result_%d_content=%s\n", i, result.Content)
+		_, _ = fmt.Fprintf(w, "result_%d_source=%s\n", i, result.Source)
+		_, _ = fmt.Fprintf(w, "result_%d_role=%s\n", i, result.Role)
+		_, _ = fmt.Fprintf(w, "result_%d_filepath=%s\n", i, result.FilePath)
+		_, _ = fmt.Fprintf(w, "result_%d_content=%s\n", i, result.Content)
 		if result.SessionID != "" {
-			fmt.Fprintf(w, "result_%d_session_id=%s\n", i, result.SessionID)
+			_, _ = fmt.Fprintf(w, "result_%d_session_id=%s\n", i, result.SessionID)
 		}
 		if result.ProjectPath != "" {
-			fmt.Fprintf(w, "result_%d_project=%s\n", i, result.ProjectPath)
+			_, _ = fmt.Fprintf(w, "result_%d_project=%s\n", i, result.ProjectPath)
 		}
-		fmt.Fprintf(w, "result_%d_score=%.2f\n", i, result.Score)
+		_, _ = fmt.Fprintf(w, "result_%d_score=%.2f\n", i, result.Score)
 		if len(result.Tags) > 0 {
-			fmt.Fprintf(w, "result_%d_tags=%s\n", i, strings.Join(result.Tags, ","))
+			_, _ = fmt.Fprintf(w, "result_%d_tags=%s\n", i, strings.Join(result.Tags, ","))
 		}
-		fmt.Fprintf(w, "result_%d_rank=%d\n", i, result.Rank)
+		_, _ = fmt.Fprintf(w, "result_%d_rank=%d\n", i, result.Rank)
 	}
 	return nil
 }

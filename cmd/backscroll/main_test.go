@@ -19,12 +19,12 @@ func testEnv(t *testing.T) (dbPath string, cleanup func()) {
 	dir := t.TempDir()
 	dbPath = filepath.Join(dir, "test.db")
 	orig := os.Getenv("BACKSCROLL_DATABASE_PATH")
-	os.Setenv("BACKSCROLL_DATABASE_PATH", dbPath)
+	_ = os.Setenv("BACKSCROLL_DATABASE_PATH", dbPath)
 	return dbPath, func() {
 		if orig == "" {
-			os.Unsetenv("BACKSCROLL_DATABASE_PATH")
+			_ = os.Unsetenv("BACKSCROLL_DATABASE_PATH")
 		} else {
-			os.Setenv("BACKSCROLL_DATABASE_PATH", orig)
+			_ = os.Setenv("BACKSCROLL_DATABASE_PATH", orig)
 		}
 	}
 }

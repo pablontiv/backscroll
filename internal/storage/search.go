@@ -141,7 +141,7 @@ func (d *Database) Search(query string, opts models.SearchOptions) ([]SearchResu
 	if err != nil {
 		return nil, fmt.Errorf("execute search query: %w", err)
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 
 	var results []SearchResult
 	for rows.Next() {
@@ -202,7 +202,7 @@ func (d *Database) loadStopwords() (map[string]struct{}, error) {
 		}
 		return nil, fmt.Errorf("query stopwords: %w", err)
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 
 	stopwords := make(map[string]struct{})
 	for rows.Next() {

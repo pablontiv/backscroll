@@ -72,7 +72,7 @@ func (d *Database) QueryIndexedRecords(q IndexedRecordQuery) ([]IndexedRecord, e
 	if err != nil {
 		return nil, fmt.Errorf("query indexed records: %w", err)
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 
 	var records []IndexedRecord
 	for rows.Next() {

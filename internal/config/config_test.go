@@ -298,6 +298,34 @@ func TestDiscoverSessionDirs(t *testing.T) {
 	}
 }
 
+func TestDiscoverSessionDirsWithEntries(t *testing.T) {
+	// Set up a fake HOME with .claude/projects/ subdirectories
+	tmpHome := t.TempDir()
+	projectsDir := filepath.Join(tmpHome, ".claude", "projects")
+	if err := os.MkdirAll(filepath.Join(projectsDir, "proj-a"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Join(projectsDir, "proj-b"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	// Also create a file (should be skipped)
+	if err := os.WriteFile(filepath.Join(projectsDir, "not-a-dir.txt"), []byte("x"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	oldHome := os.Getenv("HOME")
+	_ = os.Setenv("HOME", tmpHome)
+	defer func() { _ = os.Setenv("HOME", oldHome) }()
+
+	dirs, err := DiscoverSessionDirs()
+	if err != nil {
+		t.Fatalf("DiscoverSessionDirs: %v", err)
+	}
+	if len(dirs) != 2 {
+		t.Errorf("expected 2 dirs, got %d: %v", len(dirs), dirs)
+	}
+}
+
 func TestEnvVarSessionDirsMultiple(t *testing.T) {
 	oldDbPath := os.Getenv("BACKSCROLL_DATABASE_PATH")
 	oldSessionDirs := os.Getenv("BACKSCROLL_SESSION_DIRS")
