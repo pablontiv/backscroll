@@ -1,7 +1,7 @@
 ---
 id: T033
 tipo: task
-estado: Pending
+estado: Completed
 titulo: OnnxProvider — evaluar hugot vs CGO e implementar
 outcome: O09
 dependencias: [T031]
