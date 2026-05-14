@@ -11,6 +11,7 @@ import (
 )
 
 const claudeFixture = "../../tests/fixtures/claude-tool-events.jsonl"
+const piFixture = "../../tests/fixtures/pi-session.jsonl"
 
 func TestJsonlReader_Name(t *testing.T) {
 	r := &JsonlReader{}
@@ -168,4 +169,139 @@ func TestJsonlReader_Parse_Timestamps(t *testing.T) {
 
 func TestJsonlReader_ImplementsSessionReader(t *testing.T) {
 	var _ SessionReader = &JsonlReader{}
+}
+
+// piDef returns an InputDefinition matching the Pi preset for use in regression tests.
+func piDef() input_config.InputDefinition {
+	return input_config.InputDefinition{
+		Decode: input_config.DecodeConfig{Format: "jsonl"},
+		Record: input_config.RecordConfig{
+			Selector: "$",
+			IncludeWhen: []input_config.Predicate{
+				{Selector: "$.type", Op: "eq", Value: "message"},
+				{Selector: "$.message.role", Op: "in", Value: []any{"user", "assistant"}},
+			},
+		},
+		Map: input_config.MapConfig{
+			Role:      "$.message.role",
+			UUID:      "$.id",
+			Timestamp: "$.timestamp",
+			Project:   "$.cwd",
+		},
+		Content: input_config.ContentConfig{
+			Selector:  "$.message.content",
+			BlockText: "$.text",
+			IncludeWhen: []input_config.Predicate{
+				{Selector: "$.type", Op: "eq", Value: "text"},
+			},
+		},
+		Text: input_config.TextConfig{
+			Join:      "\n",
+			Trim:      true,
+			DropEmpty: true,
+		},
+	}
+}
+
+func TestJsonlReader_Parse_PiDeclarative(t *testing.T) {
+	r := &JsonlReader{}
+	def := piDef()
+
+	pf, err := r.Parse(piFixture, def)
+	if err != nil {
+		t.Fatalf("Parse Pi: %v", err)
+	}
+
+	if pf.Path != piFixture {
+		t.Errorf("Path = %q, want %q", pf.Path, piFixture)
+	}
+	if pf.Hash == "" {
+		t.Error("Hash should not be empty")
+	}
+	// Pi fixture has 2 message-type records with user/assistant roles; toolResult excluded
+	if len(pf.Records) != 2 {
+		t.Errorf("Pi records = %d, want 2 (user + assistant, toolResult excluded)", len(pf.Records))
+	}
+}
+
+func TestJsonlReader_Parse_PiRoles(t *testing.T) {
+	r := &JsonlReader{}
+	def := piDef()
+
+	pf, err := r.Parse(piFixture, def)
+	if err != nil {
+		t.Fatalf("Parse Pi: %v", err)
+	}
+
+	for _, rec := range pf.Records {
+		if rec.Role != "user" && rec.Role != "assistant" {
+			t.Errorf("unexpected role %q (toolResult should be excluded)", rec.Role)
+		}
+	}
+}
+
+func TestJsonlReader_Parse_PiThinkingExcluded(t *testing.T) {
+	r := &JsonlReader{}
+	def := piDef()
+
+	pf, err := r.Parse(piFixture, def)
+	if err != nil {
+		t.Fatalf("Parse Pi: %v", err)
+	}
+
+	// Thinking blocks and toolCall blocks should not appear in content
+	for _, rec := range pf.Records {
+		if contains(rec.Content, "hidden reasoning should not index") {
+			t.Error("thinking block content leaked into indexed content")
+		}
+	}
+}
+
+func TestJsonlReader_Parse_PiVisibleContent(t *testing.T) {
+	r := &JsonlReader{}
+	def := piDef()
+
+	pf, err := r.Parse(piFixture, def)
+	if err != nil {
+		t.Fatalf("Parse Pi: %v", err)
+	}
+
+	found := false
+	for _, rec := range pf.Records {
+		if contains(rec.Content, "pi visible answer") {
+			found = true
+		}
+	}
+	if !found {
+		t.Error("expected 'pi visible answer' in indexed content")
+	}
+}
+
+func TestJsonlReader_Parse_DeclarativePathChosen(t *testing.T) {
+	r := &JsonlReader{}
+
+	// With MapConfig set → declarative path
+	defWithMap := input_config.InputDefinition{
+		Map: input_config.MapConfig{Role: "$.message.role"},
+	}
+	pf, err := r.Parse(claudeFixture, defWithMap)
+	if err != nil {
+		t.Fatalf("declarative path: %v", err)
+	}
+	if pf.Hash == "" {
+		t.Error("Hash should not be empty on declarative path")
+	}
+}
+
+func contains(s, substr string) bool {
+	return len(s) >= len(substr) && (s == substr || len(s) > 0 && containsStr(s, substr))
+}
+
+func containsStr(s, sub string) bool {
+	for i := 0; i <= len(s)-len(sub); i++ {
+		if s[i:i+len(sub)] == sub {
+			return true
+		}
+	}
+	return false
 }

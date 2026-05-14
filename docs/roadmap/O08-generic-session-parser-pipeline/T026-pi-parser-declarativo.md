@@ -1,7 +1,7 @@
 ---
 id: T026
 tipo: task
-estado: Pending
+estado: Completed
 titulo: Pi como primer parser declarativo nativo via manifest
 outcome: O08
 dependencias: [T024, T025, T021]

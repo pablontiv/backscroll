@@ -258,3 +258,132 @@ func TestInvalidPatternError(t *testing.T) {
 		t.Error("Unwrap() should not be nil")
 	}
 }
+
+func TestParseDeclarative_basic(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "session.jsonl")
+
+	records := []map[string]any{
+		{
+			"type":      "user",
+			"uuid":      "u1",
+			"timestamp": "2024-01-01T00:00:00Z",
+			"sessionId": "s1",
+			"message": map[string]any{
+				"role":    "user",
+				"content": []map[string]any{{"type": "text", "text": "hello"}},
+			},
+		},
+		{
+			"type":      "assistant",
+			"uuid":      "u2",
+			"timestamp": "2024-01-01T00:01:00Z",
+			"sessionId": "s1",
+			"message": map[string]any{
+				"role":    "assistant",
+				"content": []map[string]any{{"type": "text", "text": "world"}},
+			},
+		},
+	}
+	writeJSONL(t, path, records)
+
+	msgs, err := ParseDeclarative(path, claudeDef())
+	if err != nil {
+		t.Fatalf("ParseDeclarative: %v", err)
+	}
+	if len(msgs) != 2 {
+		t.Fatalf("expected 2 messages, got %d", len(msgs))
+	}
+	if msgs[0].Role != "user" || msgs[1].Role != "assistant" {
+		t.Errorf("unexpected roles: %v %v", msgs[0].Role, msgs[1].Role)
+	}
+	if msgs[0].Content != "hello" || msgs[1].Content != "world" {
+		t.Errorf("unexpected content: %q %q", msgs[0].Content, msgs[1].Content)
+	}
+	if msgs[0].Timestamp.IsZero() {
+		t.Error("timestamp should not be zero")
+	}
+}
+
+func TestParseDeclarative_filterExcluded(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "session.jsonl")
+
+	records := []map[string]any{
+		{
+			"type":   "user",
+			"isMeta": true, // should be excluded
+			"message": map[string]any{
+				"role":    "user",
+				"content": []map[string]any{{"type": "text", "text": "meta msg"}},
+			},
+		},
+		{
+			"type": "user",
+			"message": map[string]any{
+				"role":    "user",
+				"content": []map[string]any{{"type": "text", "text": "real msg"}},
+			},
+		},
+	}
+	writeJSONL(t, path, records)
+
+	msgs, err := ParseDeclarative(path, claudeDef())
+	if err != nil {
+		t.Fatalf("ParseDeclarative: %v", err)
+	}
+	if len(msgs) != 1 {
+		t.Fatalf("expected 1 message (meta excluded), got %d", len(msgs))
+	}
+	if msgs[0].Content != "real msg" {
+		t.Errorf("content = %q", msgs[0].Content)
+	}
+}
+
+func TestParseDeclarative_roleNormalization(t *testing.T) {
+	if normalizeRole("human") != "user" {
+		t.Error("human should normalize to user")
+	}
+	if normalizeRole("user") != "user" {
+		t.Error("user should remain user")
+	}
+	if normalizeRole("assistant") != "assistant" {
+		t.Error("assistant should remain assistant")
+	}
+}
+
+func TestParseDeclarative_invalidTimestamp(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "session.jsonl")
+
+	records := []map[string]any{
+		{
+			"type":      "user",
+			"timestamp": "not-a-timestamp",
+			"message": map[string]any{
+				"role":    "user",
+				"content": []map[string]any{{"type": "text", "text": "content"}},
+			},
+		},
+	}
+	writeJSONL(t, path, records)
+
+	msgs, err := ParseDeclarative(path, claudeDef())
+	if err != nil {
+		t.Fatalf("ParseDeclarative: %v", err)
+	}
+	// Should succeed with time.Now() fallback
+	if len(msgs) != 1 {
+		t.Fatalf("expected 1 message, got %d", len(msgs))
+	}
+	if msgs[0].Timestamp.IsZero() {
+		t.Error("timestamp should not be zero even with bad input")
+	}
+}
+
+func TestParseDeclarative_missingFile(t *testing.T) {
+	_, err := ParseDeclarative("/nonexistent/path.jsonl", claudeDef())
+	if err == nil {
+		t.Error("expected error for missing file")
+	}
+}

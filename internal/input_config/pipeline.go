@@ -6,6 +6,9 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"time"
+
+	"github.com/pablontiv/backscroll/internal/models"
 )
 
 // TestRecord is a single parsed record from a dry-run of the input pipeline.
@@ -170,4 +173,89 @@ func extractRawContent(record map[string]any, cfg ContentConfig) string {
 		result += p
 	}
 	return result
+}
+
+// ParseDeclarative parses a JSONL file using the declarative pipeline from InputDefinition.
+// It applies record predicates, extracts fields via MapConfig selectors,
+// extracts content via ContentConfig, applies TextConfig transforms, and normalizes roles.
+func ParseDeclarative(path string, def InputDefinition) ([]models.Message, error) {
+	f, err := os.Open(path)
+	if err != nil {
+		return nil, fmt.Errorf("open %s: %w", path, err)
+	}
+	defer func() { _ = f.Close() }()
+
+	var results []models.Message
+	scanner := bufio.NewScanner(f)
+	scanner.Buffer(make([]byte, 1024*1024), 1024*1024)
+
+	for scanner.Scan() {
+		line := scanner.Bytes()
+		if len(line) == 0 {
+			continue
+		}
+
+		var record map[string]any
+		if err := json.Unmarshal(line, &record); err != nil {
+			continue
+		}
+
+		if len(def.Record.IncludeWhen) > 0 {
+			ok, err := EvalPredicates(def.Record.IncludeWhen, record)
+			if err != nil {
+				return nil, err
+			}
+			if !ok {
+				continue
+			}
+		}
+
+		if len(def.Record.ExcludeWhen) > 0 {
+			excluded, err := EvalPredicates(def.Record.ExcludeWhen, record)
+			if err != nil {
+				return nil, err
+			}
+			if excluded {
+				continue
+			}
+		}
+
+		role, _ := SelectString(record, def.Map.Role)
+		role = normalizeRole(role)
+		tsStr, _ := SelectString(record, def.Map.Timestamp)
+
+		ts, err := time.Parse(time.RFC3339, tsStr)
+		if err != nil {
+			ts = time.Now()
+		}
+
+		content := extractRawContent(record, def.Content)
+		content, err = ApplyTransforms(def.Text, content)
+		if errors.Is(err, ErrDropped) {
+			continue
+		}
+		if err != nil {
+			return nil, err
+		}
+		if content == "" {
+			continue
+		}
+
+		results = append(results, models.Message{
+			Role:        role,
+			Content:     content,
+			ContentType: "text",
+			Timestamp:   ts,
+		})
+	}
+
+	return results, scanner.Err()
+}
+
+// normalizeRole maps non-standard role names to canonical values.
+func normalizeRole(role string) string {
+	if role == "human" {
+		return "user"
+	}
+	return role
 }

@@ -22,13 +22,20 @@ func (r *JsonlReader) Hash(path string) (string, error) {
 }
 
 // Parse reads a JSONL session file and returns its messages as a ParsedFile.
-func (r *JsonlReader) Parse(path string, _ input_config.InputDefinition) (models.ParsedFile, error) {
+// When the InputDefinition has MapConfig selectors set, it uses the declarative pipeline.
+// Otherwise it falls back to the legacy ParseSessions parser.
+func (r *JsonlReader) Parse(path string, def input_config.InputDefinition) (models.ParsedFile, error) {
 	hash, err := bsync.HashFile(path)
 	if err != nil {
 		return models.ParsedFile{}, err
 	}
 
-	msgs, err := bsync.ParseSessions(path)
+	var msgs []models.Message
+	if def.Map.Role != "" {
+		msgs, err = input_config.ParseDeclarative(path, def)
+	} else {
+		msgs, err = bsync.ParseSessions(path)
+	}
 	if err != nil {
 		return models.ParsedFile{}, err
 	}
