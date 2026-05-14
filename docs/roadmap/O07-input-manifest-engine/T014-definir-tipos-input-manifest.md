@@ -1,7 +1,7 @@
 ---
 id: T014
 tipo: task
-estado: Pending
+estado: Completed
 titulo: Definir tipos Go para *.inputs.toml
 outcome: O07
 ---
