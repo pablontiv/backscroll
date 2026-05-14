@@ -2011,6 +2011,45 @@ func TestSessionsQueryJSON(t *testing.T) {
 	}
 }
 
+func TestInputsValidate(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("BACKSCROLL_CONFIG_DIR", dir)
+
+	_, cleanup := testEnv(t)
+	defer cleanup()
+
+	out, _, err := runCmd("inputs", "validate")
+	if err != nil {
+		t.Fatalf("inputs validate error: %v", err)
+	}
+	if !strings.Contains(out, "valid") {
+		t.Errorf("inputs validate output missing 'valid': %s", out)
+	}
+}
+
+func TestInputsValidateJSON(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("BACKSCROLL_CONFIG_DIR", dir)
+
+	_, cleanup := testEnv(t)
+	defer cleanup()
+
+	out, _, err := runCmd("inputs", "validate", "--json")
+	if err != nil {
+		t.Fatalf("inputs validate --json error: %v", err)
+	}
+	var result map[string]any
+	if err := json.Unmarshal([]byte(out), &result); err != nil {
+		t.Fatalf("invalid JSON: %v\noutput: %s", err, out)
+	}
+	if _, ok := result["valid"]; !ok {
+		t.Error("JSON missing 'valid' field")
+	}
+	if _, ok := result["inputs"]; !ok {
+		t.Error("JSON missing 'inputs' field")
+	}
+}
+
 func init() {
 	// Suppress cobra's default behavior of writing to os.Stderr on error
 	_ = fmt.Sprintf // keep fmt import

@@ -20,6 +20,7 @@ func newInputsCmd(stdout, stderr io.Writer) *cobra.Command {
 	}
 	cmd.AddCommand(
 		newInputsListCmd(stdout, stderr),
+		newInputsValidateCmd(stdout, stderr),
 		newInputsAliasesCmd(stdout, stderr),
 		newInputsIdentifyCmd(stdout, stderr),
 		newInputsTestCmd(stdout, stderr),
@@ -53,6 +54,39 @@ func newInputsListCmd(stdout, stderr io.Writer) *cobra.Command {
 				fmt.Fprintf(stdout, "  exclude: %v\n", def.Discover.Exclude)
 				fmt.Fprintln(stdout)
 			}
+			return nil
+		},
+	}
+	cmd.Flags().BoolVar(&jsonFormat, "json", false, "Output as JSON")
+	return cmd
+}
+
+func newInputsValidateCmd(stdout, stderr io.Writer) *cobra.Command {
+	var jsonFormat bool
+
+	cmd := &cobra.Command{
+		Use:   "validate",
+		Short: "Validate input manifests without syncing",
+		RunE: func(cmd *cobra.Command, args []string) error {
+			defs, mode, err := resolveInputs()
+			if err != nil {
+				if jsonFormat {
+					_ = json.NewEncoder(stdout).Encode(map[string]any{
+						"valid": false,
+						"error": err.Error(),
+					})
+					return nil
+				}
+				return err
+			}
+			if jsonFormat {
+				return json.NewEncoder(stdout).Encode(map[string]any{
+					"valid":  true,
+					"mode":   mode.String(),
+					"inputs": len(defs),
+				})
+			}
+			fmt.Fprintf(stdout, "Inputs valid: %d active inputs (%s)\n", len(defs), mode)
 			return nil
 		},
 	}

@@ -1,10 +1,10 @@
 ---
-id: T050
-tipo: task
-estado: Pending
-titulo: Subcomando inputs validate
-outcome: O13
 dependencias: []
+estado: Completed
+id: T050
+outcome: O13
+tipo: task
+titulo: Subcomando inputs validate
 ---
 
 # T050 — Subcomando `inputs validate`
