@@ -1,7 +1,7 @@
 ---
 id: T019
 tipo: task
-estado: Pending
+estado: Completed
 titulo: Separar app config de input config; backward compat session_dirs
 outcome: O07
 dependencias: [T015]
