@@ -430,11 +430,40 @@ func TestSearchHelp(t *testing.T) {
 	if err != nil {
 		t.Fatalf("search --help error: %v", err)
 	}
-	for _, flag := range []string{"--project", "--source", "--after", "--before", "--role", "--limit", "--json", "--robot"} {
+	for _, flag := range []string{"--project", "--source", "--after", "--before", "--role", "--limit", "--json", "--robot", "--lexical-only", "--similarity-threshold"} {
 		if !strings.Contains(out, flag) {
 			t.Errorf("search --help missing flag %q", flag)
 		}
 	}
+}
+
+func TestSearchLexicalOnly(t *testing.T) {
+	_, cleanup := testEnv(t)
+	defer cleanup()
+
+	fixture := filepath.Join(fixturesDir(), "claude.jsonl")
+	_, _, _ = runCmd("sync", "--path", filepath.Dir(fixture))
+
+	out, _, err := runCmd("search", "--lexical-only", "session")
+	if err != nil {
+		t.Fatalf("search --lexical-only error: %v", err)
+	}
+	_ = out
+}
+
+func TestSearchSimilarityThreshold(t *testing.T) {
+	_, cleanup := testEnv(t)
+	defer cleanup()
+
+	fixture := filepath.Join(fixturesDir(), "claude.jsonl")
+	_, _, _ = runCmd("sync", "--path", filepath.Dir(fixture))
+
+	// With no vectors in DB, falls back to BM25 regardless of threshold
+	out, _, err := runCmd("search", "--similarity-threshold", "0.5", "session")
+	if err != nil {
+		t.Fatalf("search --similarity-threshold error: %v", err)
+	}
+	_ = out
 }
 
 func TestSyncHelp(t *testing.T) {

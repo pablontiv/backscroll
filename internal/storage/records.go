@@ -23,10 +23,11 @@ type IndexedRecord struct {
 type IndexedRecordQuery struct {
 	Project    *string
 	Source     *string
-	SourcePath *string
+	SourcePath *string // supports * glob (converted to SQL LIKE %)
 	After      *string
 	Before     *string
 	Limit      int
+	MaxChars   int // if >0, truncate Text to this many characters
 }
 
 // QueryIndexedRecords returns records from search_items matching the query,
@@ -97,6 +98,9 @@ func (d *Database) QueryIndexedRecords(q IndexedRecordQuery) ([]IndexedRecord, e
 		}
 		if timestamp.Valid {
 			r.Timestamp = &timestamp.String
+		}
+		if q.MaxChars > 0 && len(r.Text) > q.MaxChars {
+			r.Text = r.Text[:q.MaxChars]
 		}
 		records = append(records, r)
 	}

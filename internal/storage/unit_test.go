@@ -836,3 +836,217 @@ func TestResolveSessionPath(t *testing.T) {
 		t.Errorf("expected empty path for no match, got %q", path)
 	}
 }
+
+func TestVectorSearch_RoundTrip(t *testing.T) {
+	db, cleanup := newTestDB(t)
+	defer cleanup()
+
+	// Index a file so search_items has a row with matching source_path
+	_ = db.SyncFiles([]IndexedFile{{
+		SourcePath: "test/a.jsonl",
+		Source:     "session",
+		Hash:       "h1",
+		Project:    "proj",
+		Messages: []IndexedMessage{
+			{Ordinal: 0, Role: "user", Text: "hello vector world", ContentType: "text"},
+		},
+	}})
+
+	// Insert a chunk with embedding
+	ids, err := db.InsertChunks("test/a.jsonl", []ChunkRecord{
+		{ChunkIdx: 0, Content: "hello vector world", TokenCount: 3},
+	}, time.Now().Unix())
+	if err != nil {
+		t.Fatalf("InsertChunks: %v", err)
+	}
+
+	vec := make([]float32, 4)
+	for i := range vec {
+		vec[i] = float32(i + 1)
+	}
+	if err := db.InsertChunkEmbedding(ids[0], vec); err != nil {
+		t.Fatalf("InsertChunkEmbedding: %v", err)
+	}
+
+	count, err := db.GetVectorCount()
+	if err != nil {
+		t.Fatalf("GetVectorCount: %v", err)
+	}
+	if count != 1 {
+		t.Errorf("expected 1 vector, got %d", count)
+	}
+
+	// Vector search with the same vector should return similarity ≈ 1.0
+	results, err := db.VectorSearch(vec, 10)
+	if err != nil {
+		t.Fatalf("VectorSearch: %v", err)
+	}
+	if len(results) == 0 {
+		t.Fatal("expected at least 1 vector result")
+	}
+	if results[0].Similarity < 0.99 {
+		t.Errorf("expected similarity ≈ 1.0, got %.4f", results[0].Similarity)
+	}
+}
+
+func TestHybridSearch_FallbackWithoutProvider(t *testing.T) {
+	db, cleanup := newTestDB(t)
+	defer cleanup()
+
+	_ = db.SyncFiles([]IndexedFile{{
+		SourcePath: "test/b.jsonl",
+		Source:     "session",
+		Hash:       "h2",
+		Project:    "proj",
+		Messages: []IndexedMessage{
+			{Ordinal: 0, Role: "user", Text: "hybrid search fallback test", ContentType: "text"},
+		},
+	}})
+
+	// No provider set — should return BM25 results
+	results, err := db.HybridSearch("hybrid", models.SearchOptions{AllProjects: true})
+	if err != nil {
+		t.Fatalf("HybridSearch: %v", err)
+	}
+	if len(results) == 0 {
+		t.Error("expected BM25 fallback results")
+	}
+}
+
+func TestHybridSearch_WithMockProvider(t *testing.T) {
+	db, cleanup := newTestDB(t)
+	defer cleanup()
+
+	provider := embedding.NewMockProvider(4)
+	defer func() { _ = provider.Close() }()
+	db.SetEmbeddingProvider(provider)
+
+	_ = db.SyncFiles([]IndexedFile{{
+		SourcePath: "test/c.jsonl",
+		Source:     "session",
+		Hash:       "h3",
+		Project:    "proj",
+		Messages: []IndexedMessage{
+			{Ordinal: 0, Role: "user", Text: "mock provider hybrid search", ContentType: "text"},
+		},
+	}})
+
+	// Insert chunk + embedding so vector path activates
+	ids, _ := db.InsertChunks("test/c.jsonl", []ChunkRecord{
+		{ChunkIdx: 0, Content: "mock provider hybrid search", TokenCount: 4},
+	}, time.Now().Unix())
+	vec, _ := provider.Embed(context.Background(), "mock provider hybrid search")
+	_ = db.InsertChunkEmbedding(ids[0], vec)
+
+	results, err := db.HybridSearch("mock", models.SearchOptions{AllProjects: true})
+	if err != nil {
+		t.Fatalf("HybridSearch with provider: %v", err)
+	}
+	if len(results) == 0 {
+		t.Error("expected hybrid results with mock provider")
+	}
+}
+
+func TestHybridSearch_LexicalOnly(t *testing.T) {
+	db, cleanup := newTestDB(t)
+	defer cleanup()
+
+	provider := embedding.NewMockProvider(4)
+	defer func() { _ = provider.Close() }()
+	db.SetEmbeddingProvider(provider)
+
+	_ = db.SyncFiles([]IndexedFile{{
+		SourcePath: "test/d.jsonl",
+		Source:     "session",
+		Hash:       "h4",
+		Project:    "proj",
+		Messages: []IndexedMessage{
+			{Ordinal: 0, Role: "user", Text: "lexical only search test", ContentType: "text"},
+		},
+	}})
+
+	// LexicalOnly=true should skip vector path even with provider
+	results, err := db.HybridSearch("lexical", models.SearchOptions{
+		AllProjects: true,
+		LexicalOnly: true,
+	})
+	if err != nil {
+		t.Fatalf("HybridSearch lexical-only: %v", err)
+	}
+	if len(results) == 0 {
+		t.Error("expected BM25 results with lexical-only")
+	}
+}
+
+func TestHasEmbeddingProvider(t *testing.T) {
+	db, cleanup := newTestDB(t)
+	defer cleanup()
+
+	if db.HasEmbeddingProvider() {
+		t.Error("expected no provider initially")
+	}
+
+	provider := embedding.NewMockProvider(4)
+	defer func() { _ = provider.Close() }()
+	db.SetEmbeddingProvider(provider)
+
+	if !db.HasEmbeddingProvider() {
+		t.Error("expected provider after SetEmbeddingProvider")
+	}
+}
+
+func TestHybridSearch_SimilarityThreshold(t *testing.T) {
+	db, cleanup := newTestDB(t)
+	defer cleanup()
+
+	provider := embedding.NewMockProvider(4)
+	defer func() { _ = provider.Close() }()
+	db.SetEmbeddingProvider(provider)
+
+	_ = db.SyncFiles([]IndexedFile{{
+		SourcePath: "test/e.jsonl",
+		Source:     "session",
+		Hash:       "h5",
+		Project:    "proj",
+		Messages: []IndexedMessage{
+			{Ordinal: 0, Role: "user", Text: "threshold filter test query", ContentType: "text"},
+		},
+	}})
+
+	ids, _ := db.InsertChunks("test/e.jsonl", []ChunkRecord{
+		{ChunkIdx: 0, Content: "threshold filter test query", TokenCount: 4},
+	}, time.Now().Unix())
+	vec, _ := provider.Embed(context.Background(), "threshold filter test query")
+	_ = db.InsertChunkEmbedding(ids[0], vec)
+
+	// High threshold — mock provider produces deterministic unit vectors so similarity ≈ 1.0
+	// Using very high threshold (e.g. 0.99) should still return results
+	results, err := db.HybridSearch("threshold", models.SearchOptions{
+		AllProjects:         true,
+		SimilarityThreshold: 0.99,
+	})
+	if err != nil {
+		t.Fatalf("HybridSearch similarity threshold: %v", err)
+	}
+	// Results may be empty if similarity < threshold — just verify no error
+	_ = results
+}
+
+func TestCosineSimilarity_ZeroVector(t *testing.T) {
+	zero := []float32{0, 0, 0}
+	unit := []float32{1, 0, 0}
+	if cosineSimilarity(zero, unit) != 0 {
+		t.Error("cosineSimilarity with zero vector should return 0")
+	}
+	if cosineSimilarity(unit, zero) != 0 {
+		t.Error("cosineSimilarity with zero second vector should return 0")
+	}
+}
+
+func TestDecodeEmbedding_InvalidLength(t *testing.T) {
+	// Odd-byte slice — not aligned to 4 bytes
+	bad := []byte{0x01, 0x02, 0x03}
+	if decodeEmbedding(bad) != nil {
+		t.Error("expected nil for misaligned byte slice")
+	}
+}

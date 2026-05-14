@@ -1,7 +1,7 @@
 ---
 id: T034
 tipo: task
-estado: Pending
+estado: Completed
 titulo: EmbeddingConfig en config structs
 outcome: O09
 dependencias: [T031]

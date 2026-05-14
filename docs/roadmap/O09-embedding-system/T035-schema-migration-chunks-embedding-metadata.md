@@ -1,7 +1,7 @@
 ---
 id: T035
 tipo: task
-estado: Pending
+estado: Completed
 titulo: Schema migration — tablas chunks y embedding_metadata
 outcome: O09
 dependencias: [T034]

@@ -1,10 +1,12 @@
 ---
+dependencias:
+  - T042
+  - T043
+estado: Completed
 id: T044
-tipo: task
-estado: Pending
-titulo: Tests de búsqueda híbrida (mock embeddings)
 outcome: O10
-dependencias: [T042, T043]
+tipo: task
+titulo: Tests de búsqueda híbrida (mock embeddings)
 ---
 
 # T044 — Tests de búsqueda híbrida (mock embeddings)
