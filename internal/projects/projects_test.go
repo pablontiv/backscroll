@@ -208,3 +208,42 @@ func TestLoadLocalHintInvalidTOML(t *testing.T) {
 		t.Errorf("expected nil hint for invalid TOML, got %+v", hint)
 	}
 }
+
+func TestLoadGlobalRegistryWithFile(t *testing.T) {
+	home := t.TempDir()
+	cfgDir := filepath.Join(home, ".config", "backscroll")
+	if err := os.MkdirAll(cfgDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	content := `
+[[projects]]
+id = "myapp"
+roots = ["/home/user/myapp"]
+`
+	if err := os.WriteFile(filepath.Join(cfgDir, "projects.toml"), []byte(content), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("HOME", home)
+
+	reg := projects.LoadGlobalRegistry()
+	if len(reg.Projects) != 1 || reg.Projects[0].ID != "myapp" {
+		t.Errorf("expected myapp project, got %+v", reg.Projects)
+	}
+}
+
+func TestLoadGlobalRegistryInvalidTOML(t *testing.T) {
+	home := t.TempDir()
+	cfgDir := filepath.Join(home, ".config", "backscroll")
+	if err := os.MkdirAll(cfgDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(cfgDir, "projects.toml"), []byte("not valid toml ==="), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("HOME", home)
+
+	reg := projects.LoadGlobalRegistry()
+	if len(reg.Projects) != 0 {
+		t.Errorf("expected empty registry for invalid TOML, got %+v", reg.Projects)
+	}
+}

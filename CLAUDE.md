@@ -100,7 +100,7 @@ Configurable in `[sources]` section of `backscroll.toml`. Source types: `ke`, `d
 - **Pure Go SQLite**: `modernc.org/sqlite` — no CGO, trivially cross-compilable.
 - **Schema migration rule**: Every new table or column MUST be introduced as a new migration version (increment the version number and add a new `if currentVersion == N` block in `setupSchema()`). Never modify existing migration blocks — existing databases that already passed that version will never re-run them.
 - **Early input validation**: CLI commands validate flag values (e.g. `--format`) before opening the database, so invalid inputs fail fast without side effects.
-- **Coverage gate**: CI enforces ≥85% aggregate statement coverage via `go test ./... -race -coverprofile`. Local check: `bash scripts/check-coverage.sh`.
+- **Coverage gate**: CI enforces ≥85% aggregate statement coverage via `go test ./... -race -coverprofile`. Local check: `bash scripts/check-coverage.sh`. Tests that depend on local machine state (e.g. `~/.config/backscroll/projects.toml`) must use `t.Setenv("HOME", tempDir)` to stay reproducible on CI.
 
 ## Dependencies
 

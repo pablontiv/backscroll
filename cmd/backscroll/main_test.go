@@ -1188,6 +1188,40 @@ func TestProjectsAliasesJSON(t *testing.T) {
 	}
 }
 
+func TestProjectsAliasesText(t *testing.T) {
+	// Text output (no --json) with unknown project → empty output, no error
+	out, _, err := runCmd("projects", "aliases", "--project-id", "nonexistent")
+	if err != nil {
+		t.Fatalf("projects aliases text error: %v", err)
+	}
+	_ = out
+}
+
+func TestProjectsAliasesWithRegistry(t *testing.T) {
+	home := t.TempDir()
+	cfgDir := filepath.Join(home, ".config", "backscroll")
+	if err := os.MkdirAll(cfgDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	content := `[[projects]]
+id = "myapp"
+roots = ["/home/user/myapp"]
+aliases = ["app", "my"]
+`
+	if err := os.WriteFile(filepath.Join(cfgDir, "projects.toml"), []byte(content), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("HOME", home)
+
+	out, _, err := runCmd("projects", "aliases", "--project-id", "myapp")
+	if err != nil {
+		t.Fatalf("projects aliases with registry error: %v", err)
+	}
+	if !strings.Contains(out, "app") {
+		t.Errorf("expected alias 'app' in output, got: %s", out)
+	}
+}
+
 // ---- decisions command tests ----
 
 func TestDecisionsHelp(t *testing.T) {
