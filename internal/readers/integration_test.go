@@ -326,7 +326,7 @@ func writeSession(t *testing.T, path string, records []map[string]any) {
 	}
 }
 
-// createTestOpenCodeDB creates a minimal OpenCode-format DB.
+// createTestOpenCodeDB creates a minimal OpenCode-format DB using the real anomalyco/opencode schema.
 func createTestOpenCodeDB(t *testing.T, path string) {
 	t.Helper()
 	db, err := sql.Open("sqlite", path)
@@ -336,32 +336,42 @@ func createTestOpenCodeDB(t *testing.T, path string) {
 	defer func() { _ = db.Close() }()
 
 	_, err = db.Exec(`
-		CREATE TABLE sessions (id TEXT PRIMARY KEY, title TEXT NOT NULL, message_count INTEGER NOT NULL DEFAULT 0,
-			prompt_tokens INTEGER NOT NULL DEFAULT 0, completion_tokens INTEGER NOT NULL DEFAULT 0,
-			cost REAL NOT NULL DEFAULT 0.0, updated_at INTEGER NOT NULL, created_at INTEGER NOT NULL);
-		CREATE TABLE messages (id TEXT PRIMARY KEY, session_id TEXT NOT NULL, role TEXT NOT NULL,
-			parts TEXT NOT NULL DEFAULT '[]', model TEXT, created_at INTEGER NOT NULL,
-			updated_at INTEGER NOT NULL, finished_at INTEGER);
+		CREATE TABLE message (
+			id TEXT PRIMARY KEY,
+			session_id TEXT NOT NULL,
+			time_created INTEGER NOT NULL,
+			time_updated INTEGER NOT NULL,
+			data TEXT NOT NULL
+		);
+		CREATE TABLE part (
+			id TEXT PRIMARY KEY,
+			message_id TEXT NOT NULL,
+			session_id TEXT NOT NULL,
+			time_created INTEGER NOT NULL,
+			time_updated INTEGER NOT NULL,
+			data TEXT NOT NULL
+		);
 	`)
 	if err != nil {
 		t.Fatalf("create schema: %v", err)
 	}
 
 	now := time.Now().UnixMilli()
-	_, err = db.Exec(`INSERT INTO sessions (id, title, updated_at, created_at) VALUES (?, ?, ?, ?)`,
-		"s1", "Integration Session", now, now)
-	if err != nil {
-		t.Fatalf("insert session: %v", err)
-	}
-
-	type part struct {
-		Type string `json:"type"`
-		Data any    `json:"data"`
-	}
-	parts, _ := json.Marshal([]part{{Type: "text", Data: map[string]string{"text": "integration test content"}}})
-	_, err = db.Exec(`INSERT INTO messages (id, session_id, role, parts, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?)`,
-		"m1", "s1", "user", string(parts), now+1000, now+1000)
+	msgData, _ := json.Marshal(map[string]string{"role": "user"})
+	_, err = db.Exec(
+		`INSERT INTO message (id, session_id, time_created, time_updated, data) VALUES (?, ?, ?, ?, ?)`,
+		"m1", "s1", now+1000, now+1000, string(msgData),
+	)
 	if err != nil {
 		t.Fatalf("insert message: %v", err)
+	}
+
+	partData, _ := json.Marshal(map[string]string{"type": "text", "text": "integration test content"})
+	_, err = db.Exec(
+		`INSERT INTO part (id, message_id, session_id, time_created, time_updated, data) VALUES (?, ?, ?, ?, ?, ?)`,
+		"p1", "m1", "s1", now+1000, now+1000, string(partData),
+	)
+	if err != nil {
+		t.Fatalf("insert part: %v", err)
 	}
 }

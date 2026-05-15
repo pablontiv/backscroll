@@ -13,6 +13,7 @@ import (
 )
 
 // createOpenCodeDB creates a temporary OpenCode-format SQLite database for testing.
+// Uses the real anomalyco/opencode schema: message + part tables with JSON data columns.
 func createOpenCodeDB(t *testing.T) string {
 	t.Helper()
 	dir := t.TempDir()
@@ -25,26 +26,20 @@ func createOpenCodeDB(t *testing.T) string {
 	defer func() { _ = db.Close() }()
 
 	_, err = db.Exec(`
-		CREATE TABLE sessions (
-			id TEXT PRIMARY KEY,
-			title TEXT NOT NULL,
-			message_count INTEGER NOT NULL DEFAULT 0,
-			prompt_tokens INTEGER NOT NULL DEFAULT 0,
-			completion_tokens INTEGER NOT NULL DEFAULT 0,
-			cost REAL NOT NULL DEFAULT 0.0,
-			updated_at INTEGER NOT NULL,
-			created_at INTEGER NOT NULL
-		);
-		CREATE TABLE messages (
+		CREATE TABLE message (
 			id TEXT PRIMARY KEY,
 			session_id TEXT NOT NULL,
-			role TEXT NOT NULL,
-			parts TEXT NOT NULL DEFAULT '[]',
-			model TEXT,
-			created_at INTEGER NOT NULL,
-			updated_at INTEGER NOT NULL,
-			finished_at INTEGER,
-			FOREIGN KEY (session_id) REFERENCES sessions(id)
+			time_created INTEGER NOT NULL,
+			time_updated INTEGER NOT NULL,
+			data TEXT NOT NULL
+		);
+		CREATE TABLE part (
+			id TEXT PRIMARY KEY,
+			message_id TEXT NOT NULL,
+			session_id TEXT NOT NULL,
+			time_created INTEGER NOT NULL,
+			time_updated INTEGER NOT NULL,
+			data TEXT NOT NULL
 		);
 	`)
 	if err != nil {
@@ -52,51 +47,49 @@ func createOpenCodeDB(t *testing.T) string {
 	}
 
 	now := time.Now().UnixMilli()
-	_, err = db.Exec(`INSERT INTO sessions (id, title, updated_at, created_at) VALUES (?, ?, ?, ?)`,
-		"sess-1", "Test Session", now, now)
-	if err != nil {
-		t.Fatalf("insert session: %v", err)
-	}
 
-	type part struct {
-		Type string `json:"type"`
-		Data any    `json:"data"`
-	}
-
-	insertMsg := func(id, role string, parts []part, createdAt int64) {
+	insertMsg := func(id, role string, timeCreated int64) {
 		t.Helper()
-		partsJSON, _ := json.Marshal(parts)
+		data, _ := json.Marshal(map[string]string{"role": role})
 		_, err := db.Exec(
-			`INSERT INTO messages (id, session_id, role, parts, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?)`,
-			id, "sess-1", role, string(partsJSON), createdAt, createdAt,
+			`INSERT INTO message (id, session_id, time_created, time_updated, data) VALUES (?, ?, ?, ?, ?)`,
+			id, "sess-1", timeCreated, timeCreated, string(data),
 		)
 		if err != nil {
 			t.Fatalf("insert message %s: %v", id, err)
 		}
 	}
 
-	// User message with text part
-	insertMsg("msg-1", "user", []part{
-		{Type: "text", Data: map[string]string{"text": "hello from user"}},
-		{Type: "finish", Data: map[string]string{"reason": "stop"}},
-	}, now+1000)
+	insertPart := func(id, msgID string, data any) {
+		t.Helper()
+		dataJSON, _ := json.Marshal(data)
+		ts := time.Now().UnixMilli()
+		_, err := db.Exec(
+			`INSERT INTO part (id, message_id, session_id, time_created, time_updated, data) VALUES (?, ?, ?, ?, ?, ?)`,
+			id, msgID, "sess-1", ts, ts, string(dataJSON),
+		)
+		if err != nil {
+			t.Fatalf("insert part %s: %v", id, err)
+		}
+	}
 
-	// Assistant message with text + tool_call parts (only text indexed)
-	insertMsg("msg-2", "assistant", []part{
-		{Type: "text", Data: map[string]string{"text": "I will use a tool"}},
-		{Type: "tool_call", Data: map[string]string{"id": "tc1", "name": "bash"}},
-	}, now+2000)
+	// msg-1: user with text + step-finish (only text indexed)
+	insertMsg("msg-1", "user", now+1000)
+	insertPart("p-1-1", "msg-1", map[string]string{"type": "text", "text": "hello from user"})
+	insertPart("p-1-2", "msg-1", map[string]string{"type": "step-finish"})
 
-	// Tool result message (should produce empty content → skipped)
-	insertMsg("msg-3", "tool", []part{
-		{Type: "tool_result", Data: map[string]string{"id": "tc1", "output": "result"}},
-		{Type: "finish", Data: map[string]string{"reason": "stop"}},
-	}, now+3000)
+	// msg-2: assistant with text + tool (only text indexed)
+	insertMsg("msg-2", "assistant", now+2000)
+	insertPart("p-2-1", "msg-2", map[string]string{"type": "text", "text": "I will use a tool"})
+	insertPart("p-2-2", "msg-2", map[string]interface{}{"type": "tool-use", "id": "tc1", "name": "bash"})
 
-	// Reasoning-only message (should be skipped)
-	insertMsg("msg-4", "assistant", []part{
-		{Type: "reasoning", Data: map[string]string{"thinking": "hidden thought"}},
-	}, now+4000)
+	// msg-3: tool result only (no text parts → skipped)
+	insertMsg("msg-3", "tool", now+3000)
+	insertPart("p-3-1", "msg-3", map[string]interface{}{"type": "tool-result", "id": "tc1", "output": "result"})
+
+	// msg-4: assistant reasoning only (skipped)
+	insertMsg("msg-4", "assistant", now+4000)
+	insertPart("p-4-1", "msg-4", map[string]string{"type": "reasoning", "thinking": "hidden thought"})
 
 	return dbPath
 }
@@ -123,9 +116,32 @@ func TestOpenCodeReader_Hash(t *testing.T) {
 	if h == "" || h == "empty" {
 		t.Errorf("Hash = %q, want non-empty hex string", h)
 	}
-	// Should be 16 hex chars (int64 formatted as %016x)
 	if len(h) != 16 {
 		t.Errorf("Hash len = %d, want 16 (%%016x format): %q", len(h), h)
+	}
+}
+
+func TestOpenCodeReader_Hash_Empty(t *testing.T) {
+	dir := t.TempDir()
+	dbPath := filepath.Join(dir, "empty.db")
+
+	db, err := sql.Open("sqlite", dbPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = db.Exec(`CREATE TABLE message (id TEXT PRIMARY KEY, session_id TEXT NOT NULL, time_created INTEGER NOT NULL, time_updated INTEGER NOT NULL, data TEXT NOT NULL)`)
+	_ = db.Close()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	r := &OpenCodeReader{}
+	h, err := r.Hash(dbPath)
+	if err != nil {
+		t.Fatalf("Hash empty: %v", err)
+	}
+	if h != "empty" {
+		t.Errorf("Hash empty DB = %q, want %q", h, "empty")
 	}
 }
 
@@ -147,7 +163,7 @@ func TestOpenCodeReader_Parse_MessageCount(t *testing.T) {
 	}
 
 	// msg-1 (user, text) + msg-2 (assistant, text) = 2 messages
-	// msg-3 (tool, only tool_result → empty) and msg-4 (reasoning only) are skipped
+	// msg-3 (only tool-result) and msg-4 (only reasoning) are skipped
 	if len(pf.Records) != 2 {
 		t.Errorf("Records count = %d, want 2", len(pf.Records))
 	}
@@ -182,8 +198,8 @@ func TestOpenCodeReader_Parse_Content(t *testing.T) {
 		t.Fatalf("Parse: %v", err)
 	}
 
-	if len(pf.Records) < 1 {
-		t.Fatalf("no records")
+	if len(pf.Records) < 2 {
+		t.Fatalf("not enough records: %d", len(pf.Records))
 	}
 	if pf.Records[0].Content != "hello from user" {
 		t.Errorf("Record[0].Content = %q", pf.Records[0].Content)
@@ -193,7 +209,7 @@ func TestOpenCodeReader_Parse_Content(t *testing.T) {
 	}
 }
 
-func TestOpenCodeReader_Parse_ToolCallNotIndexed(t *testing.T) {
+func TestOpenCodeReader_Parse_NonTextNotIndexed(t *testing.T) {
 	dbPath := createOpenCodeDB(t)
 	r := &OpenCodeReader{}
 
@@ -204,11 +220,91 @@ func TestOpenCodeReader_Parse_ToolCallNotIndexed(t *testing.T) {
 
 	for _, rec := range pf.Records {
 		if containsStr(rec.Content, "result") && containsStr(rec.Content, "tc1") {
-			t.Error("tool_result content should not be indexed")
+			t.Error("tool-result content should not be indexed")
 		}
 		if containsStr(rec.Content, "hidden thought") {
 			t.Error("reasoning content should not be indexed")
 		}
+	}
+}
+
+func TestOpenCodeReader_Parse_Ignored(t *testing.T) {
+	dir := t.TempDir()
+	dbPath := filepath.Join(dir, "opencode.db")
+
+	db, err := sql.Open("sqlite", dbPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = db.Exec(`
+		CREATE TABLE message (id TEXT PRIMARY KEY, session_id TEXT NOT NULL, time_created INTEGER NOT NULL, time_updated INTEGER NOT NULL, data TEXT NOT NULL);
+		CREATE TABLE part (id TEXT PRIMARY KEY, message_id TEXT NOT NULL, session_id TEXT NOT NULL, time_created INTEGER NOT NULL, time_updated INTEGER NOT NULL, data TEXT NOT NULL);
+	`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	now := time.Now().UnixMilli()
+	msgData, _ := json.Marshal(map[string]string{"role": "assistant"})
+	_, _ = db.Exec(`INSERT INTO message VALUES (?, ?, ?, ?, ?)`, "m1", "s1", now, now, string(msgData))
+
+	trueVal := true
+	ignoredData, _ := json.Marshal(map[string]interface{}{"type": "text", "text": "hidden ignored text", "ignored": trueVal})
+	visibleData, _ := json.Marshal(map[string]interface{}{"type": "text", "text": "visible text"})
+	_, _ = db.Exec(`INSERT INTO part VALUES (?, ?, ?, ?, ?, ?)`, "p1", "m1", "s1", now, now, string(ignoredData))
+	_, _ = db.Exec(`INSERT INTO part VALUES (?, ?, ?, ?, ?, ?)`, "p2", "m1", "s1", now+1, now+1, string(visibleData))
+	_ = db.Close()
+
+	r := &OpenCodeReader{}
+	pf, err := r.Parse(dbPath, input_config.InputDefinition{})
+	if err != nil {
+		t.Fatalf("Parse: %v", err)
+	}
+	if len(pf.Records) != 1 {
+		t.Fatalf("expected 1 record, got %d", len(pf.Records))
+	}
+	if containsStr(pf.Records[0].Content, "hidden ignored text") {
+		t.Error("ignored part should not appear in content")
+	}
+	if pf.Records[0].Content != "visible text" {
+		t.Errorf("content = %q, want %q", pf.Records[0].Content, "visible text")
+	}
+}
+
+func TestOpenCodeReader_Parse_MultipleTextParts(t *testing.T) {
+	dir := t.TempDir()
+	dbPath := filepath.Join(dir, "opencode.db")
+
+	db, err := sql.Open("sqlite", dbPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = db.Exec(`
+		CREATE TABLE message (id TEXT PRIMARY KEY, session_id TEXT NOT NULL, time_created INTEGER NOT NULL, time_updated INTEGER NOT NULL, data TEXT NOT NULL);
+		CREATE TABLE part (id TEXT PRIMARY KEY, message_id TEXT NOT NULL, session_id TEXT NOT NULL, time_created INTEGER NOT NULL, time_updated INTEGER NOT NULL, data TEXT NOT NULL);
+	`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	now := time.Now().UnixMilli()
+	msgData, _ := json.Marshal(map[string]string{"role": "assistant"})
+	_, _ = db.Exec(`INSERT INTO message VALUES (?, ?, ?, ?, ?)`, "m1", "s1", now, now, string(msgData))
+
+	p1, _ := json.Marshal(map[string]string{"type": "text", "text": "line1"})
+	p2, _ := json.Marshal(map[string]string{"type": "text", "text": "line2"})
+	_, _ = db.Exec(`INSERT INTO part VALUES (?, ?, ?, ?, ?, ?)`, "p1", "m1", "s1", now, now, string(p1))
+	_, _ = db.Exec(`INSERT INTO part VALUES (?, ?, ?, ?, ?, ?)`, "p2", "m1", "s1", now+1, now+1, string(p2))
+	_ = db.Close()
+
+	r := &OpenCodeReader{}
+	pf, err := r.Parse(dbPath, input_config.InputDefinition{})
+	if err != nil {
+		t.Fatalf("Parse: %v", err)
+	}
+	if len(pf.Records) != 1 {
+		t.Fatalf("expected 1 record, got %d", len(pf.Records))
+	}
+	if pf.Records[0].Content != "line1\nline2" {
+		t.Errorf("Content = %q, want %q", pf.Records[0].Content, "line1\nline2")
 	}
 }
 
@@ -270,7 +366,6 @@ func TestOpenCodeReader_Parse_MissingFile(t *testing.T) {
 
 func TestOpenCodeReader_Discover(t *testing.T) {
 	dir := t.TempDir()
-	// Create fake .opencode/opencode.db structure
 	dbDir := filepath.Join(dir, ".opencode")
 	if err := os.MkdirAll(dbDir, 0o755); err != nil {
 		t.Fatal(err)
@@ -293,69 +388,5 @@ func TestOpenCodeReader_Discover(t *testing.T) {
 	}
 	if len(paths) != 1 {
 		t.Errorf("Discover returned %d paths, want 1", len(paths))
-	}
-}
-
-func TestExtractTextFromParts(t *testing.T) {
-	type part struct {
-		Type string `json:"type"`
-		Data any    `json:"data"`
-	}
-
-	cases := []struct {
-		name     string
-		parts    []part
-		wantText string
-	}{
-		{
-			name: "text only",
-			parts: []part{
-				{Type: "text", Data: map[string]string{"text": "hello"}},
-			},
-			wantText: "hello",
-		},
-		{
-			name: "text + tool_call",
-			parts: []part{
-				{Type: "text", Data: map[string]string{"text": "I will call"}},
-				{Type: "tool_call", Data: map[string]string{"name": "bash"}},
-			},
-			wantText: "I will call",
-		},
-		{
-			name:     "only tool_result",
-			parts:    []part{{Type: "tool_result", Data: map[string]string{"output": "ok"}}},
-			wantText: "",
-		},
-		{
-			name:     "empty array",
-			parts:    []part{},
-			wantText: "",
-		},
-		{
-			name: "multiple text parts",
-			parts: []part{
-				{Type: "text", Data: map[string]string{"text": "line1"}},
-				{Type: "text", Data: map[string]string{"text": "line2"}},
-			},
-			wantText: "line1\nline2",
-		},
-	}
-
-	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			raw, _ := json.Marshal(tc.parts)
-			got := extractTextFromParts(string(raw))
-			if got != tc.wantText {
-				t.Errorf("got %q, want %q", got, tc.wantText)
-			}
-		})
-	}
-}
-
-func TestExtractTextFromParts_Malformed(t *testing.T) {
-	got := extractTextFromParts("not json")
-	if got != "" {
-		t.Errorf("malformed JSON should return empty, got %q", got)
 	}
 }

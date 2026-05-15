@@ -23,8 +23,8 @@ func (r *OpenCodeReader) Discover(def input_config.InputDefinition) ([]string, e
 	return input_config.DiscoverFiles(def.Discover)
 }
 
-// Hash returns a stable watermark for the database based on MAX(updated_at) of messages.
-// If the database is empty or inaccessible, it returns an empty string and no error.
+// Hash returns a stable watermark for the database based on MAX(time_updated) of messages.
+// If the database is empty or inaccessible, it returns "empty" and no error.
 func (r *OpenCodeReader) Hash(dbPath string) (string, error) {
 	db, err := openReadOnly(dbPath)
 	if err != nil {
@@ -33,7 +33,7 @@ func (r *OpenCodeReader) Hash(dbPath string) (string, error) {
 	defer func() { _ = db.Close() }()
 
 	var maxUpdated sql.NullInt64
-	row := db.QueryRow(`SELECT MAX(updated_at) FROM messages`)
+	row := db.QueryRow(`SELECT MAX(time_updated) FROM message`)
 	if err := row.Scan(&maxUpdated); err != nil {
 		return "", fmt.Errorf("opencode hash query %s: %w", dbPath, err)
 	}
@@ -43,8 +43,18 @@ func (r *OpenCodeReader) Hash(dbPath string) (string, error) {
 	return fmt.Sprintf("%016x", maxUpdated.Int64), nil
 }
 
+type msgInfoData struct {
+	Role string `json:"role"`
+}
+
+type partInfoData struct {
+	Type    string `json:"type"`
+	Text    string `json:"text"`
+	Ignored *bool  `json:"ignored"`
+}
+
 // Parse reads all messages from the OpenCode database and returns them as a ParsedFile.
-// Only parts of type "text" are indexed; reasoning, tool_call, tool_result, and finish are skipped.
+// Only parts of type "text" with ignored != true are indexed; all other part types are skipped.
 func (r *OpenCodeReader) Parse(dbPath string, _ input_config.InputDefinition) (models.ParsedFile, error) {
 	hash, err := r.Hash(dbPath)
 	if err != nil {
@@ -58,40 +68,76 @@ func (r *OpenCodeReader) Parse(dbPath string, _ input_config.InputDefinition) (m
 	defer func() { _ = db.Close() }()
 
 	rows, err := db.Query(`
-		SELECT id, session_id, role, parts, created_at
-		FROM messages
-		ORDER BY created_at ASC
+		SELECT m.id, m.session_id, m.data, m.time_created, p.data
+		FROM message m
+		JOIN part p ON p.message_id = m.id
+		ORDER BY m.time_created ASC, p.id ASC
 	`)
 	if err != nil {
 		return models.ParsedFile{}, fmt.Errorf("opencode parse query %s: %w", dbPath, err)
 	}
 	defer func() { _ = rows.Close() }()
 
-	var msgs []models.Message
+	var (
+		msgs         []models.Message
+		currentMsgID string
+		currentRole  string
+		currentTime  int64
+		textParts    []string
+	)
+
+	flush := func() {
+		if len(textParts) == 0 {
+			return
+		}
+		msgs = append(msgs, models.Message{
+			Role:        normalizeOpenCodeRole(currentRole),
+			Content:     strings.Join(textParts, "\n"),
+			ContentType: "text",
+			Timestamp:   time.UnixMilli(currentTime),
+		})
+	}
+
 	for rows.Next() {
 		var (
-			id        string
-			sessionID string
-			role      string
-			partsJSON string
-			createdAt int64
+			msgID       string
+			sessionID   string
+			msgData     string
+			timeCreated int64
+			partData    string
 		)
-		if err := rows.Scan(&id, &sessionID, &role, &partsJSON, &createdAt); err != nil {
+		if err := rows.Scan(&msgID, &sessionID, &msgData, &timeCreated, &partData); err != nil {
 			continue
 		}
 
-		text := extractTextFromParts(partsJSON)
+		var pd partInfoData
+		if err := json.Unmarshal([]byte(partData), &pd); err != nil || pd.Type != "text" {
+			continue
+		}
+		if pd.Ignored != nil && *pd.Ignored {
+			continue
+		}
+		text := strings.TrimSpace(pd.Text)
 		if text == "" {
 			continue
 		}
 
-		msgs = append(msgs, models.Message{
-			Role:        normalizeOpenCodeRole(role),
-			Content:     text,
-			ContentType: "text",
-			Timestamp:   time.UnixMilli(createdAt),
-		})
+		if msgID != currentMsgID {
+			flush()
+			currentMsgID = msgID
+			textParts = nil
+			var md msgInfoData
+			if err := json.Unmarshal([]byte(msgData), &md); err == nil {
+				currentRole = md.Role
+			} else {
+				currentRole = ""
+			}
+			currentTime = timeCreated
+		}
+		textParts = append(textParts, text)
 	}
+	flush()
+
 	if err := rows.Err(); err != nil {
 		return models.ParsedFile{}, fmt.Errorf("opencode parse rows %s: %w", dbPath, err)
 	}
@@ -106,41 +152,6 @@ func (r *OpenCodeReader) Parse(dbPath string, _ input_config.InputDefinition) (m
 // openReadOnly opens a SQLite database in read-only mode.
 func openReadOnly(path string) (*sql.DB, error) {
 	return sql.Open("sqlite", "file:"+path+"?mode=ro")
-}
-
-// openCodePart represents one element of the OpenCode parts JSON array.
-type openCodePart struct {
-	Type string          `json:"type"`
-	Data json.RawMessage `json:"data"`
-}
-
-// textData is the data payload for a "text" part.
-type textData struct {
-	Text string `json:"text"`
-}
-
-// extractTextFromParts parses the parts JSON array and returns the joined text content.
-func extractTextFromParts(partsJSON string) string {
-	var parts []openCodePart
-	if err := json.Unmarshal([]byte(partsJSON), &parts); err != nil {
-		return ""
-	}
-
-	var textParts []string
-	for _, p := range parts {
-		if p.Type != "text" {
-			continue
-		}
-		var td textData
-		if err := json.Unmarshal(p.Data, &td); err != nil {
-			continue
-		}
-		trimmed := strings.TrimSpace(td.Text)
-		if trimmed != "" {
-			textParts = append(textParts, trimmed)
-		}
-	}
-	return strings.Join(textParts, "\n")
 }
 
 // normalizeOpenCodeRole maps OpenCode roles to canonical backscroll roles.
