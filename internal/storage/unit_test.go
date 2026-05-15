@@ -792,6 +792,120 @@ func TestQuerySessionEvents(t *testing.T) {
 	}
 }
 
+func TestQuerySessionEventsFilters(t *testing.T) {
+	db, cleanup := newTestDB(t)
+	defer cleanup()
+
+	proj := "filterproj"
+	if err := db.SyncFiles([]IndexedFile{
+		{
+			SourcePath: "/test/filter-sess.jsonl",
+			Source:     "session",
+			Hash:       "fhash",
+			Project:    proj,
+			Messages: []IndexedMessage{
+				{Ordinal: 0, Role: "user", Text: "filter content", Timestamp: "2025-01-15T10:00:00Z", ContentType: "text"},
+				{Ordinal: 1, Role: "assistant", Text: "filter reply", Timestamp: "2025-01-15T10:01:00Z", ContentType: "text"},
+			},
+		},
+		{
+			SourcePath: "/test/other-sess.jsonl",
+			Source:     "session",
+			Hash:       "ohash",
+			Project:    "otherproj",
+			Messages: []IndexedMessage{
+				{Ordinal: 0, Role: "user", Text: "other content", Timestamp: "2025-02-01T10:00:00Z", ContentType: "text"},
+			},
+		},
+	}); err != nil {
+		t.Fatalf("SyncFiles: %v", err)
+	}
+
+	// Project filter
+	events, err := db.QuerySessionEvents(SessionEventQuery{Project: &proj})
+	if err != nil {
+		t.Fatalf("QuerySessionEvents project filter: %v", err)
+	}
+	if len(events) != 2 {
+		t.Errorf("expected 2 events for proj, got %d", len(events))
+	}
+
+	// Source filter
+	src := "session"
+	events, err = db.QuerySessionEvents(SessionEventQuery{Source: &src})
+	if err != nil {
+		t.Fatalf("QuerySessionEvents source filter: %v", err)
+	}
+	if len(events) == 0 {
+		t.Error("expected events for source=session")
+	}
+
+	// SourcePath wildcard filter
+	events, err = db.QuerySessionEvents(SessionEventQuery{SourcePath: "/test/*.jsonl"})
+	if err != nil {
+		t.Fatalf("QuerySessionEvents wildcard filter: %v", err)
+	}
+	if len(events) != 3 {
+		t.Errorf("expected 3 events for wildcard /test/*.jsonl, got %d", len(events))
+	}
+
+	// EventType filter
+	evtType := "message"
+	events, err = db.QuerySessionEvents(SessionEventQuery{EventType: &evtType})
+	if err != nil {
+		t.Fatalf("QuerySessionEvents event type filter: %v", err)
+	}
+	if len(events) == 0 {
+		t.Error("expected events for event_type=message")
+	}
+
+	// After filter
+	events, err = db.QuerySessionEvents(SessionEventQuery{After: "2025-01-31"})
+	if err != nil {
+		t.Fatalf("QuerySessionEvents after filter: %v", err)
+	}
+	if len(events) != 1 {
+		t.Errorf("expected 1 event after 2025-01-31, got %d", len(events))
+	}
+
+	// Before filter
+	events, err = db.QuerySessionEvents(SessionEventQuery{Before: "2025-02-01"})
+	if err != nil {
+		t.Fatalf("QuerySessionEvents before filter: %v", err)
+	}
+	if len(events) != 2 {
+		t.Errorf("expected 2 events before 2025-02-01, got %d", len(events))
+	}
+
+	// Combined: project + source
+	events, err = db.QuerySessionEvents(SessionEventQuery{Project: &proj, Source: &src})
+	if err != nil {
+		t.Fatalf("QuerySessionEvents combined filter: %v", err)
+	}
+	if len(events) != 2 {
+		t.Errorf("expected 2 events with combined filter, got %d", len(events))
+	}
+}
+
+func TestValidateWithOrphans(t *testing.T) {
+	db, cleanup := newTestDB(t)
+	defer cleanup()
+
+	// Create an orphaned search_item by inserting directly without indexed_files entry
+	_, err := db.DB().Exec(`
+		INSERT INTO search_items (source_path, source, project, ordinal, role, text, timestamp, content_type)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+	`, "/orphan/path.jsonl", "session", "proj", 0, "user", "orphan content", "2024-01-01T00:00:00Z", "text")
+	if err != nil {
+		t.Fatalf("insert orphan: %v", err)
+	}
+
+	err = db.Validate()
+	if err == nil {
+		t.Error("expected error for orphaned search_items, got nil")
+	}
+}
+
 func TestResolveSessionPath(t *testing.T) {
 	db, cleanup := newTestDB(t)
 	defer cleanup()
