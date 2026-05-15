@@ -1,6 +1,6 @@
 ---
 name: backscroll
-description: Use when the user asks for previous Claude/Pi sessions, forgotten discussions, recurring bugs, project history, or indexed Backscroll sessions/plans/notes. Use this before reinvesting context already covered by AI sessions.
+description: Use when the user asks for previous Claude, Pi, or OpenCode sessions, forgotten discussions, recurring bugs, project history, or indexed Backscroll sessions/plans/notes. Use this before reinvesting context already covered by AI sessions.
 user-invocable: true
 allowed-tools:
   - Bash
@@ -25,7 +25,7 @@ curl -fsSL https://raw.githubusercontent.com/pablontiv/backscroll/master/install
 # Alternative: copy shipped input presets after binary is in PATH
 config_dir="${BACKSCROLL_CONFIG_DIR:-${XDG_CONFIG_HOME:-$HOME/.config}}"
 mkdir -p "$config_dir/backscroll/inputs"
-cp -n inputs/claude.inputs.toml inputs/decisions.inputs.toml "$config_dir/backscroll/inputs/"
+cp -n inputs/claude.inputs.toml inputs/pi.inputs.toml inputs/opencode.inputs.toml inputs/decisions.inputs.toml "$config_dir/backscroll/inputs/"
 ```
 
 ## 2) Canonical input location

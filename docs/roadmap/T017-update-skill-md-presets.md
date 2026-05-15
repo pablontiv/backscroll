@@ -1,5 +1,5 @@
 ---
-estado: Specified
+estado: Completed
 tipo: task
 ---
 # T017: Actualizar SKILL.md para incluir todos los presets en el comando de instalación

@@ -1,5 +1,5 @@
 ---
-estado: Specified
+estado: Completed
 tipo: task
 ---
 # T015: Actualizar README para reflejar soporte de Claude, Pi y OpenCode

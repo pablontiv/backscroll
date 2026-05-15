@@ -1,5 +1,5 @@
 ---
-estado: Specified
+estado: Completed
 tipo: task
 ---
 # T016: Actualizar docs/sync.md para incluir OpenCode

@@ -35,7 +35,7 @@ Backscroll ships as a **single static binary** with no external dependencies. Ru
 curl -fsSL https://raw.githubusercontent.com/pablontiv/backscroll/master/install.sh | bash
 ```
 
-Detects your platform (Linux x86_64 / macOS aarch64), installs the binary to `~/.local/bin/`, and installs the shipped Claude/Pi input presets into the user input config directory without overwriting existing manifests.
+Detects your platform (Linux x86_64 / macOS aarch64), installs the binary to `~/.local/bin/`, and installs the shipped Claude, Pi, and OpenCode input presets into the user input config directory without overwriting existing manifests.
 
 **Windows (PowerShell):**
 
@@ -43,11 +43,11 @@ Detects your platform (Linux x86_64 / macOS aarch64), installs the binary to `~/
 irm https://raw.githubusercontent.com/pablontiv/backscroll/master/install.ps1 | iex
 ```
 
-Installs the binary to `%LOCALAPPDATA%\backscroll\bin\`, adds it to your PATH, and installs the shipped Claude/Pi input presets into `%APPDATA%\backscroll\inputs\` without overwriting existing manifests. Compatible with Windows PowerShell 5.1+.
+Installs the binary to `%LOCALAPPDATA%\backscroll\bin\`, adds it to your PATH, and installs the shipped Claude, Pi, and OpenCode input presets into `%APPDATA%\backscroll\inputs\` without overwriting existing manifests. Compatible with Windows PowerShell 5.1+.
 
 ### Install input presets
 
-Backscroll ships Claude and Pi input presets at `inputs/claude.inputs.toml` and `inputs/pi.inputs.toml`. The install scripts copy those files into the user input config directory and skip existing manifests by default; set `BACKSCROLL_FORCE_INPUTS=1` only when you intentionally want to replace edited presets.
+Backscroll ships Claude, Pi, and OpenCode input presets at `inputs/claude.inputs.toml`, `inputs/pi.inputs.toml`, and `inputs/opencode.inputs.toml`. The install scripts copy those files into the user input config directory and skip existing manifests by default; set `BACKSCROLL_FORCE_INPUTS=1` only when you intentionally want to replace edited presets. The OpenCode preset ships with `active = false` (opt-in); set `active = true` in the copied file to enable it.
 
 Default input config directories:
 
@@ -64,7 +64,7 @@ If you install from a source checkout, copy presets without clobbering existing 
 ```bash
 config_dir="${BACKSCROLL_CONFIG_DIR:-${XDG_CONFIG_HOME:-$HOME/.config}}"
 mkdir -p "$config_dir/backscroll/inputs"
-cp -n inputs/claude.inputs.toml inputs/pi.inputs.toml "$config_dir/backscroll/inputs/"
+cp -n inputs/claude.inputs.toml inputs/pi.inputs.toml inputs/opencode.inputs.toml "$config_dir/backscroll/inputs/"
 backscroll inputs validate
 backscroll inputs list
 ```
@@ -73,7 +73,7 @@ backscroll inputs list
 $configDir = if ($env:BACKSCROLL_CONFIG_DIR) { $env:BACKSCROLL_CONFIG_DIR } else { $env:APPDATA }
 $inputsDir = Join-Path $configDir "backscroll\inputs"
 New-Item -ItemType Directory -Force $inputsDir | Out-Null
-foreach ($name in "claude.inputs.toml", "pi.inputs.toml") {
+foreach ($name in "claude.inputs.toml", "pi.inputs.toml", "opencode.inputs.toml") {
   $dest = Join-Path $inputsDir $name
   if (-not (Test-Path $dest)) { Copy-Item (Join-Path "inputs" $name) $dest }
 }
@@ -136,7 +136,7 @@ backscroll status
 
 ## Core Idea
 
-AI assistants like Claude Code and Pi produce valuable reasoning logs, but they are scattered across session files with no built-in way to search across them. Backscroll makes them **searchable**, **persistent**, and **fast**.
+AI assistants like Claude Code, Pi, and OpenCode produce valuable reasoning logs, but they are scattered across session files with no built-in way to search across them. Backscroll makes them **searchable**, **persistent**, and **fast**.
 
 - Sessions are indexed incrementally — only changed files are re-processed
 - Noise is stripped automatically — system-reminders, task-notifications, subagent chatter
@@ -149,7 +149,7 @@ Backscroll does not modify your logs. It **indexes** them.
 
 ## The Session Index
 
-Each AI assistant stores conversations in its own format. Backscroll normalizes them via input manifests — the shipped Claude and Pi presets handle their respective JSONL formats, and any source with a compatible manifest is supported.
+Each AI assistant stores conversations in its own format. Backscroll normalizes them via input manifests — shipped presets exist for Claude, Pi (both JSONL), and OpenCode (SQLite via `decode.format = "opencode"`), and any source with a compatible manifest is supported.
 
 Backscroll reads these files and extracts the **conversation**: user and assistant messages only. Everything else — tool calls, system-reminders, task-notifications, local command output — is stripped as noise.
 

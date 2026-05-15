@@ -1,5 +1,5 @@
 ---
-estado: Specified
+estado: Completed
 tipo: task
 ---
 # T014: Agregar inputs/pi.inputs.toml al repositorio
