@@ -43,6 +43,12 @@ Use --all-projects to search across all projects.`,
 func runExport(stdout, stderr io.Writer,
 	query, format, project string, allProjects bool) error {
 
+	switch strings.ToLower(format) {
+	case "csv", "markdown":
+	default:
+		return fmt.Errorf("unknown export format: %s (use 'markdown' or 'csv')", format)
+	}
+
 	cfg, err := config.Load()
 	if err != nil {
 		return fmt.Errorf("load config: %w", err)
@@ -77,10 +83,8 @@ func runExport(stdout, stderr io.Writer,
 	switch strings.ToLower(format) {
 	case "csv":
 		return exportCSV(stdout, results)
-	case "markdown":
-		return exportMarkdown(stdout, results)
 	default:
-		return fmt.Errorf("unknown export format: %s (use 'markdown' or 'csv')", format)
+		return exportMarkdown(stdout, results)
 	}
 }
 

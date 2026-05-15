@@ -45,14 +45,14 @@ func newInputsListCmd(stdout, stderr io.Writer) *cobra.Command {
 					"inputs": inputSummaries(defs),
 				})
 			}
-			fmt.Fprintf(stdout, "mode: %s\n", mode)
-			fmt.Fprintf(stdout, "active inputs: %d\n\n", len(defs))
+			_, _ = fmt.Fprintf(stdout, "mode: %s\n", mode)
+			_, _ = fmt.Fprintf(stdout, "active inputs: %d\n\n", len(defs))
 			for _, def := range defs {
-				fmt.Fprintf(stdout, "  id:      %s\n", def.ID)
-				fmt.Fprintf(stdout, "  format:  %s\n", def.Decode.Format)
-				fmt.Fprintf(stdout, "  include: %v\n", def.Discover.Include)
-				fmt.Fprintf(stdout, "  exclude: %v\n", def.Discover.Exclude)
-				fmt.Fprintln(stdout)
+				_, _ = fmt.Fprintf(stdout, "  id:      %s\n", def.ID)
+				_, _ = fmt.Fprintf(stdout, "  format:  %s\n", def.Decode.Format)
+				_, _ = fmt.Fprintf(stdout, "  include: %v\n", def.Discover.Include)
+				_, _ = fmt.Fprintf(stdout, "  exclude: %v\n", def.Discover.Exclude)
+				_, _ = fmt.Fprintln(stdout)
 			}
 			return nil
 		},

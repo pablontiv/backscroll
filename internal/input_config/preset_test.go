@@ -39,7 +39,7 @@ func TestClaudePresetDiscovery(t *testing.T) {
 	writeFile(subFile)
 	// non-jsonl file — should not be discovered
 	writeFile(filepath.Join(proj1, "notes.txt") + ".dummy")
-	os.WriteFile(filepath.Join(proj1, "notes.txt"), []byte("text"), 0o644)
+	_ = os.WriteFile(filepath.Join(proj1, "notes.txt"), []byte("text"), 0o644)
 
 	cfg := DiscoverConfig{
 		Roots:   []string{root},

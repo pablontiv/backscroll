@@ -161,7 +161,7 @@ func TestJsonlReader_Parse_Timestamps(t *testing.T) {
 
 	zero := time.Time{}
 	for i, rec := range pf.Records {
-		if rec.Timestamp == zero {
+		if rec.Timestamp.Equal(zero) {
 			t.Errorf("Record[%d].Timestamp is zero", i)
 		}
 	}
