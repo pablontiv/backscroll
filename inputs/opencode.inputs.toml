@@ -1,18 +1,17 @@
 # Shipped OpenCode input preset.
 # Backscroll does not read files from this repository inputs/ directory at runtime;
 # copy this file into <config_dir>/backscroll/inputs/ (or set BACKSCROLL_CONFIG_DIR)
-# and activate by setting active = true.
+# and edit as needed.
 #
 # Installation:
 #   cp inputs/opencode.inputs.toml ~/.config/backscroll/inputs/
-#   # Edit the file and set active = true
 #   backscroll sync
 version = 1
 
 [[inputs]]
 id = "opencode"
 source = "session"
-active = false
+active = true
 
 [inputs.discover]
 roots = ["~/.local/share/opencode"]

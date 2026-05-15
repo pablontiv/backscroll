@@ -47,8 +47,7 @@ Installs the binary to `%LOCALAPPDATA%\backscroll\bin\`, adds it to your PATH, a
 
 ### Install input presets
 
-Backscroll ships Claude, Pi, and OpenCode input presets at `inputs/claude.inputs.toml`, `inputs/pi.inputs.toml`, and `inputs/opencode.inputs.toml`. The install scripts copy those files into the user input config directory and skip existing manifests by default; set `BACKSCROLL_FORCE_INPUTS=1` only when you intentionally want to replace edited presets. The OpenCode preset ships with `active = false` (opt-in); set `active = true` in the copied file to enable it.
-
+Backscroll ships Claude, Pi, and OpenCode input presets at `inputs/claude.inputs.toml`, `inputs/pi.inputs.toml`, and `inputs/opencode.inputs.toml`. The install scripts copy those files into the user input config directory and skip existing manifests by default; set `BACKSCROLL_FORCE_INPUTS=1` only when you intentionally want to replace edited presets.
 Default input config directories:
 
 | OS | Input manifest directory |
