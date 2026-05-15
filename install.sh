@@ -3,7 +3,7 @@ set -euo pipefail
 
 REPO="pablontiv/backscroll"
 INSTALL_DIR="${BACKSCROLL_INSTALL_DIR:-${HOME}/.local/bin}"
-INPUT_PRESETS=("claude.inputs.toml")
+INPUT_PRESETS=("claude.inputs.toml" "opencode.inputs.toml")
 
 main() {
     local os arch asset_name
