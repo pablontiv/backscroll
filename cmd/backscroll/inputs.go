@@ -86,7 +86,7 @@ func newInputsValidateCmd(stdout, stderr io.Writer) *cobra.Command {
 					"inputs": len(defs),
 				})
 			}
-			fmt.Fprintf(stdout, "Inputs valid: %d active inputs (%s)\n", len(defs), mode)
+			_, _ = fmt.Fprintf(stdout, "Inputs valid: %d active inputs (%s)\n", len(defs), mode)
 			return nil
 		},
 	}
@@ -106,12 +106,12 @@ func newInputsAliasesCmd(stdout, stderr io.Writer) *cobra.Command {
 			for _, def := range defs {
 				files, err := input_config.DiscoverFiles(def.Discover)
 				if err != nil {
-					fmt.Fprintf(stderr, "warning: discover %s: %v\n", def.ID, err)
+					_, _ = fmt.Fprintf(stderr, "warning: discover %s: %v\n", def.ID, err)
 					continue
 				}
-				fmt.Fprintf(stdout, "%s (%d files):\n", def.ID, len(files))
+				_, _ = fmt.Fprintf(stdout, "%s (%d files):\n", def.ID, len(files))
 				for _, f := range files {
-					fmt.Fprintf(stdout, "  %s\n", f)
+					_, _ = fmt.Fprintf(stdout, "  %s\n", f)
 				}
 			}
 			return nil
@@ -143,12 +143,12 @@ func newInputsIdentifyCmd(stdout, stderr io.Writer) *cobra.Command {
 				}
 				for _, f := range files {
 					if f == target {
-						fmt.Fprintf(stdout, "matched: %s (format: %s)\n", def.ID, def.Decode.Format)
+						_, _ = fmt.Fprintf(stdout, "matched: %s (format: %s)\n", def.ID, def.Decode.Format)
 						return nil
 					}
 				}
 			}
-			fmt.Fprintf(stdout, "no match for %s\n", target)
+			_, _ = fmt.Fprintf(stdout, "no match for %s\n", target)
 			return nil
 		},
 	}
@@ -203,10 +203,10 @@ func newInputsTestCmd(stdout, stderr io.Writer) *cobra.Command {
 			if jsonFormat {
 				return json.NewEncoder(stdout).Encode(result)
 			}
-			fmt.Fprintf(stdout, "input: %s\n", matched.ID)
-			fmt.Fprintf(stdout, "records: %d\n", len(result))
+			_, _ = fmt.Fprintf(stdout, "input: %s\n", matched.ID)
+			_, _ = fmt.Fprintf(stdout, "records: %d\n", len(result))
 			for i, r := range result {
-				fmt.Fprintf(stdout, "\n[%d] role=%s uuid=%s\n%s\n", i+1, r.Role, r.UUID, truncate(r.Content, 200))
+				_, _ = fmt.Fprintf(stdout, "\n[%d] role=%s uuid=%s\n%s\n", i+1, r.Role, r.UUID, truncate(r.Content, 200))
 			}
 			return nil
 		},

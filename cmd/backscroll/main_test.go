@@ -2232,6 +2232,63 @@ func TestInputsValidateJSON(t *testing.T) {
 	}
 }
 
+func TestExportNoResults(t *testing.T) {
+	_, cleanup := testEnv(t)
+	defer cleanup()
+
+	piDir := filepath.Dir(filepath.Join(fixturesDir(), "pi-session.jsonl"))
+	_, _, _ = runCmd("sync", "--path", piDir)
+
+	out, _, err := runCmd("export", "no_results_xyz_abc_123", "--format", "markdown")
+	if err != nil {
+		t.Fatalf("export no-results error: %v", err)
+	}
+	if !strings.Contains(out, "No results") {
+		t.Errorf("expected 'No results', got: %s", out)
+	}
+}
+
+func TestStatusWithDeclarativeInputs(t *testing.T) {
+	_, cleanup := testEnv(t)
+	defer cleanup()
+
+	presetDir := filepath.Join(fixturesDir(), "claude-preset")
+	cfgDir := t.TempDir()
+	setupInputsPreset(t, cfgDir, filepath.Join(presetDir, "projects"))
+	t.Setenv("BACKSCROLL_CONFIG_DIR", cfgDir)
+
+	out, _, err := runCmd("status", "--json")
+	if err != nil {
+		t.Fatalf("status --json with preset error: %v", err)
+	}
+	var result map[string]any
+	if err := json.Unmarshal([]byte(strings.TrimSpace(out)), &result); err != nil {
+		t.Fatalf("invalid JSON: %v\n%s", err, out)
+	}
+	cfg, ok := result["config"].(map[string]any)
+	if !ok {
+		t.Fatalf("config field missing: %v", result)
+	}
+	if using, ok := cfg["using_declarative_inputs"].(bool); !ok || !using {
+		t.Errorf("expected using_declarative_inputs=true, got: %v", cfg["using_declarative_inputs"])
+	}
+}
+
+func TestDecisionsQueryDefaultProject(t *testing.T) {
+	dbPath, cleanup := testEnv(t)
+	defer cleanup()
+
+	seedDecisions(t, dbPath)
+
+	// Call without --project or --all-projects to exercise effectiveProject
+	// cwd-based detection path (returns empty when project is unknown).
+	out, _, err := runCmd("decisions", "query", "Go")
+	if err != nil {
+		t.Fatalf("decisions query (default project) error: %v", err)
+	}
+	_ = out
+}
+
 func init() {
 	// Suppress cobra's default behavior of writing to os.Stderr on error
 	_ = fmt.Sprintf // keep fmt import
