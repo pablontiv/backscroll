@@ -84,3 +84,15 @@ func TestInputsDirEnvOverride(t *testing.T) {
 		t.Errorf("got %q, want %q", got, filepath.Join(want, "backscroll", "inputs"))
 	}
 }
+
+func TestInputsDirNoEnv(t *testing.T) {
+	t.Setenv("BACKSCROLL_CONFIG_DIR", "")
+
+	got, err := InputsDir()
+	if err != nil {
+		t.Fatalf("InputsDir without env: %v", err)
+	}
+	if got == "" {
+		t.Error("expected non-empty dir from os.UserConfigDir()")
+	}
+}
