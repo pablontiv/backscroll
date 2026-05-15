@@ -116,6 +116,7 @@ Configurable in `[sources]` section of `backscroll.toml`. Source types: `ke`, `d
 - `docs/research/` — Structured research documents: feasibility study and architecture decisions
 - `docs/roadmap/` — Roadmap decomposition (O01–O06): outcomes and tasks with frontmatter metadata
 - `.claude/skills/backscroll/` — Claude Code skill for `/backscroll` (distributed to `~/.claude/skills/` via pre-push hook)
+- `inputs/` — Shipped input presets (`claude.inputs.toml`, `pi.inputs.toml`, `decisions.inputs.toml`, `opencode.inputs.toml`); copied to `<config_dir>/backscroll/inputs/` by `install.sh` and the pre-push hook (skips if already present; `BACKSCROLL_FORCE_INPUTS=1` to overwrite)
 - Documentation is written in a mix of Spanish and English (roadmap fields like `estado`, `tipo` are in Spanish)
 
 ## Code Style
