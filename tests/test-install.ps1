@@ -49,9 +49,9 @@ Describe "Input preset functions" -Tag "Static" {
 }
 
 Describe "Get-Arch" -Tag "Runtime" {
-    It "returns x86_64 on AMD64" {
+    It "returns amd64 on AMD64" {
         if ($env:PROCESSOR_ARCHITECTURE -eq "AMD64") {
-            Get-Arch | Should -Be "x86_64"
+            Get-Arch | Should -Be "amd64"
         } else {
             { Get-Arch } | Should -Throw
         }

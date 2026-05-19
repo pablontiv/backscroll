@@ -15,7 +15,7 @@ function Main {
 
 function Get-Arch {
     switch ($env:PROCESSOR_ARCHITECTURE) {
-        "AMD64" { return "x86_64" }
+        "AMD64" { return "amd64" }
         default { throw "Unsupported architecture: $env:PROCESSOR_ARCHITECTURE. Only AMD64 is supported." }
     }
 }
@@ -56,13 +56,35 @@ function Get-InstallDir {
 function Install-Binary {
     param($Version, $Arch, $InstallDir)
 
-    $assetName = "${Binary}-windows-${Arch}.exe"
+    $semver = $Version -replace '^v',''
+    $assetName = "${Binary}_${semver}_windows_${Arch}.zip"
     $url = "https://github.com/$Repo/releases/download/$Version/$assetName"
     $destPath = Join-Path $InstallDir "$Binary.exe"
 
+    $tmpRoot = Join-Path $env:TEMP "backscroll-install-$([System.Guid]::NewGuid().ToString('N'))"
+    $zipPath = Join-Path $tmpRoot "asset.zip"
+    $extractDir = Join-Path $tmpRoot "extract"
+
     Write-Host "Downloading $assetName..."
     New-Item -ItemType Directory -Path $InstallDir -Force | Out-Null
-    Invoke-WebRequest -Uri $url -OutFile $destPath -UseBasicParsing
+    New-Item -ItemType Directory -Path $extractDir -Force | Out-Null
+
+    try {
+        Invoke-WebRequest -Uri $url -OutFile $zipPath -UseBasicParsing
+        Expand-Archive -Path $zipPath -DestinationPath $extractDir -Force
+
+        $extractedBinary = Join-Path $extractDir "$Binary.exe"
+        if (-not (Test-Path $extractedBinary)) {
+            throw "Archive $assetName did not contain $Binary.exe"
+        }
+
+        Move-Item -Path $extractedBinary -Destination $destPath -Force
+    }
+    finally {
+        if (Test-Path $tmpRoot) {
+            Remove-Item -Path $tmpRoot -Recurse -Force -ErrorAction SilentlyContinue
+        }
+    }
 }
 
 function Get-ConfigDir {

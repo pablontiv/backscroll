@@ -8,6 +8,13 @@ SCRIPT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 SCRIPT="$SCRIPT_DIR/install.sh"
 INPUTS_DIR="$SCRIPT_DIR/inputs"
 
+FIXTURE_DIR="$(mktemp -d)"
+trap 'rm -rf "$FIXTURE_DIR"' EXIT
+echo 'FAKE_BINARY' > "$FIXTURE_DIR/backscroll"
+FIXTURE_TARBALL="$FIXTURE_DIR/asset.tar.gz"
+tar -czf "$FIXTURE_TARBALL" -C "$FIXTURE_DIR" backscroll
+export FIXTURE_TARBALL
+
 pass() { ((PASS++)); echo "  PASS: $1"; }
 fail() { ((FAIL++)); echo "  FAIL: $1 — $2"; }
 
@@ -45,6 +52,8 @@ run_main_linux() {
             done
             if [[ \"\$*\" == *api.github.com* ]]; then
                 echo '{\"tag_name\": \"v0.2.3\"}'
+            elif [[ \"\$*\" == *releases/download/* ]] && [ -n \"\$outfile\" ]; then
+                cp \"\$FIXTURE_TARBALL\" \"\$outfile\"
             elif [ -n \"\$outfile\" ]; then
                 echo 'FAKE_BINARY' > \"\$outfile\"
             else
@@ -104,6 +113,8 @@ output=$(bash -c "
         done
         if [[ \"\$*\" == *api.github.com* ]]; then
             echo '{\"tag_name\": \"v0.2.3\"}'
+        elif [[ \"\$*\" == *releases/download/* ]] && [ -n \"\$outfile\" ]; then
+            cp \"\$FIXTURE_TARBALL\" \"\$outfile\"
         elif [ -n \"\$outfile\" ]; then
             echo 'FAKE_BINARY' > \"\$outfile\"
         else
@@ -118,7 +129,7 @@ output=$(bash -c "
 ") && rc=$? || rc=$?
 rm -f "$testable"
 
-if echo "$output" | grep -q "backscroll-linux-x86_64"; then
+if echo "$output" | grep -q "backscroll_0.2.3_linux_amd64.tar.gz"; then
     pass "Linux x86_64 selects correct asset"
 else
     fail "Linux x86_64 asset" "output: $output"
@@ -143,6 +154,8 @@ output=$(bash -c "
         done
         if [[ \"\$*\" == *api.github.com* ]]; then
             echo '{\"tag_name\": \"v0.2.3\"}'
+        elif [[ \"\$*\" == *releases/download/* ]] && [ -n \"\$outfile\" ]; then
+            cp \"\$FIXTURE_TARBALL\" \"\$outfile\"
         elif [ -n \"\$outfile\" ]; then
             echo 'FAKE_BINARY' > \"\$outfile\"
         else
@@ -157,7 +170,7 @@ output=$(bash -c "
 ") && rc=$? || rc=$?
 rm -f "$testable"
 
-if echo "$output" | grep -q "backscroll-macos-aarch64"; then
+if echo "$output" | grep -q "backscroll_0.2.3_darwin_arm64.tar.gz"; then
     pass "macOS arm64 selects correct asset"
 else
     fail "macOS arm64 asset" "output: $output"

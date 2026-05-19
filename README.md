@@ -80,26 +80,6 @@ backscroll inputs validate
 backscroll inputs list
 ```
 
-### Download Binary
-
-Download the latest pre-compiled binary from the [Releases](https://github.com/pablontiv/backscroll/releases) page:
-
-```bash
-# Linux x86_64
-curl -fsSL https://github.com/pablontiv/backscroll/releases/latest/download/backscroll-linux-x86_64 -o backscroll
-chmod +x backscroll && mv backscroll ~/.local/bin/
-
-# macOS aarch64 (Apple Silicon)
-curl -fsSL https://github.com/pablontiv/backscroll/releases/latest/download/backscroll-macos-aarch64 -o backscroll
-chmod +x backscroll && mv backscroll ~/.local/bin/
-```
-
-```powershell
-# Windows x86_64
-Invoke-WebRequest https://github.com/pablontiv/backscroll/releases/latest/download/backscroll-windows-x86_64.exe -OutFile backscroll.exe
-Move-Item backscroll.exe "$env:LOCALAPPDATA\backscroll\bin\"
-```
-
 ### From Source
 
 ```bash
