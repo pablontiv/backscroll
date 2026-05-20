@@ -1,5 +1,5 @@
 ---
-estado: Specified
+estado: Completed
 tipo: task
 ---
 # T019: Skill `backscroll` — sincronizar receta con el binario (subcomando `events query`)
