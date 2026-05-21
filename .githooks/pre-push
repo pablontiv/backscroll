@@ -54,6 +54,17 @@ while read local_ref local_sha remote_ref remote_sha; do
       exit 1
     fi
   fi
+
+  # Coverage gate: run pkcov check if Go files changed
+  if git diff --name-only "$range" -- '*.go' 2>/dev/null | grep -q .; then
+    echo "Checking coverage..."
+    if ! just coverage-check > /tmp/backscroll-cov.log 2>&1; then
+      cat /tmp/backscroll-cov.log
+      echo "Coverage below threshold. Run: just coverage-check"
+      exit 1
+    fi
+    echo "Coverage check passed."
+  fi
 done
 
 install_input_presets() {
