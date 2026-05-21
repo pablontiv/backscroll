@@ -116,3 +116,87 @@ func TestDiscoverFiles_noDuplicates(t *testing.T) {
 		t.Errorf("expected 1 file (no duplicates), got %d: %v", len(files), files)
 	}
 }
+
+func TestDiscover_RejectsSymlinkEscape(t *testing.T) {
+	dir := t.TempDir()
+	outside := t.TempDir()
+	outsideFile := mkfile(t, outside, "escape.jsonl")
+
+	link := filepath.Join(dir, "link")
+	if err := os.Symlink(outside, link); err != nil {
+		t.Skip("symlinks not supported:", err)
+	}
+
+	cfg := DiscoverConfig{
+		Roots:          []string{dir},
+		Include:        []string{"**/*.jsonl"},
+		FollowSymlinks: true,
+	}
+	files, err := DiscoverFiles(cfg)
+	if err != nil {
+		t.Fatalf("DiscoverFiles: %v", err)
+	}
+	// Should not include files from outside the root, even via symlinks
+	for _, f := range files {
+		if f == outsideFile {
+			t.Errorf("symlink escape was not rejected: %s", f)
+		}
+	}
+}
+
+func TestDiscover_RejectsAbsolutePath(t *testing.T) {
+	dir := t.TempDir()
+	outside := t.TempDir()
+	_ = mkfile(t, outside, "abs.jsonl")
+
+	cfg := DiscoverConfig{
+		Roots:   []string{dir},
+		Include: []string{outside}, // absolute path
+	}
+	files, err := DiscoverFiles(cfg)
+	if err != nil {
+		t.Fatalf("DiscoverFiles: %v", err)
+	}
+	// Absolute paths should be rejected
+	if len(files) > 0 {
+		t.Errorf("absolute path was not rejected: got %v", files)
+	}
+}
+
+func TestDiscover_AcceptsValidNested(t *testing.T) {
+	dir := t.TempDir()
+	validFile := mkfile(t, dir, "subdir/valid.jsonl")
+
+	cfg := DiscoverConfig{
+		Roots:   []string{dir},
+		Include: []string{"**/*.jsonl"},
+	}
+	files, err := DiscoverFiles(cfg)
+	if err != nil {
+		t.Fatalf("DiscoverFiles: %v", err)
+	}
+	if len(files) != 1 || files[0] != validFile {
+		t.Errorf("got %v, want [%s]", files, validFile)
+	}
+}
+
+func TestDiscover_AcceptsTildeExpansion(t *testing.T) {
+	// Create a temporary home directory
+	tmpHome := t.TempDir()
+	t.Setenv("HOME", tmpHome)
+
+	// Create a test file in the temp home
+	testFile := mkfile(t, tmpHome, "subdir/test.jsonl")
+
+	cfg := DiscoverConfig{
+		Roots:   []string{"~/subdir"},
+		Include: []string{"*.jsonl"},
+	}
+	files, err := DiscoverFiles(cfg)
+	if err != nil {
+		t.Fatalf("DiscoverFiles: %v", err)
+	}
+	if len(files) != 1 || files[0] != testFile {
+		t.Errorf("got %v, want [%s]", files, testFile)
+	}
+}

@@ -1,5 +1,5 @@
 ---
-estado: Specified
+estado: Completed
 tipo: task
 ---
 # T005: Adopt picokit/pathsec in internal/input_config/discover.go

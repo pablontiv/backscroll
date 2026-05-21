@@ -5,6 +5,8 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+
+	"github.com/pablontiv/picokit/pathsec"
 )
 
 // DiscoverFiles returns the absolute paths of files matching the given DiscoverConfig.
@@ -92,7 +94,11 @@ func walkGlob(root, pattern string, excludes []string, followSymlinks bool, seen
 			}
 		}
 
-		abs, _ := filepath.Abs(path)
+		// Validate path stays within root and resolves symlinks securely
+		abs, _, err := pathsec.ResolveInside(root, rel)
+		if err != nil {
+			return nil // Skip paths that escape root or are invalid
+		}
 		if _, dup := seen[abs]; !dup {
 			seen[abs] = struct{}{}
 			results = append(results, abs)
