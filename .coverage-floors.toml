@@ -1,0 +1,18 @@
+default = 85
+packages = [
+  "cmd/backscroll",
+  "internal/chunking",
+  "internal/config",
+  "internal/embedding",
+  "internal/hybrid",
+  "internal/input_config",
+  "internal/models",
+  "internal/plans",
+  "internal/projects",
+  "internal/reader",
+  "internal/readers",
+  "internal/sources",
+  "internal/storage",
+  "internal/sync",
+  "internal/tagging",
+]
