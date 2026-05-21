@@ -5,6 +5,7 @@ import (
 	"io"
 	"os"
 
+	"github.com/pablontiv/picokit/autoupdate"
 	"github.com/spf13/cobra"
 )
 
@@ -18,6 +19,11 @@ func main() {
 }
 
 func run(stdout, stderr io.Writer, args []string) error {
+	u := autoupdate.New("pablontiv/backscroll", "backscroll", "BACKSCROLL_AUTOUPDATE_DISABLE")
+	u.CurrentVersion = version
+	_ = u.ApplyStagedIfAvailable()
+	go u.FetchAndStage(version) //nolint:errcheck
+
 	rootCmd := buildRootCmd(stdout, stderr)
 	rootCmd.SetArgs(args)
 	return rootCmd.Execute()
