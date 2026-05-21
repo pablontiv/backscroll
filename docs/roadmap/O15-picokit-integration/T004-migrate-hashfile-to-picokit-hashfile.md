@@ -1,5 +1,5 @@
 ---
-estado: Specified
+estado: Completed
 tipo: task
 ---
 # T004: Migrate internal/sync.HashFile to picokit/hashfile.HashFile

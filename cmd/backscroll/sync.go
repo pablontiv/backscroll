@@ -19,8 +19,8 @@ import (
 	"github.com/pablontiv/backscroll/internal/readers"
 	"github.com/pablontiv/backscroll/internal/sources"
 	"github.com/pablontiv/backscroll/internal/storage"
-	bsync "github.com/pablontiv/backscroll/internal/sync"
 	"github.com/pablontiv/backscroll/internal/tagging"
+	"github.com/pablontiv/picokit/hashfile"
 )
 
 func newSyncCmd(stdout, stderr io.Writer) *cobra.Command {
@@ -195,7 +195,7 @@ func runSync(stdout, stderr io.Writer, path string, includeAgents, noPlans, opti
 		}
 
 		for _, sourcePath := range sourcePaths {
-			hash, err := bsync.HashFile(sourcePath)
+			hash, err := hashfile.HashFile(sourcePath)
 			if err != nil {
 				_, _ = fmt.Fprintf(stderr, "warning: hash source file %s: %v\n", sourcePath, err)
 				continue
@@ -245,7 +245,7 @@ func runSync(stdout, stderr io.Writer, path string, includeAgents, noPlans, opti
 		planFiles, err := plans.DiscoverPlanFiles(planDir)
 		if err == nil {
 			for _, planPath := range planFiles {
-				hash, err := bsync.HashFile(planPath)
+				hash, err := hashfile.HashFile(planPath)
 				if err != nil {
 					_, _ = fmt.Fprintf(stderr, "warning: hash plan file %s: %v\n", planPath, err)
 					continue

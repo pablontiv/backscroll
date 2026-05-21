@@ -2,11 +2,8 @@ package sync
 
 import (
 	"bufio"
-	"crypto/sha256"
-	"encoding/hex"
 	"encoding/json"
 	"fmt"
-	"io"
 	"io/fs"
 	"os"
 	"path/filepath"
@@ -75,22 +72,6 @@ func ParseSessions(path string) ([]models.Message, error) {
 	}
 
 	return messages, nil
-}
-
-// HashFile returns the SHA-256 hex hash of a file's content.
-func HashFile(path string) (string, error) {
-	file, err := os.Open(path)
-	if err != nil {
-		return "", fmt.Errorf("open file for hashing: %w", err)
-	}
-	defer func() { _ = file.Close() }()
-
-	hash := sha256.New()
-	if _, err := io.Copy(hash, file); err != nil {
-		return "", fmt.Errorf("hash file: %w", err)
-	}
-
-	return hex.EncodeToString(hash.Sum(nil)), nil
 }
 
 // WalkSessionDirs traverses session directories and returns parseable JSONL paths.

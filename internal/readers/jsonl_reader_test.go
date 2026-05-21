@@ -7,7 +7,8 @@ import (
 	"time"
 
 	"github.com/pablontiv/backscroll/internal/input_config"
-	bsync "github.com/pablontiv/backscroll/internal/sync"
+	"github.com/pablontiv/backscroll/internal/sync"
+	"github.com/pablontiv/picokit/hashfile"
 )
 
 const claudeFixture = "../../tests/fixtures/claude-tool-events.jsonl"
@@ -23,7 +24,7 @@ func TestJsonlReader_Name(t *testing.T) {
 func TestJsonlReader_Hash(t *testing.T) {
 	r := &JsonlReader{}
 
-	want, err := bsync.HashFile(claudeFixture)
+	want, err := hashfile.HashFile(claudeFixture)
 	if err != nil {
 		t.Fatalf("HashFile: %v", err)
 	}
@@ -55,7 +56,7 @@ func TestJsonlReader_Parse_MatchesParseSessions(t *testing.T) {
 		t.Fatalf("Parse: %v", err)
 	}
 
-	msgs, err := bsync.ParseSessions(claudeFixture)
+	msgs, err := sync.ParseSessions(claudeFixture)
 	if err != nil {
 		t.Fatalf("ParseSessions: %v", err)
 	}
@@ -133,7 +134,7 @@ func TestJsonlReader_Parse_IncludesHash(t *testing.T) {
 		t.Fatalf("Parse: %v", err)
 	}
 
-	want, err := bsync.HashFile(claudeFixture)
+	want, err := hashfile.HashFile(claudeFixture)
 	if err != nil {
 		t.Fatal(err)
 	}

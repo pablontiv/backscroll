@@ -144,33 +144,6 @@ func TestNoiseFiltering_ToolEvents(t *testing.T) {
 	}
 }
 
-// TestHashFile_Deterministic tests that the same file produces the same hash
-func TestHashFile_Deterministic(t *testing.T) {
-	path := "../../tests/fixtures/pi-session.jsonl"
-	if _, err := os.Stat(path); os.IsNotExist(err) {
-		t.Skipf("fixture file not found: %s", path)
-	}
-
-	hash1, err := HashFile(path)
-	if err != nil {
-		t.Fatalf("first HashFile call failed: %v", err)
-	}
-
-	hash2, err := HashFile(path)
-	if err != nil {
-		t.Fatalf("second HashFile call failed: %v", err)
-	}
-
-	if hash1 != hash2 {
-		t.Errorf("hashes differ: %s != %s", hash1, hash2)
-	}
-
-	// Hash should be valid hex
-	if len(hash1) != 64 { // SHA-256 is 256 bits = 32 bytes = 64 hex chars
-		t.Errorf("expected 64 hex chars, got %d", len(hash1))
-	}
-}
-
 // TestWalkSessionDirs_Exclusion tests subagent filtering
 func TestWalkSessionDirs_Exclusion(t *testing.T) {
 	dir := "../../tests/fixtures/claude-preset"
@@ -483,19 +456,6 @@ func TestParseSessions_IgnoresSubagents(t *testing.T) {
 	// The filtering happens at the directory walk level
 	if len(messages) == 0 {
 		t.Log("no messages from subagent file (expected)")
-	}
-}
-
-// BenchmarkHashFile benchmarks hash computation
-func BenchmarkHashFile(b *testing.B) {
-	path := "../../tests/fixtures/pi-session.jsonl"
-	if _, err := os.Stat(path); os.IsNotExist(err) {
-		b.Skipf("fixture file not found: %s", path)
-	}
-
-	b.ResetTimer()
-	for i := 0; i < b.N; i++ {
-		_, _ = HashFile(path)
 	}
 }
 

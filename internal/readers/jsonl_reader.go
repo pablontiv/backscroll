@@ -3,7 +3,8 @@ package readers
 import (
 	"github.com/pablontiv/backscroll/internal/input_config"
 	"github.com/pablontiv/backscroll/internal/models"
-	bsync "github.com/pablontiv/backscroll/internal/sync"
+	"github.com/pablontiv/backscroll/internal/sync"
+	"github.com/pablontiv/picokit/hashfile"
 )
 
 // JsonlReader implements SessionReader for JSONL session files.
@@ -18,14 +19,14 @@ func (r *JsonlReader) Discover(def input_config.InputDefinition) ([]string, erro
 
 // Hash returns the SHA-256 hex hash of the file at the given path.
 func (r *JsonlReader) Hash(path string) (string, error) {
-	return bsync.HashFile(path)
+	return hashfile.HashFile(path)
 }
 
 // Parse reads a JSONL session file and returns its messages as a ParsedFile.
 // When the InputDefinition has MapConfig selectors set, it uses the declarative pipeline.
 // Otherwise it falls back to the legacy ParseSessions parser.
 func (r *JsonlReader) Parse(path string, def input_config.InputDefinition) (models.ParsedFile, error) {
-	hash, err := bsync.HashFile(path)
+	hash, err := hashfile.HashFile(path)
 	if err != nil {
 		return models.ParsedFile{}, err
 	}
@@ -34,7 +35,7 @@ func (r *JsonlReader) Parse(path string, def input_config.InputDefinition) (mode
 	if def.Map.Role != "" {
 		msgs, err = input_config.ParseDeclarative(path, def)
 	} else {
-		msgs, err = bsync.ParseSessions(path)
+		msgs, err = sync.ParseSessions(path)
 	}
 	if err != nil {
 		return models.ParsedFile{}, err
