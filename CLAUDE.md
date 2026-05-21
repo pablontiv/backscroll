@@ -25,6 +25,8 @@ just audit              # go mod verify
 
 Run a single test: `go test -run TestName ./internal/...`
 
+**Pre-push gate**: the pre-push hook validates that Module Layout and Package Layout sections in CLAUDE.md are up to date whenever a Go package is added or deleted. When deleting a package, remove its entries from the "Implemented:" list, the `internal/` tree in Module Layout, and the Package Layout table before committing, or the push will be rejected.
+
 Tests use stdlib `testing` + subprocess or direct `run()` invocation. Unit tests are co-located in each package. Integration tests in `cmd/backscroll/main_test.go` (CLI integration via direct `run()` invocation). Decision helper unit tests in `cmd/backscroll/decisions_test.go`. Additional unit tests: `internal/storage/unit_test.go`, `internal/sync/noise_test.go`. Coverage gate ≥85% enforced by `scripts/check-coverage.sh` and CI (`just coverage`).
 
 ## Architecture
