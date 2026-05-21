@@ -7,9 +7,10 @@ import (
 
 	"github.com/spf13/cobra"
 
+	picokitoutput "github.com/pablontiv/picokit/output"
+
 	"github.com/pablontiv/backscroll/internal/config"
 	"github.com/pablontiv/backscroll/internal/models"
-	"github.com/pablontiv/backscroll/internal/output"
 	"github.com/pablontiv/backscroll/internal/storage"
 )
 
@@ -107,14 +108,16 @@ func runResume(stdout, stderr io.Writer,
 	}
 
 	// Use robot format by default for resume
-	format := output.FormatRobot
+	format := picokitoutput.FormatRobot
 	if !robotFormat {
-		format = output.FormatText
+		format = picokitoutput.FormatText
 	}
 
 	// Format and output
-	formatter := output.NewFormatter(format, 0)
-	if err := formatter.WriteResults(stdout, []models.SearchResult{modelResult}); err != nil {
+	formatter := picokitoutput.NewFormatter(format, 0)
+	modelResults := []models.SearchResult{modelResult}
+	lines := resultsToLines(modelResults, format)
+	if err := formatter.WriteLines(stdout, lines); err != nil {
 		return fmt.Errorf("write results: %w", err)
 	}
 

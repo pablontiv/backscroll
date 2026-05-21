@@ -8,7 +8,7 @@ Backscroll is a Go CLI tool that indexes Claude Code, Pi, and OpenCode sessions,
 
 **Status**: Go port complete — `main` branch is the active Go implementation. The Rust implementation is frozen in the `v0` branch.
 
-Implemented: `internal/config`, `internal/input_config`, `internal/models`, `internal/output`, `internal/readers`, `internal/sync`, `internal/tagging`, `internal/plans`, `internal/sources`, `internal/storage`, `internal/projects`, `internal/reader`. CLI commands in `cmd/backscroll/` (15 commands via cobra).
+Implemented: `internal/config`, `internal/input_config`, `internal/models`, `internal/readers`, `internal/sync`, `internal/tagging`, `internal/plans`, `internal/sources`, `internal/storage`, `internal/projects`, `internal/reader`. CLI commands in `cmd/backscroll/` (15 commands via cobra).
 
 Stack: cobra, go-toml/v2, goldmark, modernc.org/sqlite (pure Go, no CGO), stdlib testing.
 
@@ -55,7 +55,6 @@ internal/
 ├── config/            — config resolution: backscroll.toml → ~/.config → env → defaults
 ├── input_config/      — declarative input manifest engine: types, loader, discovery, predicates, transforms
 ├── models/            — domain types: SessionRecord, MessageContent, ParsedFile, SearchResult, Stats
-├── output/            — output formatter: Text, JSON, Robot with token limiting
 ├── sync/              — WalkDir, SHA-256 dedup, JSONL parsing, noise filtering, content-type classification
 ├── tagging/           — heuristic auto-tagging (debugging, refactoring, feature, testing, docs, config)
 ├── plans/             — Markdown plan parser (split by ## headers, goldmark)
@@ -182,5 +181,4 @@ github.com/pablontiv/backscroll/internal/storage       — SQLite FTS5 adapter
 github.com/pablontiv/backscroll/internal/projects      — Project identity registry
 github.com/pablontiv/backscroll/internal/reader        — Direct session file reader
 github.com/pablontiv/backscroll/internal/readers       — SessionReader interface, Registry, JsonlReader, OpenCodeReader
-github.com/pablontiv/backscroll/internal/output        — Output formatting
 ```

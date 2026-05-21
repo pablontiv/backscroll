@@ -1,5 +1,5 @@
 ---
-estado: Specified
+estado: Completed
 tipo: task
 ---
 # T003: Migrate internal/output to picokit/output (Format string→int refactor)

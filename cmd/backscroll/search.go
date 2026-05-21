@@ -3,13 +3,15 @@ package main
 import (
 	"fmt"
 	"io"
+	"strings"
 	"time"
 
 	"github.com/spf13/cobra"
 
+	picokitoutput "github.com/pablontiv/picokit/output"
+
 	"github.com/pablontiv/backscroll/internal/config"
 	"github.com/pablontiv/backscroll/internal/models"
-	"github.com/pablontiv/backscroll/internal/output"
 	"github.com/pablontiv/backscroll/internal/storage"
 )
 
@@ -153,18 +155,77 @@ func runSearch(stdout, stderr io.Writer,
 	}
 
 	// Determine output format
-	format := output.FormatText
+	format := picokitoutput.FormatText
 	if jsonFormat {
-		format = output.FormatJSON
+		format = picokitoutput.FormatJSON
 	} else if robotFormat {
-		format = output.FormatRobot
+		format = picokitoutput.FormatRobot
 	}
 
 	// Format and output
-	formatter := output.NewFormatter(format, maxTokens)
-	if err := formatter.WriteResults(stdout, modelResults); err != nil {
-		return fmt.Errorf("write results: %w", err)
+	formatter := picokitoutput.NewFormatter(format, maxTokens)
+	if format == picokitoutput.FormatJSON {
+		// For JSON, use WriteJSON directly
+		if err := formatter.WriteJSON(stdout, modelResults); err != nil {
+			return fmt.Errorf("write results: %w", err)
+		}
+	} else {
+		// For text and robot formats, convert results to lines
+		lines := resultsToLines(modelResults, format)
+		if err := formatter.WriteLines(stdout, lines); err != nil {
+			return fmt.Errorf("write results: %w", err)
+		}
 	}
 
 	return nil
+}
+
+// resultsToLines converts SearchResults to string lines for the specified format.
+// For text format, produces the separator + fields output.
+// For robot format, produces result_N_field=value lines.
+func resultsToLines(results []models.SearchResult, format picokitoutput.Format) []string {
+	var lines []string
+
+	for i, result := range results {
+		if format == picokitoutput.FormatRobot {
+			// Robot format: result_N_field=value
+			lines = append(lines,
+				fmt.Sprintf("result_%d_source=%s", i, result.Source),
+				fmt.Sprintf("result_%d_role=%s", i, result.Role),
+				fmt.Sprintf("result_%d_filepath=%s", i, result.FilePath),
+				fmt.Sprintf("result_%d_content=%s", i, result.Content),
+			)
+			if result.SessionID != "" {
+				lines = append(lines, fmt.Sprintf("result_%d_session_id=%s", i, result.SessionID))
+			}
+			if result.ProjectPath != "" {
+				lines = append(lines, fmt.Sprintf("result_%d_project=%s", i, result.ProjectPath))
+			}
+			lines = append(lines, fmt.Sprintf("result_%d_score=%.2f", i, result.Score))
+			if len(result.Tags) > 0 {
+				lines = append(lines, fmt.Sprintf("result_%d_tags=%s", i, strings.Join(result.Tags, ",")))
+			}
+			lines = append(lines, fmt.Sprintf("result_%d_rank=%d", i, result.Rank))
+		} else {
+			// Text format: separator + fields
+			lines = append(lines, "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
+			lines = append(lines, fmt.Sprintf("Rank: %d | Source: %s | Role: %s | Score: %.2f", result.Rank, result.Source, result.Role, result.Score))
+			lines = append(lines, fmt.Sprintf("Path: %s", result.FilePath))
+			if !result.Timestamp.IsZero() {
+				lines = append(lines, fmt.Sprintf("Time: %s", result.Timestamp.Format("2006-01-02 15:04:05")))
+			}
+			if result.SessionID != "" {
+				lines = append(lines, fmt.Sprintf("Session: %s", result.SessionID))
+			}
+			if result.ProjectPath != "" {
+				lines = append(lines, fmt.Sprintf("Project: %s", result.ProjectPath))
+			}
+			if len(result.Tags) > 0 {
+				lines = append(lines, fmt.Sprintf("Tags: %s", strings.Join(result.Tags, ", ")))
+			}
+			lines = append(lines, result.Content)
+		}
+	}
+
+	return lines
 }
