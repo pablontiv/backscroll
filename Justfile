@@ -26,9 +26,14 @@ build:
 coverage-summary:
     go test -cover ./...
 
-# Coverage threshold check
+# Show coverage per package and total
 coverage:
-    ./scripts/check-coverage.sh
+    go test ./... -coverprofile=coverage.out
+    go run github.com/pablontiv/picokit/cmd/pkcov report
+
+# Check coverage meets per-package floors
+coverage-check: coverage
+    go run github.com/pablontiv/picokit/cmd/pkcov check
 
 # Audit dependencies
 audit:
