@@ -265,15 +265,17 @@ func TestResumeOutputFormatRobot(t *testing.T) {
 	_, cleanup := testEnv(t)
 	defer cleanup()
 
-	// Sync fixture content
-	piDir := filepath.Dir(filepath.Join(fixturesDir(), "pi-session.jsonl"))
-	_, _, err := runCmd("sync", "--path", piDir)
+	// Sync Claude-format fixture with --no-plans to avoid local plan contamination.
+	// The legacy manifest (used by --path) filters by type:user/assistant, so only
+	// Claude-format JSONL is indexed; pi-format records are excluded.
+	claudeDir := filepath.Join(fixturesDir(), "claude-preset", "projects", "project-a")
+	_, _, err := runCmd("sync", "--path", claudeDir, "--no-plans")
 	if err != nil {
 		t.Fatalf("sync error: %v", err)
 	}
 
-	// Resume with --robot flag using a term known to exist in the pi fixture
-	out, _, err := runCmd("resume", "signal", "--robot")
+	// Resume with --robot flag using a term guaranteed in the Claude fixture ("hello world")
+	out, _, err := runCmd("resume", "hello", "--robot")
 	if err != nil {
 		t.Fatalf("resume --robot error: %v", err)
 	}
