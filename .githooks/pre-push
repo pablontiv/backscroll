@@ -28,8 +28,8 @@ while read local_ref local_sha remote_ref remote_sha; do
     fi
   fi
 
-  # Check if Go source changed but docs weren't updated
-  if git diff --name-only "$range" -- internal/ cmd/ 2>/dev/null | grep -q .; then
+  # Check if Go source changed but docs weren't updated (test-only changes exempt)
+  if git diff --name-only "$range" -- internal/ cmd/ 2>/dev/null | grep -v '_test\.go' | grep -q .; then
     if ! git diff --name-only "$range" -- docs/ README.md CLAUDE.md 2>/dev/null | grep -q .; then
       echo "Go source changed but docs were not updated."
       echo "Update docs/, README.md, or CLAUDE.md before pushing."

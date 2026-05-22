@@ -27,7 +27,7 @@ just audit              # go mod verify
 
 Run a single test: `go test -run TestName ./internal/...`
 
-**Pre-push gate**: the pre-push hook validates that Module Layout and Package Layout sections in CLAUDE.md are up to date whenever a Go package is added or deleted. When deleting a package, remove its entries from the "Implemented:" list, the `internal/` tree in Module Layout, and the Package Layout table before committing, or the push will be rejected. The hook also runs `just coverage-check` (pkcov) when any `*.go` file changes — push is blocked if any package falls below 85%.
+**Pre-push gate**: the pre-push hook validates that Module Layout and Package Layout sections in CLAUDE.md are up to date whenever a Go package is added or deleted. When deleting a package, remove its entries from the "Implemented:" list, the `internal/` tree in Module Layout, and the Package Layout table before committing, or the push will be rejected. The hook also runs `just coverage-check` (pkcov) when any `*.go` file changes — push is blocked if any package falls below 85%. Test-only changes (`*_test.go`) are exempt from the docs-update requirement.
 
 **Coverage**: backscroll conforms to [coverage-spec v1.0](https://github.com/pablontiv/picokit/blob/main/docs/coverage-spec.md) — per-package floors defined in `.coverage-floors.toml` (default 85%), enforced locally via pre-push hook and in CI via `just coverage-check`.
 
