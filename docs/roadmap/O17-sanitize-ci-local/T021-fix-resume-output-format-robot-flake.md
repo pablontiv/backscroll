@@ -1,5 +1,5 @@
 ---
-estado: Specified
+estado: Completed
 tipo: task
 ---
 # T021: Fix `TestResumeOutputFormatRobot` flake — setup self-contained

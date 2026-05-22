@@ -2,6 +2,7 @@ package main
 
 import (
 	"encoding/json"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -265,17 +266,25 @@ func TestResumeOutputFormatRobot(t *testing.T) {
 	_, cleanup := testEnv(t)
 	defer cleanup()
 
-	// Sync Claude-format fixture with --no-plans to avoid local plan contamination.
-	// The legacy manifest (used by --path) filters by type:user/assistant, so only
-	// Claude-format JSONL is indexed; pi-format records are excluded.
-	claudeDir := filepath.Join(fixturesDir(), "claude-preset", "projects", "project-a")
-	_, _, err := runCmd("sync", "--path", claudeDir, "--no-plans")
+	// Create a self-contained fixture: a temp directory with a single JSONL file
+	// containing content that matches the query term "test"
+	tempDir := t.TempDir()
+	sessionFile := filepath.Join(tempDir, "test-session.jsonl")
+	fixtureContent := `{"uuid":"test-u-1","timestamp":"2024-01-02T03:04:05Z","sessionId":"test-session-1","type":"user","message":{"role":"user","content":"testing query"}}
+{"uuid":"test-a-1","timestamp":"2024-01-02T03:04:06Z","sessionId":"test-session-1","type":"assistant","message":{"role":"assistant","content":"this is a test response"}}
+`
+	if err := os.WriteFile(sessionFile, []byte(fixtureContent), 0644); err != nil {
+		t.Fatalf("write fixture: %v", err)
+	}
+
+	// Sync the temp directory with --no-plans
+	_, _, err := runCmd("sync", "--path", tempDir, "--no-plans")
 	if err != nil {
 		t.Fatalf("sync error: %v", err)
 	}
 
-	// Resume with --robot flag using a term guaranteed in the Claude fixture ("hello world")
-	out, _, err := runCmd("resume", "hello", "--robot")
+	// Resume with --robot flag using the term "test" that is in the fixture
+	out, _, err := runCmd("resume", "test", "--robot")
 	if err != nil {
 		t.Fatalf("resume --robot error: %v", err)
 	}
