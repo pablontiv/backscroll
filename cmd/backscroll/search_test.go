@@ -272,16 +272,13 @@ func TestResumeOutputFormatRobot(t *testing.T) {
 		t.Fatalf("sync error: %v", err)
 	}
 
-	// Resume with --robot flag
-	out, _, err := runCmd("resume", "test", "--robot")
+	// Resume with --robot flag using a term known to exist in the pi fixture
+	out, _, err := runCmd("resume", "signal", "--robot")
 	if err != nil {
 		t.Fatalf("resume --robot error: %v", err)
 	}
 
-	// Verify robot format if content exists
-	if len(strings.TrimSpace(out)) > 0 {
-		if !strings.Contains(out, "result_0_") {
-			t.Errorf("resume robot format should contain result_N_ markers: %s", out)
-		}
+	if !strings.Contains(out, "result_0_") {
+		t.Errorf("resume robot format should contain result_N_ markers: %s", out)
 	}
 }
