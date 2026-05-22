@@ -1,5 +1,5 @@
 ---
-estado: Specified
+estado: Completed
 tipo: task
 ---
 # T020: Bump picokit de v0.2.0 a v0.4.0
