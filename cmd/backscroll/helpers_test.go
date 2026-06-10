@@ -62,14 +62,7 @@ roots = ["/tmp/other"]
 	}
 
 	// Change to the project directory
-	oldCwd, err := os.Getwd()
-	if err != nil {
-		t.Fatalf("failed to get cwd: %v", err)
-	}
-	if err := os.Chdir(projDir); err != nil {
-		t.Fatalf("failed to change dir: %v", err)
-	}
-	defer os.Chdir(oldCwd)
+	t.Chdir(projDir)
 
 	// Test that derivation returns the correct project ID
 	result := effectiveProject("", false)
@@ -87,14 +80,7 @@ func TestEffectiveProjectUnknownCwd(t *testing.T) {
 	// Create a temporary directory that is NOT in the registry
 	tmpDir := t.TempDir()
 
-	oldCwd, err := os.Getwd()
-	if err != nil {
-		t.Fatalf("failed to get cwd: %v", err)
-	}
-	if err := os.Chdir(tmpDir); err != nil {
-		t.Fatalf("failed to change dir: %v", err)
-	}
-	defer os.Chdir(oldCwd)
+	t.Chdir(tmpDir)
 
 	// When cwd is not in the registry, should return empty string
 	result := effectiveProject("", false)
