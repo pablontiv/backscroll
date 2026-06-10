@@ -29,7 +29,6 @@ func newSearchCmd(stdout, stderr io.Writer) *cobra.Command {
 		offset              int
 		contentType         string
 		tag                 string
-		fields              string
 		maxTokens           int
 		lexicalOnly         bool
 		similarityThreshold float64
@@ -72,7 +71,6 @@ Use --max-tokens to limit output size (approximate token count).`,
 	cmd.Flags().IntVar(&offset, "offset", 0, "Result offset")
 	cmd.Flags().StringVar(&contentType, "content-type", "", "Filter by content type")
 	cmd.Flags().StringVar(&tag, "tag", "", "Filter sessions by tag")
-	cmd.Flags().StringVar(&fields, "fields", "", "Fields to display (comma-separated)")
 	cmd.Flags().IntVar(&maxTokens, "max-tokens", 0, "Max tokens in output (0=unlimited)")
 	cmd.Flags().BoolVar(&lexicalOnly, "lexical-only", false, "Use BM25 only, skip vector search")
 	cmd.Flags().Float64Var(&similarityThreshold, "similarity-threshold", 0.3, "Minimum cosine similarity for vector results (0=no threshold)")

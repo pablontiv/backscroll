@@ -20,17 +20,42 @@ backscroll sync
 | `--optimize` | Run FTS5 optimization after sync |
 | `--no-embeddings` | Skip embedding generation during sync |
 
-## Indexed-only snapshot reads
+## Auto-Sync on Query
 
-Read commands normally auto-sync declared inputs before querying SQLite. For deterministic audit consumers, `backscroll list --indexed-only` opens the existing database read-only and skips input manifest sync/discovery entirely:
+Query commands automatically index new/changed files before searching, using incremental sync (SHA-256 deduplication):
+
+```bash
+# Auto-syncs before search
+backscroll search "my query"
+backscroll resume "topic"
+backscroll list
+backscroll status
+```
+
+Auto-sync is **silent**: new content is indexed without printing progress to stdout. Sync errors emit warnings to stderr and do not block the query; the system continues with the cached index.
+
+If no database exists, auto-sync creates it during the first query. Subsequent queries are faster due to SHA-256 deduplication.
+
+### Indexed-only Mode
+
+For deterministic audit consumers, `--indexed-only` skips auto-sync and opens the existing database read-only:
 
 ```bash
 backscroll list --indexed-only --json
+backscroll search term --indexed-only
+backscroll status --indexed-only
 ```
 
-This mode never creates or mutates the database. If no usable index exists, list fails with a diagnostic instructing the user to run `backscroll sync` first.
+This mode never creates or mutates the database. If no usable index exists, commands fail with a diagnostic instructing the user to run `backscroll sync` first.
 
-`backscroll status --json` emits a versioned status document with database path, index counts, project counts, source counts, active input metadata, and diagnostics. Add `--indexed-only` to inspect the current SQLite snapshot without auto-syncing; when no usable index exists, JSON status reports `index.usable = false` instead of creating a database. For the complete deterministic downstream flow, see [Downstream audit integration contract](audit-integration.md).
+**Commands supporting `--indexed-only`**:
+- `backscroll list --indexed-only`
+- `backscroll status --indexed-only`
+- `backscroll events query --indexed-only`
+- `backscroll sessions query --indexed-only`
+- `backscroll sessions list --indexed-only`
+
+`backscroll status --json` emits a versioned status document with database path, index counts, project counts, source counts, active input metadata, and diagnostics. For the complete deterministic downstream flow, see [Downstream audit integration contract](audit-integration.md).
 
 ## Declarative Inputs
 
@@ -134,11 +159,27 @@ Raw session messages can contain machine-generated content injected by agents or
 
 After filtering, if a message is empty, it is discarded entirely when `drop_empty = true`.
 
+## Default Limits
+
+Query commands have sensible defaults for result limits:
+
+| Command | Default `--limit` | Purpose |
+|---------|-------------------|---------|
+| `backscroll search` | 20 | Most searches find what's needed in first 20 results |
+| `backscroll topics` | 30 | Show top 30 concepts |
+| `backscroll list` | 20 (via `--recent`) | Show 20 most recent sessions |
+| `backscroll sessions query` | 100 | Return up to 100 session metadata records |
+
+Other defaults:
+- `backscroll search --similarity-threshold` defaults to 0.3 (vector similarity floor for hybrid search)
+
+These align with the v0 Rust implementation for consistent behavior when switching tools.
+
 ## Incremental Sync
 
 Backscroll computes a SHA-256 hash for each input file and stores it in the database alongside the indexed content. On subsequent syncs, the hash is compared and only files whose content has changed are re-processed.
 
-This makes repeated syncs fast: the first run indexes everything, subsequent runs skip unchanged files.
+This makes repeated syncs fast: the first run indexes everything, subsequent runs skip unchanged files. Auto-sync leverages this: you can run queries repeatedly without paying the cost of re-indexing unchanged files.
 
 ## Project Detection
 
