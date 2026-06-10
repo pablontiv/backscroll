@@ -4,8 +4,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
-	"os"
-	"strings"
 
 	"github.com/spf13/cobra"
 
@@ -25,6 +23,7 @@ func newEventsCmd(stdout, stderr io.Writer) *cobra.Command {
 func newEventsQueryCmd(stdout, stderr io.Writer) *cobra.Command {
 	var (
 		jsonOut     bool
+		jsonlOut    bool
 		robot       bool
 		project     string
 		allProjects bool
@@ -48,11 +47,12 @@ func newEventsQueryCmd(stdout, stderr io.Writer) *cobra.Command {
 				sessionArg = args[0]
 			}
 			return runEventsQuery(stdout, stderr, sessionArg,
-				jsonOut, robot, project, allProjects, source, sourcePath, eventType, role, after, before, limit, indexedOnly)
+				jsonOut || jsonlOut, robot, project, allProjects, source, sourcePath, eventType, role, after, before, limit, indexedOnly)
 		},
 	}
 
 	cmd.Flags().BoolVar(&jsonOut, "json", false, "Output as JSONL")
+	cmd.Flags().BoolVar(&jsonlOut, "jsonl", false, "Output as JSONL (alias for --json)")
 	cmd.Flags().BoolVar(&robot, "robot", false, "Output optimized for LLM (plain text)")
 	cmd.Flags().StringVar(&project, "project", "", "Filter by project (default: derived from cwd)")
 	cmd.Flags().BoolVar(&allProjects, "all-projects", false, "Query all projects")
@@ -75,6 +75,13 @@ func runEventsQuery(stdout, stderr io.Writer, sessionArg string,
 	cfg, err := config.Load()
 	if err != nil {
 		return fmt.Errorf("load config: %w", err)
+	}
+
+	// Auto-sync before query unless --indexed-only is set
+	if !indexedOnly {
+		if err := maybeAutoSync(cfg); err != nil {
+			_, _ = fmt.Fprintf(stderr, "warning: auto-sync failed: %v; using cached index\n", err)
+		}
 	}
 
 	db, err := storage.OpenReadOnly(cfg.DatabasePath)
@@ -101,14 +108,14 @@ func runEventsQuery(stdout, stderr io.Writer, sessionArg string,
 		q.EventType = &eventType
 	}
 
-	// Project filter
+	// Project filter using canonical effectiveProject derivation
 	if !allProjects {
 		if project != "" {
 			q.Project = &project
 		} else if sessionArg == "" && sourcePath == "" {
 			// Derive project from cwd only when no explicit session/path provided
-			if cwd, cwdErr := os.Getwd(); cwdErr == nil {
-				derived := strings.ReplaceAll(cwd, "/", "-")
+			derived := effectiveProject("", allProjects)
+			if derived != "" {
 				q.Project = &derived
 			}
 		}

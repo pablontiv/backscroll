@@ -44,7 +44,7 @@ func newSessionsListCmd(stdout, stderr io.Writer) *cobra.Command {
 	}
 	cmd.Flags().StringVar(&project, "project", "", "Filter by project")
 	cmd.Flags().BoolVar(&allProjects, "all-projects", false, "Show sessions from all projects")
-	cmd.Flags().IntVar(&recent, "recent", 0, "Show N most recent sessions (0 = all)")
+	cmd.Flags().IntVar(&recent, "recent", 20, "Show N most recent sessions (0 = all)")
 	cmd.Flags().BoolVar(&indexedOnly, "indexed-only", false, "Read existing index without auto-sync")
 	cmd.Flags().BoolVar(&jsonOut, "json", false, "Output as JSON")
 	cmd.Flags().BoolVar(&robot, "robot", false, "Output optimized for LLM")
@@ -53,22 +53,13 @@ func newSessionsListCmd(stdout, stderr io.Writer) *cobra.Command {
 
 // newSessionsValidateCmd delegates to the same logic as the top-level validate command.
 func newSessionsValidateCmd(stdout, stderr io.Writer) *cobra.Command {
-	var (
-		project     string
-		allProjects bool
-	)
-
 	cmd := &cobra.Command{
 		Use:   "validate",
 		Short: "Validate indexed sessions (alias for backscroll validate)",
 		RunE: func(cmd *cobra.Command, args []string) error {
-			_ = project
-			_ = allProjects
 			return runValidate(stdout, stderr)
 		},
 	}
-	cmd.Flags().StringVar(&project, "project", "", "Filter by project (reserved)")
-	cmd.Flags().BoolVar(&allProjects, "all-projects", false, "Validate all projects (reserved)")
 	return cmd
 }
 
@@ -83,6 +74,7 @@ func newSessionsQueryCmd(stdout, stderr io.Writer) *cobra.Command {
 		sourcePath  string
 		maxChars    int
 		jsonOut     bool
+		jsonlOut    bool
 		limit       int
 		indexedOnly bool
 	)
@@ -91,7 +83,7 @@ func newSessionsQueryCmd(stdout, stderr io.Writer) *cobra.Command {
 		Use:   "query",
 		Short: "Query indexed sessions by metadata filters",
 		RunE: func(cmd *cobra.Command, args []string) error {
-			return runSessionsQuery(stdout, stderr, project, allProjects, after, before, source, sourcePath, jsonOut, limit, maxChars, indexedOnly)
+			return runSessionsQuery(stdout, stderr, project, allProjects, after, before, source, sourcePath, jsonOut || jsonlOut, limit, maxChars, indexedOnly)
 		},
 	}
 	cmd.Flags().StringVar(&project, "project", "", "Filter by project")
@@ -102,7 +94,8 @@ func newSessionsQueryCmd(stdout, stderr io.Writer) *cobra.Command {
 	cmd.Flags().StringVar(&sourcePath, "source-path", "", "Filter by source path (exact or * glob pattern)")
 	cmd.Flags().IntVar(&maxChars, "max-chars", 2000, "Maximum text characters per record (0 = no limit)")
 	cmd.Flags().BoolVar(&jsonOut, "json", false, "Output as JSON")
-	cmd.Flags().IntVar(&limit, "limit", 50, "Maximum sessions to return")
+	cmd.Flags().BoolVar(&jsonlOut, "jsonl", false, "Output as JSONL (alias for --json)")
+	cmd.Flags().IntVar(&limit, "limit", 100, "Maximum sessions to return")
 	cmd.Flags().BoolVar(&indexedOnly, "indexed-only", false, "Read existing index without auto-sync")
 	return cmd
 }
@@ -112,6 +105,16 @@ func runSessionsQuery(stdout, stderr io.Writer, project string, allProjects bool
 	if err != nil {
 		return fmt.Errorf("load config: %w", err)
 	}
+
+	// Auto-sync before query unless --indexed-only is set
+	if !indexedOnly {
+		if err := maybeAutoSync(cfg); err != nil {
+			_, _ = fmt.Fprintf(stderr, "warning: auto-sync failed: %v; using cached index\n", err)
+		}
+	}
+
+	// Derive effective project from cwd if not explicitly set
+	project = effectiveProject(project, allProjects)
 
 	db, err := storage.OpenReadOnly(cfg.DatabasePath)
 	if err != nil {
