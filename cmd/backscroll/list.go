@@ -39,7 +39,7 @@ Use --robot to output in robot format.`,
 
 	cmd.Flags().StringVar(&project, "project", "", "Filter to project")
 	cmd.Flags().BoolVar(&allProjects, "all-projects", false, "List all projects")
-	cmd.Flags().IntVar(&recent, "recent", 0, "Show N most recent sessions (0 = all)")
+	cmd.Flags().IntVar(&recent, "recent", 20, "Show N most recent sessions (0 = all)")
 	cmd.Flags().BoolVar(&indexedOnly, "indexed-only", false, "Read existing index without auto-sync")
 	cmd.Flags().BoolVar(&jsonFormat, "json", false, "Output as JSON")
 	cmd.Flags().BoolVar(&robotFormat, "robot", false, "Output in robot format")
@@ -55,7 +55,17 @@ func runList(stdout, stderr io.Writer,
 		return fmt.Errorf("load config: %w", err)
 	}
 
-	// Open read-only database (--indexed-only is default behavior for list).
+	// Auto-sync before query unless --indexed-only is set
+	if !indexedOnly {
+		if err := maybeAutoSync(cfg); err != nil {
+			_, _ = fmt.Fprintf(stderr, "warning: auto-sync failed: %v; using cached index\n", err)
+		}
+	}
+
+	// Derive effective project from cwd if not explicitly set
+	project = effectiveProject(project, allProjects)
+
+	// Open read-only database
 	// If DB doesn't exist yet, return an empty list.
 	db, err := storage.OpenReadOnly(cfg.DatabasePath)
 	if err != nil {

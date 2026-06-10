@@ -47,6 +47,13 @@ func runStatus(stdout, stderr io.Writer, jsonFormat, indexedOnly bool) error {
 		return fmt.Errorf("load config: %w", err)
 	}
 
+	// Auto-sync before status unless --indexed-only is set
+	if !indexedOnly {
+		if err := maybeAutoSync(cfg); err != nil {
+			_, _ = fmt.Fprintf(stderr, "warning: auto-sync failed: %v; using cached index\n", err)
+		}
+	}
+
 	// Check if database exists
 	_, err = os.Stat(cfg.DatabasePath)
 	dbExists := err == nil
