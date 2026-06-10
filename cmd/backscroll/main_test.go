@@ -2529,3 +2529,30 @@ func TestReindexAfterSync(t *testing.T) {
 	}
 	_ = out
 }
+
+// TestSearchAutoSync verifies the v0-parity behavior: a query command picks up
+// new session content without a prior manual `backscroll sync`.
+func TestSearchAutoSync(t *testing.T) {
+	_, cleanup := testEnv(t)
+	defer cleanup()
+	t.Setenv("HOME", t.TempDir()) // keep auto-sync away from the real ~/.claude
+
+	sessionDir := t.TempDir()
+	src, err := os.ReadFile(filepath.Join(fixturesDir(), "claude-tool-events.jsonl"))
+	if err != nil {
+		t.Fatalf("read fixture: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(sessionDir, "claude-session.jsonl"), src, 0o644); err != nil {
+		t.Fatalf("write session: %v", err)
+	}
+	t.Setenv("BACKSCROLL_SESSION_DIRS", sessionDir)
+
+	// No manual sync: search must auto-sync and find the new content
+	out, _, err := runCmd("search", "claude", "--json", "--all-projects")
+	if err != nil {
+		t.Fatalf("search with auto-sync error: %v", err)
+	}
+	if !strings.Contains(out, "claude-session.jsonl") {
+		t.Errorf("auto-sync did not index new session; output: %s", out)
+	}
+}
