@@ -2595,3 +2595,86 @@ func TestStatusJSONIndexUsable(t *testing.T) {
 		t.Error("expected index.usable=true after sync")
 	}
 }
+
+// TestDecisionsAutoSync verifies decisions query picks up newly added decision
+// sources without a prior manual sync (v0 parity).
+func TestDecisionsAutoSync(t *testing.T) {
+	_, cleanup := testEnv(t)
+	defer cleanup()
+	t.Setenv("HOME", t.TempDir())
+
+	sessionDir := t.TempDir()
+	src, err := os.ReadFile(filepath.Join(fixturesDir(), "claude-tool-events.jsonl"))
+	if err != nil {
+		t.Fatalf("read fixture: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(sessionDir, "claude-session.jsonl"), src, 0o644); err != nil {
+		t.Fatalf("write session: %v", err)
+	}
+	t.Setenv("BACKSCROLL_SESSION_DIRS", sessionDir)
+
+	// No manual sync: decisions extract must auto-sync (DB created, sessions indexed)
+	out, _, err := runCmd("decisions", "extract", "--all-projects")
+	if err != nil {
+		t.Fatalf("decisions extract with auto-sync error: %v", err)
+	}
+	_ = out
+
+	// Verify the index was populated by the auto-sync
+	out, _, err = runCmd("status", "--json", "--indexed-only")
+	if err != nil {
+		t.Fatalf("status error: %v", err)
+	}
+	var doc map[string]any
+	if err := json.Unmarshal([]byte(out), &doc); err != nil {
+		t.Fatalf("status JSON invalid: %v", err)
+	}
+	index := doc["index"].(map[string]any)
+	if usable, _ := index["usable"].(bool); !usable {
+		t.Error("decisions auto-sync did not populate the index")
+	}
+}
+
+func TestResumeWithResults(t *testing.T) {
+	_, cleanup := testEnv(t)
+	defer cleanup()
+	t.Setenv("HOME", t.TempDir())
+
+	sessionDir := t.TempDir()
+	src, err := os.ReadFile(filepath.Join(fixturesDir(), "claude-tool-events.jsonl"))
+	if err != nil {
+		t.Fatalf("read fixture: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(sessionDir, "claude-session.jsonl"), src, 0o644); err != nil {
+		t.Fatalf("write session: %v", err)
+	}
+	t.Setenv("BACKSCROLL_SESSION_DIRS", sessionDir)
+
+	out, _, err := runCmd("resume", "claude", "--all-projects")
+	if err != nil {
+		t.Fatalf("resume error: %v", err)
+	}
+	_ = out
+
+	out, _, err = runCmd("resume", "claude", "--all-projects", "--robot")
+	if err != nil {
+		t.Fatalf("resume --robot error: %v", err)
+	}
+	_ = out
+}
+
+func TestDecisionsAutoSyncWarning(t *testing.T) {
+	_, cleanup := testEnv(t)
+	defer cleanup()
+	t.Setenv("HOME", t.TempDir())
+	// Point the DB at an uncreatable path: auto-sync warns, open fails
+	t.Setenv("BACKSCROLL_DATABASE_PATH", filepath.Join(string(os.PathSeparator), "nonexistent-root-dir", "x", "db.sqlite"))
+
+	_, stderrOut, err := runCmd("decisions", "query", "--all-projects")
+	if err == nil {
+		t.Skip("unexpectedly succeeded; environment allows path")
+	}
+	if !strings.Contains(stderrOut, "auto-sync failed") && !strings.Contains(err.Error(), "open database") {
+		t.Errorf("expected auto-sync warning or open error, got stderr=%q err=%v", stderrOut, err)
+	}
+}

@@ -22,16 +22,21 @@ func newDecisionsCmd(stdout, stderr io.Writer) *cobra.Command {
 		Long:  `Commands for querying, extracting, and analyzing decision records from the index.`,
 	}
 	cmd.AddCommand(
-		newDecisionsQueryCmd(stdout),
-		newDecisionsContextCmd(stdout),
-		newDecisionsExtractCmd(stdout),
-		newDecisionsConflictsCmd(stdout),
-		newDecisionsReplayCmd(stdout),
+		newDecisionsQueryCmd(stdout, stderr),
+		newDecisionsContextCmd(stdout, stderr),
+		newDecisionsExtractCmd(stdout, stderr),
+		newDecisionsConflictsCmd(stdout, stderr),
+		newDecisionsReplayCmd(stdout, stderr),
 	)
 	return cmd
 }
 
-func openDecisionDB(cfg *config.Config) (*storage.Database, error) {
+// openDecisionDB auto-syncs the index (warn-and-continue on failure) and
+// opens the database read-only.
+func openDecisionDB(cfg *config.Config, stderr io.Writer) (*storage.Database, error) {
+	if err := maybeAutoSync(cfg); err != nil {
+		_, _ = fmt.Fprintf(stderr, "warning: auto-sync failed: %v; using cached index\n", err)
+	}
 	db, err := storage.OpenReadOnly(cfg.DatabasePath)
 	if err != nil {
 		return nil, fmt.Errorf("open database: %w", err)
@@ -231,7 +236,7 @@ type decisionRecord struct {
 	LastSeen   *string                `json:"last_seen,omitempty"`
 }
 
-func newDecisionsQueryCmd(stdout io.Writer) *cobra.Command {
+func newDecisionsQueryCmd(stdout, stderr io.Writer) *cobra.Command {
 	var (
 		project     string
 		allProjects bool
@@ -248,7 +253,7 @@ func newDecisionsQueryCmd(stdout io.Writer) *cobra.Command {
 			if err != nil {
 				return fmt.Errorf("load config: %w", err)
 			}
-			db, err := openDecisionDB(cfg)
+			db, err := openDecisionDB(cfg, stderr)
 			if err != nil {
 				return err
 			}
@@ -348,7 +353,7 @@ type decisionContext struct {
 	TotalTokens int              `json:"total_tokens"`
 }
 
-func newDecisionsContextCmd(stdout io.Writer) *cobra.Command {
+func newDecisionsContextCmd(stdout, stderr io.Writer) *cobra.Command {
 	var (
 		project     string
 		allProjects bool
@@ -363,7 +368,7 @@ func newDecisionsContextCmd(stdout io.Writer) *cobra.Command {
 			if err != nil {
 				return fmt.Errorf("load config: %w", err)
 			}
-			db, err := openDecisionDB(cfg)
+			db, err := openDecisionDB(cfg, stderr)
 			if err != nil {
 				return err
 			}
@@ -479,7 +484,7 @@ type decisionCandidate struct {
 	Evidence   []candidateEvidence `json:"evidence"`
 }
 
-func newDecisionsExtractCmd(stdout io.Writer) *cobra.Command {
+func newDecisionsExtractCmd(stdout, stderr io.Writer) *cobra.Command {
 	var (
 		project     string
 		allProjects bool
@@ -494,7 +499,7 @@ func newDecisionsExtractCmd(stdout io.Writer) *cobra.Command {
 			if err != nil {
 				return fmt.Errorf("load config: %w", err)
 			}
-			db, err := openDecisionDB(cfg)
+			db, err := openDecisionDB(cfg, stderr)
 			if err != nil {
 				return err
 			}
@@ -692,7 +697,7 @@ func detectConflicts(proposal proposalInput, existing []struct {
 	return hints
 }
 
-func newDecisionsConflictsCmd(stdout io.Writer) *cobra.Command {
+func newDecisionsConflictsCmd(stdout, stderr io.Writer) *cobra.Command {
 	var (
 		proposalJSON string
 		project      string
@@ -729,7 +734,7 @@ func newDecisionsConflictsCmd(stdout io.Writer) *cobra.Command {
 			if err != nil {
 				return fmt.Errorf("load config: %w", err)
 			}
-			db, err := openDecisionDB(cfg)
+			db, err := openDecisionDB(cfg, stderr)
 			if err != nil {
 				return err
 			}
@@ -852,7 +857,7 @@ type replayFixture struct {
 	ExpectedDecisions []fixtureDecision `json:"expected_decisions"`
 }
 
-func newDecisionsReplayCmd(stdout io.Writer) *cobra.Command {
+func newDecisionsReplayCmd(stdout, stderr io.Writer) *cobra.Command {
 	var (
 		fixturePath string
 		project     string
@@ -867,7 +872,7 @@ func newDecisionsReplayCmd(stdout io.Writer) *cobra.Command {
 			if err != nil {
 				return fmt.Errorf("load config: %w", err)
 			}
-			db, err := openDecisionDB(cfg)
+			db, err := openDecisionDB(cfg, stderr)
 			if err != nil {
 				return err
 			}
