@@ -329,6 +329,228 @@ func homeDir() string {
 	return home
 }
 
+// maybeAutoSync performs an incremental sync operation if the database exists.
+// It is intended to be called before query commands to ensure fresh index state.
+// If sync fails, it returns an error (caller decides whether to warn/ignore).
+func maybeAutoSync(cfg *config.Config) error {
+	// Open database for reading to check if it exists
+	// (this will auto-create if missing)
+	db, err := storage.Open(cfg.DatabasePath)
+	if err != nil {
+		return fmt.Errorf("open database: %w", err)
+	}
+	defer func() { _ = db.Close() }()
+
+	// Get existing file hashes
+	existingHashes, err := db.GetFileHashes()
+	if err != nil {
+		return fmt.Errorf("get file hashes: %w", err)
+	}
+
+	// Build reader registry
+	reg := readers.NewRegistry()
+	reg.Register(&readers.JsonlReader{})
+	reg.Register(&readers.OpenCodeReader{})
+
+	// Resolve active inputs
+	defs, _, err := input_config.ActiveInputs(cfg.SessionDirs)
+	if err != nil {
+		return fmt.Errorf("resolve inputs: %w", err)
+	}
+
+	// Load project registry
+	registry := projects.LoadGlobalRegistry()
+
+	// Collect indexed files
+	var indexedFiles []storage.IndexedFile
+	var noPlans bool // Use default behavior (index plans)
+	var noEmbed bool // Use default behavior (create embeddings if enabled)
+
+	// Process sessions via reader registry
+	for _, def := range defs {
+		if def.Source == "" {
+			def.Source = "session"
+		}
+
+		reader, err := reg.ForDef(def)
+		if err != nil {
+			// Warn but continue on reader errors
+			continue
+		}
+
+		refs, err := reader.Discover(def)
+		if err != nil {
+			// Warn but continue on discover errors
+			continue
+		}
+
+		for _, ref := range refs {
+			hash, err := reader.Hash(ref)
+			if err != nil {
+				continue
+			}
+
+			if existingHashes[ref] == hash {
+				continue
+			}
+
+			pf, err := reader.Parse(ref, def)
+			if err != nil {
+				continue
+			}
+
+			ident := projects.Identify(ref, registry)
+
+			var sessionText string
+			var indexedMsgs []storage.IndexedMessage
+			for ordinal, msg := range pf.Records {
+				sessionText += msg.Content + "\n"
+				indexedMsgs = append(indexedMsgs, storage.IndexedMessage{
+					Ordinal:     ordinal,
+					Role:        msg.Role,
+					Text:        msg.Content,
+					Timestamp:   msg.Timestamp.Format("2006-01-02T15:04:05Z07:00"),
+					ContentType: msg.ContentType,
+				})
+			}
+
+			sessionTags := tagging.Tag(sessionText)
+
+			indexedFiles = append(indexedFiles, storage.IndexedFile{
+				SourcePath: ref,
+				Source:     def.Source,
+				Hash:       pf.Hash,
+				Project:    ident.ProjectID,
+				Messages:   indexedMsgs,
+				Tags:       sessionTags,
+			})
+		}
+	}
+
+	// Process external sources
+	for _, sourceType := range []string{"ke", "decision", "memory", "rule", "spec", "backlog"} {
+		var sourcePaths []string
+		switch sourceType {
+		case "ke":
+			sourcePaths = cfg.Sources.KE
+		case "decision":
+			sourcePaths = cfg.Sources.Decisions
+		case "memory":
+			sourcePaths = cfg.Sources.Memories
+		case "rule":
+			sourcePaths = cfg.Sources.Rules
+		case "spec":
+			sourcePaths = cfg.Sources.Specs
+		case "backlog":
+			sourcePaths = cfg.Sources.Backlog
+		}
+
+		for _, sourcePath := range sourcePaths {
+			hash, err := hashfile.HashFile(sourcePath)
+			if err != nil {
+				continue
+			}
+
+			if existingHashes[sourcePath] == hash {
+				continue
+			}
+
+			// Parse source file
+			sourceItems, err := sources.ParseSectioned(sourcePath, sourceType)
+			if err != nil {
+				continue
+			}
+
+			// Identify project
+			ident := projects.Identify(sourcePath, registry)
+
+			// Convert source items to IndexedMessage
+			var indexedMsgs []storage.IndexedMessage
+			for ordinal, item := range sourceItems {
+				indexedMsgs = append(indexedMsgs, storage.IndexedMessage{
+					Ordinal:     ordinal,
+					Role:        "system",
+					Text:        item.Content,
+					Timestamp:   "",
+					ContentType: "text",
+				})
+			}
+
+			indexedFiles = append(indexedFiles, storage.IndexedFile{
+				SourcePath: sourcePath,
+				Source:     sourceType,
+				Hash:       hash,
+				Project:    ident.ProjectID,
+				Messages:   indexedMsgs,
+				Tags:       []string{},
+			})
+		}
+	}
+
+	// Process plans (unless explicitly skipped)
+	if !noPlans {
+		planDir := filepath.Join(homeDir(), ".claude", "plans")
+		planFiles, err := plans.DiscoverPlanFiles(planDir)
+		if err == nil {
+			for _, planPath := range planFiles {
+				hash, err := hashfile.HashFile(planPath)
+				if err != nil {
+					continue
+				}
+
+				if existingHashes[planPath] == hash {
+					continue
+				}
+
+				// Parse plan
+				sections, err := plans.ParsePlan(planPath)
+				if err != nil {
+					continue
+				}
+
+				// Identify project
+				ident := projects.Identify(planPath, registry)
+
+				// Convert sections to IndexedMessage
+				var indexedMsgs []storage.IndexedMessage
+				for ordinal, section := range sections {
+					indexedMsgs = append(indexedMsgs, storage.IndexedMessage{
+						Ordinal:     ordinal,
+						Role:        "plan",
+						Text:        section.Content,
+						Timestamp:   "",
+						ContentType: "text",
+					})
+				}
+
+				indexedFiles = append(indexedFiles, storage.IndexedFile{
+					SourcePath: planPath,
+					Source:     "plan",
+					Hash:       hash,
+					Project:    ident.ProjectID,
+					Messages:   indexedMsgs,
+					Tags:       []string{},
+				})
+			}
+		}
+	}
+
+	// Sync all files
+	if len(indexedFiles) > 0 {
+		if err := db.SyncFiles(indexedFiles); err != nil {
+			return fmt.Errorf("sync files: %w", err)
+		}
+	}
+
+	// Chunk and embed newly synced content when embedding is enabled
+	if cfg.Embedding.Enabled && !noEmbed && len(indexedFiles) > 0 {
+		// Use nil for stdout/stderr since we're silent in auto-sync mode
+		runEmbedPipeline(io.Discard, io.Discard, db, cfg.Embedding, indexedFiles)
+	}
+
+	return nil
+}
+
 // runEmbedPipeline chunks and embeds each newly synced file.
 // Provider errors are logged as warnings and do not abort sync.
 func runEmbedPipeline(stdout, stderr io.Writer, db *storage.Database, cfg config.EmbeddingConfig, files []storage.IndexedFile) {
