@@ -95,6 +95,7 @@ func runStatus(stdout, stderr io.Writer, jsonFormat, indexedOnly bool) error {
 				"size":   dbSize,
 			},
 			"index": map[string]interface{}{
+				"usable":           dbExists && stats.TotalFiles > 0,
 				"total_files":      stats.TotalFiles,
 				"total_messages":   stats.TotalMessages,
 				"indexed_at":       stats.IndexedAt,

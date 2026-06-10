@@ -2556,3 +2556,42 @@ func TestSearchAutoSync(t *testing.T) {
 		t.Errorf("auto-sync did not index new session; output: %s", out)
 	}
 }
+
+func TestStatusJSONIndexUsable(t *testing.T) {
+	_, cleanup := testEnv(t)
+	defer cleanup()
+	t.Setenv("HOME", t.TempDir())
+
+	// No index yet: --indexed-only must report usable=false without creating the DB
+	out, _, err := runCmd("status", "--json", "--indexed-only")
+	if err != nil {
+		t.Fatalf("status --json --indexed-only error: %v", err)
+	}
+	var doc map[string]any
+	if err := json.Unmarshal([]byte(out), &doc); err != nil {
+		t.Fatalf("status JSON invalid: %v\noutput: %s", err, out)
+	}
+	index, ok := doc["index"].(map[string]any)
+	if !ok {
+		t.Fatalf("status JSON missing index object: %s", out)
+	}
+	if usable, _ := index["usable"].(bool); usable {
+		t.Error("expected index.usable=false with no index")
+	}
+
+	// After syncing a session, usable must flip to true
+	piDir := filepath.Dir(filepath.Join(fixturesDir(), "claude-tool-events.jsonl"))
+	_, _, _ = runCmd("sync", "--path", piDir)
+	out, _, err = runCmd("status", "--json", "--indexed-only")
+	if err != nil {
+		t.Fatalf("status after sync error: %v", err)
+	}
+	doc = nil
+	if err := json.Unmarshal([]byte(out), &doc); err != nil {
+		t.Fatalf("status JSON invalid after sync: %v", err)
+	}
+	index = doc["index"].(map[string]any)
+	if usable, _ := index["usable"].(bool); !usable {
+		t.Error("expected index.usable=true after sync")
+	}
+}

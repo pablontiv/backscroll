@@ -42,7 +42,6 @@ For deterministic audit consumers, `--indexed-only` skips auto-sync and opens th
 
 ```bash
 backscroll list --indexed-only --json
-backscroll search term --indexed-only
 backscroll status --indexed-only
 ```
 
