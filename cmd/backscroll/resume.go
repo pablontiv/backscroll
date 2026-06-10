@@ -49,6 +49,14 @@ func runResume(stdout, stderr io.Writer,
 		return fmt.Errorf("load config: %w", err)
 	}
 
+	// Auto-sync before query
+	if err := maybeAutoSync(cfg); err != nil {
+		_, _ = fmt.Fprintf(stderr, "warning: auto-sync failed: %v; using cached index\n", err)
+	}
+
+	// Derive effective project from cwd if not explicitly set
+	project = effectiveProject(project, allProjects)
+
 	// Open read-only database
 	db, err := storage.OpenReadOnly(cfg.DatabasePath)
 	if err != nil {

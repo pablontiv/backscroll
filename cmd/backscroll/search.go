@@ -68,14 +68,14 @@ Use --max-tokens to limit output size (approximate token count).`,
 	cmd.Flags().StringVar(&after, "after", "", "Filter after date (YYYY-MM-DD)")
 	cmd.Flags().StringVar(&before, "before", "", "Filter before date (YYYY-MM-DD)")
 	cmd.Flags().StringVar(&role, "role", "", "Filter by message role")
-	cmd.Flags().IntVar(&limit, "limit", 100, "Result limit")
+	cmd.Flags().IntVar(&limit, "limit", 20, "Result limit")
 	cmd.Flags().IntVar(&offset, "offset", 0, "Result offset")
 	cmd.Flags().StringVar(&contentType, "content-type", "", "Filter by content type")
 	cmd.Flags().StringVar(&tag, "tag", "", "Filter sessions by tag")
 	cmd.Flags().StringVar(&fields, "fields", "", "Fields to display (comma-separated)")
 	cmd.Flags().IntVar(&maxTokens, "max-tokens", 0, "Max tokens in output (0=unlimited)")
 	cmd.Flags().BoolVar(&lexicalOnly, "lexical-only", false, "Use BM25 only, skip vector search")
-	cmd.Flags().Float64Var(&similarityThreshold, "similarity-threshold", 0, "Minimum cosine similarity for vector results (0=no threshold)")
+	cmd.Flags().Float64Var(&similarityThreshold, "similarity-threshold", 0.3, "Minimum cosine similarity for vector results (0=no threshold)")
 
 	return cmd
 }
@@ -91,6 +91,14 @@ func runSearch(stdout, stderr io.Writer,
 	if err != nil {
 		return fmt.Errorf("load config: %w", err)
 	}
+
+	// Auto-sync before query
+	if err := maybeAutoSync(cfg); err != nil {
+		_, _ = fmt.Fprintf(stderr, "warning: auto-sync failed: %v; using cached index\n", err)
+	}
+
+	// Derive effective project from cwd if not explicitly set
+	project = effectiveProject(project, allProjects)
 
 	// Open read-only database
 	db, err := storage.OpenReadOnly(cfg.DatabasePath)
