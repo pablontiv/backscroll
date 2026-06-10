@@ -2398,3 +2398,134 @@ func init() {
 	// Suppress cobra's default behavior of writing to os.Stderr on error
 	_ = fmt.Sprintf // keep fmt import
 }
+
+func TestSearchFieldsInvalid(t *testing.T) {
+	_, cleanup := testEnv(t)
+	defer cleanup()
+
+	_, _, err := runCmd("search", "test", "--fields", "bogus")
+	if err == nil {
+		t.Fatal("expected error for invalid --fields value, got nil")
+	}
+	if !strings.Contains(err.Error(), "--fields") {
+		t.Errorf("error should mention --fields, got: %v", err)
+	}
+}
+
+func TestSearchFieldsMinimalDefault(t *testing.T) {
+	_, cleanup := testEnv(t)
+	defer cleanup()
+
+	piDir := filepath.Dir(filepath.Join(fixturesDir(), "pi-session.jsonl"))
+	_, _, _ = runCmd("sync", "--path", piDir)
+
+	out, _, err := runCmd("search", "pi", "--json", "--all-projects")
+	if err != nil {
+		t.Fatalf("search --json error: %v", err)
+	}
+	if strings.TrimSpace(out) == "" {
+		t.Skip("no results in fixture index")
+	}
+	var minimal []map[string]any
+	if err := json.Unmarshal([]byte(out), &minimal); err != nil {
+		t.Fatalf("minimal JSON not valid: %v\noutput: %s", err, out)
+	}
+	if len(minimal) > 0 {
+		for _, key := range []string{"source_path", "snippet", "score", "role", "timestamp"} {
+			if _, ok := minimal[0][key]; !ok {
+				t.Errorf("minimal JSON missing key %q: %v", key, minimal[0])
+			}
+		}
+		if _, ok := minimal[0]["Content"]; ok {
+			t.Error("minimal JSON should not include full-struct Content field")
+		}
+	}
+}
+
+func TestSearchFieldsFull(t *testing.T) {
+	_, cleanup := testEnv(t)
+	defer cleanup()
+
+	piDir := filepath.Dir(filepath.Join(fixturesDir(), "pi-session.jsonl"))
+	_, _, _ = runCmd("sync", "--path", piDir)
+
+	out, _, err := runCmd("search", "pi", "--json", "--fields", "full", "--all-projects")
+	if err != nil {
+		t.Fatalf("search --fields full error: %v", err)
+	}
+	if strings.TrimSpace(out) == "" {
+		t.Skip("no results in fixture index")
+	}
+	var full []map[string]any
+	if err := json.Unmarshal([]byte(out), &full); err != nil {
+		t.Fatalf("full JSON not valid: %v\noutput: %s", err, out)
+	}
+	if len(full) > 0 {
+		if _, ok := full[0]["FilePath"]; !ok {
+			t.Errorf("full JSON missing FilePath field: %v", full[0])
+		}
+	}
+}
+
+func TestSearchSourcePath(t *testing.T) {
+	_, cleanup := testEnv(t)
+	defer cleanup()
+
+	piDir := filepath.Dir(filepath.Join(fixturesDir(), "pi-session.jsonl"))
+	_, _, _ = runCmd("sync", "--path", piDir)
+
+	// Glob that matches nothing must return no results
+	out, _, err := runCmd("search", "pi", "--json", "--source-path", "/nonexistent/*", "--all-projects")
+	if err != nil {
+		t.Fatalf("search --source-path error: %v", err)
+	}
+	if strings.Contains(out, "source_path") && strings.Contains(out, "pi-session") {
+		t.Errorf("non-matching --source-path glob returned results: %s", out)
+	}
+
+	// Glob matching the fixture dir should not error
+	_, _, err = runCmd("search", "pi", "--json", "--source-path", "*pi-session.jsonl", "--all-projects")
+	if err != nil {
+		t.Fatalf("search --source-path glob error: %v", err)
+	}
+}
+
+func TestSearchInvalidDates(t *testing.T) {
+	_, cleanup := testEnv(t)
+	defer cleanup()
+
+	if _, _, err := runCmd("search", "x", "--after", "not-a-date"); err == nil {
+		t.Error("expected error for invalid --after date")
+	}
+	if _, _, err := runCmd("search", "x", "--before", "not-a-date"); err == nil {
+		t.Error("expected error for invalid --before date")
+	}
+}
+
+func TestSearchRobotWithResults(t *testing.T) {
+	_, cleanup := testEnv(t)
+	defer cleanup()
+
+	piDir := filepath.Dir(filepath.Join(fixturesDir(), "pi-session.jsonl"))
+	_, _, _ = runCmd("sync", "--path", piDir)
+
+	out, _, err := runCmd("search", "pi", "--robot", "--all-projects")
+	if err != nil {
+		t.Fatalf("search --robot error: %v", err)
+	}
+	_ = out
+}
+
+func TestReindexAfterSync(t *testing.T) {
+	_, cleanup := testEnv(t)
+	defer cleanup()
+
+	piDir := filepath.Dir(filepath.Join(fixturesDir(), "pi-session.jsonl"))
+	_, _, _ = runCmd("sync", "--path", piDir)
+
+	out, _, err := runCmd("reindex")
+	if err != nil {
+		t.Fatalf("reindex error: %v", err)
+	}
+	_ = out
+}

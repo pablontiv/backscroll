@@ -3330,3 +3330,58 @@ func TestSyncFilesMultipleMessageDeletion(t *testing.T) {
 		t.Errorf("expected 2 items after resync, got %d", count)
 	}
 }
+
+func TestSearchWithSourcePathFilter(t *testing.T) {
+	db, cleanup := newTestDB(t)
+	defer cleanup()
+
+	if err := db.SyncFiles([]IndexedFile{
+		{
+			SourcePath: "/proj/a/session.jsonl",
+			Source:     "session",
+			Hash:       "hash-a",
+			Project:    "proja",
+			Messages: []IndexedMessage{
+				{Ordinal: 0, Role: "user", Text: "needle in path a", UUID: getTestUUID(), Timestamp: "2024-01-01T00:00:00Z", ContentType: "text"},
+			},
+		},
+		{
+			SourcePath: "/proj/b/session.jsonl",
+			Source:     "session",
+			Hash:       "hash-b",
+			Project:    "projb",
+			Messages: []IndexedMessage{
+				{Ordinal: 0, Role: "user", Text: "needle in path b", UUID: getTestUUID(), Timestamp: "2024-01-01T00:00:00Z", ContentType: "text"},
+			},
+		},
+	}); err != nil {
+		t.Fatalf("SyncFiles: %v", err)
+	}
+
+	// Exact path match
+	results, err := db.Search("needle", models.SearchOptions{SourcePath: "/proj/a/session.jsonl", Limit: 10})
+	if err != nil {
+		t.Fatalf("Search exact source-path: %v", err)
+	}
+	if len(results) != 1 || results[0].SourcePath != "/proj/a/session.jsonl" {
+		t.Errorf("exact source-path: expected 1 result from /proj/a, got %d: %+v", len(results), results)
+	}
+
+	// Glob match
+	results, err = db.Search("needle", models.SearchOptions{SourcePath: "/proj/b/*", Limit: 10})
+	if err != nil {
+		t.Fatalf("Search glob source-path: %v", err)
+	}
+	if len(results) != 1 || results[0].SourcePath != "/proj/b/session.jsonl" {
+		t.Errorf("glob source-path: expected 1 result from /proj/b, got %d: %+v", len(results), results)
+	}
+
+	// Non-matching path
+	results, err = db.Search("needle", models.SearchOptions{SourcePath: "/nope/*", Limit: 10})
+	if err != nil {
+		t.Fatalf("Search non-matching source-path: %v", err)
+	}
+	if len(results) != 0 {
+		t.Errorf("non-matching source-path: expected 0 results, got %d", len(results))
+	}
+}

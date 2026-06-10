@@ -47,6 +47,7 @@ type SearchOptions struct {
 	Project             string
 	AllProjects         bool
 	Source              string
+	SourcePath          string // exact path, SQL LIKE pattern, or * glob
 	After               *time.Time
 	Before              *time.Time
 	Role                string

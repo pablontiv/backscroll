@@ -62,6 +62,17 @@ func (d *Database) Search(query string, opts models.SearchOptions) ([]SearchResu
 		args = append(args, opts.Role)
 	}
 
+	// SourcePath filter (exact path, SQL LIKE pattern, or * glob)
+	if opts.SourcePath != "" {
+		if strings.ContainsAny(opts.SourcePath, "*%") {
+			whereClauses = append(whereClauses, "si.source_path LIKE ?")
+			args = append(args, strings.ReplaceAll(opts.SourcePath, "*", "%"))
+		} else {
+			whereClauses = append(whereClauses, "si.source_path = ?")
+			args = append(args, opts.SourcePath)
+		}
+	}
+
 	// ContentType filter
 	if opts.ContentType != "" {
 		whereClauses = append(whereClauses, "si.content_type = ?")

@@ -22,6 +22,7 @@ func newSearchCmd(stdout, stderr io.Writer) *cobra.Command {
 		jsonFormat          bool
 		robotFormat         bool
 		source              string
+		sourcePath          string
 		after               string
 		before              string
 		role                string
@@ -29,6 +30,7 @@ func newSearchCmd(stdout, stderr io.Writer) *cobra.Command {
 		offset              int
 		contentType         string
 		tag                 string
+		fields              string
 		maxTokens           int
 		lexicalOnly         bool
 		similarityThreshold float64
@@ -47,15 +49,17 @@ Use --after/--before to filter by date (YYYY-MM-DD format).
 Use --role to filter by message role (user, assistant).
 Use --content-type to filter by content type (text, code, tool).
 Use --tag to filter sessions by auto-detected tags.
+Use --source-path to filter by indexed source path (exact, SQL LIKE pattern, or * glob).
 Use --json to output as JSON.
+Use --fields to choose JSON detail: minimal (default) or full.
 Use --robot to output as robot format.
 Use --max-tokens to limit output size (approximate token count).`,
 		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			return runSearch(stdout, stderr, args[0],
 				project, allProjects, jsonFormat, robotFormat,
-				source, after, before, role, limit, offset, contentType, tag, maxTokens,
-				lexicalOnly, similarityThreshold)
+				source, sourcePath, after, before, role, limit, offset, contentType, tag,
+				fields, maxTokens, lexicalOnly, similarityThreshold)
 		},
 	}
 
@@ -64,6 +68,7 @@ Use --max-tokens to limit output size (approximate token count).`,
 	cmd.Flags().BoolVar(&jsonFormat, "json", false, "Output as JSON")
 	cmd.Flags().BoolVar(&robotFormat, "robot", false, "Output in robot format")
 	cmd.Flags().StringVar(&source, "source", "", "Filter by source type")
+	cmd.Flags().StringVar(&sourcePath, "source-path", "", "Filter by source path (exact, SQL LIKE pattern, or * glob)")
 	cmd.Flags().StringVar(&after, "after", "", "Filter after date (YYYY-MM-DD)")
 	cmd.Flags().StringVar(&before, "before", "", "Filter before date (YYYY-MM-DD)")
 	cmd.Flags().StringVar(&role, "role", "", "Filter by message role")
@@ -71,6 +76,7 @@ Use --max-tokens to limit output size (approximate token count).`,
 	cmd.Flags().IntVar(&offset, "offset", 0, "Result offset")
 	cmd.Flags().StringVar(&contentType, "content-type", "", "Filter by content type")
 	cmd.Flags().StringVar(&tag, "tag", "", "Filter sessions by tag")
+	cmd.Flags().StringVar(&fields, "fields", "minimal", "JSON fields to emit: minimal or full")
 	cmd.Flags().IntVar(&maxTokens, "max-tokens", 0, "Max tokens in output (0=unlimited)")
 	cmd.Flags().BoolVar(&lexicalOnly, "lexical-only", false, "Use BM25 only, skip vector search")
 	cmd.Flags().Float64Var(&similarityThreshold, "similarity-threshold", 0.3, "Minimum cosine similarity for vector results (0=no threshold)")
@@ -81,9 +87,15 @@ Use --max-tokens to limit output size (approximate token count).`,
 func runSearch(stdout, stderr io.Writer,
 	query string,
 	project string, allProjects bool, jsonFormat, robotFormat bool,
-	source, after, before, role string,
-	limit, offset int, contentType, tag string, maxTokens int,
+	source, sourcePath, after, before, role string,
+	limit, offset int, contentType, tag string,
+	fields string, maxTokens int,
 	lexicalOnly bool, similarityThreshold float64) error {
+
+	// Validate flag values before opening the database
+	if fields != "minimal" && fields != "full" {
+		return fmt.Errorf("invalid --fields value %q: must be minimal or full", fields)
+	}
 
 	cfg, err := config.Load()
 	if err != nil {
@@ -127,6 +139,7 @@ func runSearch(stdout, stderr io.Writer,
 		Project:             project,
 		AllProjects:         allProjects,
 		Source:              source,
+		SourcePath:          sourcePath,
 		After:               afterTime,
 		Before:              beforeTime,
 		Role:                role,
@@ -171,8 +184,22 @@ func runSearch(stdout, stderr io.Writer,
 	// Format and output
 	formatter := picokitoutput.NewFormatter(format, maxTokens)
 	if format == picokitoutput.FormatJSON {
-		// For JSON, use WriteJSON directly
-		if err := formatter.WriteJSON(stdout, modelResults); err != nil {
+		// For JSON, --fields selects the payload: minimal (v0 default) or full struct
+		if fields == "minimal" {
+			minimal := make([]minimalSearchResult, len(results))
+			for i, r := range results {
+				minimal[i] = minimalSearchResult{
+					SourcePath: r.SourcePath,
+					Snippet:    r.Snippet,
+					Score:      r.Score,
+					Role:       r.Role,
+					Timestamp:  r.Timestamp,
+				}
+			}
+			if err := formatter.WriteJSON(stdout, minimal); err != nil {
+				return fmt.Errorf("write results: %w", err)
+			}
+		} else if err := formatter.WriteJSON(stdout, modelResults); err != nil {
 			return fmt.Errorf("write results: %w", err)
 		}
 	} else {
@@ -184,6 +211,16 @@ func runSearch(stdout, stderr io.Writer,
 	}
 
 	return nil
+}
+
+// minimalSearchResult is the reduced JSON payload emitted by --fields=minimal,
+// matching the v0 minimal field set.
+type minimalSearchResult struct {
+	SourcePath string    `json:"source_path"`
+	Snippet    string    `json:"snippet"`
+	Score      float64   `json:"score"`
+	Role       string    `json:"role"`
+	Timestamp  time.Time `json:"timestamp"`
 }
 
 // resultsToLines converts SearchResults to string lines for the specified format.
