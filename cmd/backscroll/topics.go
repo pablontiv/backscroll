@@ -37,7 +37,7 @@ Use --robot to output in robot format.`,
 
 	cmd.Flags().StringVar(&project, "project", "", "Filter to project")
 	cmd.Flags().BoolVar(&allProjects, "all-projects", false, "Analyze all projects")
-	cmd.Flags().IntVar(&limit, "limit", 50, "Number of topics to return")
+	cmd.Flags().IntVar(&limit, "limit", 30, "Number of topics to return")
 	cmd.Flags().BoolVar(&jsonFormat, "json", false, "Output as JSON")
 	cmd.Flags().BoolVar(&robotFormat, "robot", false, "Output in robot format")
 
@@ -51,6 +51,14 @@ func runTopics(stdout, stderr io.Writer,
 	if err != nil {
 		return fmt.Errorf("load config: %w", err)
 	}
+
+	// Auto-sync before query
+	if err := maybeAutoSync(cfg); err != nil {
+		_, _ = fmt.Fprintf(stderr, "warning: auto-sync failed: %v; using cached index\n", err)
+	}
+
+	// Derive effective project from cwd if not explicitly set
+	project = effectiveProject(project, allProjects)
 
 	// Open read-only database
 	db, err := storage.OpenReadOnly(cfg.DatabasePath)
