@@ -12,7 +12,6 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/pablontiv/backscroll/internal/config"
-	"github.com/pablontiv/backscroll/internal/projects"
 	"github.com/pablontiv/backscroll/internal/storage"
 )
 
@@ -30,28 +29,6 @@ func newDecisionsCmd(stdout, stderr io.Writer) *cobra.Command {
 		newDecisionsReplayCmd(stdout),
 	)
 	return cmd
-}
-
-// effectiveProject returns the project filter string: empty string means "all projects".
-// When allProjects is true it returns "". When project is set it returns that.
-// Otherwise it derives from cwd via the registry.
-func effectiveProject(project string, allProjects bool) string {
-	if allProjects {
-		return ""
-	}
-	if project != "" {
-		return project
-	}
-	cwd, err := os.Getwd()
-	if err != nil {
-		return ""
-	}
-	registry := projects.LoadGlobalRegistry()
-	result := projects.Identify(cwd, registry)
-	if result.ProjectID == "unknown" {
-		return ""
-	}
-	return result.ProjectID
 }
 
 func openDecisionDB(cfg *config.Config) (*storage.Database, error) {
