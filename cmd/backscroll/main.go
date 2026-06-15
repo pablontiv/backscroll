@@ -41,26 +41,15 @@ for hybrid full-text search (BM25 + vector embeddings) with RRF fusion.`,
 	root.SetErr(stderr)
 
 	root.AddCommand(
-		newSyncCmd(stdout, stderr),
 		newSearchCmd(stdout, stderr),
 		newReadCmd(stdout, stderr),
-		newResumeCmd(stdout, stderr),
 		newListCmd(stdout, stderr),
 		newStatsCmd(stdout, stderr),
-		newTopicsCmd(stdout, stderr),
-		newInsightsCmd(stdout, stderr),
-		newExportCmd(stdout, stderr),
 		newRebuildCmd(stdout, stderr),
-		newReindexCmd(stdout, stderr),
 		newPurgeCmd(stdout, stderr),
 		newValidateCmd(stdout, stderr),
 		newStatusCmd(stdout, stderr),
 		newConfigCmd(stdout, stderr),
-		newDecisionsCmd(stdout, stderr),
-		newProjectsCmd(stdout, stderr),
-		newInputsCmd(stdout, stderr),
-		newEventsCmd(stdout, stderr),
-		newSessionsCmd(stdout, stderr),
 	)
 
 	return root

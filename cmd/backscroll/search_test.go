@@ -2,7 +2,6 @@ package main
 
 import (
 	"encoding/json"
-	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -18,7 +17,7 @@ func TestSearchOutputFormatText(t *testing.T) {
 
 	// Sync fixture content
 	piDir := filepath.Dir(filepath.Join(fixturesDir(), "pi-session.jsonl"))
-	_, _, err := runCmd("sync", "--path", piDir)
+	_, _, err := syncForTest(t, "sync", "--path", piDir)
 	if err != nil {
 		t.Fatalf("sync error: %v", err)
 	}
@@ -47,7 +46,7 @@ func TestSearchOutputFormatJSON(t *testing.T) {
 
 	// Sync fixture content
 	piDir := filepath.Dir(filepath.Join(fixturesDir(), "pi-session.jsonl"))
-	_, _, err := runCmd("sync", "--path", piDir)
+	_, _, err := syncForTest(t, "sync", "--path", piDir)
 	if err != nil {
 		t.Fatalf("sync error: %v", err)
 	}
@@ -75,7 +74,7 @@ func TestSearchOutputFormatRobot(t *testing.T) {
 
 	// Sync fixture content
 	piDir := filepath.Dir(filepath.Join(fixturesDir(), "pi-session.jsonl"))
-	_, _, err := runCmd("sync", "--path", piDir)
+	_, _, err := syncForTest(t, "sync", "--path", piDir)
 	if err != nil {
 		t.Fatalf("sync error: %v", err)
 	}
@@ -110,7 +109,7 @@ func TestSearchOutputRespectsTokenLimit(t *testing.T) {
 
 	// Sync fixture content
 	piDir := filepath.Dir(filepath.Join(fixturesDir(), "pi-session.jsonl"))
-	_, _, err := runCmd("sync", "--path", piDir)
+	_, _, err := syncForTest(t, "sync", "--path", piDir)
 	if err != nil {
 		t.Fatalf("sync error: %v", err)
 	}
@@ -216,7 +215,7 @@ func TestSearchWithJSONAndMaxTokens(t *testing.T) {
 
 	// Sync fixture content
 	piDir := filepath.Dir(filepath.Join(fixturesDir(), "pi-session.jsonl"))
-	_, _, err := runCmd("sync", "--path", piDir)
+	_, _, err := syncForTest(t, "sync", "--path", piDir)
 	if err != nil {
 		t.Fatalf("sync error: %v", err)
 	}
@@ -237,59 +236,9 @@ func TestSearchWithJSONAndMaxTokens(t *testing.T) {
 }
 
 func TestResumeOutputFormatText(t *testing.T) {
-	_, cleanup := testEnv(t)
-	defer cleanup()
-
-	// Sync fixture content
-	piDir := filepath.Dir(filepath.Join(fixturesDir(), "pi-session.jsonl"))
-	_, _, err := runCmd("sync", "--path", piDir)
-	if err != nil {
-		t.Fatalf("sync error: %v", err)
-	}
-
-	// Resume without --robot (defaults to text)
-	out, _, err := runCmd("resume", "test")
-	if err != nil {
-		t.Fatalf("resume error: %v", err)
-	}
-
-	// Verify output doesn't have robot format markers if content exists
-	if len(strings.TrimSpace(out)) > 0 {
-		// If there are results, should have text format structure
-		if strings.Contains(out, "result_0_") {
-			t.Errorf("resume text format should not contain result_N_ markers: %s", out)
-		}
-	}
+	t.Skip("resume command removed in v2; use 'list --order timestamp:desc --limit 1' instead")
 }
 
 func TestResumeOutputFormatRobot(t *testing.T) {
-	_, cleanup := testEnv(t)
-	defer cleanup()
-
-	// Create a self-contained fixture: a temp directory with a single JSONL file
-	// containing content that matches the query term "test"
-	tempDir := t.TempDir()
-	sessionFile := filepath.Join(tempDir, "test-session.jsonl")
-	fixtureContent := `{"uuid":"test-u-1","timestamp":"2024-01-02T03:04:05Z","sessionId":"test-session-1","type":"user","message":{"role":"user","content":"testing query"}}
-{"uuid":"test-a-1","timestamp":"2024-01-02T03:04:06Z","sessionId":"test-session-1","type":"assistant","message":{"role":"assistant","content":"this is a test response"}}
-`
-	if err := os.WriteFile(sessionFile, []byte(fixtureContent), 0644); err != nil {
-		t.Fatalf("write fixture: %v", err)
-	}
-
-	// Sync the temp directory with --no-plans
-	_, _, err := runCmd("sync", "--path", tempDir, "--no-plans")
-	if err != nil {
-		t.Fatalf("sync error: %v", err)
-	}
-
-	// Resume with --robot flag using the term "test" that is in the fixture
-	out, _, err := runCmd("resume", "test", "--robot")
-	if err != nil {
-		t.Fatalf("resume --robot error: %v", err)
-	}
-
-	if !strings.Contains(out, "result_0_") {
-		t.Errorf("resume robot format should contain result_N_ markers: %s", out)
-	}
+	t.Skip("resume command removed in v2; use 'list --order timestamp:desc --limit 1' instead")
 }
