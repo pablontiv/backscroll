@@ -10,15 +10,34 @@ import (
 )
 
 func newReadCmd(stdout, stderr io.Writer) *cobra.Command {
+	var path string
+	var tail int
+	var semantic bool
 	cmd := &cobra.Command{
-		Use:   "read <path>",
+		Use:   "read [path]",
 		Short: "Read a specific session or plan file",
 		Long:  `Read displays the contents of a session file or plan in human-readable format.`,
-		Args:  cobra.ExactArgs(1),
+		Args:  cobra.MaximumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			return runRead(stdout, stderr, args[0])
+			locator := path
+			if len(args) > 0 {
+				if locator != "" {
+					return fmt.Errorf("use either --path or positional path, not both")
+				}
+				locator = args[0]
+			}
+			if locator == "" {
+				return fmt.Errorf("read requires --path <path>")
+			}
+			if semantic {
+				return runReadSemantic(stdout, locator, tail)
+			}
+			return runRead(stdout, stderr, locator)
 		},
 	}
+	cmd.Flags().StringVar(&path, "path", "", "path to the JSONL input file to read")
+	cmd.Flags().IntVar(&tail, "tail", 0, "return only the last N semantic rows")
+	cmd.Flags().BoolVar(&semantic, "semantic", false, "output concise semantic text/tool rows")
 
 	return cmd
 }
@@ -41,5 +60,27 @@ func runRead(stdout, stderr io.Writer, path string) error {
 
 	_, _ = fmt.Fprintf(stdout, "Total messages: %d\n", len(messages))
 
+	return nil
+}
+
+func runReadSemantic(stdout io.Writer, path string, tail int) error {
+	rows, err := reader.ReadSemanticTail(path, tail)
+	if err != nil {
+		return fmt.Errorf("read semantic file: %w", err)
+	}
+	for _, row := range rows {
+		_, _ = fmt.Fprintf(
+			stdout,
+			"path=%q line=%d ordinal=%d timestamp=%q role=%q kind=%q content=%q\n",
+			row.Path,
+			row.Line,
+			row.Ordinal,
+			row.Timestamp,
+			row.Role,
+			row.Kind,
+			row.Content,
+		)
+	}
+	_, _ = fmt.Fprintf(stdout, "total=%d\n", len(rows))
 	return nil
 }

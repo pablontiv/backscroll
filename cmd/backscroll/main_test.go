@@ -159,6 +159,62 @@ func TestRead(t *testing.T) {
 	}
 }
 
+func TestReadLargeJSONLLine(t *testing.T) {
+	_, cleanup := testEnv(t)
+	defer cleanup()
+
+	path := writeLargeJSONLFixture(t)
+	out, _, err := runCmd("read", path)
+	if err != nil {
+		t.Fatalf("read large JSONL error: %v", err)
+	}
+	if !strings.Contains(out, "Total messages: 47") {
+		t.Fatalf("read output missing message count; output prefix: %.200q", out)
+	}
+}
+
+func TestReadPathTailSemanticHandlesLargeJSONLLine(t *testing.T) {
+	_, cleanup := testEnv(t)
+	defer cleanup()
+
+	path := writeLargeJSONLFixture(t)
+	out, _, err := runCmd("read", "--path", path, "--tail", "45", "--semantic")
+	if err != nil {
+		t.Fatalf("read --path --tail --semantic error: %v", err)
+	}
+	if strings.Contains(out, "bufio.Scanner: token too long") {
+		t.Fatalf("semantic tail hit scanner token limit: %s", out)
+	}
+	if strings.Contains(out, "oversized-") {
+		t.Fatalf("semantic tail should not include the oversized first row: %.200q", out)
+	}
+	for _, want := range []string{"path=", "line=4", "line=48", "role=\"assistant\"", "content=\"final answer\""} {
+		if !strings.Contains(out, want) {
+			t.Fatalf("semantic tail output missing %q: %s", want, out)
+		}
+	}
+}
+
+func writeLargeJSONLFixture(t *testing.T) string {
+	t.Helper()
+
+	path := filepath.Join(t.TempDir(), "large.jsonl")
+	large := "oversized-" + strings.Repeat("x", 70*1024)
+	lines := []string{
+		fmt.Sprintf(`{"type":"message","timestamp":"2024-01-01T00:00:00Z","message":{"role":"user","content":%q}}`, large),
+		`{"type":"message","timestamp":"2024-01-01T00:00:01Z","message":{"role":"assistant","content":"middle answer"}}`,
+		`{"type":"message","timestamp":"2024-01-01T00:00:02Z","message":{"role":"user","content":[{"type":"tool_use","id":"tool-1","name":"bash","input":{"command":"echo hi"}}]}}`,
+	}
+	for i := 4; i < 48; i++ {
+		lines = append(lines, fmt.Sprintf(`{"type":"message","timestamp":"2024-01-01T00:00:%02dZ","message":{"role":"assistant","content":"tail item %d"}}`, i, i))
+	}
+	lines = append(lines, `{"type":"message","timestamp":"2024-01-01T00:00:48Z","message":{"role":"assistant","content":"final answer"}}`)
+	if err := os.WriteFile(path, []byte(strings.Join(lines, "\n")+"\n"), 0o644); err != nil {
+		t.Fatalf("write fixture: %v", err)
+	}
+	return path
+}
+
 func TestReadNonExistent(t *testing.T) {
 	_, cleanup := testEnv(t)
 	defer cleanup()

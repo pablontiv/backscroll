@@ -1,14 +1,13 @@
 package input_config
 
 import (
-	"bufio"
 	"encoding/json"
 	"errors"
 	"fmt"
-	"os"
 	"time"
 
 	"github.com/pablontiv/backscroll/internal/models"
+	internalsync "github.com/pablontiv/backscroll/internal/sync"
 )
 
 // TestRecord is a single parsed record from a dry-run of the input pipeline.
@@ -32,35 +31,21 @@ func TestFile(path string, def InputDefinition) ([]TestRecord, error) {
 }
 
 func testJSONL(path string, def InputDefinition) ([]TestRecord, error) {
-	f, err := os.Open(path)
-	if err != nil {
-		return nil, fmt.Errorf("open %s: %w", path, err)
-	}
-	defer func() { _ = f.Close() }()
-
 	var results []TestRecord
-	scanner := bufio.NewScanner(f)
-	scanner.Buffer(make([]byte, 1024*1024), 1024*1024)
-
-	for scanner.Scan() {
-		line := scanner.Bytes()
-		if len(line) == 0 {
-			continue
-		}
-
+	err := internalsync.IterateJSONLFile(path, func(_ int, line []byte) error {
 		var record map[string]any
 		if err := json.Unmarshal(line, &record); err != nil {
-			continue // skip malformed lines
+			return nil // skip malformed lines
 		}
 
 		// Apply include_when predicates
 		if len(def.Record.IncludeWhen) > 0 {
 			ok, err := EvalPredicates(def.Record.IncludeWhen, record)
 			if err != nil {
-				return nil, err
+				return err
 			}
 			if !ok {
-				continue
+				return nil
 			}
 		}
 
@@ -68,10 +53,10 @@ func testJSONL(path string, def InputDefinition) ([]TestRecord, error) {
 		if len(def.Record.ExcludeWhen) > 0 {
 			excluded, err := EvalPredicates(def.Record.ExcludeWhen, record)
 			if err != nil {
-				return nil, err
+				return err
 			}
 			if excluded {
-				continue
+				return nil
 			}
 		}
 
@@ -87,13 +72,13 @@ func testJSONL(path string, def InputDefinition) ([]TestRecord, error) {
 		// Apply text transforms
 		content, err := ApplyTransforms(def.Text, content)
 		if errors.Is(err, ErrDropped) {
-			continue
+			return nil
 		}
 		if err != nil {
-			return nil, err
+			return err
 		}
 		if content == "" {
-			continue
+			return nil
 		}
 
 		results = append(results, TestRecord{
@@ -103,9 +88,9 @@ func testJSONL(path string, def InputDefinition) ([]TestRecord, error) {
 			SessionID: sessionID,
 			Content:   content,
 		})
-	}
-
-	return results, scanner.Err()
+		return nil
+	})
+	return results, err
 }
 
 // extractRawContent extracts content from a record using ContentConfig.
@@ -179,44 +164,30 @@ func extractRawContent(record map[string]any, cfg ContentConfig) string {
 // It applies record predicates, extracts fields via MapConfig selectors,
 // extracts content via ContentConfig, applies TextConfig transforms, and normalizes roles.
 func ParseDeclarative(path string, def InputDefinition) ([]models.Message, error) {
-	f, err := os.Open(path)
-	if err != nil {
-		return nil, fmt.Errorf("open %s: %w", path, err)
-	}
-	defer func() { _ = f.Close() }()
-
 	var results []models.Message
-	scanner := bufio.NewScanner(f)
-	scanner.Buffer(make([]byte, 1024*1024), 1024*1024)
-
-	for scanner.Scan() {
-		line := scanner.Bytes()
-		if len(line) == 0 {
-			continue
-		}
-
+	err := internalsync.IterateJSONLFile(path, func(_ int, line []byte) error {
 		var record map[string]any
 		if err := json.Unmarshal(line, &record); err != nil {
-			continue
+			return nil
 		}
 
 		if len(def.Record.IncludeWhen) > 0 {
 			ok, err := EvalPredicates(def.Record.IncludeWhen, record)
 			if err != nil {
-				return nil, err
+				return err
 			}
 			if !ok {
-				continue
+				return nil
 			}
 		}
 
 		if len(def.Record.ExcludeWhen) > 0 {
 			excluded, err := EvalPredicates(def.Record.ExcludeWhen, record)
 			if err != nil {
-				return nil, err
+				return err
 			}
 			if excluded {
-				continue
+				return nil
 			}
 		}
 
@@ -232,13 +203,13 @@ func ParseDeclarative(path string, def InputDefinition) ([]models.Message, error
 		content := extractRawContent(record, def.Content)
 		content, err = ApplyTransforms(def.Text, content)
 		if errors.Is(err, ErrDropped) {
-			continue
+			return nil
 		}
 		if err != nil {
-			return nil, err
+			return err
 		}
 		if content == "" {
-			continue
+			return nil
 		}
 
 		results = append(results, models.Message{
@@ -247,9 +218,9 @@ func ParseDeclarative(path string, def InputDefinition) ([]models.Message, error
 			ContentType: "text",
 			Timestamp:   ts,
 		})
-	}
-
-	return results, scanner.Err()
+		return nil
+	})
+	return results, err
 }
 
 // normalizeRole maps non-standard role names to canonical values.

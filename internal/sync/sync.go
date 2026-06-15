@@ -1,7 +1,6 @@
 package sync
 
 import (
-	"bufio"
 	"encoding/json"
 	"fmt"
 	"io/fs"
@@ -16,35 +15,22 @@ import (
 // ParseSessions parses a JSONL session file and returns Message records.
 // It defensively handles both Claude and Pi formats.
 func ParseSessions(path string) ([]models.Message, error) {
-	file, err := os.Open(path)
-	if err != nil {
-		return nil, fmt.Errorf("open session file: %w", err)
-	}
-	defer func() { _ = file.Close() }()
-
 	var messages []models.Message
-	scanner := bufio.NewScanner(file)
-
-	for scanner.Scan() {
-		line := scanner.Bytes()
-		if len(line) == 0 {
-			continue
-		}
-
+	err := IterateJSONLFile(path, func(_ int, line []byte) error {
 		var rawRec rawRecord
 		if err := json.Unmarshal(line, &rawRec); err != nil {
 			// Skip malformed lines
-			continue
+			return nil
 		}
 
 		// Skip noise records
 		if IsNoiseRecord(rawRec) {
-			continue
+			return nil
 		}
 
 		// Extract message if present
 		if rawRec.Message == nil {
-			continue
+			return nil
 		}
 
 		// Parse timestamp
@@ -56,7 +42,7 @@ func ParseSessions(path string) ([]models.Message, error) {
 		// Extract content and content type
 		content, contentType := extractContent(rawRec.Message.Content)
 		if content == "" {
-			continue
+			return nil
 		}
 
 		messages = append(messages, models.Message{
@@ -65,9 +51,9 @@ func ParseSessions(path string) ([]models.Message, error) {
 			ContentType: contentType,
 			Timestamp:   ts,
 		})
-	}
-
-	if err := scanner.Err(); err != nil {
+		return nil
+	})
+	if err != nil {
 		return nil, fmt.Errorf("scan session file: %w", err)
 	}
 
