@@ -64,8 +64,8 @@ If you install from a source checkout, copy presets without clobbering existing 
 config_dir="${BACKSCROLL_CONFIG_DIR:-${XDG_CONFIG_HOME:-$HOME/.config}}"
 mkdir -p "$config_dir/backscroll/inputs"
 cp -n inputs/claude.inputs.toml inputs/pi.inputs.toml inputs/opencode.inputs.toml "$config_dir/backscroll/inputs/"
-backscroll inputs validate
-backscroll inputs list
+backscroll validate
+backscroll config
 ```
 
 ```powershell
@@ -76,8 +76,8 @@ foreach ($name in "claude.inputs.toml", "pi.inputs.toml", "opencode.inputs.toml"
   $dest = Join-Path $inputsDir $name
   if (-not (Test-Path $dest)) { Copy-Item (Join-Path "inputs" $name) $dest }
 }
-backscroll inputs validate
-backscroll inputs list
+backscroll validate
+backscroll config
 ```
 
 ### From Source
@@ -137,8 +137,8 @@ Backscroll reads these files and extracts the **conversation**: user and assista
 Backscroll computes a SHA-256 hash for each session file. On subsequent syncs, only files whose content has changed are re-processed — syncing thousands of sessions takes seconds after the initial run.
 
 ```bash
-backscroll inputs validate
-backscroll sync
+backscroll validate
+backscroll list
 ```
 
 Subagent handling is controlled by the active input manifest. The shipped Claude preset excludes `subagents` paths with a discovery glob, and you can edit your installed preset if you intentionally want a different corpus.
