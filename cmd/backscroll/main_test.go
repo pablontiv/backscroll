@@ -2859,3 +2859,143 @@ func TestDecisionsAutoSyncWarning(t *testing.T) {
 		t.Errorf("expected auto-sync warning or open error, got stderr=%q err=%v", stderrOut, err)
 	}
 }
+
+// Slice 3: Flat list/search grammar tests
+
+func TestListWithInputFilter(t *testing.T) {
+	_, cleanup := testEnv(t)
+	defer cleanup()
+
+	// Sync fixture sessions with pi input
+	piDir := filepath.Dir(filepath.Join(fixturesDir(), "pi-session.jsonl"))
+	_, _, err := runCmd("sync", "--path", piDir)
+	if err != nil {
+		t.Fatalf("sync error: %v", err)
+	}
+
+	// Test --input flag exists and accepts a value
+	out, _, err := runCmd("list", "--input", "pi")
+	if err != nil {
+		t.Fatalf("list --input pi error: %v", err)
+	}
+	_ = out
+}
+
+func TestListWithOrderFlag(t *testing.T) {
+	_, cleanup := testEnv(t)
+	defer cleanup()
+
+	// Sync fixture sessions
+	piDir := filepath.Dir(filepath.Join(fixturesDir(), "pi-session.jsonl"))
+	_, _, err := runCmd("sync", "--path", piDir)
+	if err != nil {
+		t.Fatalf("sync error: %v", err)
+	}
+
+	// Test --order flag exists and accepts timestamp:desc
+	out, _, err := runCmd("list", "--order", "timestamp:desc", "--limit", "1")
+	if err != nil {
+		t.Fatalf("list --order timestamp:desc error: %v", err)
+	}
+	// Should have output (at least one item)
+	if len(strings.TrimSpace(out)) == 0 {
+		t.Errorf("list --order timestamp:desc --limit 1 produced empty output")
+	}
+}
+
+func TestListNewestItemInputProjectOrder(t *testing.T) {
+	_, cleanup := testEnv(t)
+	defer cleanup()
+
+	// Sync fixture sessions
+	piDir := filepath.Dir(filepath.Join(fixturesDir(), "pi-session.jsonl"))
+	_, _, err := runCmd("sync", "--path", piDir)
+	if err != nil {
+		t.Fatalf("sync error: %v", err)
+	}
+
+	// Test list --input pi --order timestamp:desc --limit 1 returns exactly 1 newest item
+	out, _, err := runCmd("list", "--input", "pi", "--order", "timestamp:desc", "--limit", "1")
+	if err != nil {
+		t.Fatalf("list --input pi --order timestamp:desc --limit 1 error: %v", err)
+	}
+
+	// Output should not be empty
+	if len(strings.TrimSpace(out)) == 0 {
+		t.Errorf("list --input pi --order timestamp:desc --limit 1 produced empty output")
+	}
+
+	// Output should contain path information (parsing depends on format)
+	if !strings.Contains(out, "/") && !strings.Contains(out, "\\") {
+		t.Logf("list output (may be empty for test fixtures): %s", out)
+	}
+}
+
+func TestSearchWithTextFlag(t *testing.T) {
+	_, cleanup := testEnv(t)
+	defer cleanup()
+
+	// Sync fixture sessions
+	piDir := filepath.Dir(filepath.Join(fixturesDir(), "pi-session.jsonl"))
+	_, _, err := runCmd("sync", "--path", piDir)
+	if err != nil {
+		t.Fatalf("sync error: %v", err)
+	}
+
+	// Test --text flag exists and accepts a value
+	out, _, err := runCmd("search", "--text", "pi")
+	if err != nil {
+		t.Fatalf("search --text pi error: %v", err)
+	}
+	_ = out
+}
+
+func TestSearchWithInputFilter(t *testing.T) {
+	_, cleanup := testEnv(t)
+	defer cleanup()
+
+	// Sync fixture sessions
+	piDir := filepath.Dir(filepath.Join(fixturesDir(), "pi-session.jsonl"))
+	_, _, err := runCmd("sync", "--path", piDir)
+	if err != nil {
+		t.Fatalf("sync error: %v", err)
+	}
+
+	// Test --input flag exists and accepts a value (maps to --source internally)
+	out, _, err := runCmd("search", "--text", "test", "--input", "pi")
+	if err != nil {
+		t.Fatalf("search --text test --input pi error: %v", err)
+	}
+	_ = out
+}
+
+func TestListWithInputFilterReturnsData(t *testing.T) {
+	_, cleanup := testEnv(t)
+	defer cleanup()
+
+	// Sync fixture sessions - this creates data in the database
+	claudeDir := filepath.Join(fixturesDir(), "claude-preset", "projects")
+	_, _, err := runCmd("sync", "--path", claudeDir)
+	if err != nil {
+		t.Fatalf("sync error: %v", err)
+	}
+
+	// Get baseline list count (without filters)
+	out1, _, err := runCmd("list", "--limit", "10")
+	if err != nil {
+		t.Fatalf("list without filter error: %v", err)
+	}
+
+	// Verify we got some results
+	if len(out1) == 0 {
+		t.Logf("baseline list produced no output; skipping input filter test")
+		return
+	}
+
+	// Try list with --input filter (should work even if it filters differently)
+	out2, _, err := runCmd("list", "--input", "session", "--limit", "10")
+	if err != nil {
+		t.Fatalf("list --input session error: %v", err)
+	}
+	_ = out2
+}

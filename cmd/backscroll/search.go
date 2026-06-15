@@ -34,16 +34,20 @@ func newSearchCmd(stdout, stderr io.Writer) *cobra.Command {
 		maxTokens           int
 		lexicalOnly         bool
 		similarityThreshold float64
+		text                string
+		input               string
 	)
 
 	cmd := &cobra.Command{
-		Use:   "search <query>",
+		Use:   "search [<query>]",
 		Short: "Full-text search indexed content",
 		Long: `Search performs a hybrid search (BM25 + vector embeddings with RRF fusion)
 across all indexed sessions, plans, and external sources.
 
+Use --text <query> (v2 preferred) or positional <query> (legacy) for search text.
 Use --project to filter to a single project (default: auto-detect from cwd).
 Use --all-projects to search across all projects.
+Use --input to filter by configured input ID (v2 grammar).
 Use --source to filter by source type (session, plan, ke, decision, memory, rule, spec, backlog).
 Use --after/--before to filter by date (YYYY-MM-DD format).
 Use --role to filter by message role (user, assistant).
@@ -52,14 +56,20 @@ Use --tag to filter sessions by auto-detected tags.
 Use --source-path to filter by indexed source path (exact, SQL LIKE pattern, or * glob).
 Use --json to output as JSON.
 Use --fields to choose JSON detail: minimal (default) or full.
-Use --robot to output as robot format.
 Use --max-tokens to limit output size (approximate token count).`,
-		Args: cobra.ExactArgs(1),
+		Args: cobra.MaximumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			return runSearch(stdout, stderr, args[0],
+			query := text
+			if query == "" && len(args) > 0 {
+				query = args[0]
+			}
+			if query == "" {
+				return fmt.Errorf("search query required (use --text <query> or positional argument)")
+			}
+			return runSearch(stdout, stderr, query,
 				project, allProjects, jsonFormat, robotFormat,
 				source, sourcePath, after, before, role, limit, offset, contentType, tag,
-				fields, maxTokens, lexicalOnly, similarityThreshold)
+				fields, maxTokens, lexicalOnly, similarityThreshold, input)
 		},
 	}
 
@@ -80,6 +90,8 @@ Use --max-tokens to limit output size (approximate token count).`,
 	cmd.Flags().IntVar(&maxTokens, "max-tokens", 0, "Max tokens in output (0=unlimited)")
 	cmd.Flags().BoolVar(&lexicalOnly, "lexical-only", false, "Use BM25 only, skip vector search")
 	cmd.Flags().Float64Var(&similarityThreshold, "similarity-threshold", 0.3, "Minimum cosine similarity for vector results (0=no threshold)")
+	cmd.Flags().StringVar(&text, "text", "", "Search text (v2 preferred grammar)")
+	cmd.Flags().StringVar(&input, "input", "", "Filter by input ID (v2 grammar)")
 
 	return cmd
 }
@@ -90,7 +102,7 @@ func runSearch(stdout, stderr io.Writer,
 	source, sourcePath, after, before, role string,
 	limit, offset int, contentType, tag string,
 	fields string, maxTokens int,
-	lexicalOnly bool, similarityThreshold float64) error {
+	lexicalOnly bool, similarityThreshold float64, input string) error {
 
 	// Validate flag values before opening the database
 	if fields != "minimal" && fields != "full" {
@@ -132,6 +144,11 @@ func runSearch(stdout, stderr io.Writer,
 			return fmt.Errorf("parse --before date: %w", err)
 		}
 		beforeTime = &t
+	}
+
+	// Map v2 --input flag to --source internally
+	if input != "" && source == "" {
+		source = input
 	}
 
 	// Build search options

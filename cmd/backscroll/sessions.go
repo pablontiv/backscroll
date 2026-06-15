@@ -39,7 +39,9 @@ func newSessionsListCmd(stdout, stderr io.Writer) *cobra.Command {
 		Use:   "list",
 		Short: "List indexed sessions (alias for backscroll list)",
 		RunE: func(cmd *cobra.Command, args []string) error {
-			return runList(stdout, stderr, project, allProjects, recent, jsonOut, robot, indexedOnly)
+			// v2 filters not used in legacy sessions list subcommand; pass zeros
+			return runList(stdout, stderr, project, allProjects, recent, jsonOut, robot, indexedOnly,
+				"", "", 0, 0)
 		},
 	}
 	cmd.Flags().StringVar(&project, "project", "", "Filter by project")

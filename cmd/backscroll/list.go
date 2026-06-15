@@ -19,6 +19,10 @@ func newListCmd(stdout, stderr io.Writer) *cobra.Command {
 		jsonFormat  bool
 		robotFormat bool
 		indexedOnly bool
+		input       string
+		order       string
+		limit       int
+		offset      int
 	)
 
 	cmd := &cobra.Command{
@@ -28,12 +32,16 @@ func newListCmd(stdout, stderr io.Writer) *cobra.Command {
 
 Use --project to filter to a single project.
 Use --all-projects to list across all projects.
-Use --recent N to show N most recent sessions.
+Use --input to filter by configured input ID (v2 grammar).
+Use --order to sort results (e.g., timestamp:desc).
+Use --limit to restrict result count.
+Use --offset to skip results.
+Use --recent N to show N most recent sessions (legacy flag; prefer --order timestamp:desc --limit N).
 Use --indexed-only to skip auto-sync (read existing index only).
-Use --json to output as JSON.
-Use --robot to output in robot format.`,
+Use --json to output as JSON.`,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			return runList(stdout, stderr, project, allProjects, recent, jsonFormat, robotFormat, indexedOnly)
+			return runList(stdout, stderr, project, allProjects, recent, jsonFormat, robotFormat, indexedOnly,
+				input, order, limit, offset)
 		},
 	}
 
@@ -43,12 +51,17 @@ Use --robot to output in robot format.`,
 	cmd.Flags().BoolVar(&indexedOnly, "indexed-only", false, "Read existing index without auto-sync")
 	cmd.Flags().BoolVar(&jsonFormat, "json", false, "Output as JSON")
 	cmd.Flags().BoolVar(&robotFormat, "robot", false, "Output in robot format")
+	cmd.Flags().StringVar(&input, "input", "", "Filter by input ID (v2 grammar)")
+	cmd.Flags().StringVar(&order, "order", "", "Sort results (e.g., timestamp:desc)")
+	cmd.Flags().IntVar(&limit, "limit", 0, "Result limit (0 = no limit)")
+	cmd.Flags().IntVar(&offset, "offset", 0, "Result offset")
 
 	return cmd
 }
 
 func runList(stdout, stderr io.Writer,
-	project string, allProjects bool, recent int, jsonFormat, robotFormat, indexedOnly bool) error {
+	project string, allProjects bool, recent int, jsonFormat, robotFormat, indexedOnly bool,
+	input, order string, limit, offset int) error {
 
 	cfg, err := config.Load()
 	if err != nil {
@@ -78,10 +91,30 @@ func runList(stdout, stderr io.Writer,
 	}
 	defer func() { _ = db.Close() }()
 
-	// List sessions
-	sessions, err := db.ListSessions(project, recent)
-	if err != nil {
-		return fmt.Errorf("list sessions: %w", err)
+	// If v2 grammar flags are provided (input, order, limit, offset), use ListItemsV2
+	// Otherwise fall back to legacy ListSessions for backward compat
+	var sessions []storage.SessionEntry
+	if input != "" || order != "" || limit > 0 || offset > 0 {
+		opts := storage.ListOptions{
+			Project:     project,
+			AllProjects: allProjects,
+			Input:       input,
+			Order:       order,
+			Limit:       limit,
+			Offset:      offset,
+		}
+		var err error
+		sessions, err = db.ListItemsV2(opts)
+		if err != nil {
+			return fmt.Errorf("list items v2: %w", err)
+		}
+	} else {
+		// Legacy path: use old ListSessions
+		var err error
+		sessions, err = db.ListSessions(project, recent)
+		if err != nil {
+			return fmt.Errorf("list sessions: %w", err)
+		}
 	}
 
 	if len(sessions) == 0 {

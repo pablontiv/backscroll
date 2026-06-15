@@ -151,6 +151,142 @@ type SessionEntry struct {
 	Tags      []string
 }
 
+// ListOptions encapsulates flexible list query parameters (v2 grammar).
+// Supports input filtering, ordering, limits/offsets.
+type ListOptions struct {
+	Project     string // filter to project
+	AllProjects bool   // if true, ignore Project filter
+	Input       string // filter to input ID (maps to source field)
+	Order       string // e.g., "timestamp:desc", "timestamp:asc" (default: no ordering)
+	Limit       int    // result limit (0 = no limit)
+	Offset      int    // result offset
+	After       *time.Time
+	Before      *time.Time
+}
+
+// ListItemsV2 lists indexed search items using v2 filter grammar.
+// Supports --input (maps to source), --order (timestamp:asc|desc), --limit, --offset, --after, --before.
+func (d *Database) ListItemsV2(opts ListOptions) ([]SessionEntry, error) {
+	query := `
+		SELECT si.source_path, si.project, MAX(si.timestamp) as ts
+		FROM search_items si
+		WHERE 1=1
+	`
+
+	var args []interface{}
+
+	// Filter by input (source field)
+	if opts.Input != "" {
+		// Map input IDs to source field values
+		source := opts.Input
+		// For now, map directly; in future may need mapping table
+		query += " AND si.source = ?"
+		args = append(args, source)
+	}
+
+	// Filter by project
+	if opts.Project != "" && !opts.AllProjects {
+		query += " AND si.project = ?"
+		args = append(args, opts.Project)
+	}
+
+	// Date filters
+	if opts.After != nil {
+		query += " AND si.timestamp > ?"
+		args = append(args, opts.After.Format(time.RFC3339))
+	}
+	if opts.Before != nil {
+		query += " AND si.timestamp < ?"
+		args = append(args, opts.Before.Format(time.RFC3339))
+	}
+
+	query += `
+		GROUP BY si.source_path, si.project
+	`
+
+	// Apply ordering
+	if opts.Order != "" {
+		if strings.HasPrefix(opts.Order, "timestamp:desc") {
+			query += " ORDER BY ts DESC"
+		} else if strings.HasPrefix(opts.Order, "timestamp:asc") {
+			query += " ORDER BY ts ASC"
+		}
+	}
+
+	// Apply limit/offset
+	if opts.Limit > 0 {
+		query += fmt.Sprintf(" LIMIT %d", opts.Limit)
+	}
+	if opts.Offset > 0 {
+		query += fmt.Sprintf(" OFFSET %d", opts.Offset)
+	}
+
+	rows, err := d.db.Query(query, args...)
+	if err != nil {
+		return nil, fmt.Errorf("query items v2: %w", err)
+	}
+
+	var sessions []SessionEntry
+	for rows.Next() {
+		var entry SessionEntry
+		var ts sql.NullString
+
+		if err := rows.Scan(&entry.Path, &entry.Project, &ts); err != nil {
+			_ = rows.Close()
+			return nil, fmt.Errorf("scan item: %w", err)
+		}
+
+		if ts.Valid {
+			t, _ := time.Parse(time.RFC3339, ts.String)
+			entry.Timestamp = t
+		}
+
+		sessions = append(sessions, entry)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, fmt.Errorf("iterate items: %w", err)
+	}
+
+	// Load tags for all sessions in one pass using GROUP_CONCAT.
+	if len(sessions) == 0 {
+		return sessions, nil
+	}
+
+	paths := make([]interface{}, len(sessions))
+	for i, s := range sessions {
+		paths[i] = s.Path
+	}
+	placeholder := strings.Repeat("?,", len(paths))
+	placeholder = placeholder[:len(placeholder)-1]
+
+	tagRows, err := d.db.Query(
+		"SELECT source_path, tag FROM session_tags WHERE source_path IN ("+placeholder+") ORDER BY source_path, tag",
+		paths...,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("query tags: %w", err)
+	}
+	defer func() { _ = tagRows.Close() }()
+
+	tagsByPath := make(map[string][]string)
+	for tagRows.Next() {
+		var path, tag string
+		if err := tagRows.Scan(&path, &tag); err != nil {
+			return nil, fmt.Errorf("scan tag: %w", err)
+		}
+		tagsByPath[path] = append(tagsByPath[path], tag)
+	}
+	if err := tagRows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate tags: %w", err)
+	}
+
+	for i := range sessions {
+		sessions[i].Tags = tagsByPath[sessions[i].Path]
+	}
+
+	return sessions, nil
+}
+
 // ListSessions lists indexed sessions, optionally filtered by project.
 // If recent > 0, returns the N most recent sessions ordered by timestamp descending.
 func (d *Database) ListSessions(project string, recent int) ([]SessionEntry, error) {
