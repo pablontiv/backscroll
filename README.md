@@ -92,20 +92,20 @@ go install github.com/pablontiv/backscroll/cmd/backscroll@latest
 
 ```bash
 # 1. Confirm global input manifests are installed and valid
-backscroll inputs validate
-backscroll inputs list
+backscroll validate
+backscroll config
 
-# 2. Sync — index files declared in <config_dir>/backscroll/inputs/*.inputs.toml
-backscroll sync
-
-# 3. Search — find past conversations by keyword
+# 2. Search — find past conversations by keyword (auto-syncs)
 backscroll search "migration plan"
 
-# 4. Search by project — limit results to a specific project
+# 3. Search by project — limit results to a specific project
 backscroll search "error handling" --project "backscroll"
 
-# 5. Path lookup — narrow search to an indexed source path
-backscroll search "migration" --source-path "*/session.jsonl" --robot
+# 4. List by input — retrieve recent Claude Code sessions
+backscroll list --input claude --limit 10
+
+# 5. Read one session — get semantic snippets from a session file
+backscroll read --path ~/.claude/projects/backscroll/abc123.jsonl --tail 45 --semantic
 
 # 6. Status — check index health
 backscroll status
@@ -150,65 +150,77 @@ See [Sync & Indexing docs](docs/sync.md) for input manifests, noise filtering, a
 ## CLI
 
 ```bash
-# Input config and indexing
-backscroll inputs validate                             # Validate global input manifests
-backscroll inputs list                                 # List loaded manifests and inputs
-backscroll inputs test --input claude --file <PATH>    # Dry-run one file without writing SQLite
-backscroll sync                                        # Index files declared by active inputs
-backscroll status [--json]                            # Show index health and metrics
+# Query commands — the core v2 surface
+backscroll search <QUERY> [--input ID] [--project P] [--json] [--max-tokens N]  # Full-text search
+backscroll list [--input ID] [--project P] [--order FIELD:DIR] [--limit N] [--json]  # Query by input/project
+backscroll read --path <PATH> [--tail N] [--semantic]                          # Read one session file
+backscroll stats --input ID [--type TYPE] [--tool TOOL] [--group-by FIELD]     # Aggregate tool-call stats
 
-# Retrieval
-backscroll search <QUERY> [--project] [--json|--robot] [--fields] [--max-tokens] [--source-path <PATH_OR_PATTERN>]
-backscroll list --indexed-only --json                  # Query the existing index without auto-sync
-backscroll sessions query --jsonl --all-projects       # Stream indexed records in deterministic order
-backscroll events query --jsonl --indexed-only          # Stream normalized events without auto-sync
+# Maintenance
+backscroll status [--json]                      # Check index health and metrics
+backscroll validate                             # Validate index integrity
+backscroll rebuild                              # Rebuild index from source files
+backscroll purge --before <DATE>                # Remove indexed items older than date
+backscroll config                               # Show installed inputs and configuration
 ```
 
 ### Output Formats
 
-Search results can be consumed in three formats, depending on whether the reader is a human, a script, or an LLM:
+All v2 commands produce agent-readable output by default:
 
 ```bash
-# Human-readable (default) — terminal bold for match highlights
+# Default — tab-separated, machine-parseable
 backscroll search "query terms"
 
-# JSON lines — one JSON object per result, for pipelines and scripting
+# JSON — structured output for programmatic consumption
 backscroll search "query terms" --json
 
-# Robot — compact tab-separated format, designed for LLM consumption
-backscroll search "query terms" --robot --max-tokens 2000
+# Pretty — human-readable formatting with highlights
+backscroll search "query terms" --pretty
 ```
 
 The `--fields` flag controls field density (`minimal` or `full`), and `--max-tokens` caps output by approximate token count. See [Search docs](docs/search.md) for output shapes and flag reference.
 
-### Indexed path lookup
+### Common workflows
 
-Use `backscroll search ... --source-path <PATH_OR_PATTERN>` to retrieve matching messages from an already indexed file path through SQLite. Patterns may use `*` globs, so UUID-like session filenames can be found with `--source-path '*019e0d38-c437-7565-ba11-5dd57d516744*'`. For exhaustive local tooling, use `backscroll sessions query --jsonl` to stream indexed records in deterministic `source_path, ordinal, timestamp` order without a search term. For audit tooling that needs tool calls/results and command/error metadata, use `backscroll events query --jsonl --indexed-only`. See [Path lookup docs](docs/read.md) and the [audit integration contract](docs/audit-integration.md).
+**Latest Claude session with semantic snippets:**
+
+```bash
+backscroll list --input claude --project <path> --order timestamp:desc --limit 1 | head -1
+PATH=$(backscroll list --input claude --project <path> --order timestamp:desc --limit 1 --json | jq -r '.path')
+backscroll read --path "$PATH" --tail 45 --semantic
+```
+
+**Subagent tool-call statistics:**
+
+```bash
+backscroll stats --input pi --type tool_call --tool subagent --group-by agent --all-projects
+```
 
 ### Status
 
-`backscroll status` shows index health: files indexed, message count, projects discovered, database size, and last sync time. Use `backscroll status --json` for a versioned machine-readable status document; add `--indexed-only` to avoid auto-syncing while inspecting the current SQLite snapshot.
+`backscroll status` shows index health: files indexed, message count, projects discovered, database size, and last sync time. Auto-syncs before reporting. Use `backscroll status --json` for a versioned machine-readable status document; add `--indexed-only` to avoid auto-syncing while inspecting the current SQLite snapshot.
 
 ---
 
 ## AI-Native
 
-Backscroll is designed as a **retrieval layer for AI assistants**. The `--robot` and `--json` output formats produce stable, compact results suitable for tool use and automation.
+Backscroll is designed as a **retrieval layer for AI assistants**. Default output is agent-readable and compact; use `--json` for structured output and `--pretty` for human formatting.
 
 Use `--max-tokens` to fit results within a context window:
 
 ```bash
-# Feed search results into an LLM pipeline
-backscroll search "architecture decisions" --robot --max-tokens 4000
+# Feed search results into an LLM pipeline (default agent-readable format)
+backscroll search "architecture decisions" --max-tokens 4000
 
 # Structured output for programmatic consumption
 backscroll search "migration plan" --json --fields full | jq '.snippet'
 
 # Project-scoped retrieval
-backscroll search "error handling" --project "backscroll" --robot
+backscroll search "error handling" --project "backscroll"
 ```
 
-All output is deterministic and machine-parseable. No ANSI escape codes in `--json` or `--robot` modes.
+All output is deterministic and machine-parseable. The default format uses tab-separated values with no ANSI escape codes. Use `--pretty` for terminal formatting with highlights.
 
 ---
 
@@ -217,7 +229,7 @@ All output is deterministic and machine-parseable. No ANSI escape codes in `--js
 Backscroll separates application configuration from input configuration.
 
 - **Application config** (`backscroll.toml`) controls database and embedding settings. By default, Backscroll creates an index at `~/.backscroll.db`.
-- **Input config** (`*.inputs.toml`) controls what files are ingested. The canonical runtime location is `<config_dir>/backscroll/inputs/*.inputs.toml`, where `<config_dir>` is the OS config directory or `BACKSCROLL_CONFIG_DIR` when set.
+- **Input config** (`*.inputs.toml`) controls what files are ingested via `backscroll search`, `backscroll list`, and `backscroll stats`. The canonical runtime location is `<config_dir>/backscroll/inputs/*.inputs.toml`, where `<config_dir>` is the OS config directory or `BACKSCROLL_CONFIG_DIR` when set.
 
 Override app settings by creating `~/.config/backscroll/config.toml` or `backscroll.toml` in the current directory:
 
@@ -235,7 +247,7 @@ Environment variables are also supported:
 export BACKSCROLL_DATABASE_PATH="/tmp/custom.db"
 ```
 
-Canonical ingestion inputs live in global user-scoped manifests:
+Input manifests are declared as:
 
 ```toml
 version = 1
@@ -260,7 +272,7 @@ role = "$.message.role"
 selector = "$.message.content"
 ```
 
-The repository presets are examples to install into the global input directory; Backscroll does not read the repository `inputs/` directory at runtime. Historical app-config ingestion keys such as `session_dir`/`session_dirs` are not canonical input config and do not silently feed sync.
+The repository presets (`inputs/*.inputs.toml`) are examples to install into the global input directory via the install script; Backscroll does not read the repository `inputs/` directory at runtime. View configured inputs with `backscroll config` or `backscroll validate`.
 
 See [Configuration docs](docs/configuration.md) for the full resolution order and all options.
 

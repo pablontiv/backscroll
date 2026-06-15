@@ -23,9 +23,9 @@ If `backscroll` is missing:
 # Installer installs binary + presets into input dir
 curl -fsSL https://raw.githubusercontent.com/pablontiv/backscroll/master/install.sh | bash
 # Alternative: copy shipped input presets after binary is in PATH
-config_dir="${BACKSCROLL_CONFIG_DIR:-${XDG_CONFIG_HOME:-$HOME/.config}}"
-mkdir -p "$config_dir/backscroll/inputs"
-cp -n inputs/claude.inputs.toml inputs/pi.inputs.toml inputs/opencode.inputs.toml inputs/decisions.inputs.toml "$config_dir/backscroll/inputs/"
+config_dir=”${BACKSCROLL_CONFIG_DIR:-${XDG_CONFIG_HOME:-$HOME/.config}}”
+mkdir -p “$config_dir/backscroll/inputs”
+cp -n inputs/claude.inputs.toml inputs/pi.inputs.toml inputs/opencode.inputs.toml inputs/decisions.inputs.toml “$config_dir/backscroll/inputs/”
 ```
 
 ## 2) Canonical input location
@@ -40,112 +40,107 @@ where `<config_dir>` is OS config directory, or `BACKSCROLL_CONFIG_DIR`.
 
 `backscroll.toml` is app config only (DB/embedding), not the ingestion source.
 
-## 3) Invocation-to-command mapping
+## 3) Core commands
+
+Backscroll v2 provides four canonical query commands:
+
+| Command | Purpose |
+|---|---|
+| `backscroll list [--input ID] [--project P] [--order FIELD:DIR] [--limit N]` | Query indexed items by input/project, sorted and paginated |
+| `backscroll search <QUERY> [--input ID] [--project P] [--json] [--max-tokens N]` | Full-text search with BM25 ranking |
+| `backscroll read --path <PATH> [--tail N] [--semantic]` | Read one indexed session file, optionally tail and semantic rows |
+| `backscroll stats --input ID [--type TYPE] [--tool TOOL] [--group-by FIELD]` | Aggregate tool-call statistics by input and optional filters |
+
+Maintenance commands: `status`, `validate`, `rebuild`, `purge`, `config`.
+
+## 4) Invocation-to-command mapping
 
 When invoked as `/skill:backscroll`:
 
-| Invocation | Commands |
+| Invocation | Command |
 |---|---|
-| `/skill:backscroll` | Preflight + `backscroll status` + `backscroll list --recent 10 --robot` |
-| `/skill:backscroll QUERY` | Search indexed sessions; if `QUERY` matches UUID pattern, use `events query '*UUID*' --source-path '*UUID*'` |
-| `/skill:backscroll --topics` | `backscroll topics --all-projects --robot` |
-| `/skill:backscroll --recent N` | `backscroll list --recent N --all-projects --robot` |
+| `/skill:backscroll` | Preflight + `backscroll status` + `backscroll list --input claude --limit 10` |
+| `/skill:backscroll QUERY` | `backscroll search “QUERY”` |
+| `/skill:backscroll --recent N` | `backscroll list --input claude --limit N` |
 | `/skill:backscroll --context` | `Backscroll` context retrieval first, then optional `ref-context-mode.md` Rootline steps |
 
-### 3.1) UUID/session-id path lookup
+## 5) Common workflows
 
-If the argument looks like UUID (`xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx`), use a DB-backed `source_path` lookup instead of direct file reading.
+### 5.1) Get latest indexed item for a Claude session + semantic tail
 
-```bash
-UUID='019e0d38-c437-7565-ba11-5dd57d516744'
-backscroll events query "$UUID" --source-path "*$UUID*" --all-projects --robot
-```
-
-If the UUID is only present in the filename and not in message text, retry with nearby remembered terms as the query while keeping `--source-path "*$UUID*"` in `events query`.
-
-## 4) Non-UUID search routing (deterministic)
+Retrieve the most recent Claude Code session with semantic snippets:
 
 ```bash
-# Session search in current project
-backscroll search "QUERY" --source sessions --robot --max-tokens 4000
+backscroll list --input claude --project <path> --order timestamp:desc --limit 1 | head -1
+# Returns: {“path”: “...”, ...}
 
-# Session search across all projects
-backscroll search "QUERY" --source sessions --all-projects --robot --max-tokens 4000
-
-# Plan/notes sources
-backscroll search "QUERY" --source SOURCE --all-projects --robot --max-tokens 4000
-# SOURCE in: plan, ke, decision, memory, rule, spec, backlog
-
-# Prior conversation decisions (fallback when decision source is not conversational)
-backscroll search "QUERY" --source decision --all-projects --robot --max-tokens 4000
-# Resume only sessions
-backscroll resume "QUERY" --source sessions --all-projects --robot
-
-# Narrow retrieval to an explicit indexed file/path fragment (chronological, not ranked):
-backscroll events query "QUERY" --source-path "PATH_OR_*PATTERN*" --all-projects --robot
-# events query emits events in deterministic order; search ranks by relevance (BM25 + vector + RRF).
-# Drill by path → events query; semantic search → search. These are not interchangeable.
-
-# Metadata surfaces
-backscroll list --recent 10 --all-projects --robot
-backscroll topics --all-projects --robot
-backscroll insights --all-projects --robot
-backscroll export "QUERY" --all-projects --format markdown
+# Extract path and read semantic tail:
+PATH=$(backscroll list --input claude --project <path> --order timestamp:desc --limit 1 --json | jq -r '.path')
+backscroll read --path “$PATH” --tail 45 --semantic
 ```
 
-## 4.1) Drill into one session
+### 5.2) Subagent tool-call statistics
+
+Query subagent tool calls across all projects:
 
 ```bash
-# Human-readable dump of one session file:
-backscroll read /home/pones/.claude/projects/<slug>/<UUID>.jsonl
-
-# Tool calls in chronological order:
-backscroll events query <UUID> --event-type tool_call --robot
-
-# Filter by role:
-backscroll events query <UUID> --role user --robot
-
-# Narrow time window:
-backscroll events query <UUID> --after 2026-05-19 --before 2026-05-20 --robot
-
-# JSONL for post-processing with jq:
-backscroll events query <UUID> --event-type tool_call --json | jq '...'
+backscroll stats --input pi --type tool_call --tool subagent --group-by agent --all-projects
 ```
 
-## 5) Command validity (hard constraints)
+### 5.3) Search in current project
 
-- `--robot` applies to: `search`, `list`, `topics`, `insights`, `resume`, `events query`.
-- `--json` applies to: `search`, `list`, `events query`.
-- Do not add these flags to `status`, `validate`, `sync`, `reindex`, `export`.
-- `--source-path` applies **only** to `events query`. Do NOT use `--source-path` with `search`.
+```bash
+backscroll search “QUERY” --project <path>
+```
 
-## 6) Source and role behavior
+### 5.4) Search across all projects
 
-- `--source sessions` (plural alias) maps to indexed sessions.
-- `--source plans` (plural alias) maps to `source = plan`.
-- For others use singular exact values: `plan`, `ke`, `decision`, `memory`, `rule`, `spec`, `backlog`.
-- `--role human` is accepted as alias for `user`; other roles and `--content-type` values are exact.
-- If the path target is not registered in `backscroll projects list`, use `--all-projects` and filter output by path pattern (e.g. `grep '*-home-shared-backscroll-*'`).
+```bash
+backscroll search “QUERY” --all-projects --max-tokens 4000
+```
 
-## 7) Cuándo el fallback a Python sigue justificado
+### 5.5) Read one session file
 
-El indexador almacena los bloques `tool_use` como texto plano para BM25 + embeddings, no como campos relacionales. Si necesitás extraer **inputs estructurados** (e.g. el `command` de cada `Bash` como string aislado, separado de `description`), `events query` te da los eventos en orden pero el `input` queda como blob serializado. Para ese caso específico, parsear el `.jsonl` con Python sigue siendo correcto.
+```bash
+backscroll read --path /home/user/.claude/projects/<slug>/<UUID>.jsonl
+```
 
-Todos los demás casos (listar tool_uses cronológicamente, scopear por archivo o UUID, filtrar por rol, exportar texto) están cubiertos por `events query` + `read` y **no** requieren Python.
+## 6) Output formats
 
-## 8) “No results” and ingestion troubleshooting
+Default output is agent-readable and compact:
 
-Use this order:
+```bash
+# Default — tab-separated, agent-readable
+backscroll search “query”
+backscroll list --input claude
+
+# JSON — structured output for programmatic consumption
+backscroll search “query” --json
+backscroll list --input claude --json
+
+# Pretty — human-readable formatting
+backscroll search “query” --pretty
+```
+
+## 7) Filter by input
+
+Use `--input <id>` to filter by input manifest. Common inputs: `claude`, `pi`, `opencode`, `decisions`.
+
+```bash
+# Only Claude sessions
+backscroll search “QUERY” --input claude
+
+# Only Pi sessions
+backscroll list --input pi
+```
+
+## 8) Troubleshooting
+
+If no results appear:
 
 ```bash
 backscroll status
 backscroll validate
 ```
 
-If status and validate pass but no results appear:
-
-```bash
-backscroll sync
-```
-
-Then retry the exact search. If still no results, check that the session/source files exist at the configured paths shown by `backscroll status`.
+`status` will auto-sync files declared by active inputs; `validate` checks index integrity. If still no results, verify that input manifests are installed and configured correctly by checking `backscroll config`.

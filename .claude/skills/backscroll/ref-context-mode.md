@@ -5,22 +5,22 @@ Use this only for `/skill:backscroll --context`. Produce a recovery brief with: 
 ## Required Backscroll Retrieval
 
 ```bash
-backscroll inputs validate
+backscroll validate
 backscroll status
-backscroll list --recent 10 --all-projects --robot
+backscroll list --input claude --limit 10 --all-projects
 ```
 
 If the user supplied a query, search for it. Otherwise use the directory name plus context terms:
 
 ```bash
 PROJECT_SLUG="$(basename "$PWD")"
-backscroll search "$PROJECT_SLUG context decisions handoff blockers" --all-projects --robot --max-tokens 4000
+backscroll search "$PROJECT_SLUG context decisions handoff blockers" --all-projects --max-tokens 4000
 ```
 
 If this returns no useful results, run one broader session search:
 
 ```bash
-backscroll search "$PROJECT_SLUG" --source sessions --all-projects --robot --max-tokens 4000
+backscroll search "$PROJECT_SLUG" --input claude --all-projects --max-tokens 4000
 ```
 
 ## Optional Rootline State
