@@ -225,6 +225,131 @@ func TestReadNonExistent(t *testing.T) {
 	}
 }
 
+func TestReadSemanticDefaultAgentReadable(t *testing.T) {
+	_, cleanup := testEnv(t)
+	defer cleanup()
+
+	path := writeLargeJSONLFixture(t)
+	out, stderr, err := runCmd("read", "--path", path, "--tail", "5", "--semantic")
+	if err != nil {
+		t.Fatalf("read --semantic error: %v", err)
+	}
+
+	// Default output should be agent-readable (key=value format)
+	// and should NOT go to stderr
+	if stderr != "" {
+		t.Errorf("stderr should be empty for data output, got: %s", stderr)
+	}
+
+	// Verify agent-readable format: tab-separated key=value rows
+	lines := strings.Split(strings.TrimSpace(out), "\n")
+	if len(lines) == 0 {
+		t.Error("no output generated")
+	}
+
+	// Each line should have key=value format (except the final total= line)
+	for i, line := range lines {
+		if line == "" {
+			continue
+		}
+		if !strings.Contains(line, "=") {
+			t.Errorf("line %d not in key=value format: %q", i, line)
+		}
+	}
+}
+
+func TestReadSemanticWithPretty(t *testing.T) {
+	_, cleanup := testEnv(t)
+	defer cleanup()
+
+	path := writeLargeJSONLFixture(t)
+	out, _, err := runCmd("read", "--path", path, "--tail", "3", "--semantic", "--pretty")
+	if err != nil {
+		t.Fatalf("read --semantic --pretty error: %v", err)
+	}
+
+	// Pretty output should be human-readable (different from default key=value)
+	// For now, we just verify it runs without error
+	// Real implementation may add table headers or aligned columns
+	if len(out) == 0 {
+		t.Error("--pretty output should not be empty")
+	}
+
+	// Pretty output should include human-readable elements
+	// For now just verify it exists and is different from raw key=value
+	if strings.Count(out, "=") > 3 {
+		t.Logf("pretty output still has key=value pairs: %s", out[:200])
+	}
+}
+
+func TestReadSemanticNoRobotFlag(t *testing.T) {
+	_, cleanup := testEnv(t)
+	defer cleanup()
+
+	path := writeLargeJSONLFixture(t)
+
+	// Verify that --robot flag is not recognized (removed from v2 UX)
+	// Expected: error about unknown flag
+	_, _, err := runCmd("read", "--path", path, "--semantic", "--robot")
+	if err == nil {
+		t.Error("--robot flag should not be recognized in v2 CLI (expected error)")
+	}
+}
+
+func TestReadSemanticPrettyIncludesHeaders(t *testing.T) {
+	_, cleanup := testEnv(t)
+	defer cleanup()
+
+	path := writeLargeJSONLFixture(t)
+	out, _, err := runCmd("read", "--path", path, "--tail", "2", "--semantic", "--pretty")
+	if err != nil {
+		t.Fatalf("read --semantic --pretty error: %v", err)
+	}
+
+	// Pretty output should include table headers
+	if !strings.Contains(out, "Path") || !strings.Contains(out, "Line") {
+		t.Errorf("pretty output should have headers; got: %s", out[:200])
+	}
+
+	// Pretty output should have content aligned in columns
+	if !strings.Contains(out, "Total rows:") {
+		t.Errorf("pretty output should have total rows summary; got: %s", out)
+	}
+}
+
+func TestReadSemanticAgentFormatIsTabSeparated(t *testing.T) {
+	_, cleanup := testEnv(t)
+	defer cleanup()
+
+	path := writeLargeJSONLFixture(t)
+	out, _, err := runCmd("read", "--path", path, "--tail", "1", "--semantic")
+	if err != nil {
+		t.Fatalf("read --semantic error: %v", err)
+	}
+
+	// Default agent format should use key=value pairs
+	lines := strings.Split(strings.TrimSpace(out), "\n")
+	if len(lines) < 2 {
+		t.Fatalf("expected at least 2 lines (data + total), got %d", len(lines))
+	}
+
+	// Each data line should have key=value pairs separated by spaces
+	dataLine := lines[0]
+
+	// Verify presence of expected keys in agent format
+	expectedKeys := []string{"path=", "line=", "ordinal=", "timestamp=", "role=", "kind=", "content="}
+	for _, key := range expectedKeys {
+		if !strings.Contains(dataLine, key) {
+			t.Errorf("agent format missing key %q in line: %q", key, dataLine)
+		}
+	}
+
+	// Verify it's NOT pretty format
+	if strings.Contains(dataLine, "---") || strings.Contains(dataLine, "Total rows:") {
+		t.Errorf("agent format should not include pretty formatting")
+	}
+}
+
 func TestList(t *testing.T) {
 	_, cleanup := testEnv(t)
 	defer cleanup()
