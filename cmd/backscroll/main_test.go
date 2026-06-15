@@ -2,16 +2,13 @@ package main
 
 import (
 	"bytes"
-	"database/sql"
 	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
-	"time"
 
-	"github.com/pablontiv/backscroll/internal/storage"
 	_ "modernc.org/sqlite"
 )
 
@@ -808,63 +805,6 @@ func TestListRobotAfterValidate(t *testing.T) {
 	_ = out
 }
 
-func seedDecisions(t *testing.T, dbPath string) {
-	t.Helper()
-	db, err := storage.Open(dbPath)
-	if err != nil {
-		t.Fatalf("open db: %v", err)
-	}
-	defer func() { _ = db.Close() }()
-	files := []storage.IndexedFile{
-		{
-			SourcePath: "/decisions/d001.md",
-			Source:     "decision",
-			Hash:       "h-d001",
-			Project:    "testproj",
-			Messages: []storage.IndexedMessage{
-				{
-					Ordinal:     0,
-					Role:        "user",
-					Text:        "---\nid: D001\nstatus: accepted\nscope: technical\n---\n# Use Go\nWe decided to use Go for all backend services.",
-					UUID:        "uuid-d001",
-					Timestamp:   "2026-01-01T10:00:00Z",
-					ContentType: "text",
-				},
-			},
-		},
-		{
-			SourcePath: "/decisions/d002.md",
-			Source:     "decision",
-			Hash:       "h-d002",
-			Project:    "testproj",
-			Messages: []storage.IndexedMessage{
-				{
-					Ordinal:     0,
-					Role:        "user",
-					Text:        "---\nid: D002\nstatus: proposed\nscope: organizational\n---\n# Daily standups\nWe should have daily standups.",
-					UUID:        "uuid-d002",
-					Timestamp:   "2026-01-02T10:00:00Z",
-					ContentType: "text",
-				},
-			},
-		},
-		{
-			SourcePath: "/sessions/s001.jsonl",
-			Source:     "session",
-			Hash:       "h-s001",
-			Project:    "testproj",
-			Messages: []storage.IndexedMessage{
-				{Ordinal: 0, Role: "user", Text: "we decided to use Go for performance", UUID: "uuid-s001a", Timestamp: "2026-01-03T10:00:00Z", ContentType: "text"},
-				{Ordinal: 1, Role: "assistant", Text: "decision: adopt Go as the backend language", UUID: "uuid-s001b", Timestamp: "2026-01-03T10:01:00Z", ContentType: "text"},
-			},
-			Tags: []string{"feature"},
-		},
-	}
-	if err := db.SyncFiles(files); err != nil {
-		t.Fatalf("SyncFiles: %v", err)
-	}
-}
-
 func setupInputsPreset(t *testing.T, cfgDir, fixtureProjects string) {
 	t.Helper()
 	inputsDir := filepath.Join(cfgDir, "backscroll", "inputs")
@@ -937,57 +877,6 @@ func TestHelpListsAllCommands(t *testing.T) {
 		if strings.Contains(commandsSection, "\n  "+cmd+" ") || strings.Contains(commandsSection, "\n  "+cmd+"\n") {
 			t.Errorf("--help should not contain removed v1 command %q as root command", cmd)
 		}
-	}
-}
-
-// TestSyncOpenCode verifies that the sync command indexes OpenCode SQLite sessions
-// using a declarative opencode.inputs.toml manifest.
-func createOpenCodeTestDB(t *testing.T, path, content string) {
-	t.Helper()
-	db, err := sql.Open("sqlite", path)
-	if err != nil {
-		t.Fatalf("open db: %v", err)
-	}
-	defer func() { _ = db.Close() }()
-
-	_, err = db.Exec(`
-		CREATE TABLE message (
-			id TEXT PRIMARY KEY,
-			session_id TEXT NOT NULL,
-			time_created INTEGER NOT NULL,
-			time_updated INTEGER NOT NULL,
-			data TEXT NOT NULL
-		);
-		CREATE TABLE part (
-			id TEXT PRIMARY KEY,
-			message_id TEXT NOT NULL,
-			session_id TEXT NOT NULL,
-			time_created INTEGER NOT NULL,
-			time_updated INTEGER NOT NULL,
-			data TEXT NOT NULL
-		);
-	`)
-	if err != nil {
-		t.Fatalf("create schema: %v", err)
-	}
-
-	now := time.Now().UnixMilli()
-	msgData, _ := json.Marshal(map[string]string{"role": "user"})
-	_, err = db.Exec(
-		`INSERT INTO message (id, session_id, time_created, time_updated, data) VALUES (?, ?, ?, ?, ?)`,
-		"m1", "s1", now+1000, now+1000, string(msgData),
-	)
-	if err != nil {
-		t.Fatalf("insert message: %v", err)
-	}
-
-	partData, _ := json.Marshal(map[string]string{"type": "text", "text": content})
-	_, err = db.Exec(
-		`INSERT INTO part (id, message_id, session_id, time_created, time_updated, data) VALUES (?, ?, ?, ?, ?, ?)`,
-		"p1", "m1", "s1", now+1000, now+1000, string(partData),
-	)
-	if err != nil {
-		t.Fatalf("insert part: %v", err)
 	}
 }
 
