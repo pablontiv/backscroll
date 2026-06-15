@@ -36,6 +36,7 @@ func newSearchCmd(stdout, stderr io.Writer) *cobra.Command {
 		similarityThreshold float64
 		text                string
 		input               string
+		indexedOnly         bool
 	)
 
 	cmd := &cobra.Command{
@@ -56,7 +57,8 @@ Use --tag to filter sessions by auto-detected tags.
 Use --source-path to filter by indexed source path (exact, SQL LIKE pattern, or * glob).
 Use --json to output as JSON.
 Use --fields to choose JSON detail: minimal (default) or full.
-Use --max-tokens to limit output size (approximate token count).`,
+Use --max-tokens to limit output size (approximate token count).
+Use --indexed-only to skip auto-sync (read existing index only).`,
 		Args: cobra.MaximumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			query := text
@@ -69,7 +71,7 @@ Use --max-tokens to limit output size (approximate token count).`,
 			return runSearch(stdout, stderr, query,
 				project, allProjects, jsonFormat, robotFormat,
 				source, sourcePath, after, before, role, limit, offset, contentType, tag,
-				fields, maxTokens, lexicalOnly, similarityThreshold, input)
+				fields, maxTokens, lexicalOnly, similarityThreshold, input, indexedOnly)
 		},
 	}
 
@@ -92,6 +94,7 @@ Use --max-tokens to limit output size (approximate token count).`,
 	cmd.Flags().Float64Var(&similarityThreshold, "similarity-threshold", 0.3, "Minimum cosine similarity for vector results (0=no threshold)")
 	cmd.Flags().StringVar(&text, "text", "", "Search text (v2 preferred grammar)")
 	cmd.Flags().StringVar(&input, "input", "", "Filter by input ID (v2 grammar)")
+	cmd.Flags().BoolVar(&indexedOnly, "indexed-only", false, "Read existing index without auto-sync")
 
 	return cmd
 }
@@ -102,7 +105,7 @@ func runSearch(stdout, stderr io.Writer,
 	source, sourcePath, after, before, role string,
 	limit, offset int, contentType, tag string,
 	fields string, maxTokens int,
-	lexicalOnly bool, similarityThreshold float64, input string) error {
+	lexicalOnly bool, similarityThreshold float64, input string, indexedOnly bool) error {
 
 	// Validate flag values before opening the database
 	if fields != "minimal" && fields != "full" {
@@ -114,9 +117,11 @@ func runSearch(stdout, stderr io.Writer,
 		return fmt.Errorf("load config: %w", err)
 	}
 
-	// Auto-sync before query
-	if err := maybeAutoSync(cfg); err != nil {
-		_, _ = fmt.Fprintf(stderr, "warning: auto-sync failed: %v; using cached index\n", err)
+	// Auto-sync before query unless --indexed-only is set
+	if !indexedOnly {
+		if err := maybeAutoSync(cfg); err != nil {
+			_, _ = fmt.Fprintf(stderr, "warning: auto-sync failed: %v; using cached index\n", err)
+		}
 	}
 
 	// Derive effective project from cwd if not explicitly set

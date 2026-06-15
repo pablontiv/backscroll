@@ -59,7 +59,7 @@ func newSessionsValidateCmd(stdout, stderr io.Writer) *cobra.Command {
 		Use:   "validate",
 		Short: "Validate indexed sessions (alias for backscroll validate)",
 		RunE: func(cmd *cobra.Command, args []string) error {
-			return runValidate(stdout, stderr)
+			return runValidate(stdout, stderr, false)
 		},
 	}
 	return cmd
