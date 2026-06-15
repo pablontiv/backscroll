@@ -8,7 +8,7 @@ Backscroll is a Go CLI tool that indexes Claude Code, Pi, and OpenCode sessions,
 
 **Status**: Go port complete — `main` branch is the active Go implementation. The Rust implementation is frozen in the `v0` branch.
 
-Implemented: `internal/config`, `internal/input_config`, `internal/models`, `internal/readers`, `internal/sync`, `internal/tagging`, `internal/plans`, `internal/sources`, `internal/storage`, `internal/projects`, `internal/reader`. CLI commands in `cmd/backscroll/` (15 commands via cobra).
+Implemented: `internal/config`, `internal/input_config`, `internal/models`, `internal/readers`, `internal/sync`, `internal/tagging`, `internal/plans`, `internal/sources`, `internal/storage`, `internal/projects`, `internal/reader`. CLI commands in `cmd/backscroll/` (9 v2 commands via cobra).
 
 Stack: cobra, go-toml/v2, goldmark, modernc.org/sqlite (pure Go, no CGO), stdlib testing.
 
@@ -31,7 +31,7 @@ Run a single test: `go test -run TestName ./internal/...`
 
 **Coverage**: backscroll conforms to [coverage-spec v1.0](https://github.com/pablontiv/picokit/blob/main/docs/coverage-spec.md) — per-package floors defined in `.coverage-floors.toml` (default 85%), enforced locally via pre-push hook and in CI via `just coverage-check`.
 
-Tests use stdlib `testing` + subprocess or direct `run()` invocation. Unit tests are co-located in each package. Integration tests in `cmd/backscroll/main_test.go` (CLI integration via direct `run()` invocation). Decision helper unit tests in `cmd/backscroll/decisions_test.go`. Additional unit tests: `internal/storage/unit_test.go`, `internal/sync/noise_test.go`. Coverage gate ≥85% enforced per-package by pkcov and CI (`just coverage-check`).
+Tests use stdlib `testing` + subprocess or direct `run()` invocation. Unit tests are co-located in each package. Integration tests in `cmd/backscroll/main_test.go` (CLI integration via direct `run()` invocation). Additional unit tests: `internal/storage/unit_test.go`, `internal/sync/noise_test.go`, `internal/reader/semantic_test.go`. Coverage gate ≥85% enforced per-package by pkcov and CI (`just coverage-check`).
 
 ## Architecture
 
@@ -40,21 +40,16 @@ Tests use stdlib `testing` + subprocess or direct `run()` invocation. Unit tests
 ```
 cmd/backscroll/
 ├── main.go            — entrypoint; run(stdout, stderr, args) for testability
-├── sync.go            — sync command
-├── search.go          — search command
-├── read.go            — read command
-├── resume.go          — resume command
-├── list.go            — list command
-├── topics.go          — topics command
-├── insights.go        — insights command
-├── export.go          — export command
-├── reindex.go         — reindex command
-├── purge.go           — purge command
-├── validate.go        — validate command
+├── list.go            — list command (v2: --input, --order, --type, --tool)
+├── search.go          — search command (v2: --text, --input)
+├── read.go            — read command (v2: --path, --tail, --semantic, --pretty)
+├── stats.go           — stats command (--input, --type, --tool, --group-by)
 ├── status.go          — status command
-├── decisions.go       — decisions subcommands
-├── projects.go        — projects subcommands
-└── inputs.go          — inputs subcommands (list, aliases, identify, test)
+├── validate.go        — validate command (--indexed-only)
+├── rebuild.go         — rebuild command (replaces reindex)
+├── purge.go           — purge command
+├── config.go          — config command (shows effective config + inputs)
+└── sync_helpers.go    — shared auto-sync helpers (maybeAutoSync, runSync)
 internal/
 ├── config/            — config resolution: backscroll.toml → ~/.config → env → defaults
 ├── input_config/      — declarative input manifest engine: types, loader, discovery, predicates, transforms
@@ -69,7 +64,7 @@ internal/
 └── storage/           — SQLite adapter (FTS5, BM25, WAL mode, migrations, search_items, session_tags)
 ```
 
-Fifteen CLI commands: `sync [--path] [--include-agents] [--no-plans] [--optimize]`, `search <query> [--project] [--all-projects] [--json] [--robot] [--fields minimal|full] [--max-tokens] [--source] [--source-path] [--after] [--before] [--role] [--limit] [--offset] [--content-type] [--tag] [--lexical-only] [--similarity-threshold]`, `read <path>`, `resume <query> [--project] [--all-projects] [--robot] [--source]`, `topics [--project] [--all-projects] [--limit] [--json] [--robot]`, `list [--project] [--all-projects] [--recent] [--json] [--robot]`, `insights [--project] [--all-projects] [--json] [--robot]`, `export <query> [--format markdown|csv] [--project] [--all-projects]`, `reindex`, `purge --before <date>`, `validate`, `status`, `decisions <query|context|extract|conflicts|replay>`, `projects <identify|list|aliases>`, `inputs <list|aliases|identify|test> [--json]`.
+Nine v2 CLI commands: `list [--input <id>] [--project] [--all-projects] [--order timestamp:desc|asc] [--type <event_type>] [--tool <name>] [--after] [--before] [--limit] [--offset] [--json]`, `search [--text <query>] [--input <id>] [--project] [--all-projects] [--after] [--before] [--limit] [--offset] [--indexed-only] [--json]`, `read --path <path> [--tail <n>] [--semantic] [--pretty]`, `stats [--input <id>] [--type <event_type>] [--tool <name>] [--group-by agent|tool|type|project] [--all-projects] [--json]`, `status`, `validate [--indexed-only]`, `rebuild`, `purge --before <date>`, `config [--json]`.
 
 The `SearchEngine` interface is the port; `internal/storage` is the adapter. Database opened lazily. `OpenReadOnly()` provides read-only access for external consumers.
 
