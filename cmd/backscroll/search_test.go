@@ -9,6 +9,7 @@ import (
 	picokitoutput "github.com/pablontiv/picokit/output"
 
 	"github.com/pablontiv/backscroll/internal/models"
+	"github.com/pablontiv/backscroll/internal/storage"
 )
 
 func TestSearchOutputFormatText(t *testing.T) {
@@ -235,10 +236,173 @@ func TestSearchWithJSONAndMaxTokens(t *testing.T) {
 	}
 }
 
-func TestResumeOutputFormatText(t *testing.T) {
-	t.Skip("resume command removed in v2; use 'list --order timestamp:desc --limit 1' instead")
+func TestFormatStructuredEventsEmpty(t *testing.T) {
+	var stdout strings.Builder
+	events := []storage.StructuredEventRow{}
+
+	// Test text format (empty)
+	err := formatStructuredEvents(&stdout, events, false)
+	if err != nil {
+		t.Fatalf("formatStructuredEvents error: %v", err)
+	}
+	if !strings.Contains(stdout.String(), "No events found") {
+		t.Errorf("expected 'No events found' for empty events (text), got: %s", stdout.String())
+	}
+
+	// Test JSON format (empty)
+	stdout.Reset()
+	err = formatStructuredEvents(&stdout, events, true)
+	if err != nil {
+		t.Fatalf("formatStructuredEvents JSON error: %v", err)
+	}
+	if !strings.Contains(stdout.String(), "\"count\":0") {
+		t.Errorf("expected JSON with count:0 for empty events, got: %s", stdout.String())
+	}
 }
 
-func TestResumeOutputFormatRobot(t *testing.T) {
-	t.Skip("resume command removed in v2; use 'list --order timestamp:desc --limit 1' instead")
+func TestFormatStructuredEventsWithData(t *testing.T) {
+	var stdout strings.Builder
+	events := []storage.StructuredEventRow{
+		{
+			EventType:  "tool_call",
+			ToolName:   "search",
+			Actor:      "user",
+			SourcePath: "/path/to/session.jsonl",
+			Ordinal:    5,
+			Timestamp:  "2024-01-15T10:30:00Z",
+			Snippet:    "test snippet content",
+		},
+		{
+			EventType:  "message",
+			ToolName:   "",
+			Actor:      "assistant",
+			SourcePath: "/path/to/session.jsonl",
+			Ordinal:    6,
+			Timestamp:  "2024-01-15T10:31:00Z",
+			Snippet:    "response snippet",
+		},
+	}
+
+	// Test text format with data
+	err := formatStructuredEvents(&stdout, events, false)
+	if err != nil {
+		t.Fatalf("formatStructuredEvents error: %v", err)
+	}
+	output := stdout.String()
+	if !strings.Contains(output, "tool_call") || !strings.Contains(output, "search") || !strings.Contains(output, "Total: 2 events") {
+		t.Errorf("text format missing expected fields: %s", output)
+	}
+
+	// Test JSON format with data
+	stdout.Reset()
+	err = formatStructuredEvents(&stdout, events, true)
+	if err != nil {
+		t.Fatalf("formatStructuredEvents JSON error: %v", err)
+	}
+	output = stdout.String()
+	if !strings.Contains(output, "\"count\":2") || !strings.Contains(output, "tool_call") {
+		t.Errorf("JSON format missing expected fields: %s", output)
+	}
+}
+
+func TestGroupEventsAgent(t *testing.T) {
+	events := []storage.StructuredEventRow{
+		{EventType: "call", Actor: "user"},
+		{EventType: "call", Actor: "user"},
+		{EventType: "call", Actor: "assistant"},
+		{EventType: "call", Actor: ""},
+	}
+
+	result := groupEvents(events, "agent")
+	if len(result) != 3 {
+		t.Errorf("expected 3 groups for agent grouping, got %d", len(result))
+	}
+
+	// Check that user and assistant have correct counts
+	counts := make(map[string]int)
+	for _, e := range result {
+		counts[e.Name] = e.Count
+	}
+	if counts["user"] != 2 {
+		t.Errorf("expected 2 user events, got %d", counts["user"])
+	}
+	if counts["assistant"] != 1 {
+		t.Errorf("expected 1 assistant event, got %d", counts["assistant"])
+	}
+	if counts["<unknown>"] != 1 {
+		t.Errorf("expected 1 unknown event, got %d", counts["<unknown>"])
+	}
+}
+
+func TestGroupEventsTool(t *testing.T) {
+	events := []storage.StructuredEventRow{
+		{EventType: "call", ToolName: "search"},
+		{EventType: "call", ToolName: "search"},
+		{EventType: "call", ToolName: "read"},
+		{EventType: "call", ToolName: ""},
+	}
+
+	result := groupEvents(events, "tool")
+	if len(result) != 3 {
+		t.Errorf("expected 3 groups for tool grouping, got %d", len(result))
+	}
+
+	counts := make(map[string]int)
+	for _, e := range result {
+		counts[e.Name] = e.Count
+	}
+	if counts["search"] != 2 {
+		t.Errorf("expected 2 search events, got %d", counts["search"])
+	}
+	if counts["read"] != 1 {
+		t.Errorf("expected 1 read event, got %d", counts["read"])
+	}
+}
+
+func TestGroupEventsType(t *testing.T) {
+	events := []storage.StructuredEventRow{
+		{EventType: "tool_call", ToolName: "search"},
+		{EventType: "tool_call", ToolName: "read"},
+		{EventType: "message", ToolName: ""},
+	}
+
+	result := groupEvents(events, "type")
+	if len(result) != 2 {
+		t.Errorf("expected 2 groups for type grouping, got %d", len(result))
+	}
+
+	counts := make(map[string]int)
+	for _, e := range result {
+		counts[e.Name] = e.Count
+	}
+	if counts["tool_call"] != 2 {
+		t.Errorf("expected 2 tool_call events, got %d", counts["tool_call"])
+	}
+}
+
+func TestGroupEventsProject(t *testing.T) {
+	proj1 := "proj1"
+	proj2 := "proj2"
+	events := []storage.StructuredEventRow{
+		{EventType: "call", Project: &proj1},
+		{EventType: "call", Project: &proj1},
+		{EventType: "call", Project: &proj2},
+		{EventType: "call", Project: nil},
+	}
+
+	result := groupEvents(events, "project")
+	if len(result) != 3 {
+		t.Errorf("expected 3 groups for project grouping, got %d", len(result))
+	}
+
+	counts := make(map[string]int)
+	for _, e := range result {
+		counts[e.Name] = e.Count
+	}
+	if counts["proj1"] != 2 {
+		t.Errorf("expected 2 proj1 events, got %d", counts["proj1"])
+	}
+	if counts["<unknown>"] != 1 {
+		t.Errorf("expected 1 unknown event, got %d", counts["<unknown>"])
+	}
 }

@@ -3385,3 +3385,402 @@ func TestSearchWithSourcePathFilter(t *testing.T) {
 		t.Errorf("non-matching source-path: expected 0 results, got %d", len(results))
 	}
 }
+
+func TestListItemsV2Empty(t *testing.T) {
+	db, cleanup := newTestDB(t)
+	defer cleanup()
+
+	opts := ListOptions{Limit: 10}
+	entries, err := db.ListItemsV2(opts)
+	if err != nil {
+		t.Fatalf("ListItemsV2 error: %v", err)
+	}
+	if len(entries) != 0 {
+		t.Errorf("expected empty list, got %d entries", len(entries))
+	}
+}
+
+func TestListItemsV2WithData(t *testing.T) {
+	db, cleanup := newTestDB(t)
+	defer cleanup()
+
+	// Sync test data
+	files := []IndexedFile{
+		{
+			SourcePath: "test1.jsonl",
+			Source:     "session",
+			Hash:       "hash1",
+			Project:    "proj1",
+			Messages: []IndexedMessage{
+				{Ordinal: 0, Role: "user", Text: "hello", Timestamp: "2024-01-01T00:00:00Z"},
+			},
+			Tags: []string{"tag1"},
+		},
+		{
+			SourcePath: "test2.jsonl",
+			Source:     "session",
+			Hash:       "hash2",
+			Project:    "proj2",
+			Messages: []IndexedMessage{
+				{Ordinal: 0, Role: "user", Text: "world", Timestamp: "2024-01-02T00:00:00Z"},
+			},
+			Tags: []string{"tag2"},
+		},
+	}
+
+	if err := db.SyncFiles(files); err != nil {
+		t.Fatalf("SyncFiles error: %v", err)
+	}
+
+	// Test basic listing
+	opts := ListOptions{Limit: 10}
+	entries, err := db.ListItemsV2(opts)
+	if err != nil {
+		t.Fatalf("ListItemsV2 error: %v", err)
+	}
+	if len(entries) != 2 {
+		t.Errorf("expected 2 entries, got %d", len(entries))
+	}
+
+	// Verify paths
+	paths := make(map[string]bool)
+	for _, e := range entries {
+		paths[e.Path] = true
+	}
+	if !paths["test1.jsonl"] {
+		t.Error("expected test1.jsonl in results")
+	}
+	if !paths["test2.jsonl"] {
+		t.Error("expected test2.jsonl in results")
+	}
+}
+
+func TestListItemsV2WithProjectFilter(t *testing.T) {
+	db, cleanup := newTestDB(t)
+	defer cleanup()
+
+	// Sync test data with different projects
+	files := []IndexedFile{
+		{
+			SourcePath: "proj1/session.jsonl",
+			Source:     "session",
+			Hash:       "hash1",
+			Project:    "proj1",
+			Messages: []IndexedMessage{
+				{Ordinal: 0, Role: "user", Text: "hello", Timestamp: "2024-01-01T00:00:00Z"},
+			},
+		},
+		{
+			SourcePath: "proj2/session.jsonl",
+			Source:     "session",
+			Hash:       "hash2",
+			Project:    "proj2",
+			Messages: []IndexedMessage{
+				{Ordinal: 0, Role: "user", Text: "world", Timestamp: "2024-01-02T00:00:00Z"},
+			},
+		},
+	}
+
+	if err := db.SyncFiles(files); err != nil {
+		t.Fatalf("SyncFiles error: %v", err)
+	}
+
+	// Test project filter
+	opts := ListOptions{Project: "proj1", Limit: 10}
+	entries, err := db.ListItemsV2(opts)
+	if err != nil {
+		t.Fatalf("ListItemsV2 error: %v", err)
+	}
+	if len(entries) != 1 {
+		t.Errorf("expected 1 entry for proj1, got %d", len(entries))
+	}
+	if entries[0].Path != "proj1/session.jsonl" {
+		t.Errorf("expected proj1/session.jsonl, got %s", entries[0].Path)
+	}
+}
+
+func TestListItemsV2WithDateFilters(t *testing.T) {
+	db, cleanup := newTestDB(t)
+	defer cleanup()
+
+	// Sync test data with different timestamps
+	files := []IndexedFile{
+		{
+			SourcePath: "early.jsonl",
+			Source:     "session",
+			Hash:       "h1",
+			Project:    "p1",
+			Messages: []IndexedMessage{
+				{Ordinal: 0, Role: "user", Text: "text1", Timestamp: "2024-01-01T00:00:00Z"},
+			},
+		},
+		{
+			SourcePath: "middle.jsonl",
+			Source:     "session",
+			Hash:       "h2",
+			Project:    "p1",
+			Messages: []IndexedMessage{
+				{Ordinal: 0, Role: "user", Text: "text2", Timestamp: "2024-01-15T00:00:00Z"},
+			},
+		},
+		{
+			SourcePath: "late.jsonl",
+			Source:     "session",
+			Hash:       "h3",
+			Project:    "p1",
+			Messages: []IndexedMessage{
+				{Ordinal: 0, Role: "user", Text: "text3", Timestamp: "2024-01-31T00:00:00Z"},
+			},
+		},
+	}
+
+	if err := db.SyncFiles(files); err != nil {
+		t.Fatalf("SyncFiles error: %v", err)
+	}
+
+	// Test after filter
+	afterTime := time.Date(2024, 1, 10, 0, 0, 0, 0, time.UTC)
+	opts := ListOptions{After: &afterTime, Limit: 10}
+	entries, err := db.ListItemsV2(opts)
+	if err != nil {
+		t.Fatalf("ListItemsV2 after error: %v", err)
+	}
+	if len(entries) != 2 {
+		t.Errorf("expected 2 entries after 2024-01-10, got %d", len(entries))
+	}
+
+	// Test before filter
+	beforeTime := time.Date(2024, 1, 20, 0, 0, 0, 0, time.UTC)
+	opts = ListOptions{Before: &beforeTime, Limit: 10}
+	entries, err = db.ListItemsV2(opts)
+	if err != nil {
+		t.Fatalf("ListItemsV2 before error: %v", err)
+	}
+	if len(entries) != 2 {
+		t.Errorf("expected 2 entries before 2024-01-20, got %d", len(entries))
+	}
+
+	// Test timestamp ordering (desc)
+	opts = ListOptions{Order: "timestamp:desc", Limit: 10}
+	entries, err = db.ListItemsV2(opts)
+	if err != nil {
+		t.Fatalf("ListItemsV2 order desc error: %v", err)
+	}
+	if len(entries) > 0 && entries[0].Path != "late.jsonl" {
+		t.Errorf("expected late.jsonl first in desc order, got %s", entries[0].Path)
+	}
+
+	// Test timestamp ordering (asc)
+	opts = ListOptions{Order: "timestamp:asc", Limit: 10}
+	entries, err = db.ListItemsV2(opts)
+	if err != nil {
+		t.Fatalf("ListItemsV2 order asc error: %v", err)
+	}
+	if len(entries) > 0 && entries[0].Path != "early.jsonl" {
+		t.Errorf("expected early.jsonl first in asc order, got %s", entries[0].Path)
+	}
+}
+
+func TestListItemsV2WithInputFilter(t *testing.T) {
+	db, cleanup := newTestDB(t)
+	defer cleanup()
+
+	// Sync test data with different sources
+	files := []IndexedFile{
+		{
+			SourcePath: "session.jsonl",
+			Source:     "session",
+			Hash:       "h1",
+			Project:    "p1",
+			Messages: []IndexedMessage{
+				{Ordinal: 0, Role: "user", Text: "text", Timestamp: "2024-01-01T00:00:00Z"},
+			},
+		},
+		{
+			SourcePath: "plan.md",
+			Source:     "plan",
+			Hash:       "h2",
+			Project:    "p1",
+			Messages: []IndexedMessage{
+				{Ordinal: 0, Role: "plan", Text: "plan text", Timestamp: "2024-01-01T00:00:00Z"},
+			},
+		},
+	}
+
+	if err := db.SyncFiles(files); err != nil {
+		t.Fatalf("SyncFiles error: %v", err)
+	}
+
+	// Test input filter
+	opts := ListOptions{Input: "session", Limit: 10}
+	entries, err := db.ListItemsV2(opts)
+	if err != nil {
+		t.Fatalf("ListItemsV2 input filter error: %v", err)
+	}
+	if len(entries) != 1 || entries[0].Path != "session.jsonl" {
+		t.Errorf("expected only session.jsonl with input filter, got %v", entries)
+	}
+}
+
+func TestListSessionEventsV2Empty(t *testing.T) {
+	db, cleanup := newTestDB(t)
+	defer cleanup()
+
+	opts := ListOptions{Limit: 10}
+	events, err := db.ListSessionEventsV2(opts)
+	if err != nil {
+		t.Fatalf("ListSessionEventsV2 error: %v", err)
+	}
+	if len(events) != 0 {
+		t.Errorf("expected empty list, got %d events", len(events))
+	}
+}
+
+func TestListSessionEventsV2WithData(t *testing.T) {
+	db, cleanup := newTestDB(t)
+	defer cleanup()
+
+	// Manually insert test session_events
+	ctx := context.Background()
+	err := db.db.QueryRowContext(ctx,
+		`INSERT INTO session_events (event_type, tool_name, actor, snippet, source_path, ordinal, timestamp, project)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+		"tool_call", "search", "user", "test snippet", "session.jsonl", 1, "2024-01-01T00:00:00Z", "proj1",
+	).Err()
+	if err != nil {
+		t.Fatalf("insert event: %v", err)
+	}
+
+	opts := ListOptions{Limit: 10}
+	events, err := db.ListSessionEventsV2(opts)
+	if err != nil {
+		t.Fatalf("ListSessionEventsV2 error: %v", err)
+	}
+	if len(events) != 1 {
+		t.Errorf("expected 1 event, got %d", len(events))
+	}
+
+	// Verify event data
+	if events[0].EventType != "tool_call" {
+		t.Errorf("expected tool_call, got %s", events[0].EventType)
+	}
+	if events[0].ToolName != "search" {
+		t.Errorf("expected search, got %s", events[0].ToolName)
+	}
+}
+
+func TestListSessionEventsV2WithFilters(t *testing.T) {
+	db, cleanup := newTestDB(t)
+	defer cleanup()
+
+	// Insert multiple test events
+	ctx := context.Background()
+	events := []struct {
+		eventType  string
+		toolName   string
+		actor      string
+		snippet    string
+		sourcePath string
+		ordinal    int
+		timestamp  string
+		project    string
+	}{
+		{"tool_call", "search", "user", "search for data", "s1.jsonl", 1, "2024-01-01T00:00:00Z", "proj1"},
+		{"tool_call", "read", "user", "read file", "s1.jsonl", 2, "2024-01-02T00:00:00Z", "proj1"},
+		{"message", "read", "assistant", "got it", "s1.jsonl", 3, "2024-01-03T00:00:00Z", "proj2"},
+		{"tool_call", "search", "agent", "query", "s2.jsonl", 1, "2024-01-04T00:00:00Z", "proj2"},
+	}
+
+	for _, e := range events {
+		err := db.db.QueryRowContext(ctx,
+			`INSERT INTO session_events (event_type, tool_name, actor, snippet, source_path, ordinal, timestamp, project)
+			 VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+			e.eventType, e.toolName, e.actor, e.snippet, e.sourcePath, e.ordinal, e.timestamp, e.project,
+		).Err()
+		if err != nil {
+			t.Fatalf("insert event: %v", err)
+		}
+	}
+
+	// Test filter by event type
+	opts := ListOptions{EventType: "tool_call", Limit: 10}
+	results, err := db.ListSessionEventsV2(opts)
+	if err != nil {
+		t.Fatalf("ListSessionEventsV2 error: %v", err)
+	}
+	if len(results) != 3 {
+		t.Errorf("expected 3 tool_call events, got %d", len(results))
+	}
+
+	// Test filter by tool name
+	opts = ListOptions{ToolName: "search", Limit: 10}
+	results, err = db.ListSessionEventsV2(opts)
+	if err != nil {
+		t.Fatalf("ListSessionEventsV2 error: %v", err)
+	}
+	if len(results) != 2 {
+		t.Errorf("expected 2 search events, got %d", len(results))
+	}
+
+	// Test filter by project
+	opts = ListOptions{Project: "proj1", Limit: 10}
+	results, err = db.ListSessionEventsV2(opts)
+	if err != nil {
+		t.Fatalf("ListSessionEventsV2 error: %v", err)
+	}
+	if len(results) != 2 {
+		t.Errorf("expected 2 proj1 events, got %d", len(results))
+	}
+
+	// Test with date filter (after)
+	afterTime := time.Date(2024, 1, 2, 0, 0, 0, 0, time.UTC)
+	opts = ListOptions{After: &afterTime, Limit: 10}
+	results, err = db.ListSessionEventsV2(opts)
+	if err != nil {
+		t.Fatalf("ListSessionEventsV2 error: %v", err)
+	}
+	if len(results) != 3 {
+		t.Errorf("expected 3 events after 2024-01-02, got %d", len(results))
+	}
+
+	// Test with date filter (before)
+	beforeTime := time.Date(2024, 1, 3, 0, 0, 0, 0, time.UTC)
+	opts = ListOptions{Before: &beforeTime, Limit: 10}
+	results, err = db.ListSessionEventsV2(opts)
+	if err != nil {
+		t.Fatalf("ListSessionEventsV2 error: %v", err)
+	}
+	if len(results) != 2 {
+		t.Errorf("expected 2 events before 2024-01-03, got %d", len(results))
+	}
+
+	// Test with order descending
+	opts = ListOptions{Order: "timestamp:desc", Limit: 1}
+	results, err = db.ListSessionEventsV2(opts)
+	if err != nil {
+		t.Fatalf("ListSessionEventsV2 error: %v", err)
+	}
+	if len(results) != 1 || results[0].Timestamp != "2024-01-04T00:00:00Z" {
+		t.Errorf("expected latest event (2024-01-04), got %v", results)
+	}
+
+	// Test with order ascending
+	opts = ListOptions{Order: "timestamp:asc", Limit: 1}
+	results, err = db.ListSessionEventsV2(opts)
+	if err != nil {
+		t.Fatalf("ListSessionEventsV2 error: %v", err)
+	}
+	if len(results) != 1 || results[0].Timestamp != "2024-01-01T00:00:00Z" {
+		t.Errorf("expected earliest event (2024-01-01), got %v", results)
+	}
+
+	// Test with limit and offset
+	opts = ListOptions{Limit: 2, Offset: 1}
+	results, err = db.ListSessionEventsV2(opts)
+	if err != nil {
+		t.Fatalf("ListSessionEventsV2 error: %v", err)
+	}
+	if len(results) != 2 {
+		t.Errorf("expected 2 events with offset, got %d", len(results))
+	}
+}
