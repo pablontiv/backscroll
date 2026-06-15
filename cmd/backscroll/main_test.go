@@ -126,8 +126,7 @@ func TestSyncAndSearch(t *testing.T) {
 	defer cleanup()
 
 	fixtureSession := filepath.Join(fixturesDir(), "claude-preset", "projects")
-	_ = os.Setenv("BACKSCROLL_SESSION_DIRS", fixtureSession)
-	defer os.Unsetenv("BACKSCROLL_SESSION_DIRS")
+	t.Setenv("BACKSCROLL_SESSION_DIRS", fixtureSession)
 
 	// v2: search auto-syncs before querying. No explicit sync needed.
 
@@ -153,8 +152,7 @@ func TestSyncWithPiFixture(t *testing.T) {
 	defer cleanup()
 
 	piDir := filepath.Dir(filepath.Join(fixturesDir(), "pi-session.jsonl"))
-	_ = os.Setenv("BACKSCROLL_SESSION_DIRS", piDir)
-	defer os.Unsetenv("BACKSCROLL_SESSION_DIRS")
+	t.Setenv("BACKSCROLL_SESSION_DIRS", piDir)
 
 	// v2: auto-sync happens before query commands. Test via list (which auto-syncs).
 	out, stderr, err := runCmd("list")
