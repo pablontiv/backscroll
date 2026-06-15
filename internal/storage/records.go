@@ -133,6 +133,7 @@ type SessionEventQuery struct {
 	SourcePath string  // supports * glob (converted to SQL LIKE %)
 	EventType  *string // nil = all event types
 	Role       string
+	ToolName   *string // nil = all tools; filter by tool_name field
 	After      string
 	Before     string
 	Limit      int
@@ -172,6 +173,10 @@ func (d *Database) QuerySessionEvents(q SessionEventQuery) ([]SessionEvent, erro
 	if q.Role != "" {
 		where = append(where, "role = ?")
 		args = append(args, q.Role)
+	}
+	if q.ToolName != nil && *q.ToolName != "" {
+		where = append(where, "tool_name = ?")
+		args = append(args, *q.ToolName)
 	}
 	if q.After != "" {
 		where = append(where, "timestamp >= ?")

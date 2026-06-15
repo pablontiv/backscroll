@@ -162,6 +162,10 @@ type ListOptions struct {
 	Offset      int    // result offset
 	After       *time.Time
 	Before      *time.Time
+	// Structured query filters (when present, routes to session_events table instead of search_items)
+	EventType string // filter to event_type (e.g., "tool_call")
+	ToolName  string // filter to tool_name (e.g., "bash", "subagent")
+	Command   string // filter to command field
 }
 
 // ListItemsV2 lists indexed search items using v2 filter grammar.
@@ -285,6 +289,113 @@ func (d *Database) ListItemsV2(opts ListOptions) ([]SessionEntry, error) {
 	}
 
 	return sessions, nil
+}
+
+// StructuredEventRow represents a row from session_events for structured queries.
+type StructuredEventRow struct {
+	EventType  string
+	ToolName   string
+	Actor      string
+	Snippet    string
+	SourcePath string
+	Ordinal    int64
+	Timestamp  string
+	Project    *string
+}
+
+// ListSessionEventsV2 queries session_events using structured filters.
+// Used when --type, --tool, or --command flags are present.
+func (d *Database) ListSessionEventsV2(opts ListOptions) ([]StructuredEventRow, error) {
+	query := `
+		SELECT DISTINCT event_type, tool_name, actor, snippet, source_path, ordinal, timestamp, project
+		FROM session_events
+		WHERE 1=1
+	`
+
+	var args []interface{}
+
+	// Filter by project
+	if opts.Project != "" && !opts.AllProjects {
+		query += " AND project = ?"
+		args = append(args, opts.Project)
+	}
+
+	// Filter by input (source field)
+	if opts.Input != "" {
+		query += " AND source = ?"
+		args = append(args, opts.Input)
+	}
+
+	// Filter by event type
+	if opts.EventType != "" {
+		query += " AND event_type = ?"
+		args = append(args, opts.EventType)
+	}
+
+	// Filter by tool name
+	if opts.ToolName != "" {
+		query += " AND tool_name = ?"
+		args = append(args, opts.ToolName)
+	}
+
+	// Filter by command
+	if opts.Command != "" {
+		query += " AND command = ?"
+		args = append(args, opts.Command)
+	}
+
+	// Filter by date range
+	if opts.After != nil {
+		query += " AND timestamp >= ?"
+		args = append(args, opts.After.Format(time.RFC3339))
+	}
+	if opts.Before != nil {
+		query += " AND timestamp < ?"
+		args = append(args, opts.Before.Format(time.RFC3339))
+	}
+
+	// Apply ordering
+	if opts.Order != "" {
+		if strings.HasPrefix(opts.Order, "timestamp:desc") {
+			query += " ORDER BY timestamp DESC"
+		} else if strings.HasPrefix(opts.Order, "timestamp:asc") {
+			query += " ORDER BY timestamp ASC"
+		}
+	} else {
+		// Default ordering
+		query += " ORDER BY source_path, ordinal"
+	}
+
+	// Apply limit/offset
+	if opts.Limit > 0 {
+		query += fmt.Sprintf(" LIMIT %d", opts.Limit)
+	}
+	if opts.Offset > 0 {
+		query += fmt.Sprintf(" OFFSET %d", opts.Offset)
+	}
+
+	rows, err := d.db.Query(query, args...)
+	if err != nil {
+		return nil, fmt.Errorf("query session events v2: %w", err)
+	}
+	defer func() { _ = rows.Close() }()
+
+	var events []StructuredEventRow
+	for rows.Next() {
+		var e StructuredEventRow
+		var project sql.NullString
+
+		if err := rows.Scan(&e.EventType, &e.ToolName, &e.Actor, &e.Snippet, &e.SourcePath, &e.Ordinal, &e.Timestamp, &project); err != nil {
+			return nil, fmt.Errorf("scan event: %w", err)
+		}
+
+		if project.Valid {
+			e.Project = &project.String
+		}
+
+		events = append(events, e)
+	}
+	return events, rows.Err()
 }
 
 // ListSessions lists indexed sessions, optionally filtered by project.

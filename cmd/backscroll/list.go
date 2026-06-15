@@ -23,6 +23,9 @@ func newListCmd(stdout, stderr io.Writer) *cobra.Command {
 		order       string
 		limit       int
 		offset      int
+		eventType   string
+		toolName    string
+		command     string
 	)
 
 	cmd := &cobra.Command{
@@ -36,12 +39,18 @@ Use --input to filter by configured input ID (v2 grammar).
 Use --order to sort results (e.g., timestamp:desc).
 Use --limit to restrict result count.
 Use --offset to skip results.
+Use --type to filter by event type (e.g., tool_call) - queries structured events.
+Use --tool to filter by tool name (e.g., bash, subagent) - requires --type.
+Use --command to filter by command field - queries structured events.
 Use --recent N to show N most recent sessions (legacy flag; prefer --order timestamp:desc --limit N).
 Use --indexed-only to skip auto-sync (read existing index only).
 Use --json to output as JSON.`,
 		RunE: func(cmd *cobra.Command, args []string) error {
+			if len(args) > 0 {
+				return fmt.Errorf("unexpected positional argument %q; use --text for text search or --input for input filtering", args[0])
+			}
 			return runList(stdout, stderr, project, allProjects, recent, jsonFormat, robotFormat, indexedOnly,
-				input, order, limit, offset)
+				input, order, limit, offset, eventType, toolName, command)
 		},
 	}
 
@@ -55,13 +64,16 @@ Use --json to output as JSON.`,
 	cmd.Flags().StringVar(&order, "order", "", "Sort results (e.g., timestamp:desc)")
 	cmd.Flags().IntVar(&limit, "limit", 0, "Result limit (0 = no limit)")
 	cmd.Flags().IntVar(&offset, "offset", 0, "Result offset")
+	cmd.Flags().StringVar(&eventType, "type", "", "Filter by event type (e.g., tool_call)")
+	cmd.Flags().StringVar(&toolName, "tool", "", "Filter by tool name (e.g., bash, subagent)")
+	cmd.Flags().StringVar(&command, "command", "", "Filter by command")
 
 	return cmd
 }
 
 func runList(stdout, stderr io.Writer,
 	project string, allProjects bool, recent int, jsonFormat, robotFormat, indexedOnly bool,
-	input, order string, limit, offset int) error {
+	input, order string, limit, offset int, eventType, toolName, command string) error {
 
 	cfg, err := config.Load()
 	if err != nil {
@@ -90,6 +102,26 @@ func runList(stdout, stderr io.Writer,
 		return nil
 	}
 	defer func() { _ = db.Close() }()
+
+	// If structured query filters are provided (--type, --tool, --command), use ListSessionEventsV2
+	if eventType != "" || toolName != "" || command != "" {
+		opts := storage.ListOptions{
+			Project:     project,
+			AllProjects: allProjects,
+			Input:       input,
+			Order:       order,
+			Limit:       limit,
+			Offset:      offset,
+			EventType:   eventType,
+			ToolName:    toolName,
+			Command:     command,
+		}
+		events, err := db.ListSessionEventsV2(opts)
+		if err != nil {
+			return fmt.Errorf("list session events v2: %w", err)
+		}
+		return formatStructuredEvents(stdout, events, jsonFormat)
+	}
 
 	// If v2 grammar flags are provided (input, order, limit, offset), use ListItemsV2
 	// Otherwise fall back to legacy ListSessions for backward compat
@@ -158,6 +190,48 @@ func runList(stdout, stderr io.Writer,
 			}
 		}
 		_, _ = fmt.Fprintf(stdout, "\nTotal: %d sessions\n", len(sessions))
+	}
+
+	return nil
+}
+
+// formatStructuredEvents formats structured event rows for output.
+func formatStructuredEvents(stdout io.Writer, events []storage.StructuredEventRow, jsonFormat bool) error {
+	if len(events) == 0 {
+		if jsonFormat {
+			_, _ = fmt.Fprintf(stdout, "{\"count\":0,\"events\":[]}\n")
+		} else {
+			_, _ = fmt.Fprintf(stdout, "No events found\n")
+		}
+		return nil
+	}
+
+	if jsonFormat {
+		// JSON output
+		data := map[string]interface{}{
+			"count":  len(events),
+			"events": events,
+		}
+		if err := json.NewEncoder(stdout).Encode(data); err != nil {
+			return fmt.Errorf("encode JSON: %w", err)
+		}
+	} else {
+		// Text output
+		for i, e := range events {
+			_, _ = fmt.Fprintf(stdout, "%d. Event: %s\n", i+1, e.EventType)
+			if e.ToolName != "" {
+				_, _ = fmt.Fprintf(stdout, "   Tool: %s\n", e.ToolName)
+			}
+			if e.Actor != "" {
+				_, _ = fmt.Fprintf(stdout, "   Actor: %s\n", e.Actor)
+			}
+			_, _ = fmt.Fprintf(stdout, "   Path: %s (ordinal: %d)\n", e.SourcePath, e.Ordinal)
+			if e.Timestamp != "" {
+				_, _ = fmt.Fprintf(stdout, "   Timestamp: %s\n", e.Timestamp)
+			}
+			_, _ = fmt.Fprintf(stdout, "   Snippet: %.80s\n", e.Snippet)
+		}
+		_, _ = fmt.Fprintf(stdout, "\nTotal: %d events\n", len(events))
 	}
 
 	return nil

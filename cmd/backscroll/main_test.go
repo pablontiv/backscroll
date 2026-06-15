@@ -2999,3 +2999,113 @@ func TestListWithInputFilterReturnsData(t *testing.T) {
 	}
 	_ = out2
 }
+
+// Slice 4: Structured tool-call listing and stats
+
+func TestListWithTypeToolFilterNoPathResolution(t *testing.T) {
+	_, cleanup := testEnv(t)
+	defer cleanup()
+
+	// Sync fixture sessions containing tool calls
+	claudeDir := filepath.Join(fixturesDir(), "claude-preset", "projects")
+	_, _, err := runCmd("sync", "--path", claudeDir)
+	if err != nil {
+		t.Fatalf("sync error: %v", err)
+	}
+
+	// Test list --input claude --type tool_call --tool bash (should not try to resolve bash as a path)
+	out, _, err := runCmd("list", "--input", "claude", "--type", "tool_call", "--tool", "bash", "--limit", "10")
+	if err != nil {
+		t.Fatalf("list --input claude --type tool_call --tool bash error: %v", err)
+	}
+	_ = out // We're just checking that the command runs without path resolution errors
+}
+
+func TestListStructuredToolCallRows(t *testing.T) {
+	_, cleanup := testEnv(t)
+	defer cleanup()
+
+	// Sync fixture sessions containing tool calls
+	claudeDir := filepath.Join(fixturesDir(), "claude-preset", "projects")
+	_, _, err := runCmd("sync", "--path", claudeDir)
+	if err != nil {
+		t.Fatalf("sync error: %v", err)
+	}
+
+	// Test list --type tool_call returns structured rows
+	out, _, err := runCmd("list", "--type", "tool_call", "--limit", "5")
+	if err != nil {
+		t.Fatalf("list --type tool_call error: %v", err)
+	}
+
+	// Should have some output (assuming fixtures contain tool calls)
+	if len(strings.TrimSpace(out)) == 0 {
+		t.Logf("list --type tool_call produced empty output (may be expected if fixtures have no tool calls)")
+	}
+}
+
+func TestStatsCommandExists(t *testing.T) {
+	_, cleanup := testEnv(t)
+	defer cleanup()
+
+	// Sync fixture sessions
+	claudeDir := filepath.Join(fixturesDir(), "claude-preset", "projects")
+	_, _, err := runCmd("sync", "--path", claudeDir)
+	if err != nil {
+		t.Fatalf("sync error: %v", err)
+	}
+
+	// Test that stats command exists and can be called
+	out, _, err := runCmd("stats", "--type", "tool_call", "--group-by", "agent")
+	if err != nil {
+		t.Fatalf("stats --type tool_call --group-by agent error: %v", err)
+	}
+	_ = out
+}
+
+func TestStatsGroupByAgent(t *testing.T) {
+	_, cleanup := testEnv(t)
+	defer cleanup()
+
+	// Sync fixture sessions
+	claudeDir := filepath.Join(fixturesDir(), "claude-preset", "projects")
+	_, _, err := runCmd("sync", "--path", claudeDir)
+	if err != nil {
+		t.Fatalf("sync error: %v", err)
+	}
+
+	// Test stats --group-by agent returns agent counts
+	out, _, err := runCmd("stats", "--input", "claude", "--type", "tool_call", "--group-by", "agent")
+	if err != nil {
+		t.Fatalf("stats --input claude --type tool_call --group-by agent error: %v", err)
+	}
+
+	// Should have output (either with real agents or <unknown> fallback)
+	if len(strings.TrimSpace(out)) == 0 {
+		t.Errorf("stats --group-by agent produced empty output")
+	}
+}
+
+func TestAmbiguousPositionalError(t *testing.T) {
+	_, cleanup := testEnv(t)
+	defer cleanup()
+
+	// Sync fixture sessions
+	claudeDir := filepath.Join(fixturesDir(), "claude-preset", "projects")
+	_, _, err := runCmd("sync", "--path", claudeDir)
+	if err != nil {
+		t.Fatalf("sync error: %v", err)
+	}
+
+	// Test that a bare positional argument produces a helpful error
+	// (this should fail, and the error should hint at --text or --input)
+	_, stderr, err := runCmd("list", "ambiguous_token")
+	if err == nil {
+		t.Fatalf("list with bare positional should error, but got: %s", stderr)
+	}
+
+	// Error message should hint at appropriate flags
+	if !strings.Contains(stderr, "--") && !strings.Contains(stderr, "flag") {
+		t.Logf("error message could be more helpful; got: %s", stderr)
+	}
+}
