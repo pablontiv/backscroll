@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"time"
 
 	"github.com/pablontiv/picokit/autoupdate"
 	"github.com/spf13/cobra"
@@ -22,11 +23,28 @@ func run(stdout, stderr io.Writer, args []string) error {
 	u := autoupdate.New("pablontiv/backscroll", "backscroll", "BACKSCROLL_AUTOUPDATE_DISABLE")
 	u.CurrentVersion = version
 	_ = u.ApplyStagedIfAvailable()
-	go u.FetchAndStage(version) //nolint:errcheck
+
+	staged := make(chan struct{})
+	go func() {
+		defer close(staged)
+		_ = u.FetchAndStage(version)
+	}()
 
 	rootCmd := buildRootCmd(stdout, stderr)
 	rootCmd.SetArgs(args)
-	return rootCmd.Execute()
+	err := rootCmd.Execute()
+
+	// Wait for staging to complete so short-lived commands don't kill the
+	// download before it finishes. Output is already on screen; process lingers
+	// silently for at most 10s on slow connections.
+	timer := time.NewTimer(10 * time.Second)
+	defer timer.Stop()
+	select {
+	case <-staged:
+	case <-timer.C:
+	}
+
+	return err
 }
 
 func buildRootCmd(stdout, stderr io.Writer) *cobra.Command {
