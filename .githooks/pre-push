@@ -107,7 +107,10 @@ install_backscroll_binary() {
   local tmp
   tmp="$(mktemp)"
 
-  if ! go build -o "$tmp" ./cmd/backscroll 2>&1; then
+  local ver
+  ver="$(git describe --tags --abbrev=0 2>/dev/null | sed 's/^v//')"
+  ver="${ver:-dev}"
+  if ! go build -ldflags "-X main.version=${ver}" -o "$tmp" ./cmd/backscroll 2>&1; then
     rm -f "$tmp"
     return 1
   fi
