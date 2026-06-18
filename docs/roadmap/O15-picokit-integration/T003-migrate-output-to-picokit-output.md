@@ -59,9 +59,9 @@ Este es el cambio más invasivo de O15. Riesgo principal: divergencia byte-for-b
 
 ## Criterios de Aceptación
 
-- `grep -rn "backscroll/internal/output" /home/shared/backscroll --include="*.go"` retorna vacío.
-- `grep -rn "pablontiv/picokit/output" /home/shared/backscroll --include="*.go"` retorna ≥1 import.
-- `ls /home/shared/backscroll/internal/output/` falla (directorio borrado).
+- `grep -rn "backscroll/internal/output" /home/shared/harness/backscroll --include="*.go"` retorna vacío.
+- `grep -rn "pablontiv/picokit/output" /home/shared/harness/backscroll --include="*.go"` retorna ≥1 import.
+- `ls /home/shared/harness/backscroll/internal/output/` falla (directorio borrado).
 - Los 7 tests nuevos pasan.
 - Golden outputs CLI byte-for-byte idénticos contra fixtures previos en `tests/fixtures/`.
 - `go build ./...` pasa.

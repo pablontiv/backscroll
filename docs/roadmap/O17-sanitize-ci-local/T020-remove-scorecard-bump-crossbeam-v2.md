@@ -48,5 +48,5 @@ Dependencia cross-repo: requiere `crossbeam@v2` tageado y publicado. No se usa `
 
 ## Fuente de verdad
 
-- `/home/shared/backscroll/.github/workflows/`
-- `/home/shared/backscroll/CLAUDE.md`
+- `/home/shared/harness/backscroll/.github/workflows/`
+- `/home/shared/harness/backscroll/CLAUDE.md`

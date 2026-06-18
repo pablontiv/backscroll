@@ -390,7 +390,7 @@ func TestParseAllMissingFile(t *testing.T) {
 
 func TestFixtureFiles(t *testing.T) {
 	// Test with actual fixture files if they exist
-	fixtureDir := "/home/shared/backscroll/tests/fixtures"
+	fixtureDir := "/home/shared/harness/backscroll/tests/fixtures"
 
 	// Test KE fixture
 	keFile := filepath.Join(fixtureDir, "ke-001.md")

@@ -15,7 +15,7 @@ tipo: task
 
 ## Contexto
 
-`/home/shared/backscroll/.claude/skills/backscroll/SKILL.md` documenta `backscroll search --source-path '*PATTERN*'` (sección 3.1 líneas 60-61 y comentario en sección 4 línea 85) como mecanismo para scopear la búsqueda a un archivo o UUID específico. Ese flag no existe en el binario actual:
+`/home/shared/harness/backscroll/.claude/skills/backscroll/SKILL.md` documenta `backscroll search --source-path '*PATTERN*'` (sección 3.1 líneas 60-61 y comentario en sección 4 línea 85) como mecanismo para scopear la búsqueda a un archivo o UUID específico. Ese flag no existe en el binario actual:
 
 ```
 $ backscroll search "git push" --source-path "*33b6199f*"
@@ -75,8 +75,8 @@ Resultado del gap: agentes que siguen la receta verbatim fallan con `unknown fla
 
 8. **Sincronización user-scope** — después de editar la fuente de verdad, re-sincronizar:
    - Si existe `scripts/install-user.sh` (o equivalente) en el repo de backscroll, ejecutarlo.
-   - Si no, `cp -f /home/shared/backscroll/.claude/skills/backscroll/SKILL.md /home/pones/.claude/skills/backscroll/SKILL.md`.
-   - Verificar: `diff -q /home/shared/backscroll/.claude/skills/backscroll/SKILL.md /home/pones/.claude/skills/backscroll/SKILL.md` no produce output.
+   - Si no, `cp -f /home/shared/harness/backscroll/.claude/skills/backscroll/SKILL.md /home/pones/.claude/skills/backscroll/SKILL.md`.
+   - Verificar: `diff -q /home/shared/harness/backscroll/.claude/skills/backscroll/SKILL.md /home/pones/.claude/skills/backscroll/SKILL.md` no produce output.
 
 **Out**:
 - Cualquier cambio al binario `backscroll` (vive en `cmd/backscroll/`, fuera de esta task).
@@ -85,21 +85,21 @@ Resultado del gap: agentes que siguen la receta verbatim fallan con `unknown fla
 
 ## Estado inicial esperado
 
-- `grep -n "search.*--source-path" /home/shared/backscroll/.claude/skills/backscroll/SKILL.md` encuentra al menos 2 matches (sección 3.1 y línea 85).
+- `grep -n "search.*--source-path" /home/shared/harness/backscroll/.claude/skills/backscroll/SKILL.md` encuentra al menos 2 matches (sección 3.1 y línea 85).
 - `backscroll events query --help` lista `--source-path` como flag válido.
 - `backscroll search --help` no lista `--source-path`.
 
 ## Criterios de Aceptación
 
-- AC1: `grep -nE "backscroll search.*--source-path" /home/shared/backscroll/.claude/skills/backscroll/SKILL.md` retorna exit 1 (sin matches — ningún `search` invoca `--source-path` después del cambio).
-- AC2: `grep -nE "backscroll events query.*--source-path" /home/shared/backscroll/.claude/skills/backscroll/SKILL.md` retorna al menos 2 matches (sección 3.1 + sección 4).
+- AC1: `grep -nE "backscroll search.*--source-path" /home/shared/harness/backscroll/.claude/skills/backscroll/SKILL.md` retorna exit 1 (sin matches — ningún `search` invoca `--source-path` después del cambio).
+- AC2: `grep -nE "backscroll events query.*--source-path" /home/shared/harness/backscroll/.claude/skills/backscroll/SKILL.md` retorna al menos 2 matches (sección 3.1 + sección 4).
 - AC3: El SKILL.md contiene una sección con el título "Drill into one session" (o equivalente español) con los 5 ejemplos canónicos del Alcance punto 4.
 - AC4: El SKILL.md contiene una sección con el título "Cuándo el fallback a Python sigue justificado" (o equivalente) que reconoce la limitación de `tool_use` no estructurado.
 - AC5: La sección de "Command validity" lista `events query` como subcomando que acepta `--robot`, `--json`, y aclara que `--source-path` no aplica a `search`.
 - AC6: Smoke test: `backscroll events query 33b6199f --source-path "*33b6199f*" --all-projects --robot --limit 5` ejecuta y retorna eventos (no "unknown flag"). Si la sesión `33b6199f` ya no está indexada localmente, usar un UUID conocido de `backscroll list --recent 1 --all-projects --robot`.
-- AC7: `diff -q /home/shared/backscroll/.claude/skills/backscroll/SKILL.md /home/pones/.claude/skills/backscroll/SKILL.md` no produce output (las dos copias quedan sincronizadas).
+- AC7: `diff -q /home/shared/harness/backscroll/.claude/skills/backscroll/SKILL.md /home/pones/.claude/skills/backscroll/SKILL.md` no produce output (las dos copias quedan sincronizadas).
 
 ## Fuente de verdad
 
-- `/home/shared/backscroll/.claude/skills/backscroll/SKILL.md` (fuente canónica del skill)
+- `/home/shared/harness/backscroll/.claude/skills/backscroll/SKILL.md` (fuente canónica del skill)
 - `/home/pones/.claude/skills/backscroll/SKILL.md` (espejo user-scope, se sincroniza desde la fuente)

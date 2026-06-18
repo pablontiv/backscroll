@@ -43,9 +43,9 @@ Callsites (4):
 
 ## Criterios de Aceptación
 
-- `grep -n "HashFile" /home/shared/backscroll/internal/sync/sync.go` retorna 0 matches.
-- `grep -rn "bsync.HashFile" /home/shared/backscroll --include="*.go"` retorna vacío.
-- `grep -rn "hashfile.HashFile" /home/shared/backscroll --include="*.go"` retorna ≥2 imports.
+- `grep -n "HashFile" /home/shared/harness/backscroll/internal/sync/sync.go` retorna 0 matches.
+- `grep -rn "bsync.HashFile" /home/shared/harness/backscroll --include="*.go"` retorna vacío.
+- `grep -rn "hashfile.HashFile" /home/shared/harness/backscroll --include="*.go"` retorna ≥2 imports.
 - `go test ./internal/readers/... -race -count=1` pasa sin tocar assertions.
 - `go build ./...` pasa.
 - `scripts/check-coverage.sh` pasa con threshold ≥85%.

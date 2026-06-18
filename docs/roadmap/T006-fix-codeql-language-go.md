@@ -21,9 +21,9 @@ tipo: task
 
 ## Criterios de Aceptación
 
-- `grep "language:" /home/shared/backscroll/.github/workflows/codeql.yml` returns `language: go`
-- `git -C /home/shared/backscroll log --oneline -1` shows a conventional commit
+- `grep "language:" /home/shared/harness/backscroll/.github/workflows/codeql.yml` returns `language: go`
+- `git -C /home/shared/harness/backscroll log --oneline -1` shows a conventional commit
 
 ## Fuente de verdad
 
-- /home/shared/backscroll/.github/workflows/codeql.yml
+- /home/shared/harness/backscroll/.github/workflows/codeql.yml

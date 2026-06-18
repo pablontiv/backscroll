@@ -34,7 +34,7 @@ Esta task cierra O03. Debe ejecutar validación técnica, install-script tests, 
 2. Ejecutar tests de install scripts Bash y, si está disponible, PowerShell/Pester.
 3. Ejecutar smoke con config dir temporal copiando `inputs/claude.inputs.toml`/`inputs/pi.inputs.toml`.
 4. Ejecutar greps anti-regresión para loader local y parsers legacy.
-5. Ejecutar `rootline validate --all docs/roadmap/`, `rootline graph docs/roadmap/ --check` y `roadmapctl check --repo /home/shared/backscroll --roadmap-root docs/roadmap --output json --strict`.
+5. Ejecutar `rootline validate --all docs/roadmap/`, `rootline graph docs/roadmap/ --check` y `roadmapctl check --repo /home/shared/harness/backscroll --roadmap-root docs/roadmap --output json --strict`.
 6. Documentar cualquier warning aceptable y por qué no bloquea.
 
 **Out**:

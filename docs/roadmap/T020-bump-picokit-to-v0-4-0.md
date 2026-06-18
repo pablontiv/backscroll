@@ -10,7 +10,7 @@ tipo: task
 
 ## Contexto
 
-`/home/shared/backscroll/go.mod` apunta a `github.com/pablontiv/picokit v0.2.0` mientras que picokit ya publicó v0.2.1, v0.3.0 y producirá v0.4.0 con O04.
+`/home/shared/harness/backscroll/go.mod` apunta a `github.com/pablontiv/picokit v0.2.0` mientras que picokit ya publicó v0.2.1, v0.3.0 y producirá v0.4.0 con O04.
 
 El call-site `cmd/backscroll/main.go:9991` actual pasa los tres args (`"pablontiv/backscroll", "backscroll", "BACKSCROLL_AUTOUPDATE_DISABLE"`); seguirá compilando contra v0.4.0 sin modificación.
 
@@ -21,7 +21,7 @@ El call-site `cmd/backscroll/main.go:9991` actual pasa los tres args (`"pablonti
 **In**:
 
 1. Coordinar con quien tenga O16 T004 In Progress: confirmar orden de merge.
-2. `cd /home/shared/backscroll && go get github.com/pablontiv/picokit@v0.4.0`.
+2. `cd /home/shared/harness/backscroll && go get github.com/pablontiv/picokit@v0.4.0`.
 3. `go mod tidy`.
 4. Correr suite local:
    - `just check`
@@ -48,6 +48,6 @@ El call-site `cmd/backscroll/main.go:9991` actual pasa los tres args (`"pablonti
 
 ## Fuente de verdad
 
-- `/home/shared/backscroll/go.mod`
-- `/home/shared/backscroll/go.sum`
+- `/home/shared/harness/backscroll/go.mod`
+- `/home/shared/harness/backscroll/go.sum`
 - Conversación con quien tiene O16 T004 In Progress

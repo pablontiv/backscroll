@@ -42,5 +42,5 @@ Fix: hacer el test self-contained — crear fixture inline (write tempfile JSONL
 
 ## Fuente de verdad
 
-- `/home/shared/backscroll/cmd/backscroll/resume_test.go` (probable ubicación; confirmar)
-- `/home/shared/backscroll/cmd/backscroll/resume.go`
+- `/home/shared/harness/backscroll/cmd/backscroll/resume_test.go` (probable ubicación; confirmar)
+- `/home/shared/harness/backscroll/cmd/backscroll/resume.go`

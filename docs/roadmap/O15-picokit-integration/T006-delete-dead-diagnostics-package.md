@@ -29,11 +29,11 @@ Mantener el paquete sería deuda silenciosa. picokit/diag ofrece la misma funcio
 ## Estado inicial esperado
 
 - `internal/diagnostics/` existe.
-- `grep -rn "backscroll/internal/diagnostics" /home/shared/backscroll --include="*.go"` retorna vacío.
+- `grep -rn "backscroll/internal/diagnostics" /home/shared/harness/backscroll --include="*.go"` retorna vacío.
 
 ## Criterios de Aceptación
 
-- `ls /home/shared/backscroll/internal/diagnostics/` falla (directorio borrado).
-- `grep -rn "backscroll/internal/diagnostics" /home/shared/backscroll --include="*.go"` sigue retornando vacío.
+- `ls /home/shared/harness/backscroll/internal/diagnostics/` falla (directorio borrado).
+- `grep -rn "backscroll/internal/diagnostics" /home/shared/harness/backscroll --include="*.go"` sigue retornando vacío.
 - `go build ./...` pasa.
 - `go test ./... -race -count=1` pasa.

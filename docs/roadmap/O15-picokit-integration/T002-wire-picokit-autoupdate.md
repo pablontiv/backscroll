@@ -53,7 +53,7 @@ Env disable convention: `BACKSCROLL_AUTOUPDATE_DISABLE` (consistente con `BACKSC
 
 ## Criterios de Aceptación
 
-- `grep -n "picokit/autoupdate" /home/shared/backscroll/cmd/backscroll/main.go` muestra el import.
+- `grep -n "picokit/autoupdate" /home/shared/harness/backscroll/cmd/backscroll/main.go` muestra el import.
 - Los 4 tests nuevos pasan.
 - `BACKSCROLL_AUTOUPDATE_DISABLE=1 ./backscroll --version` termina <100ms sin HTTP.
 - `go build ./...` pasa.

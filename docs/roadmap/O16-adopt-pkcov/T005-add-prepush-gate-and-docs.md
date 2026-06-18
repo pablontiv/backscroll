@@ -36,7 +36,7 @@ Después, actualizar README/CLAUDE.md (el que aplique) para referenciar `picokit
 
 **In**:
 
-1. Editar `/home/shared/backscroll/.githooks/pre-push` (o crear si no existe) agregando el bloque condicional sobre `*.go` que llama `just coverage-check`.
+1. Editar `/home/shared/harness/backscroll/.githooks/pre-push` (o crear si no existe) agregando el bloque condicional sobre `*.go` que llama `just coverage-check`.
 2. Verificar que git hooks están enlazados (`git config core.hooksPath`); si no, instruir en CLAUDE.md o README.
 3. Actualizar CLAUDE.md o README:
    - Sección de comandos: `just coverage` / `just coverage-check`
@@ -62,7 +62,7 @@ Después, actualizar README/CLAUDE.md (el que aplique) para referenciar `picokit
 
 ## Fuente de verdad
 
-- `/home/shared/backscroll/.githooks/pre-push`
-- `/home/shared/backscroll/README.md` o `CLAUDE.md`
+- `/home/shared/harness/backscroll/.githooks/pre-push`
+- `/home/shared/harness/backscroll/README.md` o `CLAUDE.md`
 - `/home/shared/rootline/.githooks/pre-push` — patrón a imitar
 - `/home/shared/picokit/docs/coverage-spec.md` — spec referenciada

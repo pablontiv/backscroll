@@ -44,4 +44,4 @@ Estrategia: ejecutar `go test ./internal/storage/ -coverprofile=/tmp/storage.out
 
 ## Fuente de verdad
 
-- `/home/shared/backscroll/internal/storage/` — paquete target
+- `/home/shared/harness/backscroll/internal/storage/` — paquete target

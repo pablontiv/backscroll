@@ -1,4 +1,4 @@
-I did not write `/home/shared/backscroll/research/pi-memory-tradeoffs.md` because the task also said “Do not edit files,” and the higher-priority runtime instruction says no-edit wins. Findings:
+I did not write `/home/shared/harness/backscroll/research/pi-memory-tradeoffs.md` because the task also said “Do not edit files,” and the higher-priority runtime instruction says no-edit wins. Findings:
 
 # Research: Backscroll vs Pi memory
 

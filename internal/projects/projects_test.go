@@ -13,8 +13,8 @@ func makeRegistry() projects.ProjectRegistry {
 		Projects: []projects.ProjectConfig{
 			{
 				ID:               "backscroll",
-				Roots:            []string{"/home/shared/backscroll"},
-				WorktreePatterns: []string{"/home/shared/backscroll/.worktrees/*"},
+				Roots:            []string{"/home/shared/harness/backscroll"},
+				WorktreePatterns: []string{"/home/shared/harness/backscroll/.worktrees/*"},
 				Aliases:          []string{"bs"},
 			},
 		},
@@ -23,7 +23,7 @@ func makeRegistry() projects.ProjectRegistry {
 
 func TestIdentifyExactRoot(t *testing.T) {
 	reg := makeRegistry()
-	id := projects.Identify("/home/shared/backscroll", reg)
+	id := projects.Identify("/home/shared/harness/backscroll", reg)
 	if id.ProjectID != "backscroll" {
 		t.Errorf("expected backscroll, got %s", id.ProjectID)
 	}
@@ -34,7 +34,7 @@ func TestIdentifyExactRoot(t *testing.T) {
 
 func TestIdentifySubpath(t *testing.T) {
 	reg := makeRegistry()
-	id := projects.Identify("/home/shared/backscroll/internal/config", reg)
+	id := projects.Identify("/home/shared/harness/backscroll/internal/config", reg)
 	if id.ProjectID != "backscroll" {
 		t.Errorf("expected backscroll, got %s", id.ProjectID)
 	}
@@ -50,7 +50,7 @@ func TestIdentifyWorktreePattern(t *testing.T) {
 		Projects: []projects.ProjectConfig{
 			{
 				ID:               "backscroll",
-				Roots:            []string{"/home/shared/backscroll"},
+				Roots:            []string{"/home/shared/harness/backscroll"},
 				WorktreePatterns: []string{"/tmp/backscroll-worktree-*"},
 			},
 		},

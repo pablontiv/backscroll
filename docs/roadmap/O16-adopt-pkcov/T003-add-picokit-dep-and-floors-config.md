@@ -25,7 +25,7 @@ Dependencia cross-repo: picokit `O03-coverage-tooling` debe estar Completed con 
 **In**:
 
 1. `go.mod`: agregar `github.com/pablontiv/picokit` en la versión que incluye `coverage`/`pkcov`. `go mod tidy`.
-2. Crear `/home/shared/backscroll/.coverage-floors.toml`:
+2. Crear `/home/shared/harness/backscroll/.coverage-floors.toml`:
    ```toml
    default = 85
    packages = [
@@ -54,6 +54,6 @@ Dependencia cross-repo: picokit `O03-coverage-tooling` debe estar Completed con 
 
 ## Fuente de verdad
 
-- `/home/shared/backscroll/go.mod`
-- `/home/shared/backscroll/.coverage-floors.toml` (nuevo)
+- `/home/shared/harness/backscroll/go.mod`
+- `/home/shared/harness/backscroll/.coverage-floors.toml` (nuevo)
 - `/home/shared/picokit/coverage/` (consumido)

@@ -49,7 +49,7 @@ tipo: task
 
 ## Criterios de Aceptación
 
-- `grep -n "pathsec.ResolveInside" /home/shared/backscroll/internal/input_config/discover.go` retorna ≥1 match.
+- `grep -n "pathsec.ResolveInside" /home/shared/harness/backscroll/internal/input_config/discover.go` retorna ≥1 match.
 - Los 4 tests nuevos pasan.
 - `go build ./...` pasa.
 - `go test ./internal/input_config/... -race -count=1` pasa.

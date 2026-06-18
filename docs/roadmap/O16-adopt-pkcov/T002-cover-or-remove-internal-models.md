@@ -49,5 +49,5 @@ Esta task evalúa cuál camino aplica y ejecuta el elegido.
 
 ## Fuente de verdad
 
-- `/home/shared/backscroll/internal/models/`
-- `/home/shared/backscroll/` — buscar callers
+- `/home/shared/harness/backscroll/internal/models/`
+- `/home/shared/harness/backscroll/` — buscar callers

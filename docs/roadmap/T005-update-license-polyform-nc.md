@@ -18,12 +18,12 @@ tipo: task
 
 ## Criterios de Aceptación
 
-- `/home/shared/backscroll/LICENSE` contains "PolyForm Noncommercial License 1.0.0"
+- `/home/shared/harness/backscroll/LICENSE` contains "PolyForm Noncommercial License 1.0.0"
 - README license badge links to PolyForm NC
-- `git -C /home/shared/backscroll log --oneline -1` shows a conventional commit
+- `git -C /home/shared/harness/backscroll log --oneline -1` shows a conventional commit
 
 ## Fuente de verdad
 
-- /home/shared/backscroll/LICENSE
-- /home/shared/backscroll/README.md
+- /home/shared/harness/backscroll/LICENSE
+- /home/shared/harness/backscroll/README.md
 - /home/shared/rootline/LICENSE (reference for PolyForm NC text)

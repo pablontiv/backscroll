@@ -1,4 +1,4 @@
-I did not write `/home/shared/backscroll/research-external.md` because the task also said “Do not edit files.” Below is the content to place there.
+I did not write `/home/shared/harness/backscroll/research-external.md` because the task also said “Do not edit files.” Below is the content to place there.
 
 ```md
 # Research: Declarative ingestion transforms for agent/CLI-agnostic Backscroll

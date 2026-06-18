@@ -16,7 +16,7 @@ tipo: task
 
 ## Contexto
 
-`/home/shared/backscroll/scripts/check-coverage.sh` (17 líneas bash) valida sólo el total. Con T001-T003 completos, el repo está listo para adoptar pkcov que agrega per-package floors gratis (mismo total, granularidad mayor).
+`/home/shared/harness/backscroll/scripts/check-coverage.sh` (17 líneas bash) valida sólo el total. Con T001-T003 completos, el repo está listo para adoptar pkcov que agrega per-package floors gratis (mismo total, granularidad mayor).
 
 Justfile actual: revisar si existe `coverage`/`coverage-check` recipes. Si no, crear siguiendo el patrón rootline. Si sí, actualizar para invocar pkcov.
 
@@ -50,7 +50,7 @@ Justfile actual: revisar si existe `coverage`/`coverage-check` recipes. Si no, c
 
 ## Fuente de verdad
 
-- `/home/shared/backscroll/Justfile`
-- `/home/shared/backscroll/scripts/check-coverage.sh` (a borrar)
-- `/home/shared/backscroll/.github/workflows/ci.yml`
+- `/home/shared/harness/backscroll/Justfile`
+- `/home/shared/harness/backscroll/scripts/check-coverage.sh` (a borrar)
+- `/home/shared/harness/backscroll/.github/workflows/ci.yml`
 - `/home/shared/rootline/Justfile` — patrón a imitar

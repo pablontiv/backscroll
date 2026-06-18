@@ -17,9 +17,9 @@ tipo: task
 
 ## Criterios de Aceptación
 
-- `grep "> \*\*Status\*\*" /home/shared/backscroll/README.md` returns empty
-- `git -C /home/shared/backscroll log --oneline -1` shows a conventional commit
+- `grep "> \*\*Status\*\*" /home/shared/harness/backscroll/README.md` returns empty
+- `git -C /home/shared/harness/backscroll log --oneline -1` shows a conventional commit
 
 ## Fuente de verdad
 
-- /home/shared/backscroll/README.md
+- /home/shared/harness/backscroll/README.md
