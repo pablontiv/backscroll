@@ -160,11 +160,13 @@ func extractRawContent(record map[string]any, cfg ContentConfig) string {
 	return result
 }
 
-// ParseDeclarative parses a JSONL file using the declarative pipeline from InputDefinition.
+// ParseDeclarativeWithCwd parses a JSONL file using the declarative pipeline from InputDefinition.
 // It applies record predicates, extracts fields via MapConfig selectors,
-// extracts content via ContentConfig, applies TextConfig transforms, and normalizes roles.
-func ParseDeclarative(path string, def InputDefinition) ([]models.Message, error) {
+// extracts content via ContentConfig, applies TextConfig transforms, normalizes roles,
+// and extracts the cwd from the first non-empty project selector value.
+func ParseDeclarativeWithCwd(path string, def InputDefinition) ([]models.Message, string, error) {
 	var results []models.Message
+	var cwd string
 	err := internalsync.IterateJSONLFile(path, func(_ int, line []byte) error {
 		var record map[string]any
 		if err := json.Unmarshal(line, &record); err != nil {
@@ -200,6 +202,14 @@ func ParseDeclarative(path string, def InputDefinition) ([]models.Message, error
 			ts = time.Now()
 		}
 
+		// Extract cwd from first non-empty project selector
+		if cwd == "" && def.Map.Project != "" {
+			projectValue, _ := SelectString(record, def.Map.Project)
+			if projectValue != "" {
+				cwd = projectValue
+			}
+		}
+
 		content := extractRawContent(record, def.Content)
 		content, err = ApplyTransforms(def.Text, content)
 		if errors.Is(err, ErrDropped) {
@@ -220,6 +230,14 @@ func ParseDeclarative(path string, def InputDefinition) ([]models.Message, error
 		})
 		return nil
 	})
+	return results, cwd, err
+}
+
+// ParseDeclarative parses a JSONL file using the declarative pipeline from InputDefinition.
+// It applies record predicates, extracts fields via MapConfig selectors,
+// extracts content via ContentConfig, applies TextConfig transforms, and normalizes roles.
+func ParseDeclarative(path string, def InputDefinition) ([]models.Message, error) {
+	results, _, err := ParseDeclarativeWithCwd(path, def)
 	return results, err
 }
 

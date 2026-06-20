@@ -80,7 +80,12 @@ func maybeAutoSync(cfg *config.Config) error {
 				continue
 			}
 
-			ident := projects.Identify(ref, registry)
+			// Use session cwd for project identification; fall back to file path if cwd is empty
+			identPath := pf.Cwd
+			if identPath == "" {
+				identPath = ref
+			}
+			ident := projects.Identify(identPath, registry)
 
 			var sessionText string
 			var indexedMsgs []storage.IndexedMessage

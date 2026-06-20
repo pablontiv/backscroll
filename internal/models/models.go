@@ -25,6 +25,7 @@ type ParsedFile struct {
 	Path    string
 	Hash    string // SHA-256 hex
 	Records []Message
+	Cwd     string // working directory, used for project identification
 }
 
 // Message represents a message in a session.

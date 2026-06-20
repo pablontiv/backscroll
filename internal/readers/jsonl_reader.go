@@ -32,8 +32,9 @@ func (r *JsonlReader) Parse(path string, def input_config.InputDefinition) (mode
 	}
 
 	var msgs []models.Message
+	var cwd string
 	if def.Map.Role != "" {
-		msgs, err = input_config.ParseDeclarative(path, def)
+		msgs, cwd, err = input_config.ParseDeclarativeWithCwd(path, def)
 	} else {
 		msgs, err = sync.ParseSessions(path)
 	}
@@ -45,5 +46,6 @@ func (r *JsonlReader) Parse(path string, def input_config.InputDefinition) (mode
 		Path:    path,
 		Hash:    hash,
 		Records: msgs,
+		Cwd:     cwd,
 	}, nil
 }

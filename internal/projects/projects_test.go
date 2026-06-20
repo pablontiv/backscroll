@@ -247,3 +247,44 @@ func TestLoadGlobalRegistryInvalidTOML(t *testing.T) {
 		t.Errorf("expected empty registry for invalid TOML, got %+v", reg.Projects)
 	}
 }
+
+// TestIdentifySessionCwdUnderRoot verifies AC#3: session whose cwd falls under
+// a root in projects.toml is indexed with Project = that id, NOT unknown.
+func TestIdentifySessionCwdUnderRoot(t *testing.T) {
+	home := t.TempDir()
+	cfgDir := filepath.Join(home, ".config", "backscroll")
+	if err := os.MkdirAll(cfgDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	// Create projects.toml with a known root
+	content := `
+[[projects]]
+id = "myproject"
+roots = ["/tmp/myproject"]
+`
+	if err := os.WriteFile(filepath.Join(cfgDir, "projects.toml"), []byte(content), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("HOME", home)
+
+	// Load the registry (should contain myproject)
+	reg := projects.LoadGlobalRegistry()
+	if len(reg.Projects) == 0 {
+		t.Fatal("expected projects in registry")
+	}
+
+	// Create a cwd under the root
+	cwd := "/tmp/myproject/subdir/deeper"
+
+	// Identify the cwd using the registry
+	id := projects.Identify(cwd, reg)
+
+	// Verify it is identified as "myproject", not "unknown"
+	if id.ProjectID != "myproject" {
+		t.Errorf("expected myproject, got %s", id.ProjectID)
+	}
+	if id.Confidence != projects.ConfidenceExact {
+		t.Errorf("expected exact confidence, got %s", id.Confidence)
+	}
+}
