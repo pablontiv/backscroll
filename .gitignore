@@ -1,6 +1,8 @@
 # Build artifacts
 /backscroll
 /dist/
+# Rust v0 build output (frozen impl lives in v0 branch)
+/target/
 
 # Runtime databases
 *.db
