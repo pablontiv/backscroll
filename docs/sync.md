@@ -137,7 +137,7 @@ Discovery roots may be files or directories. `~` is expanded to the user's home 
 Missing discovery roots are skipped. This lets the shipped Claude, Pi, and OpenCode presets all be active even when only some tools are installed on a machine.
 ## Session File Format
 
-Claude and Pi presets both decode JSONL files. Each decoded record is filtered and mapped by the installed manifest, not by hardcoded provider-specific CLI flags. The shipped Claude preset keeps `user` and `assistant` records and removes Claude noise tags. The shipped Pi preset discovers active and archived Pi session roots, maps project from the session metadata `cwd`, and keeps message records whose role is `user` or `assistant` and text content blocks. The OpenCode preset instead reads from OpenCode's SQLite database (`decode.format = "opencode"`, root: `~/.local/share/opencode/opencode.db`) rather than JSONL.
+Claude and Pi presets both decode JSONL files. Each decoded record is filtered and mapped by the installed manifest, not by hardcoded provider-specific CLI flags. The shipped Claude preset keeps `user` and `assistant` records and removes Claude noise tags; messages are bucketed by project according to the `cwd` field in session metadata. The shipped Pi preset discovers active and archived Pi session roots, maps project from the session metadata `cwd`, and keeps message records whose role is `user` or `assistant` and text content blocks. The OpenCode preset instead reads from OpenCode's SQLite database (`decode.format = "opencode"`, root: `~/.local/share/opencode/opencode.db`) rather than JSONL.
 
 ## Noise Filtering
 

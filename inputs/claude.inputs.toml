@@ -32,6 +32,7 @@ role = "$.message.role"
 uuid = "$.uuid"
 timestamp = "$.timestamp"
 session_id = "$.sessionId"
+project = "$.cwd"
 
 [inputs.content]
 selector = "$.message.content"
