@@ -11,6 +11,7 @@
 
 # Test artifacts
 session_test.json
+coverage.out
 
 # Skill eval workspace (local artifacts)
 .claude/skills/backscroll-workspace/iteration-*/
