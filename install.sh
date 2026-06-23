@@ -83,10 +83,9 @@ get_config_dir() {
         return
     fi
 
-    case "$(uname -s)" in
-        Darwin) echo "${HOME}/Library/Application Support" ;;
-        *) echo "${XDG_CONFIG_HOME:-${HOME}/.config}" ;;
-    esac
+    # Match the binary: config/projects/inputs all live under ~/.config/backscroll
+    # on every OS (the binary hardcodes ~/.config; macOS Application Support would split it).
+    echo "${XDG_CONFIG_HOME:-${HOME}/.config}"
 }
 
 get_local_inputs_dir() {

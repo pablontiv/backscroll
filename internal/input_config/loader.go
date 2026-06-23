@@ -9,15 +9,17 @@ import (
 )
 
 // InputsDir returns the canonical directory for *.inputs.toml files.
-// Respects BACKSCROLL_CONFIG_DIR if set; otherwise uses os.UserConfigDir().
+// Respects BACKSCROLL_CONFIG_DIR if set; otherwise uses ~/.config, matching
+// the config.toml and projects.toml resolution (which hardcode ~/.config/backscroll)
+// so all backscroll config lives under one directory on every OS.
 func InputsDir() (string, error) {
 	base := os.Getenv("BACKSCROLL_CONFIG_DIR")
 	if base == "" {
-		cfgDir, err := os.UserConfigDir()
+		home, err := os.UserHomeDir()
 		if err != nil {
-			return "", fmt.Errorf("resolve config dir: %w", err)
+			return "", fmt.Errorf("resolve home dir: %w", err)
 		}
-		base = cfgDir
+		base = filepath.Join(home, ".config")
 	}
 	return filepath.Join(base, "backscroll", "inputs"), nil
 }
