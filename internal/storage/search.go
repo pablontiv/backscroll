@@ -367,7 +367,7 @@ func paginate(rs []SearchResult, limit, offset int) []SearchResult {
 		offset = 0
 	}
 	if offset >= len(rs) {
-		return nil
+		return []SearchResult{}
 	}
 	end := offset + limit
 	if end > len(rs) {
