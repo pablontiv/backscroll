@@ -3880,3 +3880,41 @@ func TestToolSearchRanksExactPathFirst(t *testing.T) {
 		t.Errorf("want sync.go ranked first, got %q", results[0].Text)
 	}
 }
+
+func TestSearchEverythingReturnsBothProseAndTool(t *testing.T) {
+	dbPath := filepath.Join(t.TempDir(), "merge.db")
+	db, err := Open(dbPath)
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	defer func() { _ = db.Close() }()
+	if err := db.SetupSchema(); err != nil {
+		t.Fatalf("setup: %v", err)
+	}
+	_, _ = db.db.Exec(`INSERT INTO indexed_files(path, hash) VALUES ('p1','h1')`)
+	_, err = db.db.Exec(`
+		INSERT INTO search_items (source, source_path, ordinal, role, text, content_type)
+		VALUES ('session','p1',0,'user','retry backoff strategy discussion','text'),
+		       ('session','p1',1,'assistant','ran retry-backoff.sh and saw retry','tool')`)
+	if err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+
+	results, err := db.Search("retry", models.SearchOptions{Limit: 10})
+	if err != nil {
+		t.Fatalf("search: %v", err)
+	}
+
+	var sawText, sawTool bool
+	for _, r := range results {
+		if r.ContentType == "text" {
+			sawText = true
+		}
+		if r.ContentType == "tool" {
+			sawTool = true
+		}
+	}
+	if !sawText || !sawTool {
+		t.Errorf("want both prose and tool hits; sawText=%v sawTool=%v (got %d results)", sawText, sawTool, len(results))
+	}
+}
