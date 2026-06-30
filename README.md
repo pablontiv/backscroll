@@ -234,7 +234,7 @@ All output is deterministic and machine-parseable. The default format uses tab-s
 Backscroll separates application configuration from input configuration.
 
 - **Application config** (`backscroll.toml`) controls database and embedding settings. By default, Backscroll creates an index at `~/.backscroll.db`.
-- **Input config** (`*.inputs.toml`) controls what files are ingested via `backscroll search`, `backscroll list`, and `backscroll stats`. The canonical runtime location is `<config_dir>/backscroll/inputs/*.inputs.toml`, where `<config_dir>` is the OS config directory or `BACKSCROLL_CONFIG_DIR` when set.
+- **Input config** (`*.inputs.toml`) controls what files are ingested via `backscroll search` and `backscroll list`. The canonical runtime location is `<config_dir>/backscroll/inputs/*.inputs.toml`, where `<config_dir>` is the OS config directory or `BACKSCROLL_CONFIG_DIR` when set.
 
 Override app settings by creating `~/.config/backscroll/config.toml` or `backscroll.toml` in the current directory:
 
