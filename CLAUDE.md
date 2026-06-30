@@ -64,7 +64,7 @@ internal/
 └── storage/           — SQLite adapter (FTS5, BM25, WAL mode, migrations, search_items, session_tags)
 ```
 
-Nine v2 CLI commands: `list [--input <id>] [--project] [--all-projects] [--order timestamp:desc|asc] [--type <event_type>] [--tool <name>] [--after] [--before] [--limit] [--offset] [--json]`, `search [--text <query>] [--input <id>] [--project] [--all-projects] [--after] [--before] [--limit] [--offset] [--indexed-only] [--json]`, `read --path <path> [--tail <n>] [--semantic] [--pretty]`, `stats [--input <id>] [--type <event_type>] [--tool <name>] [--group-by agent|tool|type|project] [--all-projects] [--json]`, `status`, `validate [--indexed-only]`, `rebuild`, `purge --before <date>`, `config [--json]`.
+Nine v2 CLI commands: `list [--project] [--all-projects] [--order timestamp:desc|asc] [--type <event_type>] [--tool <name>] [--after] [--before] [--limit] [--offset] [--json]`, `search [--text <query>] [--project] [--all-projects] [--after] [--before] [--limit] [--offset] [--indexed-only] [--json]`, `read --path <path> [--tail <n>] [--semantic] [--pretty]`, `stats [--input <id>] [--type <event_type>] [--tool <name>] [--group-by agent|tool|type|project] [--all-projects] [--json]`, `status`, `validate [--indexed-only]`, `rebuild`, `purge --before <date>`, `config [--json]`.
 
 The `SearchEngine` interface is the port; `internal/storage` is the adapter. Database opened lazily. `OpenReadOnly()` provides read-only access for external consumers.
 

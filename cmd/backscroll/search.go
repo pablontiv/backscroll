@@ -35,7 +35,6 @@ func newSearchCmd(stdout, stderr io.Writer) *cobra.Command {
 		lexicalOnly         bool
 		similarityThreshold float64
 		text                string
-		input               string
 		indexedOnly         bool
 	)
 
@@ -48,7 +47,6 @@ across all indexed sessions, plans, and external sources.
 Use --text <query> (v2 preferred) or positional <query> (legacy) for search text.
 Use --project to filter to a single project (default: auto-detect from cwd).
 Use --all-projects to search across all projects.
-Use --input to filter by configured input ID (v2 grammar).
 Use --source to filter by source type (session, plan, ke, decision, memory, rule, spec, backlog).
 Use --after/--before to filter by date (YYYY-MM-DD format).
 Use --role to filter by message role (user, assistant).
@@ -71,7 +69,7 @@ Use --indexed-only to skip auto-sync (read existing index only).`,
 			return runSearch(stdout, stderr, query,
 				project, allProjects, jsonFormat, robotFormat,
 				source, sourcePath, after, before, role, limit, offset, contentType, tag,
-				fields, maxTokens, lexicalOnly, similarityThreshold, input, indexedOnly)
+				fields, maxTokens, lexicalOnly, similarityThreshold, indexedOnly)
 		},
 	}
 
@@ -93,7 +91,6 @@ Use --indexed-only to skip auto-sync (read existing index only).`,
 	cmd.Flags().BoolVar(&lexicalOnly, "lexical-only", false, "Use BM25 only, skip vector search")
 	cmd.Flags().Float64Var(&similarityThreshold, "similarity-threshold", 0.3, "Minimum cosine similarity for vector results (0=no threshold)")
 	cmd.Flags().StringVar(&text, "text", "", "Search text (v2 preferred grammar)")
-	cmd.Flags().StringVar(&input, "input", "", "Filter by input ID (v2 grammar)")
 	cmd.Flags().BoolVar(&indexedOnly, "indexed-only", false, "Read existing index without auto-sync")
 
 	return cmd
@@ -105,7 +102,7 @@ func runSearch(stdout, stderr io.Writer,
 	source, sourcePath, after, before, role string,
 	limit, offset int, contentType, tag string,
 	fields string, maxTokens int,
-	lexicalOnly bool, similarityThreshold float64, input string, indexedOnly bool) error {
+	lexicalOnly bool, similarityThreshold float64, indexedOnly bool) error {
 
 	// Validate flag values before opening the database
 	if fields != "minimal" && fields != "full" {
@@ -149,11 +146,6 @@ func runSearch(stdout, stderr io.Writer,
 			return fmt.Errorf("parse --before date: %w", err)
 		}
 		beforeTime = &t
-	}
-
-	// Map v2 --input flag to --source internally
-	if input != "" && source == "" {
-		source = input
 	}
 
 	// Build search options

@@ -1183,27 +1183,6 @@ func TestStatusJSONIndexUsable(t *testing.T) {
 	}
 }
 
-// TestDecisionsAutoSync verifies decisions query picks up newly added decision
-// sources without a prior manual sync (v0 parity).
-func TestListWithInputFilter(t *testing.T) {
-	_, cleanup := testEnv(t)
-	defer cleanup()
-
-	// Sync fixture sessions with pi input
-	piDir := filepath.Dir(filepath.Join(fixturesDir(), "pi-session.jsonl"))
-	_, _, err := syncForTest(t, "sync", "--path", piDir)
-	if err != nil {
-		t.Fatalf("sync error: %v", err)
-	}
-
-	// Test --input flag exists and accepts a value
-	out, _, err := runCmd("list", "--input", "pi")
-	if err != nil {
-		t.Fatalf("list --input pi error: %v", err)
-	}
-	_ = out
-}
-
 func TestListWithOrderFlag(t *testing.T) {
 	_, cleanup := testEnv(t)
 	defer cleanup()
@@ -1226,34 +1205,6 @@ func TestListWithOrderFlag(t *testing.T) {
 	}
 }
 
-func TestListNewestItemInputProjectOrder(t *testing.T) {
-	_, cleanup := testEnv(t)
-	defer cleanup()
-
-	// Sync fixture sessions
-	piDir := filepath.Dir(filepath.Join(fixturesDir(), "pi-session.jsonl"))
-	_, _, err := syncForTest(t, "sync", "--path", piDir)
-	if err != nil {
-		t.Fatalf("sync error: %v", err)
-	}
-
-	// Test list --input pi --order timestamp:desc --limit 1 returns exactly 1 newest item
-	out, _, err := runCmd("list", "--input", "pi", "--order", "timestamp:desc", "--limit", "1")
-	if err != nil {
-		t.Fatalf("list --input pi --order timestamp:desc --limit 1 error: %v", err)
-	}
-
-	// Output should not be empty
-	if len(strings.TrimSpace(out)) == 0 {
-		t.Errorf("list --input pi --order timestamp:desc --limit 1 produced empty output")
-	}
-
-	// Output should contain path information (parsing depends on format)
-	if !strings.Contains(out, "/") && !strings.Contains(out, "\\") {
-		t.Logf("list output (may be empty for test fixtures): %s", out)
-	}
-}
-
 func TestSearchWithTextFlag(t *testing.T) {
 	_, cleanup := testEnv(t)
 	defer cleanup()
@@ -1269,25 +1220,6 @@ func TestSearchWithTextFlag(t *testing.T) {
 	out, _, err := runCmd("search", "--text", "pi")
 	if err != nil {
 		t.Fatalf("search --text pi error: %v", err)
-	}
-	_ = out
-}
-
-func TestSearchWithInputFilter(t *testing.T) {
-	_, cleanup := testEnv(t)
-	defer cleanup()
-
-	// Sync fixture sessions
-	piDir := filepath.Dir(filepath.Join(fixturesDir(), "pi-session.jsonl"))
-	_, _, err := syncForTest(t, "sync", "--path", piDir)
-	if err != nil {
-		t.Fatalf("sync error: %v", err)
-	}
-
-	// Test --input flag exists and accepts a value (maps to --source internally)
-	out, _, err := runCmd("search", "--text", "test", "--input", "pi")
-	if err != nil {
-		t.Fatalf("search --text test --input pi error: %v", err)
 	}
 	_ = out
 }
@@ -1315,10 +1247,10 @@ func TestListWithInputFilterReturnsData(t *testing.T) {
 		return
 	}
 
-	// Try list with --input filter (should work even if it filters differently)
-	out2, _, err := runCmd("list", "--input", "session", "--limit", "10")
+	// Try list with a limit (verifies --limit still works after session sync)
+	out2, _, err := runCmd("list", "--limit", "10")
 	if err != nil {
-		t.Fatalf("list --input session error: %v", err)
+		t.Fatalf("list --limit 10 error: %v", err)
 	}
 	_ = out2
 }
@@ -1336,8 +1268,8 @@ func TestListWithTypeToolFilterNoPathResolution(t *testing.T) {
 		t.Fatalf("sync error: %v", err)
 	}
 
-	// Test list --input claude --type tool_call --tool bash (should not try to resolve bash as a path)
-	out, _, err := runCmd("list", "--input", "claude", "--type", "tool_call", "--tool", "bash", "--limit", "10")
+	// Test list --type tool_call --tool bash (should not try to resolve bash as a path)
+	out, _, err := runCmd("list", "--type", "tool_call", "--tool", "bash", "--limit", "10")
 	if err != nil {
 		t.Fatalf("list --input claude --type tool_call --tool bash error: %v", err)
 	}

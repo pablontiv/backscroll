@@ -19,7 +19,6 @@ func newListCmd(stdout, stderr io.Writer) *cobra.Command {
 		jsonFormat  bool
 		robotFormat bool
 		indexedOnly bool
-		input       string
 		order       string
 		limit       int
 		offset      int
@@ -35,7 +34,6 @@ func newListCmd(stdout, stderr io.Writer) *cobra.Command {
 
 Use --project to filter to a single project.
 Use --all-projects to list across all projects.
-Use --input to filter by configured input ID (v2 grammar).
 Use --order to sort results (e.g., timestamp:desc).
 Use --limit to restrict result count.
 Use --offset to skip results.
@@ -47,10 +45,10 @@ Use --indexed-only to skip auto-sync (read existing index only).
 Use --json to output as JSON.`,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			if len(args) > 0 {
-				return fmt.Errorf("unexpected positional argument %q; use --text for text search or --input for input filtering", args[0])
+				return fmt.Errorf("unexpected positional argument %q; use --text for text search", args[0])
 			}
 			return runList(stdout, stderr, project, allProjects, recent, jsonFormat, robotFormat, indexedOnly,
-				input, order, limit, offset, eventType, toolName, command)
+				order, limit, offset, eventType, toolName, command)
 		},
 	}
 
@@ -60,7 +58,6 @@ Use --json to output as JSON.`,
 	cmd.Flags().BoolVar(&indexedOnly, "indexed-only", false, "Read existing index without auto-sync")
 	cmd.Flags().BoolVar(&jsonFormat, "json", false, "Output as JSON")
 	cmd.Flags().BoolVar(&robotFormat, "robot", false, "Output in robot format")
-	cmd.Flags().StringVar(&input, "input", "", "Filter by input ID (v2 grammar)")
 	cmd.Flags().StringVar(&order, "order", "", "Sort results (e.g., timestamp:desc)")
 	cmd.Flags().IntVar(&limit, "limit", 0, "Result limit (0 = no limit)")
 	cmd.Flags().IntVar(&offset, "offset", 0, "Result offset")
@@ -73,7 +70,7 @@ Use --json to output as JSON.`,
 
 func runList(stdout, stderr io.Writer,
 	project string, allProjects bool, recent int, jsonFormat, robotFormat, indexedOnly bool,
-	input, order string, limit, offset int, eventType, toolName, command string) error {
+	order string, limit, offset int, eventType, toolName, command string) error {
 
 	cfg, err := config.Load()
 	if err != nil {
@@ -108,7 +105,6 @@ func runList(stdout, stderr io.Writer,
 		opts := storage.ListOptions{
 			Project:     project,
 			AllProjects: allProjects,
-			Input:       input,
 			Order:       order,
 			Limit:       limit,
 			Offset:      offset,
@@ -126,11 +122,10 @@ func runList(stdout, stderr io.Writer,
 	// If v2 grammar flags are provided (input, order, limit, offset), use ListItemsV2
 	// Otherwise fall back to legacy ListSessions for backward compat
 	var sessions []storage.SessionEntry
-	if input != "" || order != "" || limit > 0 || offset > 0 {
+	if order != "" || limit > 0 || offset > 0 {
 		opts := storage.ListOptions{
 			Project:     project,
 			AllProjects: allProjects,
-			Input:       input,
 			Order:       order,
 			Limit:       limit,
 			Offset:      offset,
