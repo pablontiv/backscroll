@@ -61,7 +61,7 @@ internal/
 ├── projects/          — project identity registry: LoadGlobalRegistry(), Identify(), LoadLocalHint()
 ├── reader/            — direct reading and filtering of individual session files
 ├── readers/           — SessionReader interface, Registry, ClaudeReader (text+tool_use+tool_result), PiReader (text+toolCall+custom results), OpenCodeReader (text+tool state.input+state.output); toolfmt serializer
-└── storage/           — SQLite adapter (FTS5, BM25, WAL mode, migrations, search_items, session_tags)
+└── storage/           — SQLite adapter (dual FTS5 indexes: tool_fts + messages_fts, BM25, WAL mode, migrations, search_items, session_tags)
 ```
 
 Nine v2 CLI commands: `list [--project] [--all-projects] [--order timestamp:desc|asc] [--type <event_type>] [--tool <name>] [--after] [--before] [--limit] [--offset] [--json]`, `search [--text <query>] [--project] [--all-projects] [--after] [--before] [--limit] [--offset] [--indexed-only] [--json]`, `read --path <path> [--tail <n>] [--semantic] [--pretty]`, `stats [--input <id>] [--type <event_type>] [--tool <name>] [--group-by agent|tool|type|project] [--all-projects] [--json]`, `status`, `validate [--indexed-only]`, `rebuild`, `purge --before <date>`, `config [--json]`.
@@ -96,6 +96,7 @@ Configurable in `[sources]` section of `backscroll.toml`. Source types: `ke`, `d
 - **Multi-path config**: `SessionDirs []string` with backward-compatible `session_dir` alias and auto-discovery of `~/.claude/projects/`.
 - **Auto-tagging**: Regex heuristics in `internal/tagging` detect session categories (debugging, refactoring, feature, testing, docs, config) during sync; stored in `session_tags` table.
 - **Content-type classification**: Messages classified as `text`/`code`/`tool` based on message content types during sync. The `claude` input indexes `tool_use` command input and `tool_result` content with `content_type='tool'` for keyword search. The `pi` input indexes `toolCall.arguments` and `custom`-record results with `content_type='tool'` for keyword search. The `opencode` input indexes tool parts (`state.input` and `state.output`) with `content_type='tool'` for keyword search.
+- **Split FTS by retrieval semantics**: tool content (`content_type='tool'`) lives in a separate FTS5 index `tool_fts` (tokenizer `trigram`, substring/exact match for paths/commands/errors); text+code live in `messages_fts` (`porter unicode61`). `content_type`-branched triggers route each row. `--content-type tool` queries `tool_fts`; prose queries `messages_fts`; an unfiltered query merges both by per-table min-max-normalized BM25 (cross-index ordering is approximate). Introduced in migration v4. Reasoning/`thinking` indexing is deferred (Slice 2).
 - **Pure Go SQLite**: `modernc.org/sqlite` — no CGO, trivially cross-compilable.
 - **Autoupdate**: `picokit/autoupdate` fetches and stages the latest GitHub release in the background; `run()` waits up to 10s after the command completes so short-lived commands don't kill the download before it finishes.
 - **Schema migration rule**: Every new table or column MUST be introduced as a new migration version (increment the version number and add a new `if currentVersion == N` block in `setupSchema()`). Never modify existing migration blocks — existing databases that already passed that version will never re-run them.
