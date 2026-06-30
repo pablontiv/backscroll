@@ -7,8 +7,7 @@ import (
 // SessionDirsToManifest generates an implicit input manifest with Decode.Format="claude"
 // from a list of session directories, routing to ClaudeReader for parsing.
 // This provides backward compatibility for configs that use session_dirs rather than
-// declarative *.inputs.toml files. Record/Map/Content/Text fields are retained for
-// backward compatibility but are ignored by ClaudeReader (slated for removal in Slice 4).
+// declarative *.inputs.toml files.
 func SessionDirsToManifest(dirs []string) InputDefinition {
 	return InputDefinition{
 		ID:     "legacy-session-dirs",
@@ -21,37 +20,6 @@ func SessionDirsToManifest(dirs []string) InputDefinition {
 			FollowSymlinks: false,
 		},
 		Decode: DecodeConfig{Format: "claude"},
-		Record: RecordConfig{
-			Selector: "$",
-			IncludeWhen: []Predicate{
-				{Selector: "$.type", Op: "in", Value: []any{"user", "assistant"}},
-			},
-			ExcludeWhen: []Predicate{
-				{Selector: "$.isMeta", Op: "eq", Value: true},
-			},
-		},
-		Map: MapConfig{
-			Role:      "$.message.role",
-			UUID:      "$.uuid",
-			Timestamp: "$.timestamp",
-			SessionID: "$.sessionId",
-		},
-		Content: ContentConfig{
-			Selector:           "$.message.content",
-			String:             "$",
-			Blocks:             "$.message.content[*]",
-			BlockText:          "$.text",
-			ContentType:        "$.type",
-			DefaultContentType: "text",
-			IncludeWhen: []Predicate{
-				{Selector: "$.type", Op: "eq", Value: "text"},
-			},
-		},
-		Text: TextConfig{
-			Join:      "\n",
-			Trim:      true,
-			DropEmpty: true,
-		},
 	}
 }
 
