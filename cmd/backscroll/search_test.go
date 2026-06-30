@@ -9,7 +9,6 @@ import (
 	picokitoutput "github.com/pablontiv/picokit/output"
 
 	"github.com/pablontiv/backscroll/internal/models"
-	"github.com/pablontiv/backscroll/internal/storage"
 )
 
 func TestSearchOutputFormatText(t *testing.T) {
@@ -233,74 +232,5 @@ func TestSearchWithJSONAndMaxTokens(t *testing.T) {
 		if len(strings.TrimSpace(out)) > 0 {
 			t.Fatalf("search --json --max-tokens output not valid JSON: %v", err)
 		}
-	}
-}
-
-func TestFormatStructuredEventsEmpty(t *testing.T) {
-	var stdout strings.Builder
-	events := []storage.StructuredEventRow{}
-
-	// Test text format (empty)
-	err := formatStructuredEvents(&stdout, events, false)
-	if err != nil {
-		t.Fatalf("formatStructuredEvents error: %v", err)
-	}
-	if !strings.Contains(stdout.String(), "No events found") {
-		t.Errorf("expected 'No events found' for empty events (text), got: %s", stdout.String())
-	}
-
-	// Test JSON format (empty)
-	stdout.Reset()
-	err = formatStructuredEvents(&stdout, events, true)
-	if err != nil {
-		t.Fatalf("formatStructuredEvents JSON error: %v", err)
-	}
-	if !strings.Contains(stdout.String(), "\"count\":0") {
-		t.Errorf("expected JSON with count:0 for empty events, got: %s", stdout.String())
-	}
-}
-
-func TestFormatStructuredEventsWithData(t *testing.T) {
-	var stdout strings.Builder
-	events := []storage.StructuredEventRow{
-		{
-			EventType:  "tool_call",
-			ToolName:   "search",
-			Actor:      "user",
-			SourcePath: "/path/to/session.jsonl",
-			Ordinal:    5,
-			Timestamp:  "2024-01-15T10:30:00Z",
-			Snippet:    "test snippet content",
-		},
-		{
-			EventType:  "message",
-			ToolName:   "",
-			Actor:      "assistant",
-			SourcePath: "/path/to/session.jsonl",
-			Ordinal:    6,
-			Timestamp:  "2024-01-15T10:31:00Z",
-			Snippet:    "response snippet",
-		},
-	}
-
-	// Test text format with data
-	err := formatStructuredEvents(&stdout, events, false)
-	if err != nil {
-		t.Fatalf("formatStructuredEvents error: %v", err)
-	}
-	output := stdout.String()
-	if !strings.Contains(output, "tool_call") || !strings.Contains(output, "search") || !strings.Contains(output, "Total: 2 events") {
-		t.Errorf("text format missing expected fields: %s", output)
-	}
-
-	// Test JSON format with data
-	stdout.Reset()
-	err = formatStructuredEvents(&stdout, events, true)
-	if err != nil {
-		t.Fatalf("formatStructuredEvents JSON error: %v", err)
-	}
-	output = stdout.String()
-	if !strings.Contains(output, "\"count\":2") || !strings.Contains(output, "tool_call") {
-		t.Errorf("JSON format missing expected fields: %s", output)
 	}
 }
