@@ -1,0 +1,2 @@
+{"type":"message","timestamp":"2026-05-10T22:19:34.694Z","cwd":"/tmp/piproj","message":{"role":"assistant","content":[{"type":"toolCall","name":"web_search","arguments":{"queries":["pizzqx_marker query"]}}]}}
+{"type":"custom","customType":"web-search-results","timestamp":"2026-05-10T22:19:44.292Z","data":{"queries":[{"query":"q","answer":"pizzqx_result_token found"}]}}

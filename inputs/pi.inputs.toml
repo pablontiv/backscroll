@@ -20,33 +20,4 @@ exclude = []
 follow_symlinks = false
 
 [inputs.decode]
-format = "jsonl"
-
-[inputs.record]
-selector = "$"
-include_when = [
-  { selector = "$.type", op = "eq", value = "message" },
-  { selector = "$.message.role", op = "in", value = ["user", "assistant"] },
-]
-
-[inputs.map]
-role = "$.message.role"
-uuid = "$.id"
-timestamp = "$.timestamp"
-project = "$.cwd"
-
-[inputs.content]
-selector = "$.message.content"
-string = "$"
-blocks = "$.message.content[*]"
-block_text = "$.text"
-content_type = "$.type"
-include_when = [
-  { selector = "$.type", op = "eq", value = "text" },
-]
-default_content_type = "text"
-
-[inputs.text]
-join = "\n"
-trim = true
-drop_empty = true
+format = "pi"
