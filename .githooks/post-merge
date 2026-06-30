@@ -38,7 +38,7 @@ for skill in backscroll; do
 done
 install_input_presets
 
-BACKSCROLL_BIN="${BACKSCROLL_BIN:-/usr/local/bin/backscroll}"
+BACKSCROLL_BIN="${BACKSCROLL_BIN:-$HOME/.local/bin/backscroll}"
 
 install_backscroll_binary() {
   local tmp
