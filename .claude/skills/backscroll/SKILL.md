@@ -118,8 +118,8 @@ backscroll search "QUERY" --source-path "/path/to/session.jsonl"
 ### 5.7) Find what a tool did, or an error from a command
 
 Tool inputs (the command/file/args) AND tool outputs (results and errors) are indexed
-for Claude, Pi, and OpenCode sessions with `content_type='tool'`. Use `--content-type tool`
-to search only tool activity — ideal for debugging "what command ran / what failed".
+with `content_type='tool'`. Use `--content-type tool` to search only tool activity —
+ideal for debugging "what command ran / what failed".
 
 ```bash
 # Find a command that was run (searches serialized tool inputs)
