@@ -50,6 +50,8 @@ type claudeBlock struct {
 // Parse reads a Claude JSONL session and returns its messages as a ParsedFile.
 // One record may yield several messages: one for concatenated text plus one per
 // tool_use / tool_result block (so each tool call is independently searchable).
+// ClaudeReader parses record-level fields (cwd, type, isMeta, message) directly and
+// does not use the declarative InputDefinition selectors.
 func (r *ClaudeReader) Parse(path string, _ input_config.InputDefinition) (models.ParsedFile, error) {
 	hash, err := hashfile.HashFile(path)
 	if err != nil {
