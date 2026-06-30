@@ -1478,3 +1478,37 @@ func TestPurgeAndRebuildAgentOutput(t *testing.T) {
 		t.Errorf("purge produced empty output")
 	}
 }
+
+func TestSearchFindsToolCallContent(t *testing.T) {
+	_, cleanup := testEnv(t)
+	defer cleanup()
+	t.Setenv("HOME", t.TempDir())
+
+	sessionDir := t.TempDir()
+	src, err := os.ReadFile(filepath.Join(fixturesDir(), "claude-toolcalls.jsonl"))
+	if err != nil {
+		t.Fatalf("read fixture: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(sessionDir, "claude-toolcalls.jsonl"), src, 0o644); err != nil {
+		t.Fatalf("write session: %v", err)
+	}
+	t.Setenv("BACKSCROLL_SESSION_DIRS", sessionDir)
+
+	// tool_use command text must be searchable (auto-sync indexes first)
+	out, _, err := runCmd("search", "zzqx_marker", "--all-projects")
+	if err != nil {
+		t.Fatalf("search tool_use: %v", err)
+	}
+	if !strings.Contains(out, "zzqx_marker") {
+		t.Errorf("tool_use command not indexed; output: %s", out)
+	}
+
+	// tool_result error text must be searchable
+	out, _, err = runCmd("search", "zzqx_error_token", "--all-projects")
+	if err != nil {
+		t.Fatalf("search tool_result: %v", err)
+	}
+	if !strings.Contains(out, "zzqx_error_token") {
+		t.Errorf("tool_result error not indexed; output: %s", out)
+	}
+}

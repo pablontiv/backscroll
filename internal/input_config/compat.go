@@ -21,7 +21,7 @@ func SessionDirsToManifest(dirs []string) InputDefinition {
 			Exclude:        []string{"**/subagents/**"},
 			FollowSymlinks: false,
 		},
-		Decode: DecodeConfig{Format: "jsonl"},
+		Decode: DecodeConfig{Format: "claude"},
 		Record: RecordConfig{
 			Selector: "$",
 			IncludeWhen: []Predicate{
