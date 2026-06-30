@@ -52,7 +52,7 @@ cmd/backscroll/
 └── sync_helpers.go    — shared auto-sync helpers (maybeAutoSync, runSync)
 internal/
 ├── config/            — config resolution: backscroll.toml → ~/.config → env → defaults
-├── input_config/      — declarative input manifest engine: types, loader, discovery, predicates, transforms
+├── input_config/      — input manifest loading, discovery, and legacy session-dirs compatibility
 ├── models/            — domain types: SessionRecord, MessageContent, ParsedFile, SearchResult, Stats
 ├── sync/              — WalkDir, SHA-256 dedup, JSONL parsing, noise filtering, content-type classification
 ├── tagging/           — heuristic auto-tagging (debugging, refactoring, feature, testing, docs, config)
@@ -60,7 +60,7 @@ internal/
 ├── sources/           — external source parsers (ke, decision, memory, rule, spec, backlog) + SourceRegistry
 ├── projects/          — project identity registry: LoadGlobalRegistry(), Identify(), LoadLocalHint()
 ├── reader/            — direct reading and filtering of individual session files
-├── readers/           — SessionReader interface, Registry, JsonlReader, ClaudeReader (text+tool_use+tool_result), PiReader (text+toolCall+custom results), OpenCodeReader (text+tool state.input+state.output); toolfmt serializer
+├── readers/           — SessionReader interface, Registry, ClaudeReader (text+tool_use+tool_result), PiReader (text+toolCall+custom results), OpenCodeReader (text+tool state.input+state.output); toolfmt serializer
 └── storage/           — SQLite adapter (FTS5, BM25, WAL mode, migrations, search_items, session_tags)
 ```
 
@@ -172,7 +172,7 @@ Workflows delegate to [pablontiv/crossbeam](https://github.com/pablontiv/crossbe
 ```
 github.com/pablontiv/backscroll/cmd/backscroll         — CLI entrypoint
 github.com/pablontiv/backscroll/internal/config        — Config structs and resolution
-github.com/pablontiv/backscroll/internal/input_config  — Declarative input manifest engine (*.inputs.toml)
+github.com/pablontiv/backscroll/internal/input_config  — Input manifest loading, discovery, and legacy session-dirs compatibility
 github.com/pablontiv/backscroll/internal/models        — Domain types and SearchEngine interface
 github.com/pablontiv/backscroll/internal/sync          — Session parsing and noise filtering
 github.com/pablontiv/backscroll/internal/plans         — Markdown plan parsing
@@ -181,5 +181,5 @@ github.com/pablontiv/backscroll/internal/sources       — External source parse
 github.com/pablontiv/backscroll/internal/storage       — SQLite FTS5 adapter
 github.com/pablontiv/backscroll/internal/projects      — Project identity registry
 github.com/pablontiv/backscroll/internal/reader        — Direct session file reader
-github.com/pablontiv/backscroll/internal/readers       — SessionReader interface, Registry, JsonlReader, ClaudeReader (text+tool_use+tool_result), PiReader (text+toolCall+custom results), OpenCodeReader (text+tool state.input+state.output); toolfmt serializer
+github.com/pablontiv/backscroll/internal/readers       — SessionReader interface, Registry, ClaudeReader (text+tool_use+tool_result), PiReader (text+toolCall+custom results), OpenCodeReader (text+tool state.input+state.output); toolfmt serializer
 ```
