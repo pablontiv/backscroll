@@ -14,37 +14,6 @@ import (
 
 const piFixture = "../../tests/fixtures/pi-session.jsonl"
 
-func piDef() input_config.InputDefinition {
-	return input_config.InputDefinition{
-		Decode: input_config.DecodeConfig{Format: "claude"},
-		Record: input_config.RecordConfig{
-			Selector: "$",
-			IncludeWhen: []input_config.Predicate{
-				{Selector: "$.type", Op: "eq", Value: "message"},
-				{Selector: "$.message.role", Op: "in", Value: []any{"user", "assistant"}},
-			},
-		},
-		Map: input_config.MapConfig{
-			Role:      "$.message.role",
-			UUID:      "$.id",
-			Timestamp: "$.timestamp",
-			Project:   "$.cwd",
-		},
-		Content: input_config.ContentConfig{
-			Selector:  "$.message.content",
-			BlockText: "$.text",
-			IncludeWhen: []input_config.Predicate{
-				{Selector: "$.type", Op: "eq", Value: "text"},
-			},
-		},
-		Text: input_config.TextConfig{
-			Join:      "\n",
-			Trim:      true,
-			DropEmpty: true,
-		},
-	}
-}
-
 func contains(s, substr string) bool {
 	return len(s) >= len(substr) && (s == substr || len(s) > 0 && containsStr(s, substr))
 }
