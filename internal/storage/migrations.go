@@ -58,6 +58,18 @@ func (d *Database) SetupSchema() error {
 		}
 	}
 
+	// Check if version 4 is already applied
+	err = d.db.QueryRow("SELECT COUNT(*) FROM schema_migrations WHERE version = 4").Scan(&count)
+	if err != nil {
+		return fmt.Errorf("check migration version 4: %w", err)
+	}
+
+	if count == 0 {
+		if err := d.applyV4Migration(); err != nil {
+			return err
+		}
+	}
+
 	return nil
 }
 
@@ -167,6 +179,39 @@ func (d *Database) applyV3Migration() error {
 	}
 
 	return nil
+}
+
+// applyV4Migration adds the tool_fts index (trigram tokenizer), branches the
+// sync triggers by content_type, and repopulates both indexes from search_items.
+func (d *Database) applyV4Migration() error {
+	tx, err := d.db.Begin()
+	if err != nil {
+		return fmt.Errorf("begin transaction: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	if _, err := tx.Exec(sqlV4ToolFTS); err != nil {
+		return fmt.Errorf("create tool_fts: %w", err)
+	}
+	if _, err := tx.Exec(sqlV4Triggers); err != nil {
+		return fmt.Errorf("rebuild triggers: %w", err)
+	}
+	if _, err := tx.Exec(sqlV4Repopulate); err != nil {
+		return fmt.Errorf("repopulate indexes: %w", err)
+	}
+
+	checksum := sha256.Sum256([]byte(sqlV4ToolFTS + sqlV4Triggers))
+	checksumHex := fmt.Sprintf("%x", checksum)
+
+	_, err = tx.Exec(`
+		INSERT INTO schema_migrations (version, name, applied_on, checksum)
+		VALUES (4, 'V4 tool_fts trigram index', CURRENT_TIMESTAMP, ?)
+	`, checksumHex)
+	if err != nil {
+		return fmt.Errorf("record migration v4: %w", err)
+	}
+
+	return tx.Commit()
 }
 
 // SQL schema strings
@@ -281,6 +326,69 @@ CREATE TABLE IF NOT EXISTS embedding_metadata (
 // sqlV3 adds an embedding BLOB column to chunks for pure-Go cosine similarity search.
 // This replaces the sqlite-vec virtual table approach (which requires CGO).
 const sqlV3 = `ALTER TABLE chunks ADD COLUMN embedding BLOB;`
+
+const sqlV4ToolFTS = `
+CREATE VIRTUAL TABLE IF NOT EXISTS tool_fts USING fts5(
+    text,
+    content=search_items,
+    content_rowid=id,
+    tokenize='trigram'
+);
+
+CREATE VIRTUAL TABLE IF NOT EXISTS tool_vocab USING fts5vocab(tool_fts, 'row');
+`
+
+// Drop the unconditional v1 triggers and replace them with content_type-branched
+// triggers: tool rows index into tool_fts, everything else into messages_fts.
+const sqlV4Triggers = `
+DROP TRIGGER IF EXISTS search_items_ai;
+DROP TRIGGER IF EXISTS search_items_ad;
+DROP TRIGGER IF EXISTS search_items_au;
+
+-- NOTE: content_type is immutable per row (set at sync time; re-sync deletes and re-inserts).
+-- The UPDATE triggers (search_items_au_tool, search_items_au_msg) intentionally branch on old.content_type
+-- and do not handle cross-type transitions, since content_type never changes for existing rows.
+
+CREATE TRIGGER IF NOT EXISTS search_items_ai_tool AFTER INSERT ON search_items
+WHEN new.content_type = 'tool' BEGIN
+    INSERT INTO tool_fts(rowid, text) VALUES (new.id, new.text);
+END;
+
+CREATE TRIGGER IF NOT EXISTS search_items_ai_msg AFTER INSERT ON search_items
+WHEN new.content_type <> 'tool' BEGIN
+    INSERT INTO messages_fts(rowid, text) VALUES (new.id, new.text);
+END;
+
+CREATE TRIGGER IF NOT EXISTS search_items_ad_tool AFTER DELETE ON search_items
+WHEN old.content_type = 'tool' BEGIN
+    INSERT INTO tool_fts(tool_fts, rowid, text) VALUES('delete', old.id, old.text);
+END;
+
+CREATE TRIGGER IF NOT EXISTS search_items_ad_msg AFTER DELETE ON search_items
+WHEN old.content_type <> 'tool' BEGIN
+    INSERT INTO messages_fts(messages_fts, rowid, text) VALUES('delete', old.id, old.text);
+END;
+
+CREATE TRIGGER IF NOT EXISTS search_items_au_tool AFTER UPDATE ON search_items
+WHEN old.content_type = 'tool' BEGIN
+    INSERT INTO tool_fts(tool_fts, rowid, text) VALUES('delete', old.id, old.text);
+    INSERT INTO tool_fts(rowid, text) VALUES (new.id, new.text);
+END;
+
+CREATE TRIGGER IF NOT EXISTS search_items_au_msg AFTER UPDATE ON search_items
+WHEN old.content_type <> 'tool' BEGIN
+    INSERT INTO messages_fts(messages_fts, rowid, text) VALUES('delete', old.id, old.text);
+    INSERT INTO messages_fts(rowid, text) VALUES (new.id, new.text);
+END;
+`
+
+// Repopulate both indexes from search_items by content_type. 'delete-all' is valid
+// for external-content FTS5 tables and resets the index without touching content rows.
+const sqlV4Repopulate = `
+INSERT INTO messages_fts(messages_fts) VALUES('delete-all');
+INSERT INTO messages_fts(rowid, text) SELECT id, text FROM search_items WHERE content_type <> 'tool';
+INSERT INTO tool_fts(rowid, text) SELECT id, text FROM search_items WHERE content_type = 'tool';
+`
 
 // sqlV1CoreDDL is the core DDL string used for computing the migration checksum.
 // This must match the Rust version's SQL_V1 for compatibility.

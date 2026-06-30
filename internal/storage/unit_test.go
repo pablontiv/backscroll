@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -3782,5 +3783,339 @@ func TestListSessionEventsV2WithFilters(t *testing.T) {
 	}
 	if len(results) != 2 {
 		t.Errorf("expected 2 events with offset, got %d", len(results))
+	}
+}
+
+func TestV4MigrationRoutesToolRowsToToolFTS(t *testing.T) {
+	dbPath := filepath.Join(t.TempDir(), "v4.db")
+	db, err := Open(dbPath)
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	defer func() { _ = db.Close() }()
+
+	if err := db.SetupSchema(); err != nil {
+		t.Fatalf("setup schema: %v", err)
+	}
+
+	// Insert one prose row and one tool row directly.
+	_, err = db.db.Exec(`INSERT INTO indexed_files(path, hash) VALUES ('p1','h1')`)
+	if err != nil {
+		t.Fatalf("seed indexed_files: %v", err)
+	}
+	_, err = db.db.Exec(`
+		INSERT INTO search_items (source, source_path, ordinal, role, text, content_type)
+		VALUES ('session','p1',0,'user','architecture decision about retries','text'),
+		       ('session','p1',1,'assistant','internal/storage/sync.go','tool')`)
+	if err != nil {
+		t.Fatalf("seed search_items: %v", err)
+	}
+
+	var msgCount, toolCount int
+	if err := db.db.QueryRow(`SELECT count(*) FROM messages_fts WHERE messages_fts MATCH '"architecture"'`).Scan(&msgCount); err != nil {
+		t.Fatalf("query messages_fts: %v", err)
+	}
+	if err := db.db.QueryRow(`SELECT count(*) FROM tool_fts WHERE tool_fts MATCH '"sync.go"'`).Scan(&toolCount); err != nil {
+		t.Fatalf("query tool_fts: %v", err)
+	}
+
+	if msgCount != 1 {
+		t.Errorf("messages_fts: want 1 prose hit, got %d", msgCount)
+	}
+	if toolCount != 1 {
+		t.Errorf("tool_fts: want 1 tool hit, got %d", toolCount)
+	}
+
+	// The tool row must NOT be in messages_fts (no crowding).
+	var leak int
+	if err := db.db.QueryRow(`SELECT count(*) FROM messages_fts WHERE messages_fts MATCH '"sync"'`).Scan(&leak); err != nil {
+		t.Fatalf("query leak: %v", err)
+	}
+	if leak != 0 {
+		t.Errorf("tool content leaked into messages_fts: got %d hits", leak)
+	}
+
+	// Updating a prose row's text must keep it correctly routed to messages_fts.
+	if _, err := db.db.Exec(`UPDATE search_items SET text = 'updated architecture' WHERE ordinal = 0`); err != nil {
+		t.Fatalf("update prose: %v", err)
+	}
+	var updatedHit int
+	if err := db.db.QueryRow(`SELECT count(*) FROM messages_fts WHERE messages_fts MATCH '"updated"'`).Scan(&updatedHit); err != nil {
+		t.Fatalf("query updated: %v", err)
+	}
+	if updatedHit != 1 {
+		t.Errorf("update routing: want 1 hit in messages_fts, got %d", updatedHit)
+	}
+}
+
+func TestToolSearchRanksExactPathFirst(t *testing.T) {
+	dbPath := filepath.Join(t.TempDir(), "toolsearch.db")
+	db, err := Open(dbPath)
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	defer func() { _ = db.Close() }()
+	if err := db.SetupSchema(); err != nil {
+		t.Fatalf("setup: %v", err)
+	}
+
+	_, _ = db.db.Exec(`INSERT INTO indexed_files(path, hash) VALUES ('p1','h1')`)
+	_, err = db.db.Exec(`
+		INSERT INTO search_items (source, source_path, ordinal, role, text, content_type)
+		VALUES ('session','p1',0,'assistant','edited internal/storage/hybrid.go','tool'),
+		       ('session','p1',1,'assistant','read internal/storage/sync.go','tool'),
+		       ('session','p1',2,'assistant','ran go test ./internal/storage/','tool')`)
+	if err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+
+	results, err := db.Search("internal/storage/sync.go", models.SearchOptions{ContentType: "tool", Limit: 5})
+	if err != nil {
+		t.Fatalf("search: %v", err)
+	}
+	if len(results) == 0 {
+		t.Fatalf("want at least 1 result, got 0")
+	}
+	if !strings.Contains(results[0].Text, "sync.go") {
+		t.Errorf("want sync.go ranked first, got %q", results[0].Text)
+	}
+}
+
+func TestSearchEverythingReturnsBothProseAndTool(t *testing.T) {
+	dbPath := filepath.Join(t.TempDir(), "merge.db")
+	db, err := Open(dbPath)
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	defer func() { _ = db.Close() }()
+	if err := db.SetupSchema(); err != nil {
+		t.Fatalf("setup: %v", err)
+	}
+	_, _ = db.db.Exec(`INSERT INTO indexed_files(path, hash) VALUES ('p1','h1')`)
+	_, err = db.db.Exec(`
+		INSERT INTO search_items (source, source_path, ordinal, role, text, content_type)
+		VALUES ('session','p1',0,'user','retry backoff strategy discussion','text'),
+		       ('session','p1',1,'assistant','ran retry-backoff.sh and saw retry','tool')`)
+	if err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+
+	results, err := db.Search("retry", models.SearchOptions{Limit: 10})
+	if err != nil {
+		t.Fatalf("search: %v", err)
+	}
+
+	var sawText, sawTool bool
+	for _, r := range results {
+		if r.ContentType == "text" {
+			sawText = true
+		}
+		if r.ContentType == "tool" {
+			sawTool = true
+		}
+	}
+	if !sawText || !sawTool {
+		t.Errorf("want both prose and tool hits; sawText=%v sawTool=%v (got %d results)", sawText, sawTool, len(results))
+	}
+}
+
+func TestOptimizeFTSCoversToolIndex(t *testing.T) {
+	dbPath := filepath.Join(t.TempDir(), "opt.db")
+	db, err := Open(dbPath)
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	defer func() { _ = db.Close() }()
+	if err := db.SetupSchema(); err != nil {
+		t.Fatalf("setup: %v", err)
+	}
+	// Must not error now that two FTS tables exist.
+	if err := db.OptimizeFTS(); err != nil {
+		t.Fatalf("optimize: %v", err)
+	}
+}
+
+// TestSearchScopedTextRouting verifies that Search with ContentType:"text" only
+// queries messages_fts and returns text/code rows, excluding tool rows.
+func TestSearchScopedTextRouting(t *testing.T) {
+	db, cleanup := newTestDB(t)
+	defer cleanup()
+
+	// Seed search_items with both prose and tool content
+	_, _ = db.db.Exec(`INSERT INTO indexed_files(path, hash) VALUES ('p1','h1')`)
+	_, err := db.db.Exec(`
+		INSERT INTO search_items (source, source_path, ordinal, role, text, content_type)
+		VALUES ('session','p1',0,'user','implement the retry logic','text'),
+		       ('session','p1',1,'assistant','here is the code for retry-backoff','code'),
+		       ('session','p1',2,'assistant','invoke retry-backoff.sh command','tool')`)
+	if err != nil {
+		t.Fatalf("seed search_items: %v", err)
+	}
+
+	// Search with ContentType:"text" should only return text/code rows
+	results, err := db.Search("retry", models.SearchOptions{ContentType: "text", Limit: 10})
+	if err != nil {
+		t.Fatalf("search text: %v", err)
+	}
+
+	for _, r := range results {
+		if r.ContentType == "tool" {
+			t.Errorf("ContentType=text search returned tool row: %+v", r)
+		}
+		if r.ContentType != "text" && r.ContentType != "code" {
+			t.Errorf("ContentType=text search returned unexpected content_type=%s", r.ContentType)
+		}
+	}
+}
+
+// TestSearchScopedCodeRouting verifies that Search with ContentType:"code" only
+// queries messages_fts and returns matching code rows.
+func TestSearchScopedCodeRouting(t *testing.T) {
+	db, cleanup := newTestDB(t)
+	defer cleanup()
+
+	// Seed with code-specific content
+	_, _ = db.db.Exec(`INSERT INTO indexed_files(path, hash) VALUES ('p1','h1')`)
+	_, err := db.db.Exec(`
+		INSERT INTO search_items (source, source_path, ordinal, role, text, content_type)
+		VALUES ('session','p1',0,'user','find golang examples','text'),
+		       ('session','p1',1,'assistant','package main func golang code example','code'),
+		       ('session','p1',2,'assistant','golang test output tool','tool')`)
+	if err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+
+	// Search with ContentType:"code" should only return code rows
+	results, err := db.Search("golang", models.SearchOptions{ContentType: "code", Limit: 10})
+	if err != nil {
+		t.Fatalf("search code: %v", err)
+	}
+
+	if len(results) == 0 {
+		t.Error("ContentType=code search returned no results")
+	}
+	for _, r := range results {
+		if r.ContentType != "code" {
+			t.Errorf("ContentType=code search returned non-code row with content_type=%s", r.ContentType)
+		}
+	}
+}
+
+// TestPaginateOffsetBeyondResults verifies that paginate returns empty slice
+// when offset >= len(results).
+func TestPaginateOffsetBeyondResults(t *testing.T) {
+	rs := []SearchResult{
+		{ID: 1, Text: "a", Score: 1.0},
+		{ID: 2, Text: "b", Score: 0.8},
+	}
+
+	// Offset beyond length should return empty slice
+	result := paginate(rs, 10, 5)
+	if len(result) != 0 {
+		t.Errorf("paginate with offset=5 beyond len=2 returned %d results, want 0", len(result))
+	}
+}
+
+// TestPaginateLimitTruncation verifies that paginate truncates to limit size
+// when limit is smaller than available results.
+func TestPaginateLimitTruncation(t *testing.T) {
+	rs := []SearchResult{
+		{ID: 1, Text: "a", Score: 1.0},
+		{ID: 2, Text: "b", Score: 0.9},
+		{ID: 3, Text: "c", Score: 0.8},
+		{ID: 4, Text: "d", Score: 0.7},
+	}
+
+	// Limit of 2 should return 2 results
+	result := paginate(rs, 2, 0)
+	if len(result) != 2 {
+		t.Errorf("paginate with limit=2 returned %d results, want 2", len(result))
+	}
+	if result[0].ID != 1 || result[1].ID != 2 {
+		t.Errorf("paginate returned wrong results: %v", result)
+	}
+
+	// Limit of 2 with offset 1 should return IDs 2,3
+	result = paginate(rs, 2, 1)
+	if len(result) != 2 {
+		t.Errorf("paginate(limit=2, offset=1) returned %d results, want 2", len(result))
+	}
+	if result[0].ID != 2 || result[1].ID != 3 {
+		t.Errorf("paginate(limit=2, offset=1) returned IDs %d,%d, want 2,3", result[0].ID, result[1].ID)
+	}
+}
+
+// TestNormalizeEqualScores verifies that normalize assigns score=1 to all rows
+// when min == max (all scores are equal).
+func TestNormalizeEqualScores(t *testing.T) {
+	rs := []SearchResult{
+		{ID: 1, Text: "a", Score: 0.5},
+		{ID: 2, Text: "b", Score: 0.5},
+		{ID: 3, Text: "c", Score: 0.5},
+	}
+
+	normalize(rs)
+
+	for i, r := range rs {
+		if r.Score != 1.0 {
+			t.Errorf("normalize equal scores: rs[%d].Score = %f, want 1.0", i, r.Score)
+		}
+	}
+}
+
+// TestNormalizeSpreadScores verifies that normalize correctly maps a range of
+// scores to [0,1] using min-max normalization.
+func TestNormalizeSpreadScores(t *testing.T) {
+	rs := []SearchResult{
+		{ID: 1, Text: "a", Score: 10.0},
+		{ID: 2, Text: "b", Score: 15.0},
+		{ID: 3, Text: "c", Score: 20.0},
+	}
+
+	normalize(rs)
+
+	// min=10, max=20, span=10
+	// 10 -> (10-10)/10 = 0.0
+	// 15 -> (15-10)/10 = 0.5
+	// 20 -> (20-10)/10 = 1.0
+	expected := []float64{0.0, 0.5, 1.0}
+	for i, r := range rs {
+		if r.Score != expected[i] {
+			t.Errorf("normalize spread: rs[%d].Score = %f, want %f", i, r.Score, expected[i])
+		}
+	}
+}
+
+// TestPaginateDefaultLimit verifies that paginate defaults to limit=100 when
+// limit is 0.
+func TestPaginateDefaultLimit(t *testing.T) {
+	// Create 150 results to exceed default limit of 100
+	rs := make([]SearchResult, 150)
+	for i := range rs {
+		rs[i] = SearchResult{ID: i + 1, Text: fmt.Sprintf("r%d", i+1), Score: float64(150 - i)}
+	}
+
+	// With limit=0, should default to 100
+	result := paginate(rs, 0, 0)
+	if len(result) != 100 {
+		t.Errorf("paginate(limit=0) returned %d results, want 100", len(result))
+	}
+}
+
+// TestPaginateNegativeOffset verifies that paginate treats negative offset as 0.
+func TestPaginateNegativeOffset(t *testing.T) {
+	rs := []SearchResult{
+		{ID: 1, Text: "a", Score: 1.0},
+		{ID: 2, Text: "b", Score: 0.9},
+		{ID: 3, Text: "c", Score: 0.8},
+	}
+
+	// Negative offset should be treated as 0
+	result := paginate(rs, 2, -5)
+	if len(result) != 2 {
+		t.Errorf("paginate(offset=-5) returned %d results, want 2", len(result))
+	}
+	if result[0].ID != 1 || result[1].ID != 2 {
+		t.Errorf("paginate(offset=-5) returned IDs %d,%d, want 1,2", result[0].ID, result[1].ID)
 	}
 }

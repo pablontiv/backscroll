@@ -3,6 +3,7 @@ package storage
 import (
 	"database/sql"
 	"fmt"
+	"sort"
 	"strings"
 	"time"
 
@@ -27,15 +28,45 @@ type SearchResult struct {
 
 // Search performs a hybrid search (BM25 + optional vector) on the indexed content.
 // It applies all filters and returns results ranked by BM25 score.
+// When ContentType is empty, it queries both FTS tables and merges by normalized score.
 func (d *Database) Search(query string, opts models.SearchOptions) ([]SearchResult, error) {
+	switch opts.ContentType {
+	case "tool":
+		return d.searchTable("tool_fts", query, opts)
+	case "text", "code":
+		return d.searchTable("messages_fts", query, opts)
+	case "":
+		// Unfiltered search: query both tables and merge
+		prose, err := d.searchTable("messages_fts", query, withoutPaging(opts))
+		if err != nil {
+			return nil, err
+		}
+		tool, err := d.searchTable("tool_fts", query, withoutPaging(opts))
+		if err != nil {
+			return nil, err
+		}
+		merged := mergeNormalized(prose, tool)
+		return paginate(merged, opts.Limit, opts.Offset), nil
+	default:
+		return d.searchTable("messages_fts", query, opts)
+	}
+}
+
+// searchTable queries a single FTS table with all filters applied.
+func (d *Database) searchTable(ftsTable, query string, opts models.SearchOptions) ([]SearchResult, error) {
 	// Load dynamic stopwords
 	stopwords, err := d.loadStopwords()
 	if err != nil {
 		return nil, fmt.Errorf("load stopwords: %w", err)
 	}
 
-	// Sanitize FTS5 query
-	ftsQuery := sanitizeFTS5Query(query, stopwords)
+	// Pick sanitizer based on table name
+	var ftsQuery string
+	if ftsTable == "tool_fts" {
+		ftsQuery = sanitizeFTS5QueryTrigram(query, stopwords)
+	} else {
+		ftsQuery = sanitizeFTS5Query(query, stopwords)
+	}
 
 	// Build WHERE clause for filters
 	var whereClauses []string
@@ -103,7 +134,7 @@ func (d *Database) Search(query string, opts models.SearchOptions) ([]SearchResu
 
 	// Build all WHERE conditions (including FTS5 MATCH)
 	if ftsQuery != "" {
-		whereClauses = append([]string{"messages_fts MATCH ?"}, whereClauses...)
+		whereClauses = append([]string{ftsTable + " MATCH ?"}, whereClauses...)
 		args = append([]interface{}{ftsQuery}, args...)
 	}
 
@@ -121,19 +152,19 @@ func (d *Database) Search(query string, opts models.SearchOptions) ([]SearchResu
 			si.ordinal,
 			si.role,
 			si.text,
-			snippet(messages_fts, 0, '<b>', '</b>', '...', 32) as snippet,
-			bm25(messages_fts) as score,
+			snippet(%[1]s, 0, '<b>', '</b>', '...', 32) as snippet,
+			bm25(%[1]s) as score,
 			si.timestamp,
 			si.uuid,
 			si.project,
 			si.content_type
-		FROM messages_fts
-		JOIN search_items si ON messages_fts.rowid = si.id
-		%s
-		%s
+		FROM %[1]s
+		JOIN search_items si ON %[1]s.rowid = si.id
+		%[2]s
+		%[3]s
 		ORDER BY score DESC
 		LIMIT ? OFFSET ?
-	`, tagJoin, whereSQL)
+	`, ftsTable, tagJoin, whereSQL)
 
 	// Add limit and offset
 	limit := opts.Limit
@@ -257,6 +288,92 @@ func sanitizeFTS5Query(query string, stopwords map[string]struct{}) string {
 	}
 
 	return strings.Join(parts, " ")
+}
+
+// sanitizeFTS5QueryTrigram builds a MATCH query for the trigram-tokenized
+// tool_fts. Unlike the porter sanitizer it does NOT append a prefix wildcard
+// (trigram matches substrings directly) and it preserves path/command tokens.
+func sanitizeFTS5QueryTrigram(query string, stopwords map[string]struct{}) string {
+	tokens := strings.Fields(query)
+	if len(tokens) == 0 {
+		return ""
+	}
+	var filtered []string
+	for _, t := range tokens {
+		if _, ok := stopwords[strings.ToLower(t)]; !ok {
+			filtered = append(filtered, t)
+		}
+	}
+	if len(filtered) == 0 {
+		filtered = tokens
+	}
+	var parts []string
+	for _, t := range filtered {
+		escaped := strings.ReplaceAll(t, `"`, `""`)
+		parts = append(parts, fmt.Sprintf(`"%s"`, escaped))
+	}
+	return strings.Join(parts, " ")
+}
+
+// withoutPaging returns a copy of opts with Limit/Offset cleared so each
+// table query returns its full candidate set for cross-table merging.
+func withoutPaging(o models.SearchOptions) models.SearchOptions {
+	o.Limit = 200
+	o.Offset = 0
+	return o
+}
+
+// mergeNormalized min-max normalizes each slice's BM25 scores into [0,1]
+// (BM25 is negative; higher is better) and returns the union sorted by the
+// normalized score descending. Cross-index ordering is approximate by design.
+func mergeNormalized(a, b []SearchResult) []SearchResult {
+	normalize(a)
+	normalize(b)
+	out := append(append([]SearchResult{}, a...), b...)
+	sort.SliceStable(out, func(i, j int) bool { return out[i].Score > out[j].Score })
+	return out
+}
+
+// normalize min-max normalizes a slice of SearchResults' scores into [0,1].
+func normalize(rs []SearchResult) {
+	if len(rs) == 0 {
+		return
+	}
+	min, max := rs[0].Score, rs[0].Score
+	for _, r := range rs {
+		if r.Score < min {
+			min = r.Score
+		}
+		if r.Score > max {
+			max = r.Score
+		}
+	}
+	span := max - min
+	for i := range rs {
+		if span == 0 {
+			rs[i].Score = 1
+		} else {
+			rs[i].Score = (rs[i].Score - min) / span
+		}
+	}
+}
+
+// paginate applies limit and offset to a result slice.
+func paginate(rs []SearchResult, limit, offset int) []SearchResult {
+	if limit == 0 {
+		limit = 100
+	}
+	if offset < 0 {
+		offset = 0
+	}
+	if offset >= len(rs) {
+		return []SearchResult{}
+	}
+	end := offset + limit
+	if end > len(rs) {
+		end = len(rs)
+	}
+	return rs[offset:end]
 }
 
 // normalizeSource normalizes source names:
