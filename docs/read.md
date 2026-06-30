@@ -22,25 +22,25 @@ backscroll search "query terms" --source-path "*/example/*.jsonl" --robot
 # UUID/session-id fragment in an indexed source_path
 backscroll search "query terms" --source sessions --source-path "*019e0d38-c437-7565-ba11-5dd57d516744*" --all-projects --robot
 
-# Exhaustive ordered records without a search term
-backscroll sessions query --jsonl --all-projects --source-path "*/example/*.jsonl"
+# Exhaustive ordered records without a search term (empty search string)
+backscroll search "" --json --indexed-only --all-projects --source-path "*/example/*.jsonl"
 
-# Normalized audit events without auto-sync
-backscroll events query --jsonl --indexed-only --all-projects --event-type command
+# Tool activity — commands, args, outputs, errors
+backscroll search "" --json --indexed-only --all-projects --content-type tool
 ```
 
 The search query still controls the full-text match. `--source-path` narrows those matches to rows whose indexed `search_items.source_path` equals the provided path or matches the provided `*`/SQL `LIKE` pattern.
 
-For deterministic local tooling, `backscroll sessions query --jsonl` streams indexed records without full-text ranking. Records are ordered by `source_path`, `ordinal`, `timestamp`, and row id, include schema version plus project/source identifiers, role, content type, timestamp, ordinal, and bounded text, and support filters such as `--project`, `--all-projects`, `--source`, `--source-path`, `--after`, `--before`, `--limit`, and `--indexed-only`.
+For deterministic local tooling, use `backscroll list --json` or `backscroll search "" --json` with `--indexed-only` to stream indexed records without full-text ranking. Records are ordered by `source_path`, `ordinal`, `timestamp`, and row id, include schema version plus project/source identifiers, role, content type, timestamp, ordinal, and bounded text, and support filters such as `--project`, `--all-projects`, `--source`, `--source-path`, `--after`, `--before`, `--limit`, and `--indexed-only`.
 
-For audit consumers, `backscroll events query --jsonl` streams normalized `session_events` with message, tool_call, tool_result, command, error, metadata, or other event types. It supports the same scope filters plus `--event-type`; `--indexed-only` opens the existing SQLite snapshot read-only and does not run input discovery/sync.
+For tool activity, use `backscroll search "" --json --indexed-only --content-type tool` to retrieve only messages with `content_type='tool'` — serialized tool inputs, outputs, and errors.
 
 ## How It Works
 
-- `sync` ingests files declared by active manifests under `<config_dir>/backscroll/inputs/*.inputs.toml`.
+- Files are indexed via `backscroll search` auto-sync (or manually via `backscroll rebuild`).
 - Each indexed message stores its original `source_path` in SQLite.
-- `search --source-path` and `sessions query --source-path` filter over that indexed `source_path`; they do not parse arbitrary files directly.
-- Search output includes `source_path` in text, JSON, and robot formats; `sessions query --jsonl` emits one indexed record per line.
+- `search --source-path` and `list --source-path` filter over that indexed `source_path`; they do not parse arbitrary files directly.
+- Search and list output includes `source_path` in text, JSON, and robot formats; JSON emits one indexed record per line.
 
 This preserves the database as the source of truth and avoids stale direct-file reads.
 

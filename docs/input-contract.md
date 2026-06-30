@@ -28,10 +28,10 @@ config directory before running `backscroll sync`. Preset installation should
 skip existing manifest files by default so user edits are not overwritten.
 
 ```text
-discover -> decode -> record -> map -> content -> text -> emit -> search_items + session_events
+discover -> decode -> record -> map -> content -> text -> emit -> search_items
 ```
 
-`search_items` remains optimized for retrieval UX. `session_events` is the audit-oriented, ordered event stream. Message records emit `event_type = "message"`; tool calls/results, commands, errors, and provider metadata use the same versioned table without indexing unlimited raw tool output into search by default. Downstream consumers should treat the JSONL surfaces described in [Downstream audit integration contract](audit-integration.md) as the stable read boundary.
+`search_items` is optimized for both retrieval UX and audit surfaces. Each indexed row carries `source`, `source_path`, `project`, `role`, `content_type`, `timestamp`, `ordinal`, and bounded `text`. Tool inputs, outputs, and errors are indexed with `content_type='tool'` and stored in a separate FTS5 index (`tool_fts`) for substring/exact matching; prose and code use the main messages_fts index for morphological search. Downstream consumers should treat the JSON surfaces described in [Downstream audit integration contract](audit-integration.md) as the stable read boundary.
 
 ## File shape
 

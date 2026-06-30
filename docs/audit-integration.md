@@ -4,28 +4,27 @@ Backscroll is the corpus and structured-query layer. Downstream tools such as a 
 
 ## Deterministic audit flow
 
-Use an explicit snapshot boundary before auditing:
+Use an explicit snapshot boundary before auditing with `--indexed-only`:
 
 ```bash
-# 1. Maintainer-controlled index refresh, outside the audit read phase
-backscroll inputs validate
-backscroll sync
-
-# 2. Audit preflight against the existing SQLite snapshot
+# 1. Audit preflight against the existing SQLite snapshot (read-only, no sync)
 backscroll status --json --indexed-only
 
-# 3. Scope discovery from indexed session metadata
-backscroll sessions query --jsonl --indexed-only --all-projects --limit 0
+# 2. Scope discovery from indexed items and projects
+backscroll list --json --indexed-only --all-projects --limit 0
 
-# 4. Complete normalized event stream for deterministic consumers
-backscroll events query --jsonl --indexed-only --all-projects --limit 0
+# 3. Complete message records for deterministic consumers
+backscroll search "" --json --indexed-only --all-projects --limit 0
+
+# 4. Tool activity (commands, errors, outputs) — narrowly searchable
+backscroll search "" --json --indexed-only --content-type tool --all-projects --limit 0
 ```
 
 `--indexed-only` opens the existing SQLite index read-only and does not run input discovery or sync. Use it for repeatable audit reads. Commands that require an existing index fail or report `index.usable = false` instead of silently creating a new corpus boundary.
 
 ## Status JSON
 
-`backscroll status --json` emits one versioned JSON document:
+`backscroll status --json --indexed-only` emits one versioned JSON document:
 
 ```json
 {
@@ -40,9 +39,9 @@ backscroll events query --jsonl --indexed-only --all-projects --limit 0
 
 This is preflight metadata only. It does not expose transcript content.
 
-## Session detail JSONL
+## Message records via list or search
 
-`backscroll sessions query --jsonl` streams indexed message records without a search term. Each line includes:
+`backscroll list --json --indexed-only` returns indexed items without full-text ranking. Records include:
 
 - `schema_version`
 - `source`, `source_path`, `project`, `uuid`
@@ -50,24 +49,17 @@ This is preflight metadata only. It does not expose transcript content.
 - `role`, `content_type`
 - bounded `text`
 
-Records are ordered by `source_path`, `ordinal`, `timestamp`, and row id. Use filters such as `--project`, `--all-projects`, `--source`, `--source-path`, `--after`, `--before`, `--limit`, and `--indexed-only`.
+Results are ordered by `source_path`, `ordinal`, `timestamp`, and row id. Use filters such as `--project`, `--all-projects`, `--source`, `--source-path`, `--after`, `--before`, `--limit`, and `--indexed-only`.
 
-## Event JSONL
+Alternatively, `backscroll search "" --json --indexed-only` with an empty query string returns all indexed records (BM25 ranking disabled, deterministic ordering).
 
-`backscroll events query --jsonl` streams normalized session events. Each line includes:
+## Tool activity
 
-- `schema_version`
-- `source`, `source_path`, `project`
-- `ordinal`, `timestamp`, `event_type`
-- `actor`, `role`
-- event-specific metadata: `tool_name`, `tool_id`, `command`, `cwd`, `exit_code`, `is_error`
-- bounded `snippet`
-
-Supported event types include `message`, `tool_call`, `tool_result`, `command`, `error`, `metadata`, and `other`. Use `--event-type` plus the session scope filters for deterministic buckets.
+`backscroll search "" --json --indexed-only --content-type tool` returns only messages with `content_type='tool'` — tool inputs (commands, args, file paths) and outputs/errors. Use this to audit what agents actually executed. Supports the same scope filters.
 
 ## Search is supplemental
 
-`search`, `topics`, and `insights` are retrieval/UX surfaces. They may rank, truncate, aggregate, or use top-k semantics. They are useful for investigation, but they are not sufficient for exhaustive audit discovery. Audit consumers should use `status --json --indexed-only`, `sessions query --jsonl --indexed-only`, and `events query --jsonl --indexed-only` as their corpus contract.
+`search` with a non-empty query string is a retrieval/UX surface. It may rank, truncate, aggregate, or use top-k semantics. Useful for investigation, but not sufficient for exhaustive audit discovery. Audit consumers should use `status --json --indexed-only`, `list --json --indexed-only`, and `search "" --json --indexed-only [--content-type tool]` as their corpus contract.
 
 ## Privacy and raw-content boundary
 
