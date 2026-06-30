@@ -523,6 +523,16 @@ func (d *Database) Validate() error {
 		return fmt.Errorf("FTS5 virtual table messages_fts does not exist")
 	}
 
+	// Check FTS5 virtual table for tools
+	var toolFTSExists int
+	err = d.db.QueryRow(`
+		SELECT COUNT(*) FROM sqlite_master
+		WHERE type='table' AND name='tool_fts'
+	`).Scan(&toolFTSExists)
+	if err != nil || toolFTSExists == 0 {
+		return fmt.Errorf("FTS5 virtual table tool_fts does not exist")
+	}
+
 	// Check for orphaned search_items (not in indexed_files)
 	var orphans int
 	err = d.db.QueryRow(`
@@ -639,7 +649,11 @@ func (d *Database) Purge(before string) (int64, error) {
 func (d *Database) OptimizeFTS() error {
 	_, err := d.db.Exec("INSERT INTO messages_fts(messages_fts, rank) VALUES('optimize', 0)")
 	if err != nil {
-		return fmt.Errorf("optimize FTS5: %w", err)
+		return fmt.Errorf("optimize messages_fts: %w", err)
+	}
+	_, err = d.db.Exec("INSERT INTO tool_fts(tool_fts, rank) VALUES('optimize', 0)")
+	if err != nil {
+		return fmt.Errorf("optimize tool_fts: %w", err)
 	}
 	return nil
 }

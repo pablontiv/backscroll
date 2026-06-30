@@ -3918,3 +3918,19 @@ func TestSearchEverythingReturnsBothProseAndTool(t *testing.T) {
 		t.Errorf("want both prose and tool hits; sawText=%v sawTool=%v (got %d results)", sawText, sawTool, len(results))
 	}
 }
+
+func TestOptimizeFTSCoversToolIndex(t *testing.T) {
+	dbPath := filepath.Join(t.TempDir(), "opt.db")
+	db, err := Open(dbPath)
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	defer func() { _ = db.Close() }()
+	if err := db.SetupSchema(); err != nil {
+		t.Fatalf("setup: %v", err)
+	}
+	// Must not error now that two FTS tables exist.
+	if err := db.OptimizeFTS(); err != nil {
+		t.Fatalf("optimize: %v", err)
+	}
+}
