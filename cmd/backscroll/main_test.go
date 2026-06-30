@@ -1341,6 +1341,29 @@ func TestStatsGroupByAgent(t *testing.T) {
 	}
 }
 
+// TestStatsGroupByAgentNoTypeFilter is the v1.4.0 regression: without a --type
+// filter, stats pulls message rows whose tool_name/actor are NULL. Before the
+// fix this aborted with "converting NULL to string is unsupported".
+func TestStatsGroupByAgentNoTypeFilter(t *testing.T) {
+	_, cleanup := testEnv(t)
+	defer cleanup()
+
+	claudeDir := filepath.Join(fixturesDir(), "claude-preset", "projects")
+	_, _, err := syncForTest(t, "sync", "--path", claudeDir)
+	if err != nil {
+		t.Fatalf("sync error: %v", err)
+	}
+
+	// The exact reported command: --group-by agent with no --type filter.
+	out, _, err := runCmd("stats", "--all-projects", "--group-by", "agent")
+	if err != nil {
+		t.Fatalf("stats --group-by agent (no --type) error: %v", err)
+	}
+	if len(strings.TrimSpace(out)) == 0 {
+		t.Errorf("stats --group-by agent produced empty output")
+	}
+}
+
 func TestAmbiguousPositionalError(t *testing.T) {
 	_, cleanup := testEnv(t)
 	defer cleanup()

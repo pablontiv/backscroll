@@ -3670,6 +3670,44 @@ func TestListSessionEventsV2WithData(t *testing.T) {
 	}
 }
 
+// TestListSessionEventsV2NullToolNameAndActor reproduces the v1.4.0 crash:
+// sync.go inserts message rows without tool_name/actor, leaving them NULL.
+// ListSessionEventsV2 must scan those NULLs without erroring and surface
+// them as empty strings (the groupEvents layer maps "" -> <unknown>).
+func TestListSessionEventsV2NullToolNameAndActor(t *testing.T) {
+	db, cleanup := newTestDB(t)
+	defer cleanup()
+
+	// Insert exactly like internal/storage/sync.go does for a message:
+	// it omits tool_name and actor, so both columns are NULL.
+	ctx := context.Background()
+	_, err := db.db.ExecContext(ctx,
+		`INSERT INTO session_events (source, source_path, project, ordinal, timestamp, event_type, role, snippet)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+		"session", "s.jsonl", "proj1", 1, "2024-01-01T00:00:00Z", "message", "user", "hello",
+	)
+	if err != nil {
+		t.Fatalf("insert message event: %v", err)
+	}
+
+	events, err := db.ListSessionEventsV2(ListOptions{Limit: 10})
+	if err != nil {
+		t.Fatalf("ListSessionEventsV2 must not error on NULL tool_name/actor: %v", err)
+	}
+	if len(events) != 1 {
+		t.Fatalf("expected 1 event, got %d", len(events))
+	}
+	if events[0].ToolName != "" {
+		t.Errorf("expected empty ToolName for NULL column, got %q", events[0].ToolName)
+	}
+	if events[0].Actor != "" {
+		t.Errorf("expected empty Actor for NULL column, got %q", events[0].Actor)
+	}
+	if events[0].EventType != "message" {
+		t.Errorf("expected message event_type, got %q", events[0].EventType)
+	}
+}
+
 func TestListSessionEventsV2WithFilters(t *testing.T) {
 	db, cleanup := newTestDB(t)
 	defer cleanup()

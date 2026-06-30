@@ -383,12 +383,22 @@ func (d *Database) ListSessionEventsV2(opts ListOptions) ([]StructuredEventRow, 
 	var events []StructuredEventRow
 	for rows.Next() {
 		var e StructuredEventRow
-		var project sql.NullString
+		// All TEXT columns are nullable in the schema; message rows in
+		// particular leave tool_name/actor NULL (see internal/storage/sync.go).
+		// Scan through NullString and coalesce to "" so a NULL never aborts
+		// the whole query. The groupEvents layer maps "" -> <unknown>.
+		var eventType, toolName, actor, snippet, sourcePath, timestamp, project sql.NullString
 
-		if err := rows.Scan(&e.EventType, &e.ToolName, &e.Actor, &e.Snippet, &e.SourcePath, &e.Ordinal, &e.Timestamp, &project); err != nil {
+		if err := rows.Scan(&eventType, &toolName, &actor, &snippet, &sourcePath, &e.Ordinal, &timestamp, &project); err != nil {
 			return nil, fmt.Errorf("scan event: %w", err)
 		}
 
+		e.EventType = eventType.String
+		e.ToolName = toolName.String
+		e.Actor = actor.String
+		e.Snippet = snippet.String
+		e.SourcePath = sourcePath.String
+		e.Timestamp = timestamp.String
 		if project.Valid {
 			e.Project = &project.String
 		}
