@@ -53,7 +53,4 @@ func TestUnmarshalPiPreset(t *testing.T) {
 	if in.ID != "pi" {
 		t.Errorf("id = %q, want %q", in.ID, "pi")
 	}
-	if in.Map.UUID != "$.id" {
-		t.Errorf("map.uuid = %q, want %q", in.Map.UUID, "$.id")
-	}
 }

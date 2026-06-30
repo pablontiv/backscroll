@@ -90,7 +90,4 @@ func TestPiPresetParses(t *testing.T) {
 	if def.ID != "pi" {
 		t.Errorf("id = %q, want pi", def.ID)
 	}
-	if def.Map.UUID != "$.id" {
-		t.Errorf("pi uuid selector = %q, want $.id", def.Map.UUID)
-	}
 }

@@ -17,3 +17,6 @@ coverage.out
 .claude/skills/backscroll-workspace/iteration-*/
 cartyx-out/
 graphify-out/
+
+# macOS system files
+.DS_Store

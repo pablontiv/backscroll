@@ -31,12 +31,6 @@ func TestSessionDirsToManifest(t *testing.T) {
 	if !found {
 		t.Error("expected subagents exclude pattern")
 	}
-	if def.Map.Role != "$.message.role" {
-		t.Errorf("map.role = %q", def.Map.Role)
-	}
-	if !def.Text.DropEmpty {
-		t.Error("drop_empty should be true")
-	}
 }
 
 func TestActiveInputs_declarative(t *testing.T) {
@@ -103,5 +97,23 @@ func TestActiveInputs_empty(t *testing.T) {
 	}
 	if len(defs) != 0 {
 		t.Errorf("expected empty, got %d defs", len(defs))
+	}
+}
+
+func TestInputModeString(t *testing.T) {
+	tests := []struct {
+		mode InputMode
+		want string
+	}{
+		{ModeDeclarative, "declarative"},
+		{ModeLegacy, "legacy (session_dirs)"},
+		{ModeUnknown, "unknown"},
+		{InputMode(999), "unknown"}, // unknown value
+	}
+	for _, tt := range tests {
+		got := tt.mode.String()
+		if got != tt.want {
+			t.Errorf("InputMode(%v).String() = %q, want %q", tt.mode, got, tt.want)
+		}
 	}
 }

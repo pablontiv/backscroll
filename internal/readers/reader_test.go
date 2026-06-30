@@ -40,26 +40,26 @@ func TestRegistry_Default(t *testing.T) {
 		t.Error("Default() on empty registry should return nil")
 	}
 
-	r.Register(&mockReader{name: "jsonl"})
-	if r.Default().Name() != "jsonl" {
-		t.Error("Default() should return jsonl reader")
+	r.Register(&mockReader{name: "claude"})
+	if r.Default().Name() != "claude" {
+		t.Error("Default() should return claude reader")
 	}
 }
 
 func TestRegistry_ForDef(t *testing.T) {
 	r := NewRegistry()
-	r.Register(&mockReader{name: "jsonl"})
+	r.Register(&mockReader{name: "claude"})
 
-	def := input_config.InputDefinition{Decode: input_config.DecodeConfig{Format: "jsonl"}}
+	def := input_config.InputDefinition{Decode: input_config.DecodeConfig{Format: "claude"}}
 	sr, err := r.ForDef(def)
-	if err != nil || sr.Name() != "jsonl" {
-		t.Errorf("ForDef jsonl: err=%v name=%q", err, sr.Name())
+	if err != nil || sr.Name() != "claude" {
+		t.Errorf("ForDef claude: err=%v name=%q", err, sr.Name())
 	}
 
-	// Empty format falls back to jsonl
+	// Empty format falls back to claude
 	def.Decode.Format = ""
 	sr, err = r.ForDef(def)
-	if err != nil || sr.Name() != "jsonl" {
+	if err != nil || sr.Name() != "claude" {
 		t.Errorf("ForDef empty: err=%v name=%q", err, sr.Name())
 	}
 

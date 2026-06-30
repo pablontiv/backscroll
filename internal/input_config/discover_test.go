@@ -200,3 +200,26 @@ func TestDiscover_AcceptsTildeExpansion(t *testing.T) {
 		t.Errorf("got %v, want [%s]", files, testFile)
 	}
 }
+
+func TestDiscoverFiles_followSymlinks(t *testing.T) {
+	dir := t.TempDir()
+	real := mkfile(t, dir, "real/session.jsonl")
+	link := filepath.Join(dir, "link")
+	if err := os.Symlink(filepath.Dir(real), link); err != nil {
+		t.Skip("symlinks not supported:", err)
+	}
+
+	cfg := DiscoverConfig{
+		Roots:          []string{dir},
+		Include:        []string{"**/*.jsonl"},
+		FollowSymlinks: true,
+	}
+	files, err := DiscoverFiles(cfg)
+	if err != nil {
+		t.Fatalf("DiscoverFiles: %v", err)
+	}
+	// Should find files through symlinks when FollowSymlinks is true
+	if len(files) == 0 {
+		t.Error("expected to find files when following symlinks")
+	}
+}

@@ -46,9 +46,9 @@ func (r *Registry) Get(name string) (SessionReader, bool) {
 	return sr, ok
 }
 
-// Default returns the "jsonl" reader, or the first registered reader if jsonl is absent.
+// Default returns the "claude" reader, or the first registered reader if claude is absent.
 func (r *Registry) Default() SessionReader {
-	if sr, ok := r.readers["jsonl"]; ok {
+	if sr, ok := r.readers["claude"]; ok {
 		return sr
 	}
 	for _, sr := range r.readers {
@@ -58,11 +58,11 @@ func (r *Registry) Default() SessionReader {
 }
 
 // ForDef returns the reader appropriate for the given InputDefinition's decode format.
-// Falls back to "jsonl" if the format is empty.
+// Falls back to "claude" if the format is empty.
 func (r *Registry) ForDef(def input_config.InputDefinition) (SessionReader, error) {
 	format := def.Decode.Format
 	if format == "" {
-		format = "jsonl"
+		format = "claude"
 	}
 	sr, ok := r.readers[format]
 	if !ok {
