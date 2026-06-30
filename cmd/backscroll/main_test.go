@@ -1512,3 +1512,64 @@ func TestSearchFindsToolCallContent(t *testing.T) {
 		t.Errorf("tool_result error not indexed; output: %s", out)
 	}
 }
+
+// setupPiPreset writes a minimal pi.inputs.toml (format="pi") pointing at a
+// fixture dir into the config dir's inputs/ so auto-sync routes to PiReader.
+func setupPiPreset(t *testing.T, cfgDir, fixtureRoot string) {
+	t.Helper()
+	inputsDir := filepath.Join(cfgDir, "backscroll", "inputs")
+	if err := os.MkdirAll(inputsDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	toml := fmt.Sprintf(`version = 1
+[[inputs]]
+id = "pi"
+source = "session"
+active = true
+[inputs.discover]
+roots = [%q]
+include = ["**/*.jsonl"]
+[inputs.decode]
+format = "pi"
+`, fixtureRoot)
+	if err := os.WriteFile(filepath.Join(inputsDir, "pi.inputs.toml"), []byte(toml), 0o644); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestSearchFindsPiToolCallContent(t *testing.T) {
+	_, cleanup := testEnv(t)
+	defer cleanup()
+	t.Setenv("HOME", t.TempDir())
+
+	sessionDir := t.TempDir()
+	src, err := os.ReadFile(filepath.Join(fixturesDir(), "pi-toolcalls.jsonl"))
+	if err != nil {
+		t.Fatalf("read fixture: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(sessionDir, "pi-toolcalls.jsonl"), src, 0o644); err != nil {
+		t.Fatalf("write session: %v", err)
+	}
+
+	cfgDir := t.TempDir()
+	setupPiPreset(t, cfgDir, sessionDir)
+	t.Setenv("BACKSCROLL_CONFIG_DIR", cfgDir)
+
+	// toolCall argument text must be searchable (auto-sync indexes first)
+	out, _, err := runCmd("search", "pizzqx_marker", "--all-projects")
+	if err != nil {
+		t.Fatalf("search toolCall: %v", err)
+	}
+	if !strings.Contains(out, "pizzqx_marker") {
+		t.Errorf("Pi toolCall args not indexed; output: %s", out)
+	}
+
+	// custom-record result text must be searchable
+	out, _, err = runCmd("search", "pizzqx_result_token", "--all-projects")
+	if err != nil {
+		t.Fatalf("search custom result: %v", err)
+	}
+	if !strings.Contains(out, "pizzqx_result_token") {
+		t.Errorf("Pi custom result not indexed; output: %s", out)
+	}
+}

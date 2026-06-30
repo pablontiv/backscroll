@@ -60,7 +60,7 @@ internal/
 ├── sources/           — external source parsers (ke, decision, memory, rule, spec, backlog) + SourceRegistry
 ├── projects/          — project identity registry: LoadGlobalRegistry(), Identify(), LoadLocalHint()
 ├── reader/            — direct reading and filtering of individual session files
-├── readers/           — SessionReader interface, Registry, JsonlReader, ClaudeReader (text+tool_use+tool_result), OpenCodeReader; toolfmt serializer
+├── readers/           — SessionReader interface, Registry, JsonlReader, ClaudeReader (text+tool_use+tool_result), PiReader (text+toolCall+custom results), OpenCodeReader; toolfmt serializer
 └── storage/           — SQLite adapter (FTS5, BM25, WAL mode, migrations, search_items, session_tags)
 ```
 
@@ -95,7 +95,7 @@ Configurable in `[sources]` section of `backscroll.toml`. Source types: `ke`, `d
 - **Date filtering**: `--after`/`--before` flags filter by `search_items.timestamp` with NULL-safe guards; `--before` uses exclusive `<` comparison.
 - **Multi-path config**: `SessionDirs []string` with backward-compatible `session_dir` alias and auto-discovery of `~/.claude/projects/`.
 - **Auto-tagging**: Regex heuristics in `internal/tagging` detect session categories (debugging, refactoring, feature, testing, docs, config) during sync; stored in `session_tags` table.
-- **Content-type classification**: Messages classified as `text`/`code`/`tool` based on message content types during sync. The `claude` input indexes `tool_use` command input and `tool_result` content with `content_type='tool'` for keyword search.
+- **Content-type classification**: Messages classified as `text`/`code`/`tool` based on message content types during sync. The `claude` input indexes `tool_use` command input and `tool_result` content with `content_type='tool'` for keyword search. The `pi` input indexes `toolCall.arguments` and `custom`-record results with `content_type='tool'` for keyword search.
 - **Pure Go SQLite**: `modernc.org/sqlite` — no CGO, trivially cross-compilable.
 - **Autoupdate**: `picokit/autoupdate` fetches and stages the latest GitHub release in the background; `run()` waits up to 10s after the command completes so short-lived commands don't kill the download before it finishes.
 - **Schema migration rule**: Every new table or column MUST be introduced as a new migration version (increment the version number and add a new `if currentVersion == N` block in `setupSchema()`). Never modify existing migration blocks — existing databases that already passed that version will never re-run them.
@@ -181,5 +181,5 @@ github.com/pablontiv/backscroll/internal/sources       — External source parse
 github.com/pablontiv/backscroll/internal/storage       — SQLite FTS5 adapter
 github.com/pablontiv/backscroll/internal/projects      — Project identity registry
 github.com/pablontiv/backscroll/internal/reader        — Direct session file reader
-github.com/pablontiv/backscroll/internal/readers       — SessionReader interface, Registry, JsonlReader, ClaudeReader (text+tool_use+tool_result), OpenCodeReader; toolfmt serializer
+github.com/pablontiv/backscroll/internal/readers       — SessionReader interface, Registry, JsonlReader, ClaudeReader (text+tool_use+tool_result), PiReader (text+toolCall+custom results), OpenCodeReader; toolfmt serializer
 ```
