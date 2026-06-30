@@ -819,7 +819,7 @@ roots = [%q]
 include = ["**/*.jsonl"]
 exclude = ["**/subagents/**"]
 [inputs.decode]
-format = "jsonl"
+format = "claude"
 [inputs.record]
 selector = "$"
 include_when = [{selector = "$.type", op = "in", value = ["user", "assistant"]}]

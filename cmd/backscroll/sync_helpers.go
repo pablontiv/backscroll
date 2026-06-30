@@ -32,7 +32,6 @@ func maybeAutoSync(cfg *config.Config) error {
 
 	// Build reader registry
 	reg := readers.NewRegistry()
-	reg.Register(&readers.JsonlReader{})
 	reg.Register(&readers.OpenCodeReader{})
 	reg.Register(&readers.ClaudeReader{})
 	reg.Register(&readers.PiReader{})
