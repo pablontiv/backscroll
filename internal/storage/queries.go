@@ -389,7 +389,6 @@ func (d *Database) Validate() error {
 	tables := []string{
 		"indexed_files",
 		"search_items",
-		"session_events",
 		"session_tags",
 		"dynamic_stopwords",
 		"schema_migrations",

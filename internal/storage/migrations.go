@@ -70,6 +70,18 @@ func (d *Database) SetupSchema() error {
 		}
 	}
 
+	// Check if version 5 is already applied
+	err = d.db.QueryRow("SELECT COUNT(*) FROM schema_migrations WHERE version = 5").Scan(&count)
+	if err != nil {
+		return fmt.Errorf("check migration version 5: %w", err)
+	}
+
+	if count == 0 {
+		if err := d.applyV5Migration(); err != nil {
+			return err
+		}
+	}
+
 	return nil
 }
 
@@ -209,6 +221,40 @@ func (d *Database) applyV4Migration() error {
 	`, checksumHex)
 	if err != nil {
 		return fmt.Errorf("record migration v4: %w", err)
+	}
+
+	return tx.Commit()
+}
+
+// applyV5Migration drops the phantom session_events table. Nothing reads or
+// writes it after the structured-stats surface was removed (stats command,
+// structured list filters, and the session_events query/insert paths are gone).
+// Per the schema rule this is a new migration; V1 still creates the table on
+// the way up, and V5 drops it.
+func (d *Database) applyV5Migration() error {
+	tx, err := d.db.Begin()
+	if err != nil {
+		return fmt.Errorf("begin transaction: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	const sqlV5Drop = `
+DROP INDEX IF EXISTS idx_session_events_order;
+DROP INDEX IF EXISTS idx_session_events_project;
+DROP TABLE IF EXISTS session_events;
+`
+	if _, err := tx.Exec(sqlV5Drop); err != nil {
+		return fmt.Errorf("drop session_events: %w", err)
+	}
+
+	checksum := sha256.Sum256([]byte(sqlV5Drop))
+	checksumHex := fmt.Sprintf("%x", checksum)
+
+	if _, err := tx.Exec(`
+		INSERT INTO schema_migrations (version, name, applied_on, checksum)
+		VALUES (5, 'V5 drop phantom session_events', CURRENT_TIMESTAMP, ?)
+	`, checksumHex); err != nil {
+		return fmt.Errorf("record migration v5: %w", err)
 	}
 
 	return tx.Commit()

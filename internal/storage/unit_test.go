@@ -21,31 +21,18 @@ func TestDB(t *testing.T) {
 	}
 }
 
-func TestSyncDoesNotWriteSessionEvents(t *testing.T) {
+func TestMigrationV5DropsSessionEvents(t *testing.T) {
 	db, cleanup := newTestDB(t)
 	defer cleanup()
 
-	if err := db.SyncFiles([]IndexedFile{
-		{
-			SourcePath: "/test/session.jsonl",
-			Source:     "session",
-			Hash:       "abc123",
-			Project:    "test",
-			Messages: []IndexedMessage{
-				{Ordinal: 0, Role: "user", Text: "hello", Timestamp: "2024-01-01T00:00:00Z", ContentType: "text"},
-			},
-		},
-	}); err != nil {
-		t.Fatalf("SyncFiles: %v", err)
+	var name string
+	err := db.db.QueryRow(
+		"SELECT name FROM sqlite_master WHERE type='table' AND name='session_events'",
+	).Scan(&name)
+	if err == nil {
+		t.Fatalf("session_events should not exist after V5, but found %q", name)
 	}
-
-	var n int
-	if err := db.db.QueryRow("SELECT COUNT(*) FROM session_events").Scan(&n); err != nil {
-		t.Fatalf("count: %v", err)
-	}
-	if n != 0 {
-		t.Errorf("expected 0 session_events rows after sync, got %d", n)
-	}
+	// sql.ErrNoRows is the expected outcome.
 }
 
 func TestNormalizeSource(t *testing.T) {
@@ -2857,52 +2844,6 @@ func TestValidateFTSCheck(t *testing.T) {
 	err := db.Validate()
 	if err != nil {
 		t.Fatalf("Validate on fresh DB should pass: %v", err)
-	}
-}
-
-// TestPurgeSessionEventsDeletion verifies purge no longer touches session_events
-func TestPurgeSessionEventsDeletionPath(t *testing.T) {
-	db, cleanup := newTestDB(t)
-	defer cleanup()
-
-	now := time.Now()
-	oldTime := now.Add(-100 * 24 * time.Hour)
-
-	// Sync with multiple messages
-	if err := db.SyncFiles([]IndexedFile{
-		{
-			SourcePath: "/old/s.jsonl",
-			Source:     "session",
-			Hash:       "h1",
-			Project:    "test",
-			Messages: []IndexedMessage{
-				{Ordinal: 0, Role: "user", Text: "old1", UUID: getTestUUID(), Timestamp: oldTime.Format(time.RFC3339), ContentType: "text"},
-				{Ordinal: 1, Role: "assistant", Text: "old2", UUID: getTestUUID(), Timestamp: oldTime.Format(time.RFC3339), ContentType: "text"},
-				{Ordinal: 2, Role: "user", Text: "old3", UUID: getTestUUID(), Timestamp: oldTime.Format(time.RFC3339), ContentType: "text"},
-			},
-		},
-	}); err != nil {
-		t.Fatalf("SyncFiles: %v", err)
-	}
-
-	// Verify sync no longer writes to session_events
-	var count int
-	_ = db.DB().QueryRow("SELECT COUNT(*) FROM session_events WHERE source_path = ?", "/old/s.jsonl").Scan(&count)
-	if count != 0 {
-		t.Fatalf("expected 0 session_events after sync, got %d", count)
-	}
-
-	// Purge
-	purgeTime := now.Add(-50 * 24 * time.Hour)
-	_, err := db.Purge(purgeTime.Format(time.RFC3339))
-	if err != nil {
-		t.Fatalf("Purge: %v", err)
-	}
-
-	// Verify session_events remains empty (purge doesn't touch it)
-	_ = db.DB().QueryRow("SELECT COUNT(*) FROM session_events WHERE source_path = ?", "/old/s.jsonl").Scan(&count)
-	if count != 0 {
-		t.Errorf("expected 0 session_events after purge, got %d", count)
 	}
 }
 
