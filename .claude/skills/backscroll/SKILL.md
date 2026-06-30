@@ -47,7 +47,7 @@ Backscroll v2 provides four canonical query commands:
 | Command | Purpose |
 |---|---|
 | `backscroll list [--project P] [--order FIELD:DIR] [--limit N]` | List indexed items sorted and paginated |
-| `backscroll search <QUERY> [--project P] [--source TYPE] [--json] [--max-tokens N]` | Full-text search with BM25 ranking |
+| `backscroll search <QUERY> [--project P] [--source TYPE] [--content-type text\|code\|tool] [--json] [--max-tokens N]` | Full-text search with BM25 ranking |
 | `backscroll read --path <PATH> [--tail N] [--semantic]` | Read one indexed session file, optionally tail and semantic rows |
 | `backscroll stats --input ID [--type TYPE] [--tool TOOL] [--group-by FIELD]` | Aggregate tool-call statistics (`--input` only valid on stats) |
 
@@ -114,6 +114,26 @@ backscroll search "QUERY" --all-projects --max-tokens 8000
 # Narrow to a specific session file
 backscroll search "QUERY" --source-path "/path/to/session.jsonl"
 ```
+
+### 5.7) Find what a tool did, or an error from a command
+
+Tool inputs (the command/file/args) AND tool outputs (results and errors) are indexed
+for Claude, Pi, and OpenCode sessions with `content_type='tool'`. Use `--content-type tool`
+to search only tool activity — ideal for debugging "what command ran / what failed".
+
+```bash
+# Find a command that was run (searches serialized tool inputs)
+backscroll search "go test ./..." --all-projects --content-type tool
+
+# Find an error returned by a tool/command
+backscroll search "exit code 1" --all-projects --content-type tool
+
+# Find when a specific file was read or edited
+backscroll search "internal/storage/sync.go" --all-projects --content-type tool
+```
+
+Do NOT shell out to Python/jq to parse `session.jsonl` for tool calls — they are already
+indexed. `--content-type tool` returns them directly.
 
 ## 6) Output formats
 
