@@ -1,6 +1,6 @@
 ---
 name: backscroll
-description: Use when the user asks for previous Claude, Pi, or OpenCode sessions, forgotten discussions, recurring bugs, project history, or indexed Backscroll sessions/plans/notes. Use this before reinvesting context already covered by AI sessions. Also use for Spanish queries about session or conversation history: 'sesiones anteriores', 'sesión pasada', 'consulta en la sesión', 'conversaciones anteriores', 'lo que hablamos', 'lo que discutimos', 'historial de sesiones', 'busca en sesiones', 'planes anteriores', 'notas previas', 'qué hablamos sobre X'.
+description: "Trigger: backscroll, sesiones anteriores, where were we, ya lo hicimos, prior sessions, already done, we already did this, continue from last session. Search indexed AI session history for past decisions and prior work before answering."
 user-invocable: true
 allowed-tools:
   - Bash
