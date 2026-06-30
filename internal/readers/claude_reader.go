@@ -95,7 +95,7 @@ func extractClaudeMessages(rec claudeRecord) []models.Message {
 		if text == "" {
 			return nil
 		}
-		return []models.Message{{Role: role, Content: text, ContentType: classifyClaude(text), Timestamp: ts}}
+		return []models.Message{{Role: role, Content: text, ContentType: classifyText(text), Timestamp: ts}}
 	}
 
 	// content as an array of blocks
@@ -127,12 +127,12 @@ func extractClaudeMessages(rec claudeRecord) []models.Message {
 	}
 	if len(textParts) > 0 {
 		text := strings.TrimSpace(strings.Join(textParts, " "))
-		out = append([]models.Message{{Role: role, Content: text, ContentType: classifyClaude(text), Timestamp: ts}}, out...)
+		out = append([]models.Message{{Role: role, Content: text, ContentType: classifyText(text), Timestamp: ts}}, out...)
 	}
 	return out
 }
 
-func classifyClaude(text string) string {
+func classifyText(text string) string {
 	if strings.Contains(text, "```") {
 		return "code"
 	}
