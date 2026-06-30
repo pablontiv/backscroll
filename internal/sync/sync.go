@@ -99,7 +99,7 @@ func WalkSessionDirs(dirs []string, includeAgents bool) ([]string, error) {
 // IsNoiseRecord returns true if the record should be filtered out.
 func IsNoiseRecord(r rawRecord) bool {
 	// Filter by type
-	if isNoiseType(r.Type) {
+	if IsNoiseType(r.Type) {
 		return true
 	}
 
@@ -152,8 +152,8 @@ type rawBlock struct {
 	Content    json.RawMessage `json:"content"`
 }
 
-// isNoiseType returns true if the type should be filtered
-func isNoiseType(typ string) bool {
+// IsNoiseType returns true if the type should be filtered
+func IsNoiseType(typ string) bool {
 	noiseTypes := map[string]bool{
 		"system-reminder":      true,
 		"task-notification":    true,
@@ -175,7 +175,7 @@ func extractContent(raw json.RawMessage) (string, string) {
 	// Try parsing as string first
 	var strContent string
 	if err := json.Unmarshal(raw, &strContent); err == nil {
-		content := cleanContent(strContent)
+		content := CleanContent(strContent)
 		return content, classifyContentType(content, false)
 	}
 
@@ -197,7 +197,7 @@ func extractFromBlocks(blocks []rawBlock) (string, string) {
 	for _, block := range blocks {
 		switch block.Type {
 		case "text":
-			cleaned := cleanContent(block.Text)
+			cleaned := CleanContent(block.Text)
 			if cleaned != "" {
 				textParts = append(textParts, cleaned)
 				if strings.Contains(cleaned, "```") {
@@ -231,8 +231,8 @@ func extractFromBlocks(blocks []rawBlock) (string, string) {
 	return content, contentType
 }
 
-// cleanContent removes noise patterns from content
-func cleanContent(content string) string {
+// CleanContent removes noise patterns from content
+func CleanContent(content string) string {
 	if content == "" {
 		return ""
 	}

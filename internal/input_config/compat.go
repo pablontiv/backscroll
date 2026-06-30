@@ -4,12 +4,11 @@ import (
 	"fmt"
 )
 
-// SessionDirsToManifest generates an implicit JSONL input manifest from a list
-// of session directories. This provides backward compatibility for configs that
-// use session_dirs rather than declarative *.inputs.toml files.
-//
-// The generated manifest replicates the behavior of WalkSessionDirs: include
-// all **/*.jsonl, exclude **/subagents/**.
+// SessionDirsToManifest generates an implicit input manifest with Decode.Format="claude"
+// from a list of session directories, routing to ClaudeReader for parsing.
+// This provides backward compatibility for configs that use session_dirs rather than
+// declarative *.inputs.toml files. Record/Map/Content/Text fields are retained for
+// backward compatibility but are ignored by ClaudeReader (slated for removal in Slice 4).
 func SessionDirsToManifest(dirs []string) InputDefinition {
 	return InputDefinition{
 		ID:     "legacy-session-dirs",
@@ -21,7 +20,7 @@ func SessionDirsToManifest(dirs []string) InputDefinition {
 			Exclude:        []string{"**/subagents/**"},
 			FollowSymlinks: false,
 		},
-		Decode: DecodeConfig{Format: "jsonl"},
+		Decode: DecodeConfig{Format: "claude"},
 		Record: RecordConfig{
 			Selector: "$",
 			IncludeWhen: []Predicate{

@@ -29,20 +29,11 @@ func TestUnmarshalClaudePreset(t *testing.T) {
 	if !in.Active {
 		t.Error("active should be true")
 	}
-	if in.Decode.Format != "jsonl" {
-		t.Errorf("format = %q, want jsonl", in.Decode.Format)
+	if in.Decode.Format != "claude" {
+		t.Errorf("format = %q, want claude", in.Decode.Format)
 	}
 	if len(in.Discover.Include) == 0 {
 		t.Error("no include patterns")
-	}
-	if len(in.Record.IncludeWhen) == 0 {
-		t.Error("no include_when predicates")
-	}
-	if in.Map.Role == "" {
-		t.Error("map.role is empty")
-	}
-	if in.Text.DropEmpty != true {
-		t.Error("text.drop_empty should be true")
 	}
 }
 

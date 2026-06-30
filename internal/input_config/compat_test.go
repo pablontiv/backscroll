@@ -16,7 +16,7 @@ func TestSessionDirsToManifest(t *testing.T) {
 	if !def.Active {
 		t.Error("should be active")
 	}
-	if def.Decode.Format != "jsonl" {
+	if def.Decode.Format != "claude" {
 		t.Errorf("format = %q", def.Decode.Format)
 	}
 	if len(def.Discover.Include) == 0 {

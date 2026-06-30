@@ -34,6 +34,7 @@ func maybeAutoSync(cfg *config.Config) error {
 	reg := readers.NewRegistry()
 	reg.Register(&readers.JsonlReader{})
 	reg.Register(&readers.OpenCodeReader{})
+	reg.Register(&readers.ClaudeReader{})
 
 	// Resolve active inputs
 	defs, _, err := input_config.ActiveInputs(cfg.SessionDirs)

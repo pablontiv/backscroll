@@ -432,9 +432,9 @@ func TestCleanContent(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got := cleanContent(tt.input)
+			got := CleanContent(tt.input)
 			if got != tt.want {
-				t.Errorf("cleanContent() = %q, want %q", got, tt.want)
+				t.Errorf("CleanContent() = %q, want %q", got, tt.want)
 			}
 		})
 	}

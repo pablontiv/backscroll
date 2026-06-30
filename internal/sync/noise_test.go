@@ -57,9 +57,22 @@ func TestIsNoiseType(t *testing.T) {
 		{"", false},
 	}
 	for _, tc := range tests {
-		got := isNoiseType(tc.typ)
+		got := IsNoiseType(tc.typ)
 		if got != tc.isNoise {
-			t.Errorf("isNoiseType(%q) = %v, want %v", tc.typ, got, tc.isNoise)
+			t.Errorf("IsNoiseType(%q) = %v, want %v", tc.typ, got, tc.isNoise)
 		}
+	}
+}
+
+func TestExportedNoiseHelpers(t *testing.T) {
+	if !IsNoiseType("system-reminder") {
+		t.Error("IsNoiseType(system-reminder) = false, want true")
+	}
+	if IsNoiseType("user") {
+		t.Error("IsNoiseType(user) = true, want false")
+	}
+	got := CleanContent("hello <system-reminder>drop</system-reminder> world")
+	if got != "hello world" {
+		t.Errorf("CleanContent = %q, want %q", got, "hello world")
 	}
 }
