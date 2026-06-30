@@ -22,9 +22,6 @@ func newListCmd(stdout, stderr io.Writer) *cobra.Command {
 		order       string
 		limit       int
 		offset      int
-		eventType   string
-		toolName    string
-		command     string
 	)
 
 	cmd := &cobra.Command{
@@ -37,9 +34,6 @@ Use --all-projects to list across all projects.
 Use --order to sort results (e.g., timestamp:desc).
 Use --limit to restrict result count.
 Use --offset to skip results.
-Use --type to filter by event type (e.g., tool_call) - queries structured events.
-Use --tool to filter by tool name (e.g., bash, subagent) - requires --type.
-Use --command to filter by command field - queries structured events.
 Use --recent N to show N most recent sessions (legacy flag; prefer --order timestamp:desc --limit N).
 Use --indexed-only to skip auto-sync (read existing index only).
 Use --json to output as JSON.`,
@@ -48,7 +42,7 @@ Use --json to output as JSON.`,
 				return fmt.Errorf("unexpected positional argument %q; use --text for text search", args[0])
 			}
 			return runList(stdout, stderr, project, allProjects, recent, jsonFormat, robotFormat, indexedOnly,
-				order, limit, offset, eventType, toolName, command)
+				order, limit, offset)
 		},
 	}
 
@@ -61,16 +55,13 @@ Use --json to output as JSON.`,
 	cmd.Flags().StringVar(&order, "order", "", "Sort results (e.g., timestamp:desc)")
 	cmd.Flags().IntVar(&limit, "limit", 0, "Result limit (0 = no limit)")
 	cmd.Flags().IntVar(&offset, "offset", 0, "Result offset")
-	cmd.Flags().StringVar(&eventType, "type", "", "Filter by event type (e.g., tool_call)")
-	cmd.Flags().StringVar(&toolName, "tool", "", "Filter by tool name (e.g., bash, subagent)")
-	cmd.Flags().StringVar(&command, "command", "", "Filter by command")
 
 	return cmd
 }
 
 func runList(stdout, stderr io.Writer,
 	project string, allProjects bool, recent int, jsonFormat, robotFormat, indexedOnly bool,
-	order string, limit, offset int, eventType, toolName, command string) error {
+	order string, limit, offset int) error {
 
 	cfg, err := config.Load()
 	if err != nil {
@@ -99,25 +90,6 @@ func runList(stdout, stderr io.Writer,
 		return nil
 	}
 	defer func() { _ = db.Close() }()
-
-	// If structured query filters are provided (--type, --tool, --command), use ListSessionEventsV2
-	if eventType != "" || toolName != "" || command != "" {
-		opts := storage.ListOptions{
-			Project:     project,
-			AllProjects: allProjects,
-			Order:       order,
-			Limit:       limit,
-			Offset:      offset,
-			EventType:   eventType,
-			ToolName:    toolName,
-			Command:     command,
-		}
-		events, err := db.ListSessionEventsV2(opts)
-		if err != nil {
-			return fmt.Errorf("list session events v2: %w", err)
-		}
-		return formatStructuredEvents(stdout, events, jsonFormat)
-	}
 
 	// If v2 grammar flags are provided (input, order, limit, offset), use ListItemsV2
 	// Otherwise fall back to legacy ListSessions for backward compat

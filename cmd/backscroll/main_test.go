@@ -1257,45 +1257,16 @@ func TestListWithInputFilterReturnsData(t *testing.T) {
 
 // Slice 4: Structured tool-call listing and stats
 
-func TestListWithTypeToolFilterNoPathResolution(t *testing.T) {
+func TestListStructuredFlagsRemoved(t *testing.T) {
 	_, cleanup := testEnv(t)
 	defer cleanup()
 
-	// Sync fixture sessions containing tool calls
-	claudeDir := filepath.Join(fixturesDir(), "claude-preset", "projects")
-	_, _, err := syncForTest(t, "sync", "--path", claudeDir)
-	if err != nil {
-		t.Fatalf("sync error: %v", err)
+	_, stderr, err := runCmd("list", "--type", "tool_call")
+	if err == nil {
+		t.Fatal("expected error: --type flag should be removed from list")
 	}
-
-	// Test list --type tool_call --tool bash (should not try to resolve bash as a path)
-	out, _, err := runCmd("list", "--type", "tool_call", "--tool", "bash", "--limit", "10")
-	if err != nil {
-		t.Fatalf("list --input claude --type tool_call --tool bash error: %v", err)
-	}
-	_ = out // We're just checking that the command runs without path resolution errors
-}
-
-func TestListStructuredToolCallRows(t *testing.T) {
-	_, cleanup := testEnv(t)
-	defer cleanup()
-
-	// Sync fixture sessions containing tool calls
-	claudeDir := filepath.Join(fixturesDir(), "claude-preset", "projects")
-	_, _, err := syncForTest(t, "sync", "--path", claudeDir)
-	if err != nil {
-		t.Fatalf("sync error: %v", err)
-	}
-
-	// Test list --type tool_call returns structured rows
-	out, _, err := runCmd("list", "--type", "tool_call", "--limit", "5")
-	if err != nil {
-		t.Fatalf("list --type tool_call error: %v", err)
-	}
-
-	// Should have some output (assuming fixtures contain tool calls)
-	if len(strings.TrimSpace(out)) == 0 {
-		t.Logf("list --type tool_call produced empty output (may be expected if fixtures have no tool calls)")
+	if !strings.Contains(stderr, "unknown flag") {
+		t.Errorf("expected 'unknown flag', got: %q", stderr)
 	}
 }
 

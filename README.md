@@ -157,7 +157,7 @@ See [Sync & Indexing docs](docs/sync.md) for input manifests, noise filtering, a
 ```bash
 # Query commands — the core v2 surface
 backscroll search <QUERY> [--project P] [--source TYPE] [--content-type text|code|tool] [--json] [--max-tokens N]  # Full-text search
-backscroll list [--project P] [--order FIELD:DIR] [--type TYPE] [--tool NAME] [--limit N] [--json]  # List indexed items
+backscroll list [--project P] [--order FIELD:DIR] [--limit N] [--json]  # List indexed items
 backscroll read --path <PATH> [--tail N] [--semantic]                          # Read one session file
 
 # Maintenance
