@@ -48,13 +48,22 @@ type msgInfoData struct {
 }
 
 type partInfoData struct {
-	Type    string `json:"type"`
-	Text    string `json:"text"`
-	Ignored *bool  `json:"ignored"`
+	Type    string         `json:"type"`
+	Text    string         `json:"text"`
+	Ignored *bool          `json:"ignored"`
+	Tool    string         `json:"tool"`
+	State   *toolPartState `json:"state"`
+}
+
+// toolPartState is the `state` object of an OpenCode `tool` part. A single tool
+// part carries both the input (an object) and the output (a string).
+type toolPartState struct {
+	Input  json.RawMessage `json:"input"`
+	Output json.RawMessage `json:"output"`
 }
 
 // Parse reads all messages from the OpenCode database and returns them as a ParsedFile.
-// Only parts of type "text" with ignored != true are indexed; all other part types are skipped.
+// Parts of type "text" (with ignored != true) and "tool" (with non-empty state.input/state.output) are indexed; all other part types are skipped.
 func (r *OpenCodeReader) Parse(dbPath string, _ input_config.InputDefinition) (models.ParsedFile, error) {
 	hash, err := r.Hash(dbPath)
 	if err != nil {
@@ -84,18 +93,21 @@ func (r *OpenCodeReader) Parse(dbPath string, _ input_config.InputDefinition) (m
 		currentRole  string
 		currentTime  int64
 		textParts    []string
+		toolMsgs     []models.Message
 	)
 
 	flush := func() {
-		if len(textParts) == 0 {
-			return
+		if len(textParts) > 0 {
+			msgs = append(msgs, models.Message{
+				Role:        normalizeOpenCodeRole(currentRole),
+				Content:     strings.Join(textParts, "\n"),
+				ContentType: "text",
+				Timestamp:   time.UnixMilli(currentTime),
+			})
 		}
-		msgs = append(msgs, models.Message{
-			Role:        normalizeOpenCodeRole(currentRole),
-			Content:     strings.Join(textParts, "\n"),
-			ContentType: "text",
-			Timestamp:   time.UnixMilli(currentTime),
-		})
+		msgs = append(msgs, toolMsgs...)
+		textParts = nil
+		toolMsgs = nil
 	}
 
 	for rows.Next() {
@@ -111,21 +123,13 @@ func (r *OpenCodeReader) Parse(dbPath string, _ input_config.InputDefinition) (m
 		}
 
 		var pd partInfoData
-		if err := json.Unmarshal([]byte(partData), &pd); err != nil || pd.Type != "text" {
-			continue
-		}
-		if pd.Ignored != nil && *pd.Ignored {
-			continue
-		}
-		text := strings.TrimSpace(pd.Text)
-		if text == "" {
+		if err := json.Unmarshal([]byte(partData), &pd); err != nil {
 			continue
 		}
 
 		if msgID != currentMsgID {
 			flush()
 			currentMsgID = msgID
-			textParts = nil
 			var md msgInfoData
 			if err := json.Unmarshal([]byte(msgData), &md); err == nil {
 				currentRole = md.Role
@@ -134,7 +138,28 @@ func (r *OpenCodeReader) Parse(dbPath string, _ input_config.InputDefinition) (m
 			}
 			currentTime = timeCreated
 		}
-		textParts = append(textParts, text)
+
+		switch pd.Type {
+		case "text":
+			if pd.Ignored != nil && *pd.Ignored {
+				continue
+			}
+			if text := strings.TrimSpace(pd.Text); text != "" {
+				textParts = append(textParts, text)
+			}
+		case "tool":
+			if pd.State == nil {
+				continue
+			}
+			role := normalizeOpenCodeRole(currentRole)
+			ts := time.UnixMilli(currentTime)
+			if in := SerializeToolInput(pd.Tool, pd.State.Input); strings.TrimSpace(in) != "" {
+				toolMsgs = append(toolMsgs, models.Message{Role: role, Content: in, ContentType: "tool", Timestamp: ts})
+			}
+			if out := SerializeToolOutput(pd.State.Output); strings.TrimSpace(out) != "" {
+				toolMsgs = append(toolMsgs, models.Message{Role: role, Content: out, ContentType: "tool", Timestamp: ts})
+			}
+		}
 	}
 	flush()
 
