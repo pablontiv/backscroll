@@ -3833,4 +3833,16 @@ func TestV4MigrationRoutesToolRowsToToolFTS(t *testing.T) {
 	if leak != 0 {
 		t.Errorf("tool content leaked into messages_fts: got %d hits", leak)
 	}
+
+	// Updating a prose row's text must keep it correctly routed to messages_fts.
+	if _, err := db.db.Exec(`UPDATE search_items SET text = 'updated architecture' WHERE ordinal = 0`); err != nil {
+		t.Fatalf("update prose: %v", err)
+	}
+	var updatedHit int
+	if err := db.db.QueryRow(`SELECT count(*) FROM messages_fts WHERE messages_fts MATCH '"updated"'`).Scan(&updatedHit); err != nil {
+		t.Fatalf("query updated: %v", err)
+	}
+	if updatedHit != 1 {
+		t.Errorf("update routing: want 1 hit in messages_fts, got %d", updatedHit)
+	}
 }

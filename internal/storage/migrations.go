@@ -345,6 +345,10 @@ DROP TRIGGER IF EXISTS search_items_ai;
 DROP TRIGGER IF EXISTS search_items_ad;
 DROP TRIGGER IF EXISTS search_items_au;
 
+-- NOTE: content_type is immutable per row (set at sync time; re-sync deletes and re-inserts).
+-- The UPDATE triggers (search_items_au_tool, search_items_au_msg) intentionally branch on old.content_type
+-- and do not handle cross-type transitions, since content_type never changes for existing rows.
+
 CREATE TRIGGER IF NOT EXISTS search_items_ai_tool AFTER INSERT ON search_items
 WHEN new.content_type = 'tool' BEGIN
     INSERT INTO tool_fts(rowid, text) VALUES (new.id, new.text);
