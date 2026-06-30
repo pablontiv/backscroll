@@ -390,3 +390,118 @@ func TestOpenCodeReader_Discover(t *testing.T) {
 		t.Errorf("Discover returned %d paths, want 1", len(paths))
 	}
 }
+
+// createOpenCodeDBWithTool builds a DB with one assistant message that has a
+// text part and a real `type:"tool"` part (state.input object + state.output
+// string), matching the live OpenCode schema.
+func createOpenCodeDBWithTool(t *testing.T) string {
+	t.Helper()
+	dir := t.TempDir()
+	dbPath := filepath.Join(dir, "opencode.db")
+	db, err := sql.Open("sqlite", dbPath)
+	if err != nil {
+		t.Fatalf("create test db: %v", err)
+	}
+	defer func() { _ = db.Close() }()
+
+	if _, err := db.Exec(`
+		CREATE TABLE message (id TEXT PRIMARY KEY, session_id TEXT NOT NULL, time_created INTEGER NOT NULL, time_updated INTEGER NOT NULL, data TEXT NOT NULL);
+		CREATE TABLE part (id TEXT PRIMARY KEY, message_id TEXT NOT NULL, session_id TEXT NOT NULL, time_created INTEGER NOT NULL, time_updated INTEGER NOT NULL, data TEXT NOT NULL);
+	`); err != nil {
+		t.Fatalf("schema: %v", err)
+	}
+
+	now := time.Now().UnixMilli()
+	msgData, _ := json.Marshal(map[string]string{"role": "assistant"})
+	if _, err := db.Exec(`INSERT INTO message (id, session_id, time_created, time_updated, data) VALUES (?,?,?,?,?)`,
+		"m1", "s1", now, now, string(msgData)); err != nil {
+		t.Fatalf("insert msg: %v", err)
+	}
+
+	insertPart := func(id string, data any) {
+		t.Helper()
+		dj, _ := json.Marshal(data)
+		if _, err := db.Exec(`INSERT INTO part (id, message_id, session_id, time_created, time_updated, data) VALUES (?,?,?,?,?,?)`,
+			id, "m1", "s1", now, now, string(dj)); err != nil {
+			t.Fatalf("insert part %s: %v", id, err)
+		}
+	}
+	insertPart("p1", map[string]any{"type": "text", "text": "running a command"})
+	insertPart("p2", map[string]any{
+		"type": "tool",
+		"tool": "bash",
+		"state": map[string]any{
+			"status": "completed",
+			"input":  map[string]any{"command": "occ_marker_cmd", "description": "do it"},
+			"output": "occ_output_token done",
+		},
+	})
+	return dbPath
+}
+
+func TestOpenCodeReader_CapturesToolInputOutput(t *testing.T) {
+	pf, err := (&OpenCodeReader{}).Parse(createOpenCodeDBWithTool(t), input_config.InputDefinition{})
+	if err != nil {
+		t.Fatalf("Parse: %v", err)
+	}
+	var gotText, gotInput, gotOutput bool
+	for _, m := range pf.Records {
+		switch {
+		case m.ContentType == "text" && m.Content == "running a command":
+			gotText = true
+		case m.ContentType == "tool" && contains(m.Content, "occ_marker_cmd") && contains(m.Content, "bash"):
+			gotInput = true
+		case m.ContentType == "tool" && contains(m.Content, "occ_output_token"):
+			gotOutput = true
+		}
+	}
+	if !gotText {
+		t.Error("missing text message")
+	}
+	if !gotInput {
+		t.Error("missing tool input message")
+	}
+	if !gotOutput {
+		t.Error("missing tool output message")
+	}
+}
+
+func TestOpenCodeReader_ToolOnlyMessageEmitted(t *testing.T) {
+	// A message with only a tool part (no text) must still produce tool messages.
+	dir := t.TempDir()
+	dbPath := filepath.Join(dir, "opencode.db")
+	db, err := sql.Open("sqlite", dbPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = db.Close() }()
+	if _, err := db.Exec(`
+		CREATE TABLE message (id TEXT PRIMARY KEY, session_id TEXT NOT NULL, time_created INTEGER NOT NULL, time_updated INTEGER NOT NULL, data TEXT NOT NULL);
+		CREATE TABLE part (id TEXT PRIMARY KEY, message_id TEXT NOT NULL, session_id TEXT NOT NULL, time_created INTEGER NOT NULL, time_updated INTEGER NOT NULL, data TEXT NOT NULL);
+	`); err != nil {
+		t.Fatal(err)
+	}
+	now := time.Now().UnixMilli()
+	md, _ := json.Marshal(map[string]string{"role": "assistant"})
+	if _, err := db.Exec(`INSERT INTO message (id, session_id, time_created, time_updated, data) VALUES (?,?,?,?,?)`, "m1", "s1", now, now, string(md)); err != nil {
+		t.Fatal(err)
+	}
+	pdj, _ := json.Marshal(map[string]any{"type": "tool", "tool": "read", "state": map[string]any{"input": map[string]any{"file_path": "occ_only_marker"}, "output": ""}})
+	if _, err := db.Exec(`INSERT INTO part (id, message_id, session_id, time_created, time_updated, data) VALUES (?,?,?,?,?,?)`, "p1", "m1", "s1", now, now, string(pdj)); err != nil {
+		t.Fatal(err)
+	}
+
+	pf, err := (&OpenCodeReader{}).Parse(dbPath, input_config.InputDefinition{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var gotInput bool
+	for _, m := range pf.Records {
+		if m.ContentType == "tool" && contains(m.Content, "occ_only_marker") {
+			gotInput = true
+		}
+	}
+	if !gotInput {
+		t.Errorf("tool-only message not emitted; records = %+v", pf.Records)
+	}
+}
