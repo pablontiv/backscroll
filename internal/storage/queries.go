@@ -162,10 +162,6 @@ type ListOptions struct {
 	Offset      int    // result offset
 	After       *time.Time
 	Before      *time.Time
-	// Structured query filters (when present, routes to session_events table instead of search_items)
-	EventType string // filter to event_type (e.g., "tool_call")
-	ToolName  string // filter to tool_name (e.g., "bash", "subagent")
-	Command   string // filter to command field
 }
 
 // ListItemsV2 lists indexed search items using v2 filter grammar.
