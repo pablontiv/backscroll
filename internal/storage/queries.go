@@ -498,15 +498,6 @@ func (d *Database) Purge(before string) (int64, error) {
 		return 0, fmt.Errorf("rows affected: %w", err)
 	}
 
-	// Delete from session_events
-	_, err = tx.Exec(`
-		DELETE FROM session_events
-		WHERE timestamp < ?
-	`, beforeStr)
-	if err != nil {
-		return 0, fmt.Errorf("delete session_events: %w", err)
-	}
-
 	// Delete indexed_files entries for paths that have no more items
 	for _, sp := range sourcePaths {
 		var count int

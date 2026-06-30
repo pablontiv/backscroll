@@ -21,6 +21,33 @@ func TestDB(t *testing.T) {
 	}
 }
 
+func TestSyncDoesNotWriteSessionEvents(t *testing.T) {
+	db, cleanup := newTestDB(t)
+	defer cleanup()
+
+	if err := db.SyncFiles([]IndexedFile{
+		{
+			SourcePath: "/test/session.jsonl",
+			Source:     "session",
+			Hash:       "abc123",
+			Project:    "test",
+			Messages: []IndexedMessage{
+				{Ordinal: 0, Role: "user", Text: "hello", Timestamp: "2024-01-01T00:00:00Z", ContentType: "text"},
+			},
+		},
+	}); err != nil {
+		t.Fatalf("SyncFiles: %v", err)
+	}
+
+	var n int
+	if err := db.db.QueryRow("SELECT COUNT(*) FROM session_events").Scan(&n); err != nil {
+		t.Fatalf("count: %v", err)
+	}
+	if n != 0 {
+		t.Errorf("expected 0 session_events rows after sync, got %d", n)
+	}
+}
+
 func TestNormalizeSource(t *testing.T) {
 	tests := []struct {
 		in   string
@@ -2833,7 +2860,7 @@ func TestValidateFTSCheck(t *testing.T) {
 	}
 }
 
-// TestPurgeSessionEventsDeletion covers session_events deletion
+// TestPurgeSessionEventsDeletion verifies purge no longer touches session_events
 func TestPurgeSessionEventsDeletionPath(t *testing.T) {
 	db, cleanup := newTestDB(t)
 	defer cleanup()
@@ -2841,7 +2868,7 @@ func TestPurgeSessionEventsDeletionPath(t *testing.T) {
 	now := time.Now()
 	oldTime := now.Add(-100 * 24 * time.Hour)
 
-	// Sync with multiple messages to get multiple session_events
+	// Sync with multiple messages
 	if err := db.SyncFiles([]IndexedFile{
 		{
 			SourcePath: "/old/s.jsonl",
@@ -2858,11 +2885,11 @@ func TestPurgeSessionEventsDeletionPath(t *testing.T) {
 		t.Fatalf("SyncFiles: %v", err)
 	}
 
-	// Verify session_events were created
+	// Verify sync no longer writes to session_events
 	var count int
 	_ = db.DB().QueryRow("SELECT COUNT(*) FROM session_events WHERE source_path = ?", "/old/s.jsonl").Scan(&count)
-	if count != 3 {
-		t.Fatalf("expected 3 session_events, got %d", count)
+	if count != 0 {
+		t.Fatalf("expected 0 session_events after sync, got %d", count)
 	}
 
 	// Purge
@@ -2872,10 +2899,10 @@ func TestPurgeSessionEventsDeletionPath(t *testing.T) {
 		t.Fatalf("Purge: %v", err)
 	}
 
-	// Verify session_events were deleted
+	// Verify session_events remains empty (purge doesn't touch it)
 	_ = db.DB().QueryRow("SELECT COUNT(*) FROM session_events WHERE source_path = ?", "/old/s.jsonl").Scan(&count)
 	if count != 0 {
-		t.Errorf("session_events should be deleted, got %d", count)
+		t.Errorf("expected 0 session_events after purge, got %d", count)
 	}
 }
 

@@ -158,10 +158,10 @@ func TestSyncFiles(t *testing.T) {
 		t.Fatalf("expected 2 session_tags, got %d", count)
 	}
 
-	// Verify session_events were inserted
+	// Verify sync no longer writes to session_events
 	err = db.db.QueryRow("SELECT COUNT(*) FROM session_events WHERE source_path = ?", "/path/to/session1.jsonl").Scan(&count)
-	if err != nil || count != 2 {
-		t.Fatalf("expected 2 session_events, got %d", count)
+	if err != nil || count != 0 {
+		t.Fatalf("expected 0 session_events, got %d", count)
 	}
 }
 

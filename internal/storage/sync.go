@@ -45,11 +45,6 @@ func (d *Database) SyncFiles(files []IndexedFile) error {
 			return fmt.Errorf("delete old search_items for %s: %w", file.SourcePath, err)
 		}
 
-		// Delete old session_events for this source_path
-		if _, err := tx.Exec("DELETE FROM session_events WHERE source_path = ?", file.SourcePath); err != nil {
-			return fmt.Errorf("delete old session_events for %s: %w", file.SourcePath, err)
-		}
-
 		// Insert new search_items. Use OR IGNORE so that cross-file UUID
 		// collisions (rare) are silently skipped rather than aborting the
 		// transaction. Use nil (SQL NULL) when uuid is absent — SQLite's
@@ -76,27 +71,6 @@ func (d *Database) SyncFiles(files []IndexedFile) error {
 			)
 			if err != nil {
 				return fmt.Errorf("insert search_item for %s: %w", file.SourcePath, err)
-			}
-		}
-
-		// Insert session_events (one per message, with event_type='message')
-		for _, msg := range file.Messages {
-			_, err := tx.Exec(`
-				INSERT INTO session_events
-				(source, source_path, project, ordinal, timestamp, event_type, role, snippet)
-				VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-			`,
-				file.Source,
-				file.SourcePath,
-				file.Project,
-				msg.Ordinal,
-				msg.Timestamp,
-				"message",
-				msg.Role,
-				msg.Text,
-			)
-			if err != nil {
-				return fmt.Errorf("insert session_event for %s: %w", file.SourcePath, err)
 			}
 		}
 
