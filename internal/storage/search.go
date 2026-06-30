@@ -34,8 +34,13 @@ func (d *Database) Search(query string, opts models.SearchOptions) ([]SearchResu
 		return nil, fmt.Errorf("load stopwords: %w", err)
 	}
 
-	// Sanitize FTS5 query
+	// Pick FTS table and sanitizer based on ContentType
+	ftsTable := "messages_fts"
 	ftsQuery := sanitizeFTS5Query(query, stopwords)
+	if opts.ContentType == "tool" {
+		ftsTable = "tool_fts"
+		ftsQuery = sanitizeFTS5QueryTrigram(query, stopwords)
+	}
 
 	// Build WHERE clause for filters
 	var whereClauses []string
@@ -103,7 +108,7 @@ func (d *Database) Search(query string, opts models.SearchOptions) ([]SearchResu
 
 	// Build all WHERE conditions (including FTS5 MATCH)
 	if ftsQuery != "" {
-		whereClauses = append([]string{"messages_fts MATCH ?"}, whereClauses...)
+		whereClauses = append([]string{ftsTable + " MATCH ?"}, whereClauses...)
 		args = append([]interface{}{ftsQuery}, args...)
 	}
 
@@ -121,19 +126,19 @@ func (d *Database) Search(query string, opts models.SearchOptions) ([]SearchResu
 			si.ordinal,
 			si.role,
 			si.text,
-			snippet(messages_fts, 0, '<b>', '</b>', '...', 32) as snippet,
-			bm25(messages_fts) as score,
+			snippet(%[1]s, 0, '<b>', '</b>', '...', 32) as snippet,
+			bm25(%[1]s) as score,
 			si.timestamp,
 			si.uuid,
 			si.project,
 			si.content_type
-		FROM messages_fts
-		JOIN search_items si ON messages_fts.rowid = si.id
-		%s
-		%s
+		FROM %[1]s
+		JOIN search_items si ON %[1]s.rowid = si.id
+		%[2]s
+		%[3]s
 		ORDER BY score DESC
 		LIMIT ? OFFSET ?
-	`, tagJoin, whereSQL)
+	`, ftsTable, tagJoin, whereSQL)
 
 	// Add limit and offset
 	limit := opts.Limit
@@ -256,6 +261,31 @@ func sanitizeFTS5Query(query string, stopwords map[string]struct{}) string {
 		parts = append(parts, fmt.Sprintf(`"%s"*`, escaped))
 	}
 
+	return strings.Join(parts, " ")
+}
+
+// sanitizeFTS5QueryTrigram builds a MATCH query for the trigram-tokenized
+// tool_fts. Unlike the porter sanitizer it does NOT append a prefix wildcard
+// (trigram matches substrings directly) and it preserves path/command tokens.
+func sanitizeFTS5QueryTrigram(query string, stopwords map[string]struct{}) string {
+	tokens := strings.Fields(query)
+	if len(tokens) == 0 {
+		return ""
+	}
+	var filtered []string
+	for _, t := range tokens {
+		if _, ok := stopwords[strings.ToLower(t)]; !ok {
+			filtered = append(filtered, t)
+		}
+	}
+	if len(filtered) == 0 {
+		filtered = tokens
+	}
+	var parts []string
+	for _, t := range filtered {
+		escaped := strings.ReplaceAll(t, `"`, `""`)
+		parts = append(parts, fmt.Sprintf(`"%s"`, escaped))
+	}
 	return strings.Join(parts, " ")
 }
 

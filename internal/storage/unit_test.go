@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -3844,5 +3845,38 @@ func TestV4MigrationRoutesToolRowsToToolFTS(t *testing.T) {
 	}
 	if updatedHit != 1 {
 		t.Errorf("update routing: want 1 hit in messages_fts, got %d", updatedHit)
+	}
+}
+
+func TestToolSearchRanksExactPathFirst(t *testing.T) {
+	dbPath := filepath.Join(t.TempDir(), "toolsearch.db")
+	db, err := Open(dbPath)
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	defer func() { _ = db.Close() }()
+	if err := db.SetupSchema(); err != nil {
+		t.Fatalf("setup: %v", err)
+	}
+
+	_, _ = db.db.Exec(`INSERT INTO indexed_files(path, hash) VALUES ('p1','h1')`)
+	_, err = db.db.Exec(`
+		INSERT INTO search_items (source, source_path, ordinal, role, text, content_type)
+		VALUES ('session','p1',0,'assistant','edited internal/storage/hybrid.go','tool'),
+		       ('session','p1',1,'assistant','read internal/storage/sync.go','tool'),
+		       ('session','p1',2,'assistant','ran go test ./internal/storage/','tool')`)
+	if err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+
+	results, err := db.Search("internal/storage/sync.go", models.SearchOptions{ContentType: "tool", Limit: 5})
+	if err != nil {
+		t.Fatalf("search: %v", err)
+	}
+	if len(results) == 0 {
+		t.Fatalf("want at least 1 result, got 0")
+	}
+	if !strings.Contains(results[0].Text, "sync.go") {
+		t.Errorf("want sync.go ranked first, got %q", results[0].Text)
 	}
 }
