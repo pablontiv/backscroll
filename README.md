@@ -4,9 +4,9 @@
 [![Go](https://img.shields.io/badge/Go-1.22+-00ADD8?logo=go&logoColor=white)](https://go.dev)
 [![License: PolyForm NC](https://img.shields.io/badge/License-PolyForm%20NC-blue.svg)](LICENSE)
 
-A **full-text search engine** for AI assistant sessions — Claude Code, Pi, and any source with an input manifest.
+A **full-text search engine** for your AI session history — one unified search layer over every coding-agent session, whatever assistant produced it.
 
-Backscroll treats your local AI sessions as a searchable archive: it indexes conversation logs incrementally, strips machine-generated noise, and provides instant full-text search with relevance ranking.
+Backscroll is the retrieval abstraction over your local agent sessions: it normalizes each assistant's session format behind a single index, strips machine-generated noise, and provides instant full-text search with relevance ranking — so you query *what happened*, not *which tool wrote it where*.
 
 ---
 
@@ -101,8 +101,11 @@ backscroll search "migration plan"
 # 3. Search by project — limit results to a specific project
 backscroll search "error handling" --project "backscroll"
 
-# 4. List by input — retrieve recent Claude Code sessions
-backscroll list --input claude --limit 10
+# 4. List recent sessions — newest first
+backscroll list --order timestamp:desc --limit 10
+
+# 4b. Search tool activity — what command ran, or what failed
+backscroll search "go test ./..." --content-type tool
 
 # 5. Read one session — get semantic snippets from a session file
 backscroll read --path ~/.claude/projects/backscroll/abc123.jsonl --tail 45 --semantic
@@ -115,10 +118,12 @@ backscroll status
 
 ## Core Idea
 
-AI assistants like Claude Code, Pi, and OpenCode produce valuable reasoning logs, but they are scattered across session files with no built-in way to search across them. Backscroll makes them **searchable**, **persistent**, and **fast**.
+Your coding agents produce valuable reasoning logs, but each stores them in its own format, scattered across session files with no built-in way to search across them. Backscroll is the abstraction that unifies them — making every session **searchable**, **persistent**, and **fast**, regardless of which assistant produced it.
 
+- One index across all your agents — you search content, not per-tool file formats
+- Tool activity is searchable — the commands that ran, the files touched, the outputs and errors they returned
 - Sessions are indexed incrementally — only changed files are re-processed
-- Noise is stripped automatically — system-reminders, task-notifications, subagent chatter
+- Noise is stripped automatically — system-reminders, task-notifications, command wrappers
 - Search uses BM25 ranking with highlighted snippets
 - Output adapts to the consumer — human-readable, JSON, or compact LLM format
 
@@ -128,9 +133,9 @@ Backscroll does not modify your logs. It **indexes** them.
 
 ## The Session Index
 
-Each AI assistant stores conversations in its own format. Backscroll normalizes them via input manifests — shipped presets exist for Claude, Pi (both JSONL), and OpenCode (SQLite via `decode.format = "opencode"`), and any source with a compatible manifest is supported.
+Each agent stores conversations in its own format. Backscroll normalizes them behind one index via input manifests — shipped presets cover the common agent formats (JSONL and SQLite), and any source with a compatible manifest is supported.
 
-Backscroll reads these files and extracts the **conversation**: user and assistant messages only. Everything else — tool calls, system-reminders, task-notifications, local command output — is stripped as noise.
+Backscroll extracts both the **conversation** (user and assistant messages) and the **tool activity** (the serialized tool inputs — commands, file paths, args — and their outputs and errors), indexing the latter as `content_type='tool'` so you can search what an agent actually did. Genuine noise — system-reminders, task-notifications, command wrappers — is stripped.
 
 ### Incremental sync
 
@@ -151,10 +156,10 @@ See [Sync & Indexing docs](docs/sync.md) for input manifests, noise filtering, a
 
 ```bash
 # Query commands — the core v2 surface
-backscroll search <QUERY> [--input ID] [--project P] [--json] [--max-tokens N]  # Full-text search
-backscroll list [--input ID] [--project P] [--order FIELD:DIR] [--limit N] [--json]  # Query by input/project
+backscroll search <QUERY> [--project P] [--source TYPE] [--content-type text|code|tool] [--json] [--max-tokens N]  # Full-text search
+backscroll list [--project P] [--order FIELD:DIR] [--type TYPE] [--tool NAME] [--limit N] [--json]  # List indexed items
 backscroll read --path <PATH> [--tail N] [--semantic]                          # Read one session file
-backscroll stats --input ID [--type TYPE] [--tool TOOL] [--group-by FIELD]     # Aggregate tool-call stats
+backscroll stats --input ID [--type TYPE] [--tool TOOL] [--group-by FIELD]     # Aggregate tool-call stats (--input valid here)
 
 # Maintenance
 backscroll status [--json]                      # Check index health and metrics
@@ -183,12 +188,19 @@ The `--fields` flag controls field density (`minimal` or `full`), and `--max-tok
 
 ### Common workflows
 
-**Latest Claude session with semantic snippets:**
+**Latest session with semantic snippets:**
 
 ```bash
-backscroll list --input claude --project <path> --order timestamp:desc --limit 1 | head -1
-PATH=$(backscroll list --input claude --project <path> --order timestamp:desc --limit 1 --json | jq -r '.path')
+PATH=$(backscroll list --project <path> --order timestamp:desc --limit 1 --json | jq -r '.sessions[0].path')
 backscroll read --path "$PATH" --tail 45 --semantic
+```
+
+**Find what a tool did, or an error from a command:**
+
+```bash
+# Tool inputs and outputs are indexed — no need to grep raw session files
+backscroll search "exit code 1" --all-projects --content-type tool
+backscroll search "internal/storage/sync.go" --all-projects --content-type tool
 ```
 
 **Subagent tool-call statistics:**
@@ -263,16 +275,10 @@ include = ["**/*.jsonl"]
 exclude = ["**/subagents/**"]
 
 [inputs.decode]
-format = "jsonl"
-
-[inputs.map]
-role = "$.message.role"
-
-[inputs.content]
-selector = "$.message.content"
+format = "claude"
 ```
 
-The repository presets (`inputs/*.inputs.toml`) are examples to install into the global input directory via the install script; Backscroll does not read the repository `inputs/` directory at runtime. View configured inputs with `backscroll config` or `backscroll validate`.
+A manifest declares only **where** to find sessions (`discover`) and **how** to decode them (`decode.format`). Each `format` is handled by a dedicated reader that knows that agent's session schema — `claude`, `pi`, and `opencode` ship built in. The repository presets (`inputs/*.inputs.toml`) are examples to install into the global input directory via the install script; Backscroll does not read the repository `inputs/` directory at runtime. View configured inputs with `backscroll config` or `backscroll validate`.
 
 See [Configuration docs](docs/configuration.md) for the full resolution order and all options.
 
