@@ -63,7 +63,7 @@ type toolPartState struct {
 }
 
 // Parse reads all messages from the OpenCode database and returns them as a ParsedFile.
-// Only parts of type "text" with ignored != true are indexed; all other part types are skipped.
+// Parts of type "text" (with ignored != true) and "tool" (with non-empty state.input/state.output) are indexed; all other part types are skipped.
 func (r *OpenCodeReader) Parse(dbPath string, _ input_config.InputDefinition) (models.ParsedFile, error) {
 	hash, err := r.Hash(dbPath)
 	if err != nil {
