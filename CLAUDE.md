@@ -8,7 +8,7 @@ Backscroll is a Go CLI tool that indexes Claude Code, Pi, and OpenCode sessions,
 
 **Status**: Go port complete — `main` branch is the active Go implementation. The Rust implementation is frozen in the `v0` branch.
 
-Implemented: `internal/config`, `internal/input_config`, `internal/models`, `internal/readers`, `internal/sync`, `internal/tagging`, `internal/plans`, `internal/sources`, `internal/storage`, `internal/projects`, `internal/reader`. CLI commands in `cmd/backscroll/` (9 v2 commands via cobra).
+Implemented: `internal/config`, `internal/input_config`, `internal/models`, `internal/readers`, `internal/sync`, `internal/tagging`, `internal/plans`, `internal/sources`, `internal/storage`, `internal/projects`, `internal/reader`. CLI commands in `cmd/backscroll/` (8 v2 commands via cobra).
 
 Stack: cobra, go-toml/v2, goldmark, modernc.org/sqlite (pure Go, no CGO), stdlib testing.
 
@@ -43,7 +43,6 @@ cmd/backscroll/
 ├── list.go            — list command (v2: --input, --order, --type, --tool)
 ├── search.go          — search command (v2: --text, --input)
 ├── read.go            — read command (v2: --path, --tail, --semantic, --pretty)
-├── stats.go           — stats command (--input, --type, --tool, --group-by)
 ├── status.go          — status command
 ├── validate.go        — validate command (--indexed-only)
 ├── rebuild.go         — rebuild command (replaces reindex)
@@ -64,7 +63,7 @@ internal/
 └── storage/           — SQLite adapter (dual FTS5 indexes: tool_fts + messages_fts, BM25, WAL mode, migrations, search_items, session_tags)
 ```
 
-Nine v2 CLI commands: `list [--project] [--all-projects] [--order timestamp:desc|asc] [--type <event_type>] [--tool <name>] [--after] [--before] [--limit] [--offset] [--json]`, `search [--text <query>] [--project] [--all-projects] [--after] [--before] [--limit] [--offset] [--indexed-only] [--json]`, `read --path <path> [--tail <n>] [--semantic] [--pretty]`, `stats [--input <id>] [--type <event_type>] [--tool <name>] [--group-by agent|tool|type|project] [--all-projects] [--json]`, `status`, `validate [--indexed-only]`, `rebuild`, `purge --before <date>`, `config [--json]`.
+Eight v2 CLI commands: `list [--project] [--all-projects] [--order timestamp:desc|asc] [--type <event_type>] [--tool <name>] [--after] [--before] [--limit] [--offset] [--json]`, `search [--text <query>] [--project] [--all-projects] [--after] [--before] [--limit] [--offset] [--indexed-only] [--json]`, `read --path <path> [--tail <n>] [--semantic] [--pretty]`, `status`, `validate [--indexed-only]`, `rebuild`, `purge --before <date>`, `config [--json]`.
 
 The `SearchEngine` interface is the port; `internal/storage` is the adapter. Database opened lazily. `OpenReadOnly()` provides read-only access for external consumers.
 

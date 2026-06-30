@@ -49,7 +49,6 @@ Backscroll v2 provides four canonical query commands:
 | `backscroll list [--project P] [--order FIELD:DIR] [--limit N]` | List indexed items sorted and paginated |
 | `backscroll search <QUERY> [--project P] [--source TYPE] [--content-type text\|code\|tool] [--json] [--max-tokens N]` | Full-text search with BM25 ranking |
 | `backscroll read --path <PATH> [--tail N] [--semantic]` | Read one indexed session file, optionally tail and semantic rows |
-| `backscroll stats --input ID [--type TYPE] [--tool TOOL] [--group-by FIELD]` | Aggregate tool-call statistics (`--input` only valid on stats) |
 
 Maintenance commands: `status`, `validate`, `rebuild`, `purge`, `config`.
 
@@ -79,10 +78,14 @@ backscroll read --path "$PATH" --tail 45 --semantic
 
 **Warning — tail gap**: `--tail N` shows only the LAST N rows. Content at the start or middle of a session is invisible. If you need content from anywhere in a session, use search (see 5.6).
 
-### 5.2) Subagent tool-call statistics
+### 5.2) Search tool activity across projects
 
 ```bash
-backscroll stats --input pi --type tool_call --tool subagent --group-by agent --all-projects
+# Find all tool calls for a specific tool
+backscroll search "bash" --all-projects --content-type tool
+
+# Find tool activity related to a project
+backscroll search "error" --all-projects --content-type tool
 ```
 
 ### 5.3) Search in current project
@@ -152,7 +155,7 @@ backscroll search "query" --pretty
 
 ## 7) Filter by source type
 
-Use `--source <type>` on `search` to filter by content type. `--input` is NOT valid on `list` or `search` — only on `stats`.
+Use `--source <type>` on `search` to filter by content type.
 
 ```bash
 backscroll search "QUERY" --source session    # only session content

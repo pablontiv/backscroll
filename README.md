@@ -159,7 +159,6 @@ See [Sync & Indexing docs](docs/sync.md) for input manifests, noise filtering, a
 backscroll search <QUERY> [--project P] [--source TYPE] [--content-type text|code|tool] [--json] [--max-tokens N]  # Full-text search
 backscroll list [--project P] [--order FIELD:DIR] [--type TYPE] [--tool NAME] [--limit N] [--json]  # List indexed items
 backscroll read --path <PATH> [--tail N] [--semantic]                          # Read one session file
-backscroll stats --input ID [--type TYPE] [--tool TOOL] [--group-by FIELD]     # Aggregate tool-call stats (--input valid here)
 
 # Maintenance
 backscroll status [--json]                      # Check index health and metrics
@@ -201,12 +200,6 @@ backscroll read --path "$PATH" --tail 45 --semantic
 # Tool inputs and outputs are indexed — no need to grep raw session files
 backscroll search "exit code 1" --all-projects --content-type tool
 backscroll search "internal/storage/sync.go" --all-projects --content-type tool
-```
-
-**Subagent tool-call statistics:**
-
-```bash
-backscroll stats --input pi --type tool_call --tool subagent --group-by agent --all-projects
 ```
 
 ### Status

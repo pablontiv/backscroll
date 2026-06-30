@@ -94,7 +94,7 @@ func TestHelp(t *testing.T) {
 	commandsSection := parts[1]
 
 	// v2 approved root commands that SHOULD be present
-	approvedV2 := []string{"list", "search", "read", "stats", "status", "validate", "rebuild", "purge", "config"}
+	approvedV2 := []string{"list", "search", "read", "status", "validate", "rebuild", "purge", "config"}
 	for _, cmd := range approvedV2 {
 		if !strings.Contains(commandsSection, "\n  "+cmd+" ") && !strings.Contains(commandsSection, "\n  "+cmd+"\n") {
 			t.Errorf("--help missing approved v2 command %q", cmd)
@@ -858,7 +858,7 @@ func TestHelpListsAllCommands(t *testing.T) {
 
 	// v2 approved root commands
 	for _, cmd := range []string{
-		"search", "read", "list", "stats", "purge", "validate", "status",
+		"search", "read", "list", "purge", "validate", "status",
 		"rebuild", "config",
 	} {
 		if !strings.Contains(commandsSection, "\n  "+cmd+" ") && !strings.Contains(commandsSection, "\n  "+cmd+"\n") {
@@ -1299,68 +1299,16 @@ func TestListStructuredToolCallRows(t *testing.T) {
 	}
 }
 
-func TestStatsCommandExists(t *testing.T) {
+func TestStatsCommandRemoved(t *testing.T) {
 	_, cleanup := testEnv(t)
 	defer cleanup()
 
-	// Sync fixture sessions
-	claudeDir := filepath.Join(fixturesDir(), "claude-preset", "projects")
-	_, _, err := syncForTest(t, "sync", "--path", claudeDir)
-	if err != nil {
-		t.Fatalf("sync error: %v", err)
+	_, stderr, err := runCmd("stats", "--group-by", "agent")
+	if err == nil {
+		t.Fatal("expected error: stats command should no longer exist")
 	}
-
-	// Test that stats command exists and can be called
-	out, _, err := runCmd("stats", "--type", "tool_call", "--group-by", "agent")
-	if err != nil {
-		t.Fatalf("stats --type tool_call --group-by agent error: %v", err)
-	}
-	_ = out
-}
-
-func TestStatsGroupByAgent(t *testing.T) {
-	_, cleanup := testEnv(t)
-	defer cleanup()
-
-	// Sync fixture sessions
-	claudeDir := filepath.Join(fixturesDir(), "claude-preset", "projects")
-	_, _, err := syncForTest(t, "sync", "--path", claudeDir)
-	if err != nil {
-		t.Fatalf("sync error: %v", err)
-	}
-
-	// Test stats --group-by agent returns agent counts
-	out, _, err := runCmd("stats", "--input", "claude", "--type", "tool_call", "--group-by", "agent")
-	if err != nil {
-		t.Fatalf("stats --input claude --type tool_call --group-by agent error: %v", err)
-	}
-
-	// Should have output (either with real agents or <unknown> fallback)
-	if len(strings.TrimSpace(out)) == 0 {
-		t.Errorf("stats --group-by agent produced empty output")
-	}
-}
-
-// TestStatsGroupByAgentNoTypeFilter is the v1.4.0 regression: without a --type
-// filter, stats pulls message rows whose tool_name/actor are NULL. Before the
-// fix this aborted with "converting NULL to string is unsupported".
-func TestStatsGroupByAgentNoTypeFilter(t *testing.T) {
-	_, cleanup := testEnv(t)
-	defer cleanup()
-
-	claudeDir := filepath.Join(fixturesDir(), "claude-preset", "projects")
-	_, _, err := syncForTest(t, "sync", "--path", claudeDir)
-	if err != nil {
-		t.Fatalf("sync error: %v", err)
-	}
-
-	// The exact reported command: --group-by agent with no --type filter.
-	out, _, err := runCmd("stats", "--all-projects", "--group-by", "agent")
-	if err != nil {
-		t.Fatalf("stats --group-by agent (no --type) error: %v", err)
-	}
-	if len(strings.TrimSpace(out)) == 0 {
-		t.Errorf("stats --group-by agent produced empty output")
+	if !strings.Contains(stderr, "unknown command") {
+		t.Errorf("expected 'unknown command' on stderr, got: %q", stderr)
 	}
 }
 
