@@ -3784,3 +3784,53 @@ func TestListSessionEventsV2WithFilters(t *testing.T) {
 		t.Errorf("expected 2 events with offset, got %d", len(results))
 	}
 }
+
+func TestV4MigrationRoutesToolRowsToToolFTS(t *testing.T) {
+	dbPath := filepath.Join(t.TempDir(), "v4.db")
+	db, err := Open(dbPath)
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	defer func() { _ = db.Close() }()
+
+	if err := db.SetupSchema(); err != nil {
+		t.Fatalf("setup schema: %v", err)
+	}
+
+	// Insert one prose row and one tool row directly.
+	_, err = db.db.Exec(`INSERT INTO indexed_files(path, hash) VALUES ('p1','h1')`)
+	if err != nil {
+		t.Fatalf("seed indexed_files: %v", err)
+	}
+	_, err = db.db.Exec(`
+		INSERT INTO search_items (source, source_path, ordinal, role, text, content_type)
+		VALUES ('session','p1',0,'user','architecture decision about retries','text'),
+		       ('session','p1',1,'assistant','internal/storage/sync.go','tool')`)
+	if err != nil {
+		t.Fatalf("seed search_items: %v", err)
+	}
+
+	var msgCount, toolCount int
+	if err := db.db.QueryRow(`SELECT count(*) FROM messages_fts WHERE messages_fts MATCH '"architecture"'`).Scan(&msgCount); err != nil {
+		t.Fatalf("query messages_fts: %v", err)
+	}
+	if err := db.db.QueryRow(`SELECT count(*) FROM tool_fts WHERE tool_fts MATCH '"sync.go"'`).Scan(&toolCount); err != nil {
+		t.Fatalf("query tool_fts: %v", err)
+	}
+
+	if msgCount != 1 {
+		t.Errorf("messages_fts: want 1 prose hit, got %d", msgCount)
+	}
+	if toolCount != 1 {
+		t.Errorf("tool_fts: want 1 tool hit, got %d", toolCount)
+	}
+
+	// The tool row must NOT be in messages_fts (no crowding).
+	var leak int
+	if err := db.db.QueryRow(`SELECT count(*) FROM messages_fts WHERE messages_fts MATCH '"sync"'`).Scan(&leak); err != nil {
+		t.Fatalf("query leak: %v", err)
+	}
+	if leak != 0 {
+		t.Errorf("tool content leaked into messages_fts: got %d hits", leak)
+	}
+}
