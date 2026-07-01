@@ -6,8 +6,9 @@
 set -uo pipefail
 
 BS="${BACKSCROLL_BIN:-backscroll}"
-# Pi reasoning blobs and harness chatter are pure noise — strip them.
-NOISE='encrypted_content|pi-drive:observation|system-reminder|task-notification'
+# Strip Pi reasoning/telemetry blobs, harness chatter, and the doctor's own
+# self-referential output (its script + skill name) — all pure noise.
+NOISE='encrypted_content|pi-drive:observation|turn_end|turn_start|turn-end|turn-start|system-reminder|task-notification|gather\.sh|backscroll-doctor'
 PER_QUERY="${BACKSCROLL_DOCTOR_LIMIT:-40}"
 
 # emit LABEL MODE QUERY...  (MODE: tool = --content-type tool, text = prose)

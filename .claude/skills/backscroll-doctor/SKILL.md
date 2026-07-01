@@ -19,7 +19,7 @@ Run when asked to diagnose, self-audit, or find bugs/gaps/enhancements in backsc
 
 1. **Preflight**: `command -v backscroll && backscroll status`. The index must be non-empty; note its size (files/messages) as the sample.
 2. **Gather signal across FOUR angles.** For a large index, fan out one subagent per angle to keep context clean; for a quick check, run inline.
-   - **Errors/bugs** — failed tool outputs: `assets/gather.sh errors`.
+   - **Errors/bugs** — failed tool outputs: `assets/gather.sh errors`. Trigram matching on tool content yields prose false positives; treat every error-signature hit as a LEAD, never a fact — the verify step (4) is the guard.
    - **Gaps/wishes** — prose friction and workarounds: `assets/gather.sh gaps`.
    - **Usage friction** — invocation patterns (pipes to jq/rg, retried flags, `--tail` then `search`): `assets/gather.sh usage`.
    - **Known backlog** — read `docs/roadmap/`, CLAUDE.md "Key Design Decisions", `git log`, and in-repo `TODO`/`FIXME`. Never re-propose already-planned or already-dropped work.
