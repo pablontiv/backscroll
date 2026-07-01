@@ -171,6 +171,10 @@ func runSearch(stdout, stderr io.Writer,
 		return fmt.Errorf("search: %w", err)
 	}
 
+	if len(results) == 0 {
+		writeSearchHints(stderr, allProjects, contentType == "tool")
+	}
+
 	// Convert storage.SearchResult to models.SearchResult
 	var modelResults []models.SearchResult
 	for i, r := range results {

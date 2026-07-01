@@ -122,6 +122,7 @@ func runList(stdout, stderr io.Writer,
 		} else {
 			_, _ = fmt.Fprintf(stdout, "No sessions found\n")
 		}
+		writeSearchHints(stderr, allProjects, true)
 		return nil
 	}
 

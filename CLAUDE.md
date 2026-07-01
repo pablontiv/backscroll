@@ -102,6 +102,7 @@ Configurable in `[sources]` section of `backscroll.toml`. Source types: `ke`, `d
 - **Schema migration rule**: Every new table or column MUST be introduced as a new migration version (increment the version number and add a new version-check block in `SetupSchema()`). Never modify existing migration blocks — existing databases that already passed that version will never re-run them. Migration v5 drops the phantom `session_events` table (and its indexes `idx_session_events_order` and `idx_session_events_project`) — the table was write-only dead weight after structured-stats filtering was removed.
 - **Early input validation**: CLI commands validate flag values (e.g. `--format`) before opening the database, so invalid inputs fail fast without side effects.
 - **Coverage gate**: CI enforces ≥85% aggregate statement coverage via `go test ./... -race -coverprofile`. Local check: `bash scripts/check-coverage.sh`. Tests that depend on local machine state (e.g. `~/.config/backscroll/projects.toml`) must use `t.Setenv("HOME", tempDir)` to stay reproducible on CI. Likewise, `InputsDir` branches requiring `BACKSCROLL_CONFIG_DIR` to be unset must set it to `""` via `t.Setenv`. To test the `Validate` orphan path, insert directly into `search_items` without a matching `indexed_files` row.
+- **Zero-result guidance**: when `search`/`list` return no rows, actionable suggestions (`--all-projects`, `--content-type tool`, `backscroll status`) are printed to STDERR — never STDOUT, so `--json` stays a clean empty payload.
 
 ## Dependencies
 
