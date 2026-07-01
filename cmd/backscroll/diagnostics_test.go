@@ -58,3 +58,40 @@ func TestSearchZeroResultHintsToStderr(t *testing.T) {
 		t.Errorf("hints must not leak into stdout, got: %q", out)
 	}
 }
+
+func TestWarnShortToolQuery(t *testing.T) {
+	cases := []struct {
+		name        string
+		contentType string
+		query       string
+		wantWarn    bool
+	}{
+		{"short tool query warns", "tool", "go", true},
+		{"short tool query with spaces warns", "tool", " cd ", true},
+		{"three-char tool query is fine", "tool", "git", false},
+		{"short query but not tool-scoped", "", "go", false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			var buf bytes.Buffer
+			warnShortToolQuery(&buf, tc.contentType, tc.query)
+			got := strings.Contains(buf.String(), "under 3 characters")
+			if got != tc.wantWarn {
+				t.Errorf("warn=%v want=%v (out=%q)", got, tc.wantWarn, buf.String())
+			}
+		})
+	}
+}
+
+func TestSearchShortToolQueryWarnsToStderr(t *testing.T) {
+	out, stderr, err := runCmd("search", "go", "--content-type", "tool", "--json", "--indexed-only")
+	if err != nil {
+		t.Fatalf("search error: %v\nstderr: %s", err, stderr)
+	}
+	if !strings.Contains(stderr, "under 3 characters") {
+		t.Errorf("expected short-query warning on stderr, got: %q", stderr)
+	}
+	if strings.Contains(out, "under 3 characters") {
+		t.Errorf("warning must not leak into stdout, got: %q", out)
+	}
+}

@@ -109,6 +109,8 @@ func runSearch(stdout, stderr io.Writer,
 		return fmt.Errorf("invalid --fields value %q: must be minimal or full", fields)
 	}
 
+	warnShortToolQuery(stderr, contentType, query)
+
 	cfg, err := config.Load()
 	if err != nil {
 		return fmt.Errorf("load config: %w", err)
