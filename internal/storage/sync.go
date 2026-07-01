@@ -1,7 +1,6 @@
 package storage
 
 import (
-	"encoding/json"
 	"fmt"
 )
 
@@ -186,33 +185,4 @@ func (d *Database) GetFileHashes() (map[string]string, error) {
 	}
 
 	return hashes, nil
-}
-
-// SessionSourceMetadata represents metadata stored in session source_metadata JSON column.
-type SessionSourceMetadata struct {
-	UUID        string `json:"uuid,omitempty"`
-	SessionID   string `json:"session_id,omitempty"`
-	ProjectPath string `json:"project_path,omitempty"`
-	CWD         string `json:"cwd,omitempty"`
-}
-
-// SetSessionSourceMetadata sets the source_metadata JSON for a session.
-// This is called during sync for sessions to store extra context.
-func (d *Database) SetSessionSourceMetadata(sourcePath string, metadata SessionSourceMetadata) error {
-	data, err := json.Marshal(metadata)
-	if err != nil {
-		return fmt.Errorf("marshal metadata: %w", err)
-	}
-
-	// Update all search_items for this source_path
-	_, err = d.db.Exec(
-		"UPDATE search_items SET source_metadata = ? WHERE source_path = ?",
-		string(data),
-		sourcePath,
-	)
-	if err != nil {
-		return fmt.Errorf("update source_metadata: %w", err)
-	}
-
-	return nil
 }

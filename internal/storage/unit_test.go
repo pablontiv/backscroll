@@ -35,6 +35,52 @@ func TestMigrationV5DropsSessionEvents(t *testing.T) {
 	// sql.ErrNoRows is the expected outcome.
 }
 
+func TestMigrationV6DropsSourceMetadata(t *testing.T) {
+	db, cleanup := newTestDB(t)
+	defer cleanup()
+
+	// Check that source_metadata column does not exist in search_items
+	rows, err := db.db.Query("PRAGMA table_info(search_items)")
+	if err != nil {
+		t.Fatalf("PRAGMA table_info: %v", err)
+	}
+	defer rows.Close()
+
+	var hasSourceMetadata bool
+	for rows.Next() {
+		var cid int
+		var name string
+		var typ string
+		var notnull int
+		var dfltValue interface{}
+		var pk int
+
+		if err := rows.Scan(&cid, &name, &typ, &notnull, &dfltValue, &pk); err != nil {
+			t.Fatalf("scan PRAGMA row: %v", err)
+		}
+
+		if name == "source_metadata" {
+			hasSourceMetadata = true
+			break
+		}
+	}
+
+	if hasSourceMetadata {
+		t.Fatal("source_metadata column should not exist after V6 migration")
+	}
+
+	// Verify idempotency: opening a new database should still succeed
+	db2, cleanup2 := newTestDB(t)
+	defer cleanup2()
+	var count int
+	if err := db2.db.QueryRow("SELECT COUNT(*) FROM schema_migrations WHERE version = 6").Scan(&count); err != nil {
+		t.Fatalf("check V6 migration applied: %v", err)
+	}
+	if count != 1 {
+		t.Errorf("expected V6 migration to be applied once, got %d times", count)
+	}
+}
+
 func TestNormalizeSource(t *testing.T) {
 	tests := []struct {
 		in   string
@@ -93,34 +139,6 @@ func TestLoadStopwords(t *testing.T) {
 	// On an empty DB, stopwords should be empty
 	if len(stopwords) != 0 {
 		t.Errorf("expected 0 stopwords, got %d", len(stopwords))
-	}
-}
-
-func TestSetSessionSourceMetadata(t *testing.T) {
-	db, cleanup := newTestDB(t)
-	defer cleanup()
-
-	// Sync a file first so we have rows to update
-	if err := db.SyncFiles([]IndexedFile{
-		{
-			SourcePath: "/test/session.jsonl",
-			Source:     "session",
-			Hash:       "abc123",
-			Project:    "test",
-			Messages: []IndexedMessage{
-				{Ordinal: 0, Role: "user", Text: "hello", Timestamp: "2024-01-01T00:00:00Z", ContentType: "text"},
-			},
-		},
-	}); err != nil {
-		t.Fatalf("SyncFiles: %v", err)
-	}
-
-	err := db.SetSessionSourceMetadata("/test/session.jsonl", SessionSourceMetadata{
-		UUID:      "test-uuid",
-		SessionID: "test-session",
-	})
-	if err != nil {
-		t.Fatalf("SetSessionSourceMetadata: %v", err)
 	}
 }
 
@@ -1245,19 +1263,6 @@ func TestSyncFilesTransactionRollback(t *testing.T) {
 }
 
 // TestSetSessionSourceMetadataWithEmptyPath tests edge case
-func TestSetSessionSourceMetadataWithEmptyPath(t *testing.T) {
-	db, cleanup := newTestDB(t)
-	defer cleanup()
-
-	// SetSessionSourceMetadata on non-existent path should succeed (UPDATE with no rows)
-	err := db.SetSessionSourceMetadata("/nonexistent/path.jsonl", SessionSourceMetadata{
-		UUID: "test-uuid",
-	})
-	if err != nil {
-		t.Fatalf("SetSessionSourceMetadata: %v", err)
-	}
-}
-
 // TestSearchErrorHandling covers search error paths
 func TestSearchErrorHandling(t *testing.T) {
 	db, cleanup := newTestDB(t)

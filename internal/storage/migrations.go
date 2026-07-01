@@ -82,6 +82,18 @@ func (d *Database) SetupSchema() error {
 		}
 	}
 
+	// Check if version 6 is already applied
+	err = d.db.QueryRow("SELECT COUNT(*) FROM schema_migrations WHERE version = 6").Scan(&count)
+	if err != nil {
+		return fmt.Errorf("check migration version 6: %w", err)
+	}
+
+	if count == 0 {
+		if err := d.applyV6Migration(); err != nil {
+			return err
+		}
+	}
+
 	return nil
 }
 
@@ -255,6 +267,36 @@ DROP TABLE IF EXISTS session_events;
 		VALUES (5, 'V5 drop phantom session_events', CURRENT_TIMESTAMP, ?)
 	`, checksumHex); err != nil {
 		return fmt.Errorf("record migration v5: %w", err)
+	}
+
+	return tx.Commit()
+}
+
+// applyV6Migration drops the phantom source_metadata column. Nothing reads or
+// writes it (no production callers, no SELECT access anywhere).
+// Per the schema rule this is a new migration; V1 still creates the column on
+// the way up, and V6 drops it.
+func (d *Database) applyV6Migration() error {
+	tx, err := d.db.Begin()
+	if err != nil {
+		return fmt.Errorf("begin transaction: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	const sqlV6Drop = `ALTER TABLE search_items DROP COLUMN source_metadata;`
+
+	if _, err := tx.Exec(sqlV6Drop); err != nil {
+		return fmt.Errorf("drop source_metadata column: %w", err)
+	}
+
+	checksum := sha256.Sum256([]byte(sqlV6Drop))
+	checksumHex := fmt.Sprintf("%x", checksum)
+
+	if _, err := tx.Exec(`
+		INSERT INTO schema_migrations (version, name, applied_on, checksum)
+		VALUES (6, 'V6 drop phantom source_metadata column', CURRENT_TIMESTAMP, ?)
+	`, checksumHex); err != nil {
+		return fmt.Errorf("record migration v6: %w", err)
 	}
 
 	return tx.Commit()
