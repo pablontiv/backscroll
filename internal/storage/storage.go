@@ -18,7 +18,9 @@ type Database struct {
 
 // Open opens or creates a new SQLite database at the given path with FTS5 and WAL mode enabled.
 func Open(path string) (*Database, error) {
-	db, err := sql.Open("sqlite", path+"?_journal_mode=WAL&_synchronous=NORMAL&_busy_timeout=5000")
+	// modernc.org/sqlite honors the `_pragma=name(value)` DSN syntax; the mattn-style
+	// `_name=value` form is silently ignored (leaving rollback journal mode + no busy timeout).
+	db, err := sql.Open("sqlite", path+"?_pragma=journal_mode(WAL)&_pragma=synchronous(NORMAL)&_pragma=busy_timeout(5000)")
 	if err != nil {
 		return nil, fmt.Errorf("opening database %s: %w", path, err)
 	}
@@ -52,7 +54,9 @@ func OpenReadOnly(path string) (*Database, error) {
 		return nil, fmt.Errorf("backscroll database not found: %s", path)
 	}
 
-	db, err := sql.Open("sqlite", "file:"+path+"?mode=ro&_journal_mode=WAL")
+	// Journal mode is persisted in the DB file (set by the write connection); a read-only
+	// connection only needs the busy timeout so queries wait out a concurrent writer's lock.
+	db, err := sql.Open("sqlite", "file:"+path+"?mode=ro&_pragma=busy_timeout(5000)")
 	if err != nil {
 		return nil, fmt.Errorf("opening readonly database %s: %w", path, err)
 	}

@@ -90,6 +90,63 @@ func TestOpenReadOnly(t *testing.T) {
 	}
 }
 
+// TestWriteConnPragmas verifies the write connection actually applies WAL mode and a
+// busy timeout. modernc.org/sqlite honors the `_pragma=name(value)` DSN syntax, not the
+// mattn-style `_name=value`; the latter is silently ignored, leaving the DB in rollback
+// (delete) journal mode with no busy timeout — the root cause of SQLITE_BUSY under load.
+func TestWriteConnPragmas(t *testing.T) {
+	dbPath := filepath.Join(t.TempDir(), "write_pragmas.db")
+
+	db, err := Open(dbPath)
+	if err != nil {
+		t.Fatalf("failed to create test database: %v", err)
+	}
+	defer func() { _ = db.Close() }()
+
+	var journalMode string
+	if err := db.db.QueryRow("PRAGMA journal_mode").Scan(&journalMode); err != nil {
+		t.Fatalf("querying journal_mode: %v", err)
+	}
+	if journalMode != "wal" {
+		t.Fatalf("write connection journal_mode = %q, want \"wal\"", journalMode)
+	}
+
+	var timeout int
+	if err := db.db.QueryRow("PRAGMA busy_timeout").Scan(&timeout); err != nil {
+		t.Fatalf("querying busy_timeout: %v", err)
+	}
+	if timeout == 0 {
+		t.Fatalf("write connection has no busy_timeout (got %d); writes fail immediately under contention", timeout)
+	}
+}
+
+// TestOpenReadOnlyHasBusyTimeout verifies the read-only connection is configured
+// with a busy timeout. Without it, a query fails immediately with SQLITE_BUSY when
+// a concurrent auto-sync holds the write lock, instead of waiting for it to release.
+func TestOpenReadOnlyHasBusyTimeout(t *testing.T) {
+	dbPath := filepath.Join(t.TempDir(), "busy_timeout.db")
+
+	db, err := Open(dbPath)
+	if err != nil {
+		t.Fatalf("failed to create test database: %v", err)
+	}
+	_ = db.Close()
+
+	db, err = OpenReadOnly(dbPath)
+	if err != nil {
+		t.Fatalf("failed to open database in read-only mode: %v", err)
+	}
+	defer func() { _ = db.Close() }()
+
+	var timeout int
+	if err := db.db.QueryRow("PRAGMA busy_timeout").Scan(&timeout); err != nil {
+		t.Fatalf("querying busy_timeout: %v", err)
+	}
+	if timeout == 0 {
+		t.Fatalf("read-only connection has no busy_timeout (got %d); queries can fail with SQLITE_BUSY under concurrent writes", timeout)
+	}
+}
+
 // TestOpenReadOnlyNonExistent verifies that opening a non-existent database fails.
 func TestOpenReadOnlyNonExistent(t *testing.T) {
 	_, err := OpenReadOnly("/nonexistent/path/db.sqlite")
