@@ -758,3 +758,71 @@ func TestOptimizeFTS(t *testing.T) {
 		t.Fatalf("expected results after optimize")
 	}
 }
+
+// TestSearch_UnfilteredMergesToolAndProseWithRRF verifies that unfiltered searches
+// merge tool_fts and messages_fts results using Reciprocal Rank Fusion (RRF).
+func TestSearch_UnfilteredMergesToolAndProseWithRRF(t *testing.T) {
+	db, cleanup := newTestDB(t)
+	defer cleanup()
+
+	// Insert a mixed corpus:
+	// - Item 1: tool content, high in tool_fts
+	// - Item 2: prose content, high in messages_fts, also has tool mention
+	// - Item 3: tool only, lower rank in tool_fts
+	// - Item 4: prose only, lower rank in messages_fts
+
+	now := time.Now()
+	items := []struct {
+		id          int
+		source      string
+		contentType string
+		text        string
+		project     string
+	}{
+		{1, "session", "tool", "error: connection timeout failed", "proj1"},
+		{2, "session", "text", "we debugged the connection timeout issue for hours", "proj1"},
+		{3, "session", "tool", "retry mechanism implemented success", "proj1"},
+		{4, "session", "code", "fixed a typo in the config", "proj1"},
+	}
+
+	for _, item := range items {
+		_, err := db.db.Exec(`
+			INSERT INTO search_items (source, source_path, ordinal, role, text, timestamp, uuid, project, content_type)
+			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+		`, item.source, "path/"+item.source, 1, "assistant", item.text, now.Format(time.RFC3339),
+			fmt.Sprintf("uuid-%d", item.id), item.project, item.contentType)
+		if err != nil {
+			t.Fatalf("insert item %d: %v", item.id, err)
+		}
+	}
+
+	// Search for "timeout" — appears in tool content (item 1) and prose (item 2)
+	opts := models.SearchOptions{
+		Project: "proj1",
+		Limit:   100,
+	}
+	results, err := db.Search("timeout", opts)
+	if err != nil {
+		t.Fatalf("search: %v", err)
+	}
+
+	// Expect results in RRF order:
+	// - Both item 1 and 2 should be high (both matched "timeout")
+	// - RRF should weight them based on rank in their respective indexes
+	if len(results) < 2 {
+		t.Fatalf("expected at least 2 results with 'timeout', got %d", len(results))
+	}
+
+	// Verify: first two results contain items 1 and 2 (in some RRF order)
+	topIDs := map[int]bool{results[0].ID: true, results[1].ID: true}
+	if !topIDs[1] || !topIDs[2] {
+		t.Errorf("expected items 1 and 2 in top 2, got IDs: %v", []int{results[0].ID, results[1].ID})
+	}
+
+	// Verify scores are RRF (not min-max normalized [0, 1])
+	for _, r := range results {
+		if r.Score <= 0 {
+			t.Errorf("result ID %d has invalid RRF score %f", r.ID, r.Score)
+		}
+	}
+}

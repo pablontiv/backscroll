@@ -3,10 +3,10 @@ package storage
 import (
 	"database/sql"
 	"fmt"
-	"sort"
 	"strings"
 	"time"
 
+	"github.com/pablontiv/backscroll/internal/hybrid"
 	"github.com/pablontiv/backscroll/internal/models"
 )
 
@@ -28,7 +28,7 @@ type SearchResult struct {
 
 // Search performs a hybrid search (BM25 + optional vector) on the indexed content.
 // It applies all filters and returns results ranked by BM25 score.
-// When ContentType is empty, it queries both FTS tables and merges by normalized score.
+// When ContentType is empty, it queries both FTS tables and merges via RRF.
 func (d *Database) Search(query string, opts models.SearchOptions) ([]SearchResult, error) {
 	switch opts.ContentType {
 	case "tool":
@@ -36,7 +36,7 @@ func (d *Database) Search(query string, opts models.SearchOptions) ([]SearchResu
 	case "text", "code":
 		return d.searchTable("messages_fts", query, opts)
 	case "":
-		// Unfiltered search: query both tables and merge
+		// Unfiltered search: query both tables and merge via RRF
 		prose, err := d.searchTable("messages_fts", query, withoutPaging(opts))
 		if err != nil {
 			return nil, err
@@ -45,7 +45,7 @@ func (d *Database) Search(query string, opts models.SearchOptions) ([]SearchResu
 		if err != nil {
 			return nil, err
 		}
-		merged := mergeNormalized(prose, tool)
+		merged := mergeRRF(prose, tool)
 		return paginate(merged, opts.Limit, opts.Offset), nil
 	default:
 		return d.searchTable("messages_fts", query, opts)
@@ -323,39 +323,56 @@ func withoutPaging(o models.SearchOptions) models.SearchOptions {
 	return o
 }
 
-// mergeNormalized min-max normalizes each slice's BM25 scores into [0,1]
-// (BM25 is negative; higher is better) and returns the union sorted by the
-// normalized score descending. Cross-index ordering is approximate by design.
-func mergeNormalized(a, b []SearchResult) []SearchResult {
-	normalize(a)
-	normalize(b)
-	out := append(append([]SearchResult{}, a...), b...)
-	sort.SliceStable(out, func(i, j int) bool { return out[i].Score > out[j].Score })
-	return out
-}
+// mergeRRF uses Reciprocal Rank Fusion to merge two ranked lists by position,
+// immune to score-scale differences between tokenizers (trigram vs porter).
+// k=60 is the standard RRF constant.
+func mergeRRF(proseResults, toolResults []SearchResult) []SearchResult {
+	// Convert to hybrid.RankResult for RRF fusion
+	toolRanking := make([]hybrid.RankResult, len(toolResults))
+	for i, r := range toolResults {
+		toolRanking[i] = hybrid.RankResult{
+			ID:    fmt.Sprintf("%d", r.ID),
+			Score: r.Score, // score value ignored by RRF; rank position is used
+		}
+	}
 
-// normalize min-max normalizes a slice of SearchResults' scores into [0,1].
-func normalize(rs []SearchResult) {
-	if len(rs) == 0 {
-		return
-	}
-	min, max := rs[0].Score, rs[0].Score
-	for _, r := range rs {
-		if r.Score < min {
-			min = r.Score
-		}
-		if r.Score > max {
-			max = r.Score
+	proseRanking := make([]hybrid.RankResult, len(proseResults))
+	for i, r := range proseResults {
+		proseRanking[i] = hybrid.RankResult{
+			ID:    fmt.Sprintf("%d", r.ID),
+			Score: r.Score,
 		}
 	}
-	span := max - min
-	for i := range rs {
-		if span == 0 {
-			rs[i].Score = 1
-		} else {
-			rs[i].Score = (rs[i].Score - min) / span
+
+	// Fuse rankings via RRF
+	fused := hybrid.ReciprocatRankFusion(60, toolRanking, proseRanking)
+
+	// Map fused results back to SearchResult with RRF score
+	// Create ID→SearchResult lookup from original results
+	byID := make(map[string]*SearchResult)
+	for i := range toolResults {
+		key := fmt.Sprintf("%d", toolResults[i].ID)
+		byID[key] = &toolResults[i]
+	}
+	for i := range proseResults {
+		key := fmt.Sprintf("%d", proseResults[i].ID)
+		// If already in byID (overlap), keep the existing entry's pointer
+		if _, exists := byID[key]; !exists {
+			byID[key] = &proseResults[i]
 		}
 	}
+
+	// Build final list in RRF order
+	final := make([]SearchResult, 0, len(fused))
+	for _, f := range fused {
+		if r, ok := byID[f.ID]; ok {
+			result := *r
+			result.Score = f.Score // Replace with RRF score
+			final = append(final, result)
+		}
+	}
+
+	return final
 }
 
 // paginate applies limit and offset to a result slice.

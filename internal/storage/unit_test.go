@@ -3704,47 +3704,6 @@ func TestPaginateLimitTruncation(t *testing.T) {
 	}
 }
 
-// TestNormalizeEqualScores verifies that normalize assigns score=1 to all rows
-// when min == max (all scores are equal).
-func TestNormalizeEqualScores(t *testing.T) {
-	rs := []SearchResult{
-		{ID: 1, Text: "a", Score: 0.5},
-		{ID: 2, Text: "b", Score: 0.5},
-		{ID: 3, Text: "c", Score: 0.5},
-	}
-
-	normalize(rs)
-
-	for i, r := range rs {
-		if r.Score != 1.0 {
-			t.Errorf("normalize equal scores: rs[%d].Score = %f, want 1.0", i, r.Score)
-		}
-	}
-}
-
-// TestNormalizeSpreadScores verifies that normalize correctly maps a range of
-// scores to [0,1] using min-max normalization.
-func TestNormalizeSpreadScores(t *testing.T) {
-	rs := []SearchResult{
-		{ID: 1, Text: "a", Score: 10.0},
-		{ID: 2, Text: "b", Score: 15.0},
-		{ID: 3, Text: "c", Score: 20.0},
-	}
-
-	normalize(rs)
-
-	// min=10, max=20, span=10
-	// 10 -> (10-10)/10 = 0.0
-	// 15 -> (15-10)/10 = 0.5
-	// 20 -> (20-10)/10 = 1.0
-	expected := []float64{0.0, 0.5, 1.0}
-	for i, r := range rs {
-		if r.Score != expected[i] {
-			t.Errorf("normalize spread: rs[%d].Score = %f, want %f", i, r.Score, expected[i])
-		}
-	}
-}
-
 // TestPaginateDefaultLimit verifies that paginate defaults to limit=100 when
 // limit is 0.
 func TestPaginateDefaultLimit(t *testing.T) {
