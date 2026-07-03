@@ -94,6 +94,18 @@ func (d *Database) SetupSchema() error {
 		}
 	}
 
+	// Check if version 7 is already applied
+	err = d.db.QueryRow("SELECT COUNT(*) FROM schema_migrations WHERE version = 7").Scan(&count)
+	if err != nil {
+		return fmt.Errorf("check migration version 7: %w", err)
+	}
+
+	if count == 0 {
+		if err := d.applyV7Migration(); err != nil {
+			return err
+		}
+	}
+
 	return nil
 }
 
@@ -302,6 +314,36 @@ func (d *Database) applyV6Migration() error {
 	return tx.Commit()
 }
 
+// applyV7Migration updates the content_type-branched triggers to support reasoning
+// indexing. Reasoning blocks (content_type='reasoning') route to messages_fts
+// alongside 'text' and 'code', NOT to tool_fts. This preserves the v4 semantic:
+// tool_fts is for structured tool metadata (names, paths, commands); messages_fts
+// is for prose (text, code, reasoning).
+func (d *Database) applyV7Migration() error {
+	tx, err := d.db.Begin()
+	if err != nil {
+		return fmt.Errorf("begin transaction: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	if _, err := tx.Exec(sqlV7Triggers); err != nil {
+		return fmt.Errorf("rebuild triggers for reasoning: %w", err)
+	}
+
+	checksum := sha256.Sum256([]byte(sqlV7Triggers))
+	checksumHex := fmt.Sprintf("%x", checksum)
+
+	_, err = tx.Exec(`
+		INSERT INTO schema_migrations (version, name, applied_on, checksum)
+		VALUES (7, 'V7 reasoning content_type routes to messages_fts', CURRENT_TIMESTAMP, ?)
+	`, checksumHex)
+	if err != nil {
+		return fmt.Errorf("record migration v7: %w", err)
+	}
+
+	return tx.Commit()
+}
+
 // SQL schema strings
 
 const sqlV1Core = `
@@ -476,6 +518,55 @@ const sqlV4Repopulate = `
 INSERT INTO messages_fts(messages_fts) VALUES('delete-all');
 INSERT INTO messages_fts(rowid, text) SELECT id, text FROM search_items WHERE content_type <> 'tool';
 INSERT INTO tool_fts(rowid, text) SELECT id, text FROM search_items WHERE content_type = 'tool';
+`
+
+// sqlV7Triggers updates the v4 branched triggers to support reasoning content_type.
+// The semantic is: tool-specific content (content_type='tool') indexes into tool_fts
+// (trigram, substring matching); prose content (text, code, reasoning) indexes into
+// messages_fts (porter, morphological matching). This preserves the v4 split while
+// extending it for reasoning blocks.
+const sqlV7Triggers = `
+DROP TRIGGER IF EXISTS search_items_ai_tool;
+DROP TRIGGER IF EXISTS search_items_ai_msg;
+DROP TRIGGER IF EXISTS search_items_ad_tool;
+DROP TRIGGER IF EXISTS search_items_ad_msg;
+DROP TRIGGER IF EXISTS search_items_au_tool;
+DROP TRIGGER IF EXISTS search_items_au_msg;
+
+-- NOTE: content_type is immutable per row (set at sync time; re-sync deletes and re-inserts).
+-- The UPDATE triggers branch on old.content_type and do not handle cross-type transitions.
+
+CREATE TRIGGER IF NOT EXISTS search_items_ai_tool AFTER INSERT ON search_items
+WHEN new.content_type = 'tool' BEGIN
+    INSERT INTO tool_fts(rowid, text) VALUES (new.id, new.text);
+END;
+
+CREATE TRIGGER IF NOT EXISTS search_items_ai_msg AFTER INSERT ON search_items
+WHEN new.content_type IN ('text', 'code', 'reasoning') BEGIN
+    INSERT INTO messages_fts(rowid, text) VALUES (new.id, new.text);
+END;
+
+CREATE TRIGGER IF NOT EXISTS search_items_ad_tool AFTER DELETE ON search_items
+WHEN old.content_type = 'tool' BEGIN
+    INSERT INTO tool_fts(tool_fts, rowid, text) VALUES('delete', old.id, old.text);
+END;
+
+CREATE TRIGGER IF NOT EXISTS search_items_ad_msg AFTER DELETE ON search_items
+WHEN old.content_type IN ('text', 'code', 'reasoning') BEGIN
+    INSERT INTO messages_fts(messages_fts, rowid, text) VALUES('delete', old.id, old.text);
+END;
+
+CREATE TRIGGER IF NOT EXISTS search_items_au_tool AFTER UPDATE ON search_items
+WHEN old.content_type = 'tool' BEGIN
+    INSERT INTO tool_fts(tool_fts, rowid, text) VALUES('delete', old.id, old.text);
+    INSERT INTO tool_fts(rowid, text) VALUES (new.id, new.text);
+END;
+
+CREATE TRIGGER IF NOT EXISTS search_items_au_msg AFTER UPDATE ON search_items
+WHEN old.content_type IN ('text', 'code', 'reasoning') BEGIN
+    INSERT INTO messages_fts(messages_fts, rowid, text) VALUES('delete', old.id, old.text);
+    INSERT INTO messages_fts(rowid, text) VALUES (new.id, new.text);
+END;
 `
 
 // sqlV1CoreDDL is the core DDL string used for computing the migration checksum.

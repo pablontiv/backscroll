@@ -3778,3 +3778,71 @@ func TestPaginateNegativeOffset(t *testing.T) {
 		t.Errorf("paginate(offset=-5) returned IDs %d,%d, want 1,2", result[0].ID, result[1].ID)
 	}
 }
+
+func TestMigrationV7(t *testing.T) {
+	// Create a fresh database and force application of all migrations.
+	db, cleanup := newTestDB(t)
+	defer cleanup()
+
+	// Verify schema_migrations records version 7 FIRST (before any test data operations).
+	var v7Applied int
+	if err := db.DB().QueryRow("SELECT COUNT(*) FROM schema_migrations WHERE version = 7").Scan(&v7Applied); err != nil {
+		t.Fatalf("query v7: %v", err)
+	}
+	if v7Applied != 1 {
+		t.Errorf("v7 migration not recorded; count=%d", v7Applied)
+	}
+
+	// Insert reasoning and text content_types and verify they index into messages_fts.
+	// (This requires the sync loop / trigger to fire; a minimal test inserts directly.)
+	if _, err := db.DB().Exec(`
+		INSERT INTO search_items (source_path, ordinal, role, text, content_type)
+		VALUES (?, ?, ?, ?, ?)
+	`, "/tmp/test.jsonl", 1, "assistant", "reasoning text here", "reasoning"); err != nil {
+		t.Fatalf("insert reasoning: %v", err)
+	}
+	if _, err := db.DB().Exec(`
+		INSERT INTO search_items (source_path, ordinal, role, text, content_type)
+		VALUES (?, ?, ?, ?, ?)
+	`, "/tmp/test.jsonl", 2, "assistant", "regular text", "text"); err != nil {
+		t.Fatalf("insert text: %v", err)
+	}
+	if _, err := db.DB().Exec(`
+		INSERT INTO search_items (source_path, ordinal, role, text, content_type)
+		VALUES (?, ?, ?, ?, ?)
+	`, "/tmp/test.jsonl", 3, "assistant", "tool command", "tool"); err != nil {
+		t.Fatalf("insert tool: %v", err)
+	}
+
+	// Verify reasoning and text are in messages_fts.
+	var reasoningCount, textCount, toolCount int
+	if err := db.DB().QueryRow("SELECT COUNT(*) FROM messages_fts WHERE text MATCH 'reasoning'").Scan(&reasoningCount); err != nil {
+		t.Fatalf("query messages_fts reasoning: %v", err)
+	}
+	if reasoningCount == 0 {
+		t.Error("reasoning content not in messages_fts")
+	}
+
+	if err := db.DB().QueryRow("SELECT COUNT(*) FROM messages_fts WHERE text MATCH 'regular'").Scan(&textCount); err != nil {
+		t.Fatalf("query messages_fts text: %v", err)
+	}
+	if textCount == 0 {
+		t.Error("text content not in messages_fts")
+	}
+
+	// Verify tool content is in tool_fts, NOT in messages_fts.
+	if err := db.DB().QueryRow("SELECT COUNT(*) FROM tool_fts WHERE text MATCH 'command'").Scan(&toolCount); err != nil {
+		t.Fatalf("query tool_fts: %v", err)
+	}
+	if toolCount == 0 {
+		t.Error("tool content not in tool_fts")
+	}
+
+	var toolInMsg int
+	if err := db.DB().QueryRow("SELECT COUNT(*) FROM messages_fts WHERE text MATCH 'command'").Scan(&toolInMsg); err != nil {
+		t.Fatalf("query messages_fts for tool: %v", err)
+	}
+	if toolInMsg != 0 {
+		t.Error("tool content should NOT be in messages_fts")
+	}
+}
