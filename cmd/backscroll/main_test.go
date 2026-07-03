@@ -1515,3 +1515,71 @@ func TestSearchFindsPiToolCallContent(t *testing.T) {
 		t.Errorf("Pi custom result not indexed; output: %s", out)
 	}
 }
+
+func TestIntegration_SyncWithCrosshostEquivalence(t *testing.T) {
+	_, cleanup := testEnv(t)
+	defer cleanup()
+
+	// Create a test session JSONL file with cwd set to /Users/Shared (macOS)
+	sessionDir := t.TempDir()
+	sessionFile := filepath.Join(sessionDir, "test_session.jsonl")
+	sessionJSON := `{"type":"user","cwd":"/Users/Shared/myproject/src","timestamp":"2024-01-01T00:00:00Z","message":{"role":"user","content":"hello crosshost"}}`
+	if err := os.WriteFile(sessionFile, []byte(sessionJSON+"\n"), 0o644); err != nil {
+		t.Fatalf("failed to write session: %v", err)
+	}
+
+	// Create a projects registry with ONLY /home/shared root (simulating Linux registry)
+	home := t.TempDir()
+	cfgDir := filepath.Join(home, ".config", "backscroll")
+	if err := os.MkdirAll(cfgDir, 0o755); err != nil {
+		t.Fatalf("failed to create config dir: %v", err)
+	}
+	projectsTOML := `
+[[projects]]
+id = "myproj"
+roots = ["/home/shared/myproject"]
+`
+	if err := os.WriteFile(filepath.Join(cfgDir, "projects.toml"), []byte(projectsTOML), 0o644); err != nil {
+		t.Fatalf("failed to write projects.toml: %v", err)
+	}
+
+	// Set up environment: session dir and config dir
+	t.Setenv("BACKSCROLL_SESSION_DIRS", sessionDir)
+	t.Setenv("BACKSCROLL_CONFIG_DIR", cfgDir)
+	t.Setenv("HOME", home)
+
+	// Run status to trigger auto-sync
+	out, stderr, err := runCmd("status")
+	if err != nil {
+		t.Fatalf("status failed: %v; stderr: %s", err, stderr)
+	}
+	if !strings.Contains(out, "Files indexed") {
+		t.Errorf("status missing 'Files indexed': %s", out)
+	}
+
+	// Search for the test content; it should be indexed with project "myproj" (not "unknown")
+	// Use --fields full to include ProjectPath in JSON output
+	out, _, err = runCmd("search", "--text", "crosshost", "--json", "--fields", "full")
+	if err != nil {
+		t.Fatalf("search failed: %v", err)
+	}
+
+	// Parse JSON results
+	var results []map[string]interface{}
+	if err := json.Unmarshal([]byte(out), &results); err != nil {
+		t.Fatalf("failed to parse search results JSON: %v; output: %s", err, out)
+	}
+
+	if len(results) == 0 {
+		t.Fatal("expected at least one search result")
+	}
+
+	// Verify the ProjectPath is "myproj", not "unknown"
+	projectPath, ok := results[0]["ProjectPath"].(string)
+	if !ok {
+		t.Fatalf("ProjectPath field missing or not a string in result: %+v", results[0])
+	}
+	if projectPath != "myproj" {
+		t.Errorf("expected ProjectPath 'myproj', got %q", projectPath)
+	}
+}
