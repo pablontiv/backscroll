@@ -77,6 +77,92 @@ func LoadLocalHint(cwd string) *ProjectHint {
 	return nil
 }
 
+// NormalizeRootEquivalence maps equivalent roots (from cross-host syncs like
+// /home/shared vs /Users/Shared) to a canonical form using the project registry.
+// It finds the longest suffix of a canonical root that appears as a contiguous
+// sequence in cwd's components. If found, cwd is remapped to use that canonical root.
+// If no equivalent is found, cwd is returned unchanged.
+func NormalizeRootEquivalence(cwd string, registry ProjectRegistry) string {
+	if cwd == "" {
+		return cwd
+	}
+
+	for _, p := range registry.Projects {
+		for _, canonicalRoot := range p.Roots {
+			if isCrossHostEquivalent(cwd, canonicalRoot) {
+				return remapPath(cwd, canonicalRoot)
+			}
+		}
+	}
+
+	return cwd
+}
+
+// isCrossHostEquivalent returns true if cwd and canonicalRoot refer to the same
+// logical path with different host/mount prefixes.
+// It checks if a suffix of canonicalRoot's path components appears as a contiguous
+// sequence in cwd's components, using case-insensitive comparison.
+func isCrossHostEquivalent(cwd, canonicalRoot string) bool {
+	cwdParts := strings.Split(strings.TrimPrefix(filepath.ToSlash(filepath.Clean(cwd)), "/"), "/")
+	rootParts := strings.Split(strings.TrimPrefix(filepath.ToSlash(filepath.Clean(canonicalRoot)), "/"), "/")
+
+	// Require at least 3 components in cwd and 2 in root
+	if len(cwdParts) < 3 || len(rootParts) < 2 {
+		return false
+	}
+
+	// Try tail lengths from longest to shortest (down to 2 components minimum)
+	for tailLen := len(rootParts); tailLen >= 2; tailLen-- {
+		tail := rootParts[len(rootParts)-tailLen:]
+
+		// Check if cwd_parts contains tail as a contiguous subsequence
+		for i := 0; i <= len(cwdParts)-len(tail); i++ {
+			if slicesEqualFold(cwdParts[i:i+len(tail)], tail) {
+				return true
+			}
+		}
+	}
+
+	return false
+}
+
+// remapPath rewrites cwd to use canonicalRoot, preserving any trailing subpath.
+// Assumes isCrossHostEquivalent(cwd, canonicalRoot) returned true.
+func remapPath(cwd, canonicalRoot string) string {
+	cwdParts := strings.Split(strings.TrimPrefix(filepath.ToSlash(filepath.Clean(cwd)), "/"), "/")
+	rootParts := strings.Split(strings.TrimPrefix(filepath.ToSlash(filepath.Clean(canonicalRoot)), "/"), "/")
+
+	// Find the matching tail and its position in cwdParts
+	for tailLen := len(rootParts); tailLen >= 2; tailLen-- {
+		tail := rootParts[len(rootParts)-tailLen:]
+
+		for i := 0; i <= len(cwdParts)-len(tail); i++ {
+			if slicesEqualFold(cwdParts[i:i+len(tail)], tail) {
+				// Found tail at position i; extract rest (subpath after tail)
+				rest := cwdParts[i+len(tail):]
+				// Reconstruct: canonical root + rest, preserving leading /
+				parts := append(rootParts, rest...)
+				return "/" + filepath.Join(parts...)
+			}
+		}
+	}
+
+	return cwd
+}
+
+// slicesEqualFold reports whether a and b are equal under Unicode case-folding.
+func slicesEqualFold(a, b []string) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if !strings.EqualFold(a[i], b[i]) {
+			return false
+		}
+	}
+	return true
+}
+
 // Identify resolves the canonical project for cwd.
 // Resolution order: local hint → exact root → worktree pattern → truncated suffix → unknown.
 func Identify(cwd string, registry ProjectRegistry) Identification {

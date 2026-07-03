@@ -288,3 +288,36 @@ roots = ["/tmp/myproject"]
 		t.Errorf("expected exact confidence, got %s", id.Confidence)
 	}
 }
+
+func TestNormalizeRootEquivalence_CrossHost(t *testing.T) {
+	reg := projects.ProjectRegistry{
+		Projects: []projects.ProjectConfig{
+			{
+				ID:    "myproj",
+				Roots: []string{"/home/shared/myproject"},
+			},
+		},
+	}
+
+	result := projects.NormalizeRootEquivalence("/Users/Shared/myproject/src", reg)
+	expected := filepath.Join("/home/shared/myproject", "src")
+	if result != expected {
+		t.Errorf("expected %s, got %s", expected, result)
+	}
+}
+
+func TestNormalizeRootEquivalence_NoMatch(t *testing.T) {
+	reg := projects.ProjectRegistry{
+		Projects: []projects.ProjectConfig{
+			{
+				ID:    "other",
+				Roots: []string{"/home/other/project"},
+			},
+		},
+	}
+
+	result := projects.NormalizeRootEquivalence("/Users/Shared/myproject/src", reg)
+	if result != "/Users/Shared/myproject/src" {
+		t.Errorf("expected unchanged path, got %s", result)
+	}
+}
