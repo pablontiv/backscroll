@@ -234,3 +234,32 @@ func TestSearchWithJSONAndMaxTokens(t *testing.T) {
 		}
 	}
 }
+
+func TestSearchValidatesContentType(t *testing.T) {
+	tests := []struct {
+		flag    string
+		wantErr bool
+	}{
+		{"text", false},
+		{"code", false},
+		{"tool", false},
+		{"reasoning", false},
+		{"invalid", true},
+		{"", false}, // empty is valid (no filter)
+	}
+	for _, tt := range tests {
+		t.Run(tt.flag, func(t *testing.T) {
+			if tt.flag == "" {
+				_, _, err := runCmd("search", "test")
+				if (err != nil) != tt.wantErr {
+					t.Errorf("runCmd with no --content-type: err=%v, wantErr=%v", err, tt.wantErr)
+				}
+			} else {
+				_, _, err := runCmd("search", "test", "--content-type", tt.flag)
+				if (err != nil) != tt.wantErr {
+					t.Errorf("runCmd with --content-type %q: err=%v, wantErr=%v", tt.flag, err, tt.wantErr)
+				}
+			}
+		})
+	}
+}

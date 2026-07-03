@@ -50,7 +50,7 @@ Use --all-projects to search across all projects.
 Use --source to filter by source type (session, plan, ke, decision, memory, rule, spec, backlog).
 Use --after/--before to filter by date (YYYY-MM-DD format).
 Use --role to filter by message role (user, assistant).
-Use --content-type to filter by content type (text, code, tool).
+Use --content-type to filter by content type (text, code, tool, reasoning).
 Use --tag to filter sessions by auto-detected tags.
 Use --source-path to filter by indexed source path (exact, SQL LIKE pattern, or * glob).
 Use --json to output as JSON.
@@ -107,6 +107,17 @@ func runSearch(stdout, stderr io.Writer,
 	// Validate flag values before opening the database
 	if fields != "minimal" && fields != "full" {
 		return fmt.Errorf("invalid --fields value %q: must be minimal or full", fields)
+	}
+
+	validContentTypes := map[string]bool{
+		"text":      true,
+		"code":      true,
+		"tool":      true,
+		"reasoning": true,
+	}
+
+	if contentType != "" && !validContentTypes[contentType] {
+		return fmt.Errorf("invalid --content-type %q; must be one of: text, code, tool, reasoning", contentType)
 	}
 
 	warnShortToolQuery(stderr, contentType, query)
