@@ -103,6 +103,9 @@ Configurable in `[sources]` section of `backscroll.toml`. Source types: `ke`, `d
 - **Early input validation**: CLI commands validate flag values (e.g. `--format`) before opening the database, so invalid inputs fail fast without side effects.
 - **Coverage gate**: CI enforces ≥85% aggregate statement coverage via `go test ./... -race -coverprofile`. Local check: `bash scripts/check-coverage.sh`. Tests that depend on local machine state (e.g. `~/.config/backscroll/projects.toml`) must use `t.Setenv("HOME", tempDir)` to stay reproducible on CI. Likewise, `InputsDir` branches requiring `BACKSCROLL_CONFIG_DIR` to be unset must set it to `""` via `t.Setenv`. To test the `Validate` orphan path, insert directly into `search_items` without a matching `indexed_files` row.
 - **Zero-result guidance**: when `search`/`list` return no rows, actionable suggestions (`--all-projects`, `--content-type tool`, `backscroll status`) are printed to STDERR — never STDOUT, so `--json` stays a clean empty payload.
+- **Robot output contract**: `search --robot` emits `result_N_field=value` lines exactly once-wrapped (the robot path writes lines directly; passing pre-formatted lines through the picokit formatter double-wraps them as `result_N=result_N_field=...`).
+- **Cross-host project identity**: `projects.Identify()` normalizes session cwd against registry roots by matching root tails (≥2 components, case-insensitive), so `/home/shared/<proj>` sessions resolve against `/Users/Shared/<proj>` roots on a synced index. Registry roots should keep distinct suffixes — two projects whose roots share the same trailing components could misbucket.
+- **Recall eval-set**: `docs/eval/queries.toml` (~20 real mined queries with `expected_match` ground truth) + `scripts/eval.sh` compute recall@5; a query counts only if its expected target appears in the top 5. Local regression gate, not a required CI step.
 
 ## Dependencies
 
