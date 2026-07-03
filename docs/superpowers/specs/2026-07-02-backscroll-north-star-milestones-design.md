@@ -98,11 +98,12 @@ hints already help here).
 
 ### Track B — Complete Corpus
 
-**B1. Slice 3 — OpenCode tool parts** (cheapest, ships first)
+**B1. Slice 3 — OpenCode tool parts** — ALREADY SHIPPED
 
-Extend `OpenCodeReader` to capture `tool` parts (`state.input` + `state.output`),
-serialized with the existing `toolfmt` serializer from Slice 1. No new reader, no
-migration: rows enter `tool_fts` as `content_type='tool'`. Low risk.
+Verified during plan review: `OpenCodeReader` already captures `tool` parts
+(`state.input` + `state.output`) via the `toolfmt` serializer (commit 657aa50,
+merge 2d1ca87). No work remains beyond adding OpenCode-only queries to the
+eval-set (folded into A3).
 
 **B2. Slice 2 — Pi reasoning** (requires explicit privacy decision)
 
@@ -117,14 +118,11 @@ blocks, there is no data. Two decisions fixed at design time:
   Requires migration v7 (new version block; existing migration blocks are never
   modified, per repo rule).
 
-**B3. Slice 4 — Retire the declarative input engine** (closing cleanup)
+**B3. Slice 4 — Retire the declarative input engine** — ALREADY SHIPPED
 
-Delete `JsonlReader` + `ParseDeclarative`; consolidate on reader-per-agent
-(ClaudeReader, PiReader, OpenCodeReader). Pure deletion, zero behavior change —
-but it goes last: if B1/B2 reveal any input still depending on the declarative
-path, we learn it before deleting. Operational reminder: when deleting a
-package, update the Module Layout and Package Layout sections in CLAUDE.md or
-the pre-push hook rejects the push.
+Verified during plan review: the declarative pipeline was deleted in commit
+315e6f2 and merged as Slice 4 in a1d5ab4; reader-per-agent is the parser layer.
+No work remains in this slice.
 
 **Track testing**: each slice ships with fixtures from real (anonymized)
 sessions, and the eval-set gains 3-5 queries answerable only with the new
@@ -150,21 +148,26 @@ queries. A change that lowers recall is visible before it ships.
 
 **C3. Embeddings spike** (time-boxed, end of milestone)
 
-Experimental branch: activate the dormant O09/O10 code (ONNX provider + hybrid
-RRF), run the eval-set BM25-only vs hybrid, measure recall@5, latency, and setup
-weight. Output is a documented decision with numbers: **activate / defer /
-delete** the dormant code. Either way the phantom debt is settled. Constraint:
-if activation would break pure-Go/no-CGO, it is an automatic no-go; the pure-Go
-`sqlite-vec` path is the alternative to evaluate inside the same spike. The
-spike merges a decision report (docs + engram), not necessarily code.
+Corrected premise (verified during plan review): the hybrid infrastructure is
+NOT dormant — HybridSearch + RRF + migration v3 + CLI flags shipped complete on
+2026-06-22 (commit 78ab780) with a safe BM25 fallback. What is actually missing
+for end-to-end hybrid: (1) a real embedding provider — the ONNX provider is a
+stub returning ErrOnnxNotAvailable; (2) sync-time vector population (T036 was
+never implemented); (3) measurement. The spike therefore answers: is a REAL
+local embedding provider feasible within pure-Go/no-CGO (hard gate — CGO-bound
+runtimes are an automatic no-go), and would wiring T036 pay off? It reuses the
+A3 eval-set/runner (no parallel harness), measures BM25-only vs hybrid with the
+best feasible real provider (mock-only measurement is not evidence), and ships
+a decision report: **activate / defer / delete**. Report merges to main; spike
+code stays on its branch.
 
 ### M1 Delivery
 
 - Direct commits to `main` with conventional commits; push after each completed
   slice. CI releases automatically on every push.
-- Slice order: A1 (O18) → A2+A3 (skill + eval-set) → B1 (OpenCode) → B2 (Pi
-  reasoning, migration v7) → C1 (RRF) → B3 (retire declarative) → C3 (spike).
-  B1 may proceed in parallel with A2/A3.
+- Slice order: A1 (O18) → A2+A3 (skill + eval-set, includes robot-format CLI
+  fix) → B2 (Pi reasoning, migration v7) → C1 (RRF) → C3 (spike). B1 and B3
+  were found already shipped during plan review and carry no work.
 - Gates per slice: `just check`, `just test`, coverage ≥85% (pre-push enforced),
   eval-set recall@5 from A3 onward.
 
