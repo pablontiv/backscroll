@@ -59,6 +59,17 @@ func TestOpen(t *testing.T) {
 	}
 }
 
+// TestOpenDirectoryPath verifies Open fails cleanly when the path is a directory.
+func TestOpenDirectoryPath(t *testing.T) {
+	dir := t.TempDir()
+
+	db, err := Open(dir)
+	if err == nil {
+		_ = db.Close()
+		t.Fatal("expected error opening a directory as a database")
+	}
+}
+
 // TestOpenReadOnly verifies read-only mode.
 func TestOpenReadOnly(t *testing.T) {
 	db, cleanup := newTestDB(t)

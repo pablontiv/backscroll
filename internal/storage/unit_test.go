@@ -3847,6 +3847,16 @@ func TestMigrationV7(t *testing.T) {
 	}
 }
 
+func TestMigrationV7BeginError(t *testing.T) {
+	// applyV7Migration must surface a Begin() failure; a closed connection forces it.
+	db, cleanup := newTestDB(t)
+	cleanup()
+
+	if err := db.applyV7Migration(); err == nil {
+		t.Fatal("applyV7Migration should fail when the connection is closed")
+	}
+}
+
 func TestMigrationV7ErrorRollback(t *testing.T) {
 	// Test that applyV7Migration properly rolls back on INSERT failure.
 	// Pre-insert version 7 into schema_migrations to force a duplicate-key constraint violation
