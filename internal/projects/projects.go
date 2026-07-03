@@ -164,16 +164,20 @@ func slicesEqualFold(a, b []string) bool {
 }
 
 // Identify resolves the canonical project for cwd.
-// Resolution order: local hint → exact root → worktree pattern → truncated suffix → unknown.
+// Resolution order: local hint → exact root → worktree pattern → subpath → truncated suffix → unknown.
+// Paths are normalized for cross-host equivalence (e.g., /home/shared vs /Users/Shared roots).
 func Identify(cwd string, registry ProjectRegistry) Identification {
 	if hint := LoadLocalHint(cwd); hint != nil {
 		return Identification{ProjectID: hint.ProjectID, Confidence: ConfidenceHint}
 	}
 
-	// 1. Exact root match (cwd == root itself).
+	// Normalize cwd for cross-host equivalence
+	normalizedCwd := NormalizeRootEquivalence(cwd, registry)
+
+	// 1. Exact root match (normalizedCwd == root itself).
 	for _, p := range registry.Projects {
 		for _, root := range p.Roots {
-			if cwd == root {
+			if normalizedCwd == root {
 				return Identification{ProjectID: p.ID, Confidence: ConfidenceExact}
 			}
 		}
@@ -182,7 +186,7 @@ func Identify(cwd string, registry ProjectRegistry) Identification {
 	// 2. Worktree pattern match — checked before subpath so worktrees get "pattern" confidence.
 	for _, p := range registry.Projects {
 		for _, pattern := range p.WorktreePatterns {
-			if matched, _ := filepath.Match(pattern, cwd); matched {
+			if matched, _ := filepath.Match(pattern, normalizedCwd); matched {
 				return Identification{ProjectID: p.ID, Confidence: ConfidencePattern}
 			}
 		}
@@ -191,14 +195,14 @@ func Identify(cwd string, registry ProjectRegistry) Identification {
 	// 3. Subpath under a known root.
 	for _, p := range registry.Projects {
 		for _, root := range p.Roots {
-			if strings.HasPrefix(cwd, root+string(filepath.Separator)) {
+			if strings.HasPrefix(normalizedCwd, root+string(filepath.Separator)) {
 				return Identification{ProjectID: p.ID, Confidence: ConfidenceExact}
 			}
 		}
 	}
 
-	// Truncated path: cwd suffix matches a known root (leading path stripped).
-	cwdClean := strings.TrimPrefix(cwd, string(filepath.Separator))
+	// Truncated path: normalizedCwd suffix matches a known root (leading path stripped).
+	cwdClean := strings.TrimPrefix(normalizedCwd, string(filepath.Separator))
 	for _, p := range registry.Projects {
 		for _, root := range p.Roots {
 			rootClean := strings.TrimPrefix(root, string(filepath.Separator))

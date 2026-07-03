@@ -321,3 +321,22 @@ func TestNormalizeRootEquivalence_NoMatch(t *testing.T) {
 		t.Errorf("expected unchanged path, got %s", result)
 	}
 }
+
+func TestIdentify_CrossHostEquivalence(t *testing.T) {
+	reg := projects.ProjectRegistry{
+		Projects: []projects.ProjectConfig{
+			{
+				ID:    "myproj",
+				Roots: []string{"/home/shared/myproject"},
+			},
+		},
+	}
+
+	result := projects.Identify("/Users/Shared/myproject/src", reg)
+	if result.ProjectID != "myproj" {
+		t.Errorf("expected ProjectID 'myproj', got %q", result.ProjectID)
+	}
+	if result.Confidence == projects.ConfidenceUnknown {
+		t.Errorf("expected non-unknown confidence, got %s", result.Confidence)
+	}
+}
