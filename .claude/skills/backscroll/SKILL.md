@@ -1,14 +1,14 @@
 ---
 name: backscroll
-description: "Trigger: backscroll, sesiones anteriores, where were we, ya lo hicimos, prior sessions, already done, we already did this, continue from last session. Search indexed AI session history for past decisions and prior work before answering."
+description: "Trigger: starting work on a feature/bug with potential prior history. Explicit: prior sessions, we already did this, ya lo hicimos, what error did Y give, where did I run X, what did we decide about Z. Automatic recall for code features, testing, fixes, refactoring. Uses --project first (implicit from cwd), --all-projects if needed, --content-type tool for execution queries. Agent-grade output: --robot --fields minimal under declared token budget."
 user-invocable: true
 allowed-tools:
   - Bash
 ---
 
-# Backscroll Recipe
+# Backscroll Recipe — Recall-First for Agents
 
-Backscroll is the retrieval binary for indexed AI history and declared inputs. Always run Backscroll commands before inspecting raw `session.jsonl` files.
+Backscroll is the definitive local episodic memory for agents. Always run before starting work on a feature, bug, or test that may have history — even if you don't remember the topic. Backscroll finds what happened.
 
 ## 1) Preflight (required)
 
@@ -20,7 +20,6 @@ backscroll status
 If `backscroll` is missing:
 
 ```bash
-# Installer installs binary + presets into input dir
 curl -fsSL https://raw.githubusercontent.com/pablontiv/backscroll/master/install.sh | bash
 # Alternative: copy shipped input presets after binary is in PATH
 config_dir="${BACKSCROLL_CONFIG_DIR:-${XDG_CONFIG_HOME:-$HOME/.config}}"
@@ -28,7 +27,22 @@ mkdir -p "$config_dir/backscroll/inputs"
 cp -n inputs/claude.inputs.toml inputs/pi.inputs.toml inputs/opencode.inputs.toml inputs/decisions.inputs.toml "$config_dir/backscroll/inputs/"
 ```
 
-## 2) Canonical input location
+## 2) When to Invoke (Automatic Triggers)
+
+Invoke `/skill:backscroll` **automatically** at these points:
+
+- **Starting a feature** ("implement X", "add Y capability") — query: feature name + goal
+- **Fixing a bug** ("fix broken Z", "handle error case") — query: error message or symptom
+- **Writing tests** ("test the validate function") — query: test subject
+- **Refactoring** ("clean up internal/X") — query: module or pattern being refactored
+- **Decision questions** ("should we use RRF or vector?", "did we decide on this?") — query: decision topic
+- **Debugging execution** ("what error did Y give?", "where did I run X?") — query: command or error, use `--content-type tool`
+
+**Spanish equivalents:** "ya lo hicimos", "que hicimos con", "qué error dio", "dónde corrí", "qué decidimos".
+
+Do NOT wait for explicit recall requests. The cost of a missed lookup is high (rework, duplicate decisions).
+
+## 3) Canonical Input Location
 
 Manifests are loaded only from:
 
@@ -40,136 +54,138 @@ where `<config_dir>` is OS config directory, or `BACKSCROLL_CONFIG_DIR`.
 
 `backscroll.toml` is app config only (DB/embedding), not the ingestion source.
 
-## 3) Core commands
+## 4) Agent Output Contract
 
-Backscroll v2 provides four canonical query commands:
+When invoked as an agent (not a human), use these flags for minimal, machine-readable output:
 
-| Command | Purpose |
-|---|---|
-| `backscroll list [--project P] [--order FIELD:DIR] [--limit N]` | List indexed items sorted and paginated |
-| `backscroll search <QUERY> [--project P] [--source TYPE] [--content-type text\|code\|tool] [--json] [--max-tokens N]` | Full-text search with BM25 ranking |
-| `backscroll read --path <PATH> [--tail N] [--semantic]` | Read one indexed session file, optionally tail and semantic rows |
+**Mandatory flags:**
+- `--robot`: outputs `result_N_field=value` format (no text decoration)
+- `--fields minimal`: JSON fields only (`source_path`, `snippet`, `score`, `role`, `timestamp`)
+- `--max-tokens <budget>`: enforce output size limit; agent declares budget (e.g., 2000 tokens for a lookup)
 
-Maintenance commands: `status`, `validate`, `rebuild`, `purge`, `config`.
-
-## 4) Invocation-to-command mapping
-
-When invoked as `/skill:backscroll`:
-
-| Invocation | Command |
-|---|---|
-| `/skill:backscroll` | Preflight + `backscroll status` + `backscroll list --order timestamp:desc --limit 10` |
-| `/skill:backscroll QUERY` | `backscroll search "QUERY"` |
-| `/skill:backscroll --recent N` | `backscroll list --order timestamp:desc --limit N` |
-| `/skill:backscroll --context` | `Backscroll` context retrieval first, then optional `ref-context-mode.md` Rootline steps |
-
-## 5) Common workflows
-
-### 5.1) Get latest indexed session + semantic tail
-
+**Recipe:**
 ```bash
-backscroll list --order timestamp:desc --limit 1 --json
-# Returns: {"count":1,"sessions":[{"path":"..."},...]}
+# Project-scoped query first
+backscroll search "QUERY" --project <cwd-or-inferred> --robot --fields minimal --max-tokens 2000
 
-# Extract path and read semantic tail:
-PATH=$(backscroll list --order timestamp:desc --limit 1 --json | jq -r '.sessions[0].path')
-backscroll read --path "$PATH" --tail 45 --semantic
+# If no results, expand to all projects
+if [ $? -ne 0 ] || [ -z "$result" ]; then
+  backscroll search "QUERY" --all-projects --robot --fields minimal --max-tokens 2000
+fi
+
+# For execution-shaped queries (commands, errors, paths), use --content-type tool
+backscroll search "command or error" --all-projects --content-type tool --robot --fields minimal --max-tokens 1500
 ```
 
-**Warning — tail gap**: `--tail N` shows only the LAST N rows. Content at the start or middle of a session is invisible. If you need content from anywhere in a session, use search (see 5.6).
+**Token budget guidance:**
+- Lookup for start-of-feature decision: 1500–2000 tokens.
+- Multi-project cross-reference: 2000–3000 tokens.
+- Tool/error investigation: 1000–1500 tokens (trigram tokenizer, precise results).
+- Default ceiling: `--max-tokens 2000` unless the agent explicitly declares a higher budget.
 
-### 5.2) Search tool activity across projects
+**Token accounting:** The formatter respects `--max-tokens` and truncates output. If the search completes but is truncated, the output ends with an indicator; the agent should interpret partial results as "index knows the topic exists" and may refine the query.
 
+## 5) Query Patterns by Use Case
+
+### Decision Recovery
 ```bash
-# Find all tool calls for a specific tool
-backscroll search "bash" --all-projects --content-type tool
-
-# Find tool activity related to a project
-backscroll search "error" --all-projects --content-type tool
+backscroll search "should we use RRF or vector" --all-projects --robot --fields minimal --max-tokens 2000
+backscroll search "migration v7 reasoning index" --all-projects --robot --fields minimal --max-tokens 2000
 ```
 
-### 5.3) Search in current project
-
+### Error Investigation
 ```bash
-backscroll search "QUERY" --project <path>
+backscroll search "SQLITE_BUSY database is locked" --all-projects --content-type tool --robot --fields minimal --max-tokens 1500
+backscroll search "exit code 1" --all-projects --content-type tool --robot --fields minimal --max-tokens 1500
 ```
 
-### 5.4) Search across all projects
-
+### Feature Work Recovery
 ```bash
-backscroll search "QUERY" --all-projects --max-tokens 4000
+backscroll search "split FTS index" --project <cwd> --robot --fields minimal --max-tokens 2000
+backscroll search "backscroll search --robot" --all-projects --content-type tool --robot --fields minimal --max-tokens 1500
 ```
 
-### 5.5) Read one session file
-
+### Code Pattern Lookup
 ```bash
-backscroll read --path /home/user/.claude/projects/<slug>/<UUID>.jsonl
+backscroll search "SearchEngine interface" --project <cwd> --robot --fields minimal --max-tokens 1500
 ```
 
-### 5.6) Find content anywhere in a session (not just the tail)
-
-`--tail` misses content at the start and middle of sessions. To find content at any position:
-
+### Cross-Project Execution
 ```bash
-# Search across all indexed rows of all sessions
-backscroll search "QUERY" --all-projects --max-tokens 8000
-
-# Narrow to a specific session file
-backscroll search "QUERY" --source-path "/path/to/session.jsonl"
+backscroll search "go test" --all-projects --content-type tool --robot --fields minimal --max-tokens 1500
 ```
 
-### 5.7) Find what a tool did, or an error from a command
+## 6) Degradation & Error Handling
 
-Tool inputs (the command/file/args) AND tool outputs (results and errors) are indexed
-with `content_type='tool'`. Use `--content-type tool` to search only tool activity —
-ideal for debugging "what command ran / what failed".
-
+**Index is stale or locked:**
+If `backscroll status` shows zero indexed files or if auto-sync fails:
 ```bash
-# Find a command that was run (searches serialized tool inputs)
-backscroll search "go test ./..." --all-projects --content-type tool
-
-# Find an error returned by a tool/command
-backscroll search "exit code 1" --all-projects --content-type tool
-
-# Find when a specific file was read or edited
-backscroll search "internal/storage/sync.go" --all-projects --content-type tool
+backscroll search ... 2>&1 | grep -E "warning|suggestions"
 ```
 
-Do NOT shell out to Python/jq to parse `session.jsonl` for tool calls — they are already
-indexed. `--content-type tool` returns them directly.
+The CLI prints actionable hints to stderr:
+- `--all-projects`: expand search scope.
+- `--content-type tool`: try tool-only search (better for commands/errors).
+- `backscroll status`: confirm index size and last-indexed time.
 
-## 6) Output formats
+Do NOT retry the same query. Act on the hints or report stale index.
 
+**No results (empty result set):**
+The agent receives zero rows. Interpret as "query term not in index" — do NOT infer "topic doesn't exist". Refine the query (shorter terms, broader project scope, `--all-projects`) and retry once. If still zero, escalate to manual human recall.
+
+**Output truncated by --max-tokens:**
+If the output ends abruptly or shows a truncation indicator, the index has more data but the budget was exhausted. Refine the query (narrower date range, `--source session` to exclude plans) or increase the budget.
+
+## 7) Troubleshooting
+
+**No command `backscroll`:**
 ```bash
-# Default — agent-readable
-backscroll search "query"
-backscroll list
-
-# JSON
-backscroll search "query" --json
-backscroll list --json
-
-# Pretty — human-readable
-backscroll search "query" --pretty
+curl -fsSL https://raw.githubusercontent.com/pablontiv/backscroll/master/install.sh | bash
 ```
 
-## 7) Filter by source type
-
-Use `--source <type>` on `search` to filter by content type.
-
+**Database locked (SQLITE_BUSY):**
 ```bash
-backscroll search "QUERY" --source session    # only session content
-backscroll search "QUERY" --source plan       # only plan content
-backscroll search "QUERY" --source decision   # only decision records
+BACKSCROLL_AUTOUPDATE_DISABLE=1 backscroll status
+```
+Wait a few seconds and retry. If persistent, the database file is locked by another process (another backscroll invocation, or stale file handle). Check `lsof /path/to/.backscroll.db`.
+
+**Zero results on tool query with ≥3 character term:**
+The `tool_fts` index uses trigram tokenizer; some pattern may not match. Try:
+- Exact flag/path: `"--content-type tool"` (has 15+ chars, should match).
+- Command name: `"go test"` (should match, but "go" alone may not).
+- Error fragment: `"BUSY"` (should match, but "go" alone will not).
+
+**Still zero results:**
+```bash
+backscroll status  # Confirm index is populated
+backscroll validate --indexed-only  # Check for orphan rows
+backscroll rebuild  # Full reindex if suspect corruption
 ```
 
-## 8) Troubleshooting
+## 8) Token Budget Allocation for Agents
 
-If no results appear:
+When an agent invokes multiple backscroll lookups in a single session:
 
+| Use Case | Budget | Notes |
+|----------|--------|-------|
+| Pre-work feature/bug recall | 2000 | First lookup in the session; larger budget justified. |
+| Refinement/clarification | 1000–1500 | Narrow query after first pass. |
+| Tool error investigation | 1000–1500 | Exact command/error; trigram tokenizer is precise. |
+| Cross-project reference | 2000 | Wider scope, larger budget acceptable. |
+| Decision context | 1500–2000 | Decision topics tend to have longer prose matches. |
+
+**Total per session**: Agents should allocate ~5000 tokens for episodic recall (3–4 lookups). If a single lookup is insufficient, refine the query rather than increase the budget.
+
+Declare the budget upfront:
 ```bash
-backscroll status
-backscroll validate
+backscroll search "query" --all-projects --robot --fields minimal --max-tokens 2000
 ```
 
-`status` auto-syncs files declared by active inputs; `validate` checks index integrity. If still no results, check `backscroll config`.
+The CLI will truncate output if needed; the agent reads truncation as "got what fit".
+
+## References
+
+- **CLI documentation**: `backscroll search --help`, `backscroll list --help`, `backscroll read --help`
+- **v1.4.0+ improvements**: Split FTS index (Slice 1) — `tool_fts` with trigram tokenizer for exact command/error matching; `messages_fts` with porter tokenizer for prose. Switched by `--content-type`.
+- **Deployable version check**: `backscroll version` or `backscroll status` shows deployed build.
+- **Diagnostic skill**: `backscroll-doctor` self-audits the index for bugs, gaps, enhancements.
