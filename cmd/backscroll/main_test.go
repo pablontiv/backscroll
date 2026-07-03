@@ -1583,3 +1583,113 @@ roots = ["/home/shared/myproject"]
 		t.Errorf("expected ProjectPath 'myproj', got %q", projectPath)
 	}
 }
+
+// setupPiReasoningPreset writes a pi.inputs.toml with index_reasoning=true
+func setupPiReasoningPreset(t *testing.T, cfgDir, fixtureRoot string) {
+	t.Helper()
+	inputsDir := filepath.Join(cfgDir, "backscroll", "inputs")
+	if err := os.MkdirAll(inputsDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	toml := fmt.Sprintf(`version = 1
+[[inputs]]
+id = "pi-reasoning"
+source = "session"
+active = true
+[inputs.discover]
+roots = [%q]
+include = ["**/*.jsonl"]
+[inputs.decode]
+format = "pi"
+index_reasoning = true
+`, fixtureRoot)
+	if err := os.WriteFile(filepath.Join(inputsDir, "pi-reasoning.inputs.toml"), []byte(toml), 0o644); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestSearchFindsPiReasoningWhenEnabled(t *testing.T) {
+	_, cleanup := testEnv(t)
+	defer cleanup()
+	t.Setenv("HOME", t.TempDir())
+
+	sessionDir := t.TempDir()
+	src, err := os.ReadFile(filepath.Join(fixturesDir(), "pi-reasoning.jsonl"))
+	if err != nil {
+		t.Fatalf("read fixture: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(sessionDir, "pi-reasoning.jsonl"), src, 0o644); err != nil {
+		t.Fatalf("write session: %v", err)
+	}
+
+	cfgDir := t.TempDir()
+	setupPiReasoningPreset(t, cfgDir, sessionDir)
+	t.Setenv("BACKSCROLL_CONFIG_DIR", cfgDir)
+
+	// Search for reasoning content (auto-sync indexes first)
+	out, _, err := runCmd("search", "race condition", "--all-projects")
+	if err != nil {
+		t.Fatalf("search race condition: %v", err)
+	}
+	if !strings.Contains(out, "race condition") {
+		t.Errorf("Pi reasoning 'race condition' not found in search; output: %s", out)
+	}
+
+	// Search with --content-type reasoning filter
+	out, _, err = runCmd("search", "think", "--content-type", "reasoning", "--all-projects")
+	if err != nil {
+		t.Fatalf("search reasoning: %v", err)
+	}
+	if !strings.Contains(out, "think") {
+		t.Errorf("Pi reasoning 'think' not filtered correctly; output: %s", out)
+	}
+}
+
+func TestSearchSkipsPiReasoningWhenDisabled(t *testing.T) {
+	_, cleanup := testEnv(t)
+	defer cleanup()
+	t.Setenv("HOME", t.TempDir())
+
+	sessionDir := t.TempDir()
+	src, err := os.ReadFile(filepath.Join(fixturesDir(), "pi-reasoning.jsonl"))
+	if err != nil {
+		t.Fatalf("read fixture: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(sessionDir, "pi-reasoning.jsonl"), src, 0o644); err != nil {
+		t.Fatalf("write session: %v", err)
+	}
+
+	cfgDir := t.TempDir()
+	// Setup with index_reasoning=false (default)
+	toml := fmt.Sprintf(`version = 1
+[[inputs]]
+id = "pi-noreason"
+source = "session"
+active = true
+[inputs.discover]
+roots = [%q]
+include = ["**/*.jsonl"]
+[inputs.decode]
+format = "pi"
+index_reasoning = false
+`, sessionDir)
+	inputsDir := filepath.Join(cfgDir, "backscroll", "inputs")
+	if err := os.MkdirAll(inputsDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(inputsDir, "pi-noreason.inputs.toml"), []byte(toml), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("BACKSCROLL_CONFIG_DIR", cfgDir)
+
+	// The reasoning text should NOT be indexed; search must not find it
+	out, _, err := runCmd("search", "mutex pattern", "--all-projects")
+	if err != nil {
+		t.Fatalf("search: %v", err)
+	}
+	// Only the assistant text "I found the race condition..." should match,
+	// NOT the internal reasoning "Let me reason about the solution"
+	if strings.Contains(out, "Let me reason") {
+		t.Errorf("Pi reasoning should not be indexed when index_reasoning=false; output: %s", out)
+	}
+}
