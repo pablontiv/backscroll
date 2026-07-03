@@ -23,13 +23,14 @@ just coverage-summary   # go test -cover ./...
 just coverage           # coverage report via pkcov
 just coverage-check     # coverage report + enforce per-package floors (≥85%)
 just audit              # go mod verify
+just ci                 # local mirror of CI gate: build + scrubbed-HOME tests + coverage ≥85%
 ```
 
 Run a single test: `go test -run TestName ./internal/...`
 
-**Pre-push gate**: the pre-push hook validates that Module Layout and Package Layout sections in CLAUDE.md are up to date whenever a Go package is added or deleted. When deleting a package, remove its entries from the "Implemented:" list, the `internal/` tree in Module Layout, and the Package Layout table before committing, or the push will be rejected. The hook also runs `just coverage-check` (pkcov) when any `*.go` file changes — push is blocked if any package falls below 85%. Test-only changes (`*_test.go`) are exempt from the docs-update requirement.
+**Pre-push gate**: the pre-push hook validates that Module Layout and Package Layout sections in CLAUDE.md are up to date whenever a Go package is added or deleted. When deleting a package, remove its entries from the "Implemented:" list, the `internal/` tree in Module Layout, and the Package Layout table before committing, or the push will be rejected. The hook also runs `just ci` when any `*.go` file changes — push is blocked if the CI gate fails (build error, test failure, or coverage below 85%). Test-only changes (`*_test.go`) are exempt from the docs-update requirement.
 
-**Coverage**: backscroll conforms to [coverage-spec v1.0](https://github.com/pablontiv/picokit/blob/main/docs/coverage-spec.md) — per-package floors defined in `.coverage-floors.toml` (default 85%), enforced locally via pre-push hook and in CI via `just coverage-check`.
+**Coverage**: backscroll conforms to [coverage-spec v1.0](https://github.com/pablontiv/picokit/blob/main/docs/coverage-spec.md) — per-package floors defined in `.coverage-floors.toml` (default 85%), enforced locally via pre-push hook (`just ci`) and in CI via `just coverage-check`.
 
 Tests use stdlib `testing` + subprocess or direct `run()` invocation. Unit tests are co-located in each package. Integration tests in `cmd/backscroll/main_test.go` (CLI integration via direct `run()` invocation). Additional unit tests: `internal/storage/unit_test.go`, `internal/sync/noise_test.go`, `internal/reader/semantic_test.go`. Coverage gate ≥85% enforced per-package by pkcov and CI (`just coverage-check`).
 

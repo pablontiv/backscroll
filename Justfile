@@ -38,3 +38,10 @@ coverage-check: coverage
 # Audit dependencies
 audit:
     go mod verify
+
+# Local mirror of CI gate: build + scrubbed-HOME tests + coverage ≥85%
+ci:
+    go build ./...
+    config_dir="$(mktemp -d)" && trap 'rm -rf "$config_dir"' EXIT && \
+    HOME="$(mktemp -d)" BACKSCROLL_CONFIG_DIR="$config_dir" go test ./... -coverprofile=coverage.out && \
+    go tool cover -func=coverage.out | grep total | awk '{print substr($3, 1, length($3)-1)}' | { read cov; echo "Coverage: ${cov}%"; if (( $(echo "$cov < 85" | bc -l) )); then echo "Coverage ${cov}% below 85%"; exit 1; fi; }
