@@ -25,5 +25,6 @@ type DiscoverConfig struct {
 
 // DecodeConfig specifies how to decode discovered files.
 type DecodeConfig struct {
-	Format string `toml:"format"` // "jsonl", "json", "markdown", "sqlite"
+	Format         string `toml:"format"`          // "pi", "claude", "opencode", "markdown"
+	IndexReasoning bool   `toml:"index_reasoning"` // Pi only; opt-in to index reasoning blocks
 }

@@ -21,3 +21,4 @@ follow_symlinks = false
 
 [inputs.decode]
 format = "pi"
+index_reasoning = false
