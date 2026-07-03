@@ -50,7 +50,7 @@ type piBlock struct {
 // Parse reads a Pi JSONL session and returns its messages as a ParsedFile.
 // Only `message` records (text + toolCall) and `custom` records (tool results)
 // produce messages; other record types are skipped.
-func (r *PiReader) Parse(path string, _ input_config.InputDefinition) (models.ParsedFile, error) {
+func (r *PiReader) Parse(path string, def input_config.InputDefinition) (models.ParsedFile, error) {
 	hash, err := hashfile.HashFile(path)
 	if err != nil {
 		return models.ParsedFile{}, err
@@ -58,6 +58,7 @@ func (r *PiReader) Parse(path string, _ input_config.InputDefinition) (models.Pa
 
 	var msgs []models.Message
 	var cwd string
+	indexReasoning := def.Decode.IndexReasoning
 	err = sync.IterateJSONLFile(path, func(_ int, line []byte) error {
 		var rec piRecord
 		if err := json.Unmarshal(line, &rec); err != nil {
@@ -68,7 +69,7 @@ func (r *PiReader) Parse(path string, _ input_config.InputDefinition) (models.Pa
 		}
 		switch rec.Type {
 		case "message":
-			msgs = append(msgs, extractPiMessages(rec)...)
+			msgs = append(msgs, extractPiMessages(rec, indexReasoning)...)
 		case "custom":
 			if m, ok := extractPiCustom(rec); ok {
 				msgs = append(msgs, m)
@@ -91,7 +92,7 @@ func piTimestamp(s string) time.Time {
 	return ts
 }
 
-func extractPiMessages(rec piRecord) []models.Message {
+func extractPiMessages(rec piRecord, indexReasoning bool) []models.Message {
 	if rec.Message == nil {
 		return nil
 	}
@@ -128,7 +129,12 @@ func extractPiMessages(rec piRecord) []models.Message {
 			if t := SerializeToolInput(b.Name, b.Arguments); strings.TrimSpace(t) != "" {
 				out = append(out, models.Message{Role: role, Content: t, ContentType: "tool", Timestamp: ts})
 			}
-			// `thinking` and any other block types are intentionally ignored
+		case "thinking":
+			if indexReasoning {
+				if m := extractPiReasoning(b, ts); m != nil {
+					out = append(out, *m)
+				}
+			}
 		}
 	}
 	if len(textParts) > 0 {
@@ -136,6 +142,20 @@ func extractPiMessages(rec piRecord) []models.Message {
 		out = append([]models.Message{{Role: role, Content: text, ContentType: classifyText(text), Timestamp: ts}}, out...)
 	}
 	return out
+}
+
+// extractPiReasoning converts a thinking block into a searchable reasoning message.
+func extractPiReasoning(block piBlock, ts time.Time) *models.Message {
+	text := sync.CleanContent(block.Text)
+	if text == "" {
+		return nil
+	}
+	return &models.Message{
+		Role:        "reasoning",
+		Content:     text,
+		ContentType: "reasoning",
+		Timestamp:   ts,
+	}
 }
 
 // extractPiCustom turns a Pi `custom` record (a tool result) into a searchable

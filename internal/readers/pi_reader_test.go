@@ -25,7 +25,9 @@ func TestPiReader_Name(t *testing.T) {
 
 func TestPiReader_TextAndCwd(t *testing.T) {
 	line := `{"type":"message","timestamp":"2026-05-10T22:19:34.694Z","cwd":"/home/shared/proj","message":{"role":"user","content":"hello pi"}}` + "\n"
-	pf, err := (&PiReader{}).Parse(writePiFixture(t, line), input_config.InputDefinition{})
+	pf, err := (&PiReader{}).Parse(writePiFixture(t, line), input_config.InputDefinition{
+		Decode: input_config.DecodeConfig{IndexReasoning: false},
+	})
 	if err != nil {
 		t.Fatalf("Parse: %v", err)
 	}
@@ -39,7 +41,9 @@ func TestPiReader_TextAndCwd(t *testing.T) {
 
 func TestPiReader_CapturesToolCall(t *testing.T) {
 	line := `{"type":"message","timestamp":"2026-05-10T22:19:34.694Z","message":{"role":"assistant","content":[{"type":"text","text":"searching"},{"type":"toolCall","name":"web_search","arguments":{"queries":["pizzqx_query"]}}]}}` + "\n"
-	pf, err := (&PiReader{}).Parse(writePiFixture(t, line), input_config.InputDefinition{})
+	pf, err := (&PiReader{}).Parse(writePiFixture(t, line), input_config.InputDefinition{
+		Decode: input_config.DecodeConfig{IndexReasoning: false},
+	})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -63,7 +67,9 @@ func TestPiReader_CapturesToolCall(t *testing.T) {
 func TestPiReader_SkipsNonMessageNonCustomTypes(t *testing.T) {
 	lines := `{"type":"session","timestamp":"2026-05-10T22:19:34.694Z"}` + "\n" +
 		`{"type":"model_change","timestamp":"2026-05-10T22:19:34.694Z"}` + "\n"
-	pf, err := (&PiReader{}).Parse(writePiFixture(t, lines), input_config.InputDefinition{})
+	pf, err := (&PiReader{}).Parse(writePiFixture(t, lines), input_config.InputDefinition{
+		Decode: input_config.DecodeConfig{IndexReasoning: false},
+	})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -75,7 +81,9 @@ func TestPiReader_SkipsNonMessageNonCustomTypes(t *testing.T) {
 func TestPiReader_CapturesCustomResult(t *testing.T) {
 	lines := `{"type":"message","timestamp":"2026-05-10T22:19:34.694Z","message":{"role":"assistant","content":[{"type":"toolCall","name":"web_search","arguments":{"queries":["q"]}}]}}` + "\n" +
 		`{"type":"custom","customType":"web-search-results","timestamp":"2026-05-10T22:19:44.292Z","data":{"queries":[{"query":"q","answer":"pizzqx_answer_token"}]}}` + "\n"
-	pf, err := (&PiReader{}).Parse(writePiFixture(t, lines), input_config.InputDefinition{})
+	pf, err := (&PiReader{}).Parse(writePiFixture(t, lines), input_config.InputDefinition{
+		Decode: input_config.DecodeConfig{IndexReasoning: false},
+	})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -92,11 +100,72 @@ func TestPiReader_CapturesCustomResult(t *testing.T) {
 
 func TestPiReader_SkipsEmptyCustomData(t *testing.T) {
 	line := `{"type":"custom","customType":"x","timestamp":"2026-05-10T22:19:44.292Z","data":{}}` + "\n"
-	pf, err := (&PiReader{}).Parse(writePiFixture(t, line), input_config.InputDefinition{})
+	pf, err := (&PiReader{}).Parse(writePiFixture(t, line), input_config.InputDefinition{
+		Decode: input_config.DecodeConfig{IndexReasoning: false},
+	})
 	if err != nil {
 		t.Fatal(err)
 	}
 	if len(pf.Records) != 0 {
 		t.Errorf("empty custom data should yield no message; got %+v", pf.Records)
+	}
+}
+
+func TestPiReader_CapturesReasoningWhenEnabled(t *testing.T) {
+	line := `{"type":"message","timestamp":"2026-05-10T22:19:34.694Z","message":{"role":"assistant","content":[{"type":"thinking","text":"let me analyze this problem"},{"type":"text","text":"here is the solution"}]}}` + "\n"
+	pf, err := (&PiReader{}).Parse(writePiFixture(t, line), input_config.InputDefinition{
+		Decode: input_config.DecodeConfig{Format: "pi", IndexReasoning: true},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var gotReasoning, gotText bool
+	for _, m := range pf.Records {
+		if m.ContentType == "reasoning" && contains(m.Content, "analyze") {
+			gotReasoning = true
+		}
+		if m.ContentType == "text" && contains(m.Content, "solution") {
+			gotText = true
+		}
+	}
+	if !gotReasoning {
+		t.Error("reasoning block not captured when index_reasoning=true")
+	}
+	if !gotText {
+		t.Error("text block missing")
+	}
+}
+
+func TestPiReader_SkipsReasoningWhenDisabled(t *testing.T) {
+	line := `{"type":"message","timestamp":"2026-05-10T22:19:34.694Z","message":{"role":"assistant","content":[{"type":"thinking","text":"internal reasoning"},{"type":"text","text":"visible text"}]}}` + "\n"
+	pf, err := (&PiReader{}).Parse(writePiFixture(t, line), input_config.InputDefinition{
+		Decode: input_config.DecodeConfig{Format: "pi", IndexReasoning: false},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var gotReasoning bool
+	for _, m := range pf.Records {
+		if m.ContentType == "reasoning" {
+			gotReasoning = true
+		}
+	}
+	if gotReasoning {
+		t.Error("reasoning block captured when index_reasoning=false (should be skipped)")
+	}
+}
+
+func TestPiReader_SkipsEmptyReasoning(t *testing.T) {
+	line := `{"type":"message","timestamp":"2026-05-10T22:19:34.694Z","message":{"role":"assistant","content":[{"type":"thinking","text":""},{"type":"text","text":"ok"}]}}` + "\n"
+	pf, err := (&PiReader{}).Parse(writePiFixture(t, line), input_config.InputDefinition{
+		Decode: input_config.DecodeConfig{Format: "pi", IndexReasoning: true},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, m := range pf.Records {
+		if m.ContentType == "reasoning" {
+			t.Error("empty reasoning block should not create a message")
+		}
 	}
 }
