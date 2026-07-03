@@ -8,11 +8,12 @@ This ~20-query set was mined from real indexed sessions across backscroll, rootl
 
 ## What We Measure
 
-**Recall@5**: percentage of eval queries returning a relevant result at rank ≤5.
+**Recall@5 with Ground-Truth Matching**: percentage of eval queries returning the **correct target result** at rank ≤5.
 
 - Target: **≥80%** after each slice in Track A, B, C.
 - Metric computed by `scripts/eval.sh` — simple, reproducible, no human judgment.
 - Not a required CI gate (eval runs locally or on-demand), but a standing regression check.
+- **Ground-truth approach**: Each query includes an `expected_match` — a distinctive substring from the correct target's filepath or content. A query succeeds iff that substring appears in any result at rank 0–4. This prevents vacuous evaluation (BM25 always returns something; we need to verify it's the RIGHT thing).
 
 ## The Query Set
 
@@ -22,6 +23,7 @@ This ~20-query set was mined from real indexed sessions across backscroll, rootl
 - `id`: stable query identifier (e.g., `q1_split_fts_decision`)
 - `text`: search string ("RRF merge reciprocal rank fusion")
 - `flags`: backscroll CLI flags (`--all-projects`, `--content-type tool`, etc.)
+- `expected_match`: distinctive substring from the correct target (e.g., "home-shared-backscroll" from filepath, or a unique session ID). Verifies we found the RIGHT result, not just any result.
 - `description`: what the query is about (feature, bug, design)
 - `rationale`: why this query matters (agent use case)
 - `expected_rank`: human-predicted rank where the correct result should appear

@@ -2,7 +2,7 @@
 set -euo pipefail
 
 # Backscroll Evaluation Runner — M1 Slice A2+A3
-# Computes recall@5 over the eval-set (docs/eval/queries.toml)
+# Computes recall@5 with ground-truth matching over the eval-set (docs/eval/queries.toml)
 # Usage: scripts/eval.sh [--verbose] [--limit N]
 # Exit: 0 if recall@5 >= 80%, 1 otherwise (gated, not required CI)
 
@@ -49,24 +49,24 @@ if echo "$robot_sample" | grep -E "^result_0=result_0_" >/dev/null; then
   exit 1
 fi
 
-echo "Backscroll Evaluation — Recall@5 Metric"
-echo "========================================"
+echo "Backscroll Evaluation — Recall@5 Metric with Ground-Truth Matching"
+echo "===================================================================="
 echo "Index: $indexed_files files, $(echo "$status_json" | jq '.index.total_messages // 0' 2>/dev/null || echo '?') messages"
 echo "Eval-set: $EVAL_TOML"
 echo ""
 
 # Parse queries from TOML
 # Simple inline parser: extract [[query]] blocks and field lines
-# LIMITATION: quoted paths with special chars (e.g., spaces, commas) unsupported in flags array.
-# Workaround: escape manually or keep flag paths simple (common case: no special chars needed).
 declare -a query_ids
 declare -a query_texts
 declare -a query_flags_str
+declare -a query_matches
 
 query_count=0
 current_id=""
 current_text=""
 current_flags=""
+current_match=""
 
 while IFS= read -r line; do
   # Skip comments and empty lines
@@ -79,15 +79,19 @@ while IFS= read -r line; do
       query_ids+=("$current_id")
       query_texts+=("$current_text")
       query_flags_str+=("$current_flags")
-      ((query_count++))
+      query_matches+=("$current_match")
+      query_count=$((query_count + 1))
     fi
     current_id=""
     current_text=""
     current_flags=""
+    current_match=""
   elif [[ "$line" =~ ^id[[:space:]]*=[[:space:]]*\"(.+)\" ]]; then
     current_id="${BASH_REMATCH[1]}"
   elif [[ "$line" =~ ^text[[:space:]]*=[[:space:]]*\"(.+)\" ]]; then
     current_text="${BASH_REMATCH[1]}"
+  elif [[ "$line" =~ ^expected_match[[:space:]]*=[[:space:]]*\"(.+)\" ]]; then
+    current_match="${BASH_REMATCH[1]}"
   elif [[ "$line" =~ ^flags[[:space:]]*= ]]; then
     # Extract array: flags = ["--project", "path"] → "--project" "path"
     flags_part="${line#*flags*=}"
@@ -103,7 +107,8 @@ if [[ -n "$current_id" ]]; then
   query_ids+=("$current_id")
   query_texts+=("$current_text")
   query_flags_str+=("$current_flags")
-  ((query_count++))
+  query_matches+=("$current_match")
+  query_count=$((query_count + 1))
 fi
 
 if [ "$query_count" -lt 1 ]; then
@@ -118,15 +123,16 @@ if [ "$LIMIT" -gt 0 ] && [ "$LIMIT" -lt "$query_count" ]; then
 fi
 echo ""
 
-# Execute queries and compute recall@5
+# Execute queries and compute recall@5 with ground-truth matching
 results_found=0
-results_at_rank_5=0
+results_at_rank_5_with_match=0
 declare -a result_details
 
 for ((i = 0; i < query_count; i++)); do
   id="${query_ids[$i]}"
   text="${query_texts[$i]}"
   flags_str="${query_flags_str[$i]}"
+  expected_match="${query_matches[$i]}"
 
   # Build command: backscroll search --robot --fields minimal + flags
   # If no --all-projects in flags, add it by default
@@ -138,28 +144,40 @@ for ((i = 0; i < query_count; i++)); do
     echo "[$((i+1))/$query_count] $id"
     echo "  Query: $text"
     echo "  Flags: $flags_str"
+    echo "  Expected match: $expected_match"
   fi
 
   # Execute search with robot format
   robot_output=$(BACKSCROLL_AUTOUPDATE_DISABLE=1 "$BACKSCROLL_BIN" search "$text" $flags_str --robot --fields minimal --max-tokens 2000 2>&1 || true)
 
-  # Extract rank from robot output: result_0_rank=<N>
-  rank=$(echo "$robot_output" | grep "^result_0_rank=" | head -1 | cut -d= -f2)
+  # Check ranks 0-4 for ground-truth match
+  match_found=0
+  matched_rank=""
 
-  if [[ -n "$rank" ]] && [[ "$rank" =~ ^[0-9]+$ ]]; then
-    ((results_found++))
-    if [ "$rank" -le 5 ]; then
-      ((results_at_rank_5++))
+  for rank in 0 1 2 3 4; do
+    filepath=$(echo "$robot_output" | { grep "^result_${rank}_filepath=" || true; } | cut -d= -f2-)
+    content=$(echo "$robot_output" | { grep "^result_${rank}_content=" || true; } | cut -d= -f2- | cut -c1-200)
+
+    # Check if expected_match appears in filepath or content
+    if [[ -n "$filepath" && "$filepath" =~ $expected_match ]] || [[ -n "$content" && "$content" =~ $expected_match ]]; then
+      match_found=1
+      matched_rank=$rank
+      break
     fi
+  done
+
+  if [ "$match_found" -eq 1 ]; then
+    results_found=$((results_found + 1))
+    results_at_rank_5_with_match=$((results_at_rank_5_with_match + 1))
     if [ "$VERBOSE" -eq 1 ]; then
-      echo "  ✓ Found at rank $rank"
+      echo "  ✓ Match found at rank $matched_rank"
     fi
-    result_details+=("$id: rank=$rank")
+    result_details+=("$id: MATCH rank=$matched_rank")
   else
     if [ "$VERBOSE" -eq 1 ]; then
-      echo "  ✗ No result (rank not found in output)"
+      echo "  ✗ No match (expected_match not in top 5 results)"
     fi
-    result_details+=("$id: NO RESULT")
+    result_details+=("$id: NO_MATCH")
   fi
 done
 
@@ -167,16 +185,15 @@ echo ""
 echo "Results"
 echo "======="
 
-if [ "$results_found" -gt 0 ]; then
-  recall_at_5=$(awk "BEGIN {printf \"%.1f\", 100 * $results_at_rank_5 / $query_count}")
+if [ "$query_count" -gt 0 ]; then
+  recall_at_5=$(awk "BEGIN {printf \"%.1f\", 100 * $results_at_rank_5_with_match / $query_count}")
 else
   recall_at_5="0"
 fi
 
 echo "Queries evaluated: $query_count"
-echo "Results found: $results_found"
-echo "Results at rank ≤5: $results_at_rank_5"
-echo "Recall@5: $recall_at_5%"
+echo "Matches found at rank ≤4: $results_at_rank_5_with_match"
+echo "Recall@5 (with ground-truth matching): $recall_at_5%"
 echo ""
 
 if [ "$VERBOSE" -eq 1 ]; then
