@@ -222,8 +222,16 @@ func runSearch(stdout, stderr io.Writer,
 		} else if err := formatter.WriteJSON(stdout, modelResults); err != nil {
 			return fmt.Errorf("write results: %w", err)
 		}
+	} else if format == picokitoutput.FormatRobot {
+		// Robot format: write lines directly (already formatted as result_N_field=value)
+		lines := resultsToLines(modelResults, format)
+		for _, line := range lines {
+			if _, err := fmt.Fprintln(stdout, line); err != nil {
+				return fmt.Errorf("write results: %w", err)
+			}
+		}
 	} else {
-		// For text and robot formats, convert results to lines
+		// Text format: use formatter (applies token truncation, etc.)
 		lines := resultsToLines(modelResults, format)
 		if err := formatter.WriteLines(stdout, lines); err != nil {
 			return fmt.Errorf("write results: %w", err)
