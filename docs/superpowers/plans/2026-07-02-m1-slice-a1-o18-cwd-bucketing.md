@@ -1,6 +1,6 @@
 # A1. O18 — Workspace Bucketing by CWD — Implementation Plan
 
-> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (- [ ]) syntax for tracking.
+> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (- [x]) syntax for tracking.
 
 ## Goal
 
@@ -39,7 +39,7 @@ Go (stdlib path/filepath, strings); existing projects package (ProjectRegistry, 
 
 **Steps**
 
-- [ ] Write failing test: add test case `TestNormalizeRootEquivalence_CrossHost` to projects_test.go that:
+- [x] Write failing test: add test case `TestNormalizeRootEquivalence_CrossHost` to projects_test.go that:
   - Creates a ProjectRegistry with a project root `/home/shared/myproject` (ONLY this root; no /Users/Shared)
   - Calls `NormalizeRootEquivalence("/Users/Shared/myproject/src", registry)` 
   - Expects exactly `/home/shared/myproject/src` (cwd remapped to canonical root with subpath preserved)
@@ -64,7 +64,7 @@ func TestNormalizeRootEquivalence_CrossHost(t *testing.T) {
 }
 ```
 
-- [ ] Minimal implementation in projects.go (correct algorithm; detects cross-host by finding root as contiguous suffix):
+- [x] Minimal implementation in projects.go (correct algorithm; detects cross-host by finding root as contiguous suffix):
 
 ```go
 // NormalizeRootEquivalence maps equivalent roots (from cross-host syncs like
@@ -164,9 +164,9 @@ Hand-trace of example:
   - i=1: cwdParts[1:3]=["Shared","myproject"] vs tail — "Shared".EqualFold("shared")=true, "myproject".EqualFold("myproject")=true → MATCH
   - remapPath: rest=cwdParts[1+2:]=["src"], result=filepath.Join(["home","shared","myproject","src"])="/home/shared/myproject/src" ✓
 
-- [ ] Run test: `go test -run TestNormalizeRootEquivalence ./internal/projects/` — should PASS
+- [x] Run test: `go test -run TestNormalizeRootEquivalence ./internal/projects/` — should PASS
 
-- [ ] Add second test case for no-match scenario:
+- [x] Add second test case for no-match scenario:
 
 ```go
 func TestNormalizeRootEquivalence_NoMatch(t *testing.T) {
@@ -187,11 +187,11 @@ func TestNormalizeRootEquivalence_NoMatch(t *testing.T) {
 }
 ```
 
-- [ ] Run tests: `go test -run TestNormalizeRootEquivalence ./internal/projects/` — should PASS both
+- [x] Run tests: `go test -run TestNormalizeRootEquivalence ./internal/projects/` — should PASS both
 
-- [ ] Run full projects package tests: `go test ./internal/projects/` — should PASS; check coverage is ≥85% via `go test -cover ./internal/projects/`
+- [x] Run full projects package tests: `go test ./internal/projects/` — should PASS; check coverage is ≥85% via `go test -cover ./internal/projects/`
 
-- [ ] Commit: 
+- [x] Commit: 
 ```bash
 git add internal/projects/projects.go internal/projects/projects_test.go
 git commit -m "feat(projects): add NormalizeRootEquivalence for cross-host path mapping"
@@ -211,7 +211,7 @@ git commit -m "feat(projects): add NormalizeRootEquivalence for cross-host path 
 
 **Steps**
 
-- [ ] Write failing test: add test case `TestIdentify_CrossHostEquivalence` to projects_test.go that:
+- [x] Write failing test: add test case `TestIdentify_CrossHostEquivalence` to projects_test.go that:
   - Creates a ProjectRegistry with root `/home/shared/myproject` ONLY (simulating Linux-only registry)
   - Calls `Identify("/Users/Shared/myproject/src", registry)` (macOS cwd, synced index from Linux)
   - Expects ProjectID == "myproj", Confidence != ConfidenceUnknown
@@ -238,7 +238,7 @@ func TestIdentify_CrossHostEquivalence(t *testing.T) {
 }
 ```
 
-- [ ] Modify Identify function to normalize cwd before matching. Replace line 82 onwards with:
+- [x] Modify Identify function to normalize cwd before matching. Replace line 82 onwards with:
 
 ```go
 // Identify resolves the canonical project for cwd.
@@ -294,11 +294,11 @@ func Identify(cwd string, registry ProjectRegistry) Identification {
 }
 ```
 
-- [ ] Run test: `go test -run TestIdentify_CrossHostEquivalence ./internal/projects/` — should PASS
+- [x] Run test: `go test -run TestIdentify_CrossHostEquivalence ./internal/projects/` — should PASS
 
-- [ ] Run all projects tests: `go test ./internal/projects/` — should PASS; check coverage ≥85%
+- [x] Run all projects tests: `go test ./internal/projects/` — should PASS; check coverage ≥85%
 
-- [ ] Commit:
+- [x] Commit:
 ```bash
 git add internal/projects/projects.go
 git commit -m "fix(projects): normalize cwd for cross-host equivalence in Identify"
@@ -318,12 +318,12 @@ git commit -m "fix(projects): normalize cwd for cross-host equivalence in Identi
 
 **Steps**
 
-- [ ] Review the current flow in sync_helpers.go (lines 84-89). Confirm that:
+- [x] Review the current flow in sync_helpers.go (lines 84-89). Confirm that:
   - Line 85: `identPath := pf.Cwd` uses ParsedFile's cwd
   - Line 89: `projects.Identify(identPath, registry)` now benefits from NormalizeRootEquivalence via Identify
   - Line 110: `Project: ident.ProjectID` stores the resolved project ID
 
-- [ ] Write failing integration test in cmd/backscroll/main_test.go (or a new file if tests are organized differently):
+- [x] Write failing integration test in cmd/backscroll/main_test.go (or a new file if tests are organized differently):
 
 ```go
 func TestIntegration_SyncWithCrosshostEquivalence(t *testing.T) {
@@ -392,13 +392,13 @@ roots = ["/home/shared/myproject"]
 }
 ```
 
-- [ ] Run test: `go test -run TestIntegration_SyncWithCrosshostEquivalence ./cmd/backscroll/` — should FAIL (will show project as "unknown" before normalization is active)
+- [x] Run test: `go test -run TestIntegration_SyncWithCrosshostEquivalence ./cmd/backscroll/` — should FAIL (will show project as "unknown" before normalization is active)
 
-- [ ] After Task 2 is complete (Identify is updated), run test again: should PASS
+- [x] After Task 2 is complete (Identify is updated), run test again: should PASS
 
-- [ ] Run all cmd/backscroll tests: `go test ./cmd/backscroll/` — should PASS; verify coverage ≥85%
+- [x] Run all cmd/backscroll tests: `go test ./cmd/backscroll/` — should PASS; verify coverage ≥85%
 
-- [ ] Commit:
+- [x] Commit:
 ```bash
 git add cmd/backscroll/main_test.go
 git commit -m "test(integration): verify cross-host cwd resolution in sync pipeline"
@@ -417,21 +417,21 @@ git commit -m "test(integration): verify cross-host cwd resolution in sync pipel
 
 **Steps**
 
-- [ ] Run full test suite: `just test` — should PASS all tests (including Task 1, 2, 3 new tests)
+- [x] Run full test suite: `just test` — should PASS all tests (including Task 1, 2, 3 new tests)
 
-- [ ] Check coverage: `go test -cover ./...` — verify output shows ≥85% for internal/projects and cmd/backscroll
+- [x] Check coverage: `go test -cover ./...` — verify output shows ≥85% for internal/projects and cmd/backscroll
 
-- [ ] Run coverage check tool: `just coverage-check` — should PASS (no regressions)
+- [x] Run coverage check tool: `just coverage-check` — should PASS (no regressions)
 
-- [ ] Run formatter and linter: `just check` — should PASS (gofmt + go vet)
+- [x] Run formatter and linter: `just check` — should PASS (gofmt + go vet)
 
-- [ ] Smoke test (integration verification): Build backscroll, create a test projects.toml with one Linux root, create a session with macOS cwd, run sync, and verify search returns project ID (not "unknown")
+- [x] Smoke test (integration verification): Build backscroll, create a test projects.toml with one Linux root, create a session with macOS cwd, run sync, and verify search returns project ID (not "unknown")
   ```bash
   just build
   # Manual or scripted verification that a cross-host session indexes correctly
   ```
 
-- [ ] Commit if any formatting fixes were needed:
+- [x] Commit if any formatting fixes were needed:
 ```bash
 git add -A
 git commit -m "chore: formatting and test cleanup"
@@ -450,23 +450,23 @@ git commit -m "chore: formatting and test cleanup"
 
 **Steps**
 
-- [ ] Spot-check ClaudeReader.Parse (line 62-70 of claude_reader.go): confirm cwd extraction loop extracts first non-empty cwd from records
-- [ ] Spot-check PiReader.Parse: confirm cwd extraction pattern (same as ClaudeReader)
-- [ ] Spot-check OpenCodeReader.Parse: confirm cwd extraction pattern
-- [ ] Verify all three return ParsedFile with Cwd field populated
-- [ ] These are already implemented; no code changes needed
+- [x] Spot-check ClaudeReader.Parse (line 62-70 of claude_reader.go): confirm cwd extraction loop extracts first non-empty cwd from records
+- [x] Spot-check PiReader.Parse: confirm cwd extraction pattern (same as ClaudeReader)
+- [x] Spot-check OpenCodeReader.Parse: confirm cwd extraction pattern
+- [x] Verify all three return ParsedFile with Cwd field populated
+- [x] These are already implemented; no code changes needed
 
 ---
 
 ## Definition of Done
 
-- [ ] Tasks 1–5 all completed with checkbox steps marked done
-- [ ] `just check` passes (gofmt + go vet)
-- [ ] `just test` passes (all tests, including new integration and cross-host equivalence tests)
-- [ ] Coverage ≥85% for internal/projects and cmd/backscroll
-- [ ] All commits follow conventional commit format
-- [ ] Changes directly to main (no PR, per M1 delivery model)
-- [ ] Code compiles and is runnable: `just build`
+- [x] Tasks 1–5 all completed with checkbox steps marked done
+- [x] `just check` passes (gofmt + go vet)
+- [x] `just test` passes (all tests, including new integration and cross-host equivalence tests)
+- [x] Coverage ≥85% for internal/projects and cmd/backscroll
+- [x] All commits follow conventional commit format
+- [x] Changes directly to main (no PR, per M1 delivery model)
+- [x] Code compiles and is runnable: `just build`
 
 ---
 
