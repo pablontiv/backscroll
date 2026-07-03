@@ -22,20 +22,25 @@ while [[ $# -gt 0 ]]; do
 done
 
 # Check preflight: backscroll installed + index populated
-if ! command -v backscroll &>/dev/null; then
-  echo "❌ backscroll not found in PATH"
+# Prefer locally built binary if it exists, otherwise use PATH
+if [ -x "$REPO_ROOT/backscroll" ]; then
+  BACKSCROLL_BIN="$REPO_ROOT/backscroll"
+elif command -v backscroll &>/dev/null; then
+  BACKSCROLL_BIN="backscroll"
+else
+  echo "❌ backscroll not found in PATH or local directory"
   exit 1
 fi
 
-status_json=$(BACKSCROLL_AUTOUPDATE_DISABLE=1 backscroll status --json 2>/dev/null || true)
-indexed_files=$(echo "$status_json" | jq '.index.files_indexed // 0' 2>/dev/null || echo 0)
+status_json=$(BACKSCROLL_AUTOUPDATE_DISABLE=1 "$BACKSCROLL_BIN" status --json 2>/dev/null || true)
+indexed_files=$(echo "$status_json" | jq '.index.total_files // 0' 2>/dev/null || echo 0)
 if [ "$indexed_files" -lt 1 ]; then
-  echo "❌ Index appears empty (files_indexed=$indexed_files). Run 'backscroll rebuild' first."
+  echo "❌ Index appears empty (total_files=$indexed_files). Run 'backscroll rebuild' first."
   exit 1
 fi
 
 # Preflight: verify --robot format is NOT double-wrapped
-robot_sample=$(BACKSCROLL_AUTOUPDATE_DISABLE=1 backscroll search "test" --robot --limit 1 2>&1 | head -3 || true)
+robot_sample=$(BACKSCROLL_AUTOUPDATE_DISABLE=1 "$BACKSCROLL_BIN" search "test" --robot --limit 1 2>&1 | head -3 || true)
 if echo "$robot_sample" | grep -E "^result_0=result_0_" >/dev/null; then
   echo "❌ BLOCKER: --robot output is double-wrapped (bug in backscroll CLI)"
   echo "   Expected format: result_0_source=value"
@@ -46,7 +51,7 @@ fi
 
 echo "Backscroll Evaluation — Recall@5 Metric"
 echo "========================================"
-echo "Index: $indexed_files files, $(echo "$status_json" | jq '.index.messages_indexed // 0' 2>/dev/null || echo '?') messages"
+echo "Index: $indexed_files files, $(echo "$status_json" | jq '.index.total_messages // 0' 2>/dev/null || echo '?') messages"
 echo "Eval-set: $EVAL_TOML"
 echo ""
 
@@ -136,7 +141,7 @@ for ((i = 0; i < query_count; i++)); do
   fi
 
   # Execute search with robot format
-  robot_output=$(BACKSCROLL_AUTOUPDATE_DISABLE=1 backscroll search "$text" $flags_str --robot --fields minimal --max-tokens 2000 2>&1 || true)
+  robot_output=$(BACKSCROLL_AUTOUPDATE_DISABLE=1 "$BACKSCROLL_BIN" search "$text" $flags_str --robot --fields minimal --max-tokens 2000 2>&1 || true)
 
   # Extract rank from robot output: result_0_rank=<N>
   rank=$(echo "$robot_output" | grep "^result_0_rank=" | head -1 | cut -d= -f2)
