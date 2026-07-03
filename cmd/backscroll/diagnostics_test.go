@@ -84,6 +84,15 @@ func TestWarnShortToolQuery(t *testing.T) {
 }
 
 func TestSearchShortToolQueryWarnsToStderr(t *testing.T) {
+	_, cleanup := testEnv(t)
+	defer cleanup()
+
+	// Initialize the database by running validate
+	_, _, err := runCmd("validate", "--indexed-only")
+	if err != nil {
+		// validate may fail if no sessions exist, which is fine
+	}
+
 	out, stderr, err := runCmd("search", "go", "--content-type", "tool", "--json", "--indexed-only")
 	if err != nil {
 		t.Fatalf("search error: %v\nstderr: %s", err, stderr)
