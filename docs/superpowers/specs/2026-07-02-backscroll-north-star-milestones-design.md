@@ -1,7 +1,25 @@
-# Backscroll — Episodic Recall v1 (Milestone Design)
+# Backscroll — North Star and Milestone Map (Master Design)
 
 Date: 2026-07-02
-Status: Approved design, pending implementation plan
+Status: Approved design, pending implementation plans
+
+This is the master spec: it fixes the north star, maps all milestones toward it
+(M1–M4), and details M1 in full. M2–M4 are scoped at milestone level and get
+their own detailed designs when their turn comes. Implementation plans are
+derived per slice from this document.
+
+## Milestone Map
+
+| Milestone | Theme | Success signal |
+|-----------|-------|----------------|
+| M1 — Episodic Recall v1 | Automatic recall + complete corpus | Agents recover prior work unprompted; eval-set recall@5 measured |
+| M2 — Retrieval Quality by Data | Execute the spike verdict; permanent benchmark | Ranking decision (hybrid vs lexical) documented with numbers; ~50-query benchmark in repo |
+| M3 — Downstream Consumers | O04 event query API + read-only programmatic surface | Pinata/poness consume backscroll via stable JSON contract |
+| M4 — Full Episodic Ecosystem | More readers, retention policies, engram handoff | backscroll feeds engram distillation; new agents onboard via reader-per-agent |
+
+Sequencing is strict M1 → M2 → M3 → M4: M2 depends on M1's spike and eval-set;
+M3 only makes sense once M1 proves recall works; M4 builds on a proven,
+consumed index.
 
 ## North Star
 
@@ -35,10 +53,11 @@ the corpus.
    semver from conventional commits, builds, publishes), so every slice ships to
    production on its own.
 
-## Milestone Structure — Three Tracks
+## M1 — Episodic Recall v1 (Detailed Design)
 
-Dependency order: A1 (O18) first; then Track A and Track B proceed in parallel;
-Track C closes the milestone using the eval-set as evidence.
+Three tracks in a single arc. Dependency order: A1 (O18) first; then Track A
+and Track B proceed in parallel; Track C closes the milestone using the
+eval-set as evidence.
 
 ### Track A — Automatic Recall
 
@@ -139,7 +158,7 @@ if activation would break pure-Go/no-CGO, it is an automatic no-go; the pure-Go
 `sqlite-vec` path is the alternative to evaluate inside the same spike. The
 spike merges a decision report (docs + engram), not necessarily code.
 
-## Delivery
+### M1 Delivery
 
 - Direct commits to `main` with conventional commits; push after each completed
   slice. CI releases automatically on every push.
@@ -149,15 +168,62 @@ spike merges a decision report (docs + engram), not necessarily code.
 - Gates per slice: `just check`, `just test`, coverage ≥85% (pre-push enforced),
   eval-set recall@5 from A3 onward.
 
-## Success Criterion
+### M1 Success Criterion
 
 An agent in a fresh session of any indexed project recovers relevant prior work
 without manual invocation, and the eval-set passes with measurable recall.
 
-## Out of Scope
+## M2 — Retrieval Quality by Data
 
-- O04 event query API / downstream consumers (Pinata).
-- MCP server.
-- Embeddings activation in production (spike decides its future).
-- Consolidation/summarization layers (episodic→semantic distillation belongs to
-  engram's territory per the identity decision).
+Execute the verdict of M1's embeddings spike instead of debating it:
+
+- If the spike shows hybrid retrieval beats BM25 on the eval-set at acceptable
+  latency and without breaking pure-Go/no-CGO: activate it (ONNX provider or
+  pure-Go sqlite-vec, whichever the spike favored) behind a config flag.
+- If not: delete the dormant O09/O10 code paths and stay lexical, closing the
+  phantom debt permanently.
+- Grow the eval-set into a permanent benchmark (~50 queries, covering tool,
+  prose, reasoning, and cross-project shapes) that runs as the standing
+  regression gate.
+- Ranking tuning informed by the benchmark: per-content-type weights and a
+  recency boost are the two candidates surfaced by usage mining.
+
+Success signal: the ranking decision is documented with numbers, and the
+benchmark lives in the repo as the standing quality gate.
+
+## M3 — Downstream Consumers
+
+What M1 deliberately excluded returns as its own milestone, once recall is
+proven:
+
+- O04 event query API: deterministic, ordered session-event queries with a
+  stable JSON contract (the design exists; implementation tasks T006+ were
+  never built).
+- `OpenReadOnly()` promoted to an official programmatic surface with documented
+  guarantees for external consumers (Pinata, poness).
+- Contract tests so downstream consumers can pin against a versioned schema.
+
+Success signal: at least one real consumer (Pinata or poness) reads backscroll
+through the contract in production use.
+
+## M4 — Full Episodic Ecosystem
+
+- New readers via the reader-per-agent pattern for additional agents/formats as
+  they appear in the toolchain.
+- Retention and archival policies: purge by policy (age, project, content type,
+  size budgets), not only by date.
+- Formal backscroll→engram handoff: backscroll as the episodic source engram
+  consumes for distillation — closing the loop of the memory architecture
+  (episodic records feed semantic consolidation, each layer owning its role).
+
+Success signal: engram distills from backscroll data through a defined
+interface, and onboarding a new agent format is a reader plus a manifest, no
+core changes.
+
+## Permanently Out of Scope
+
+- MCP server: rejected on verified token-cost evidence (4-32x CLI cost); the
+  CLI + skill is the integration surface.
+- Consolidation/summarization inside backscroll: episodic→semantic distillation
+  is engram's territory per the identity decision. Backscroll records; engram
+  learns.
