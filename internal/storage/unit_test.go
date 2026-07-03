@@ -3846,3 +3846,260 @@ func TestMigrationV7(t *testing.T) {
 		t.Error("tool content should NOT be in messages_fts")
 	}
 }
+
+func TestMigrationV7ErrorRollback(t *testing.T) {
+	// Test that applyV7Migration properly rolls back on INSERT failure.
+	// Pre-insert version 7 into schema_migrations to force a duplicate-key constraint violation
+	// on the INSERT statement, exercising the error path and ensuring rollback occurs.
+	db, cleanup := newTestDB(t)
+	defer cleanup()
+
+	// Remove v7 from schema_migrations if it exists (fresh DB has it from SetupSchema)
+	if _, err := db.DB().Exec("DELETE FROM schema_migrations WHERE version = 7"); err != nil {
+		t.Fatalf("delete v7: %v", err)
+	}
+
+	// Now manually insert v7 to force the duplicate-key failure
+	if _, err := db.DB().Exec(`
+		INSERT INTO schema_migrations (version, name, applied_on, checksum)
+		VALUES (7, 'duplicate test', CURRENT_TIMESTAMP, 'test-checksum')
+	`); err != nil {
+		t.Fatalf("pre-insert v7: %v", err)
+	}
+
+	// Now try to apply v7 migration again — this should fail and roll back
+	// because the INSERT INTO schema_migrations will fail (duplicate version key)
+	err := db.applyV7Migration()
+	if err == nil {
+		t.Fatal("applyV7Migration should have failed on duplicate insert, but succeeded")
+	}
+
+	// Verify rollback: the duplicate entry should still exist with the original name
+	var name string
+	err = db.DB().QueryRow("SELECT name FROM schema_migrations WHERE version = 7").Scan(&name)
+	if err != nil {
+		t.Fatalf("query v7 after failed migration: %v", err)
+	}
+	if name != "duplicate test" {
+		t.Errorf("rollback failed: expected name 'duplicate test', got %q (new triggers may have been applied)", name)
+	}
+}
+
+func TestMigrationV7Idempotent(t *testing.T) {
+	// Test that SetupSchema correctly skips v7 migration when already applied.
+	// This exercises the version-check path in SetupSchema that determines whether to apply.
+	db, cleanup := newTestDB(t)
+	defer cleanup()
+
+	// Verify v7 is applied from fresh DB
+	var count int
+	if err := db.DB().QueryRow("SELECT COUNT(*) FROM schema_migrations WHERE version = 7").Scan(&count); err != nil {
+		t.Fatalf("query v7: %v", err)
+	}
+	if count != 1 {
+		t.Errorf("v7 should be applied once on fresh DB; count=%d", count)
+	}
+
+	// Call SetupSchema again — should skip v7 (idempotent)
+	if err := db.SetupSchema(); err != nil {
+		t.Fatalf("SetupSchema second call: %v", err)
+	}
+
+	// Verify v7 is still applied exactly once
+	if err := db.DB().QueryRow("SELECT COUNT(*) FROM schema_migrations WHERE version = 7").Scan(&count); err != nil {
+		t.Fatalf("query v7 after second SetupSchema: %v", err)
+	}
+	if count != 1 {
+		t.Errorf("v7 should be applied exactly once after idempotent SetupSchema; count=%d", count)
+	}
+
+	// Verify triggers still work by inserting reasoning content
+	if _, err := db.DB().Exec(`
+		INSERT INTO search_items (source_path, ordinal, role, text, content_type)
+		VALUES (?, ?, ?, ?, ?)
+	`, "/tmp/idempotent_test.jsonl", 1, "assistant", "test reasoning content", "reasoning"); err != nil {
+		t.Fatalf("insert reasoning after idempotent setup: %v", err)
+	}
+
+	var reasoningFound int
+	if err := db.DB().QueryRow("SELECT COUNT(*) FROM messages_fts WHERE text MATCH 'reasoning'").Scan(&reasoningFound); err != nil {
+		t.Fatalf("query messages_fts: %v", err)
+	}
+	if reasoningFound == 0 {
+		t.Error("reasoning content not indexed in messages_fts after idempotent SetupSchema")
+	}
+}
+
+func TestMigrationV7UpdateTrigger(t *testing.T) {
+	// Test that v7 UPDATE trigger properly handles reasoning content_type updates.
+	// This exercises the search_items_au_msg trigger path for reasoning rows.
+	db, cleanup := newTestDB(t)
+	defer cleanup()
+
+	// Insert a reasoning row
+	result, err := db.DB().Exec(`
+		INSERT INTO search_items (source_path, ordinal, role, text, content_type, timestamp)
+		VALUES (?, ?, ?, ?, ?, ?)
+	`, "/tmp/update_test.jsonl", 1, "assistant", "original reasoning", "reasoning", "2026-01-01")
+	if err != nil {
+		t.Fatalf("insert reasoning: %v", err)
+	}
+
+	rowID, err := result.LastInsertId()
+	if err != nil {
+		t.Fatalf("get LastInsertId: %v", err)
+	}
+
+	// Verify it's in messages_fts
+	var found int
+	if err := db.DB().QueryRow("SELECT COUNT(*) FROM messages_fts WHERE rowid = ?", rowID).Scan(&found); err != nil {
+		t.Fatalf("query before update: %v", err)
+	}
+	if found == 0 {
+		t.Error("reasoning row not in messages_fts after insert")
+	}
+
+	// Update the text of the reasoning row
+	if _, err := db.DB().Exec(`
+		UPDATE search_items SET text = ? WHERE id = ?
+	`, "updated reasoning", rowID); err != nil {
+		t.Fatalf("update text: %v", err)
+	}
+
+	// Verify the updated text is in messages_fts (the UPDATE trigger should handle this)
+	var foundUpdated int
+	if err := db.DB().QueryRow("SELECT COUNT(*) FROM messages_fts WHERE text MATCH 'updated'").Scan(&foundUpdated); err != nil {
+		t.Fatalf("query after update: %v", err)
+	}
+	if foundUpdated == 0 {
+		t.Error("updated reasoning content not found in messages_fts")
+	}
+
+	// Verify old text is gone
+	var foundOld int
+	if err := db.DB().QueryRow("SELECT COUNT(*) FROM messages_fts WHERE text MATCH 'original'").Scan(&foundOld); err != nil {
+		t.Fatalf("query old text: %v", err)
+	}
+	if foundOld != 0 {
+		t.Error("old reasoning content should not be in messages_fts after update")
+	}
+}
+
+func TestMigrationV7DeleteTrigger(t *testing.T) {
+	// Test that v7 DELETE trigger properly handles reasoning content_type deletions.
+	// This exercises the search_items_ad_msg trigger path for reasoning rows.
+	db, cleanup := newTestDB(t)
+	defer cleanup()
+
+	// Insert a reasoning row
+	result, err := db.DB().Exec(`
+		INSERT INTO search_items (source_path, ordinal, role, text, content_type, timestamp)
+		VALUES (?, ?, ?, ?, ?, ?)
+	`, "/tmp/delete_test.jsonl", 1, "assistant", "delete me reasoning", "reasoning", "2026-01-01")
+	if err != nil {
+		t.Fatalf("insert reasoning: %v", err)
+	}
+
+	rowID, err := result.LastInsertId()
+	if err != nil {
+		t.Fatalf("get LastInsertId: %v", err)
+	}
+
+	// Verify it's in messages_fts
+	var found int
+	if err := db.DB().QueryRow("SELECT COUNT(*) FROM messages_fts WHERE rowid = ?", rowID).Scan(&found); err != nil {
+		t.Fatalf("query before delete: %v", err)
+	}
+	if found == 0 {
+		t.Error("reasoning row not in messages_fts after insert")
+	}
+
+	// Delete the reasoning row
+	if _, err := db.DB().Exec(`
+		DELETE FROM search_items WHERE id = ?
+	`, rowID); err != nil {
+		t.Fatalf("delete row: %v", err)
+	}
+
+	// Verify it's removed from messages_fts (the DELETE trigger should handle this)
+	var foundAfter int
+	if err := db.DB().QueryRow("SELECT COUNT(*) FROM messages_fts WHERE text MATCH 'delete'").Scan(&foundAfter); err != nil {
+		t.Fatalf("query after delete: %v", err)
+	}
+	if foundAfter != 0 {
+		t.Error("deleted reasoning content should not be in messages_fts")
+	}
+}
+
+func TestMigrationV7AllContentTypes(t *testing.T) {
+	// Comprehensive test: verify v7 triggers handle all content types correctly.
+	// This exercises the INSERT, UPDATE, and DELETE paths for text, code, reasoning, and tool.
+	db, cleanup := newTestDB(t)
+	defer cleanup()
+
+	insertID := func(path string, ordinal int, role string, text string, ct string) int64 {
+		result, err := db.DB().Exec(`
+			INSERT INTO search_items (source_path, ordinal, role, text, content_type, timestamp)
+			VALUES (?, ?, ?, ?, ?, ?)
+		`, path, ordinal, role, text, ct, "2026-01-01")
+		if err != nil {
+			t.Fatalf("insert %s: %v", ct, err)
+		}
+		id, _ := result.LastInsertId()
+		return id
+	}
+
+	// Insert one of each type
+	_ = insertID("/tmp/all_types.jsonl", 1, "user", "user text content", "text")
+	codeID := insertID("/tmp/all_types.jsonl", 2, "assistant", "func hello() {}", "code")
+	reasoningID := insertID("/tmp/all_types.jsonl", 3, "assistant", "let me think through this", "reasoning")
+	_ = insertID("/tmp/all_types.jsonl", 4, "assistant", "search_query: test", "tool")
+
+	// Verify each is in the correct index
+	texts := []struct {
+		query   string
+		match   string
+		inTable string
+	}{
+		{"SELECT COUNT(*) FROM messages_fts WHERE text MATCH 'user'", "user text", "messages_fts"},
+		{"SELECT COUNT(*) FROM messages_fts WHERE text MATCH 'func'", "code", "messages_fts"},
+		{"SELECT COUNT(*) FROM messages_fts WHERE text MATCH 'think'", "reasoning", "messages_fts"},
+		{"SELECT COUNT(*) FROM tool_fts WHERE text MATCH 'search'", "tool", "tool_fts"},
+	}
+
+	for _, tc := range texts {
+		var count int
+		if err := db.DB().QueryRow(tc.query).Scan(&count); err != nil {
+			t.Fatalf("query %s: %v", tc.inTable, err)
+		}
+		if count == 0 {
+			t.Errorf("%s content type not in %s index", tc.match, tc.inTable)
+		}
+	}
+
+	// Update reasoning text
+	if _, err := db.DB().Exec("UPDATE search_items SET text = ? WHERE id = ?", "updated thought process", reasoningID); err != nil {
+		t.Fatalf("update reasoning: %v", err)
+	}
+
+	var updatedFound int
+	if err := db.DB().QueryRow("SELECT COUNT(*) FROM messages_fts WHERE text MATCH 'updated'").Scan(&updatedFound); err != nil {
+		t.Fatalf("query updated reasoning: %v", err)
+	}
+	if updatedFound == 0 {
+		t.Error("updated reasoning text not found in messages_fts")
+	}
+
+	// Delete code
+	if _, err := db.DB().Exec("DELETE FROM search_items WHERE id = ?", codeID); err != nil {
+		t.Fatalf("delete code: %v", err)
+	}
+
+	var codeAfterDelete int
+	if err := db.DB().QueryRow("SELECT COUNT(*) FROM messages_fts WHERE text MATCH 'func'").Scan(&codeAfterDelete); err != nil {
+		t.Fatalf("query after delete: %v", err)
+	}
+	if codeAfterDelete != 0 {
+		t.Error("deleted code still in messages_fts")
+	}
+}
