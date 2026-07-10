@@ -17,86 +17,10 @@ type SourceItem struct {
 	Path    string // path to the source file
 }
 
-// SourceConfig contains paths for different source types.
-type SourceConfig struct {
-	KE        []string `toml:"ke"`
-	Decisions []string `toml:"decisions"`
-	Memories  []string `toml:"memories"`
-	Rules     []string `toml:"rules"`
-	Specs     []string `toml:"specs"`
-	Backlog   []string `toml:"backlog"`
-}
-
-// ParseAll returns all source items from the configured paths.
-func ParseAll(cfg SourceConfig) ([]SourceItem, error) {
-	var items []SourceItem
-
-	// KE: whole-document parsing
-	for _, path := range cfg.KE {
-		item, err := ParseDocument(path, "ke")
-		if err != nil {
-			return nil, fmt.Errorf("failed to parse KE %s: %w", path, err)
-		}
-		items = append(items, item)
-	}
-
-	// Decisions: sectioned (by ## headers)
-	for _, path := range cfg.Decisions {
-		sectioned, err := ParseSectioned(path, "decision")
-		if err != nil {
-			return nil, fmt.Errorf("failed to parse Decision %s: %w", path, err)
-		}
-		items = append(items, sectioned...)
-	}
-
-	// Memories: whole-document parsing
-	for _, path := range cfg.Memories {
-		item, err := ParseDocument(path, "memory")
-		if err != nil {
-			return nil, fmt.Errorf("failed to parse Memory %s: %w", path, err)
-		}
-		items = append(items, item)
-	}
-
-	// Rules: sectioned (by ## headers)
-	for _, path := range cfg.Rules {
-		sectioned, err := ParseSectioned(path, "rule")
-		if err != nil {
-			return nil, fmt.Errorf("failed to parse Rule %s: %w", path, err)
-		}
-		items = append(items, sectioned...)
-	}
-
-	// Specs: sectioned (by ## headers)
-	for _, path := range cfg.Specs {
-		sectioned, err := ParseSectioned(path, "spec")
-		if err != nil {
-			return nil, fmt.Errorf("failed to parse Spec %s: %w", path, err)
-		}
-		items = append(items, sectioned...)
-	}
-
-	// Backlog: sectioned (by ## headers) or whole-document
-	for _, path := range cfg.Backlog {
-		sectioned, err := ParseSectioned(path, "backlog")
-		if err != nil {
-			return nil, fmt.Errorf("failed to parse Backlog %s: %w", path, err)
-		}
-		items = append(items, sectioned...)
-	}
-
-	return items, nil
-}
-
 const sourceReadBufferSize = 32 * 1024
 
-// ParseDocument parses a whole-document source (single item).
-// Extracts frontmatter ID and returns the entire content as one item.
-func ParseDocument(path string, sourceType string) (SourceItem, error) {
-	return ParseDocumentContext(context.Background(), path, sourceType)
-}
-
-// ParseDocumentContext is ParseDocument with cancellation support.
+// ParseDocumentContext parses a whole-document source with cancellation support.
+// It extracts the frontmatter ID and returns the entire content as one item.
 func ParseDocumentContext(ctx context.Context, path string, sourceType string) (SourceItem, error) {
 	content, id, err := prepareSource(ctx, path, sourceType)
 	if err != nil {
@@ -111,13 +35,8 @@ func ParseDocumentContext(ctx context.Context, path string, sourceType string) (
 	}, nil
 }
 
-// ParseSectioned parses a markdown file split by ## headers (each section = item).
-// If no ## headers are found, returns the entire content as a single item.
-func ParseSectioned(path string, sourceType string) ([]SourceItem, error) {
-	return ParseSectionedContext(context.Background(), path, sourceType)
-}
-
-// ParseSectionedContext is ParseSectioned with cancellation support.
+// ParseSectionedContext splits a Markdown source by ## headers with cancellation support.
+// If no ## headers are found, it returns the entire content as a single item.
 func ParseSectionedContext(ctx context.Context, path string, sourceType string) ([]SourceItem, error) {
 	content, baseID, err := prepareSource(ctx, path, sourceType)
 	if err != nil {

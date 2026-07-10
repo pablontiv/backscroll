@@ -15,18 +15,6 @@ func testMsg(role, content string) models.Message {
 	}
 }
 
-func TestDetectorRegistry(t *testing.T) {
-	// Test that registered detectors can be run
-	result := RunDetectors([]models.Message{{Role: "user", Content: "test"}})
-	if result == nil {
-		result = make(map[int][]Detection)
-	}
-	// For a normal non-correction message, no detectors should fire
-	if len(result) != 0 {
-		t.Errorf("expected no detections for normal message, got %d", len(result))
-	}
-}
-
 func TestCorrectionLexiconDetector(t *testing.T) {
 	tests := []struct {
 		name        string

@@ -8,10 +8,10 @@ Backscroll is a Go CLI tool that indexes Claude Code, Pi, OMP, OpenCode, Codex C
 
 **Status**: Go port complete — `main` branch is the active Go implementation. The Rust implementation is frozen in the `v0` branch.
 
- Implemented: `internal/autoupdate`, `internal/config`, `internal/input_config`, `internal/presets`, `internal/models`, `internal/readers`, `internal/sync`, `internal/tagging`, `internal/plans`, `internal/sources`, `internal/storage`, `internal/services`, `internal/projects`, `internal/templates`, `internal/corrections`, `internal/categories`, `internal/sequences`, `internal/hybrid`, `internal/compat`, `internal/recovery`, `internal/startuplock`, `internal/skillinstall`. CLI commands in `cmd/backscroll/` (12 v2 commands via cobra).
+ Implemented: `internal/autoupdate`, `internal/config`, `internal/input_config`, `internal/presets`, `internal/models`, `internal/readers`, `internal/sync`, `internal/tagging`, `internal/sources`, `internal/storage`, `internal/services`, `internal/projects`, `internal/templates`, `internal/corrections`, `internal/categories`, `internal/sequences`, `internal/hybrid`, `internal/compat`, `internal/recovery`, `internal/startuplock`, `internal/skillinstall`. CLI commands in `cmd/backscroll/` (12 v2 commands via cobra).
  github.com/pablontiv/backscroll/internal/autoupdate    — Private context-aware release staging and safe replacement
 
-Stack: cobra, go-toml/v2, goldmark, modernc.org/sqlite (pure Go, no CGO), stdlib testing.
+Stack: cobra, go-toml/v2, modernc.org/sqlite (pure Go, no CGO), stdlib testing.
 
 ## Build & Test Commands
 
@@ -64,17 +64,16 @@ internal/
 ├── input_config/      — input manifest loading, discovery, and legacy session-dirs compatibility
 ├── presets/           — embedded input preset installation with explicit overwrite control
 ├── models/            — domain types: SessionRecord, MessageContent, ParsedFile, SearchResult, Stats
-├── sync/              — WalkDir, SHA-256 dedup, JSONL parsing, noise filtering, content-type classification
+├── sync/              — cancellable JSONL iteration, noise-type filtering, content cleaning, exit-code extraction
 ├── tagging/           — heuristic auto-tagging (debugging, refactoring, feature, testing, docs, config)
-├── plans/             — Markdown plan parser (split by ## headers, goldmark)
-├── sources/           — external source parsers (ke, decision, memory, rule, spec, backlog) + SourceRegistry
+├── sources/           — cancellable whole-document and sectioned Markdown parsers shared by manifest readers
 ├── projects/          — project identity registry: LoadGlobalRegistry() (ProjectRegistry, error), Identify(), LoadLocalHint()
 ├── readers/           — SessionReader interface, Registry, ClaudeReader (text+tool_use+tool_result), PiReader (text+toolCall+custom results), OMPReader (native v3 text+thinking+toolCall+toolResult; parser-backed identities and origin), OpenCodeReader (text+tool state.input+state.output), CodexReader (rollout response items; docs/input-contract.md), MarkdownDocumentReader (`markdown_document`), MarkdownSectionsReader (`markdown_sections`); toolfmt serializer
 ├── recovery/          — stranded database recovery orchestration, verified active+stranded union, durable backup, atomic replacement, and post-install sync
 ├── startuplock/       — canonical database lock coordination via persistent OS advisory sidecar
 ├── skillinstall/      — safe Backscroll skill installation, receipts, rollback, and Python v1 restore compatibility
 ├── templates/         — F2 Drain-inspired miner: Miner, ProcessLine, ExtractErrorLines, deterministic signature via SHA256
-├── corrections/       — F3 correction detection: bilingual lexicon, interrupt flags, denial heuristics, rephrase-similarity; detector registry + implementations
+├── corrections/       — F3 correction detection: bilingual lexicon, interrupt flags, denial heuristics, rephrase-similarity; prose-filtered cancellable orchestration
 ├── categories/        — F4 category map loader (rule engine, versioning, tool→category mapping) with embedded default preset
 ├── hybrid/            — Reciprocal Rank Fusion helpers for merged lexical retrieval
 ├── sequences/         — F4 PrefixSpan mining (deterministic discovery of frequent tool-call sequences per session)
@@ -103,11 +102,10 @@ validated invocation → startup command class → canonical startup lock
                                            └─ remediation owner: retain mutation-grade lease → skip ordinary compatible-open and pre-handler sync → handler
 
 Ordinary startup sync inputs ────────────────────────────────┐
-JSONL files → fs.WalkDir → SHA-256 dedup → ParseSessions() ─┤
-Markdown plans → DiscoverPlanFiles() → ParsePlan() ──────────┤
-Declarative Markdown inputs → markdown readers ──────────────┤
+Native sessions → manifest discovery → native readers ───────┤
+Markdown documents/plans → manifest discovery → Markdown readers
                                                               ▼
-                                              SyncFiles() → perennial SQLite FTS5
+                                       SHA-256 dedup → SyncFiles() → perennial SQLite FTS5
                                                             │
 search/context/list/patterns/status/validate → database-backed query/output
 recover apply → post-install sync under retained remediation lease
@@ -182,7 +180,6 @@ External knowledge sources are configured with active `*.inputs.toml` manifests 
 - `github.com/spf13/cobra` — CLI argument parsing with subcommands
 - `modernc.org/sqlite` — Pure Go SQLite with FTS5, WAL mode (no CGO)
 - `github.com/pelletier/go-toml/v2` — TOML config parsing
-- `github.com/yuin/goldmark` — Markdown parsing for plan indexing
 - `github.com/pablontiv/picokit` — Output formatting (text/robot/JSON), file hashing, path security (release updating is owned by private `internal/autoupdate`)
 - `crypto/sha256` (stdlib) — SHA-256 hashing for incremental sync deduplication
 - `io/fs` + `path/filepath` (stdlib) — Recursive directory traversal
@@ -254,12 +251,11 @@ github.com/pablontiv/backscroll/internal/directsearch  — Shared direct-search 
 github.com/pablontiv/backscroll/internal/input_config  — Input manifest loading, discovery, and legacy session-dirs compatibility
 github.com/pablontiv/backscroll/internal/presets       — Embedded input preset installation with explicit overwrite control
 github.com/pablontiv/backscroll/internal/models        — Domain types and SearchEngine interface
-github.com/pablontiv/backscroll/internal/sync          — Session parsing and noise filtering
-github.com/pablontiv/backscroll/internal/plans         — Markdown plan parsing
+github.com/pablontiv/backscroll/internal/sync          — Cancellable JSONL iteration, noise filtering, content cleaning, exit-code extraction
 github.com/pablontiv/backscroll/internal/tagging       — Heuristic session auto-tagging
-github.com/pablontiv/backscroll/internal/sources       — External source parsers + SourceRegistry
+github.com/pablontiv/backscroll/internal/sources       — Cancellable whole-document and sectioned Markdown parsers
 github.com/pablontiv/backscroll/internal/templates     — F2 Drain-inspired miner: Miner, ProcessLine, ExtractErrorLines
-github.com/pablontiv/backscroll/internal/corrections   — F3 correction-signal detectors: lexicon (es+en), interrupt, denial, rephrase-similarity; registry pattern for deterministic, pluggable detectors
+github.com/pablontiv/backscroll/internal/corrections   — F3 correction-signal detectors: lexicon (es+en), interrupt, denial, rephrase-similarity; prose-filtered cancellable orchestration
 github.com/pablontiv/backscroll/internal/categories    — F4 category map loader (rule engine, versioning, tool→category mapping) with embedded default preset
 github.com/pablontiv/backscroll/internal/hybrid        — Reciprocal Rank Fusion helpers for merged lexical retrieval
 github.com/pablontiv/backscroll/internal/sequences     — F4 PrefixSpan mining (deterministic pattern discovery per session)
@@ -268,7 +264,7 @@ github.com/pablontiv/backscroll/internal/storage       — Database schema, migr
 github.com/pablontiv/backscroll/internal/projects      — Project identity registry
 github.com/pablontiv/backscroll/internal/readers       — SessionReader interface, Registry, ClaudeReader (text+tool_use+tool_result), PiReader (text+toolCall+custom results), OMPReader (native v3 text+thinking+toolCall+toolResult; parser-backed identities and origin), OpenCodeReader (text+tool state.input+state.output), CodexReader (rollout response items; docs/input-contract.md), MarkdownDocumentReader (`markdown_document`), MarkdownSectionsReader (`markdown_sections`); toolfmt serializer
 github.com/pablontiv/backscroll/internal/recovery      — Stranded database recovery orchestration, durable backup, atomic replacement, and post-install sync
- Implemented: `internal/autoupdate`, `internal/config`, `internal/input_config`, `internal/presets`, `internal/models`, `internal/readers`, `internal/sync`, `internal/tagging`, `internal/plans`, `internal/sources`, `internal/storage`, `internal/services`, `internal/projects`, `internal/templates`, `internal/corrections`, `internal/categories`, `internal/sequences`, `internal/hybrid`, `internal/compat`, `internal/recovery`, `internal/startuplock`, `internal/skillinstall`. CLI commands in `cmd/backscroll/` (12 v2 commands via cobra).
+ Implemented: `internal/autoupdate`, `internal/config`, `internal/input_config`, `internal/presets`, `internal/models`, `internal/readers`, `internal/sync`, `internal/tagging`, `internal/sources`, `internal/storage`, `internal/services`, `internal/projects`, `internal/templates`, `internal/corrections`, `internal/categories`, `internal/sequences`, `internal/hybrid`, `internal/compat`, `internal/recovery`, `internal/startuplock`, `internal/skillinstall`. CLI commands in `cmd/backscroll/` (12 v2 commands via cobra).
  github.com/pablontiv/backscroll/internal/autoupdate    — Private context-aware release staging and safe replacement
 github.com/pablontiv/backscroll/internal/startuplock   — Canonical database lock coordination via persistent OS advisory sidecar
 github.com/pablontiv/backscroll/internal/skillinstall  — Safe Backscroll skill installation, receipts, rollback, and Python v1 restore compatibility

@@ -14,41 +14,8 @@ type Detection struct {
 	Confidence   float64
 }
 
-// Detector is a function that analyzes a message at a given ordinal position
-// within a session and returns a Detection if a correction signal is found.
-// Returns nil if no signal is detected.
-type Detector func(msgs []models.Message, idx int) *Detection
-
-// Registry maps detector names to their functions (for orderly, repeatable
-// execution and testing). Detectors are registered at init() time.
-var detectorRegistry map[string]Detector
-
-// Register adds a detector to the registry. Called at init() time.
-func Register(name string, fn Detector) {
-	detectorRegistry[name] = fn
-}
-
-// RunDetectors executes all registered detectors over a session's messages.
-// Returns a map of message ordinal -> slice of Detections (detectors that fired).
-// The slice is sorted by detector name for determinism.
-func RunDetectors(msgs []models.Message) map[int][]Detection {
-	if len(msgs) == 0 {
-		return nil
-	}
-	result := make(map[int][]Detection)
-	for i := range msgs {
-		for name, fn := range detectorRegistry {
-			if detection := fn(msgs, i); detection != nil {
-				detection.DetectorName = name
-				result[i] = append(result[i], *detection)
-			}
-		}
-	}
-	return result
-}
-
-// RunDetectorsFiltered executes detectors with prose-only filtering without
-// cancellation. It is retained for compatibility with existing callers.
+// RunDetectorsFiltered executes prose-filtered detection for callers without
+// a cancellation context, including stored-text backfill.
 func RunDetectorsFiltered(msgs []models.Message) map[int][]Detection {
 	result, _ := RunDetectorsFilteredContext(context.Background(), msgs)
 	return result
@@ -344,12 +311,4 @@ func cRephraseDetector(msgs []models.Message, idx int) *Detection {
 		return &Detection{Confidence: 0.6}
 	}
 	return nil
-}
-
-func init() {
-	detectorRegistry = make(map[string]Detector)
-	Register("lexicon", cCorrectionLexiconDetector)
-	Register("interrupt", cInterruptDetector)
-	Register("denial", cDenialDetector)
-	Register("rephrase", cRephraseDetector)
 }
