@@ -114,7 +114,7 @@ Configurable in `[sources]` section of `backscroll.toml`. Source types: `ke`, `d
 - `modernc.org/sqlite` — Pure Go SQLite with FTS5, WAL mode (no CGO)
 - `github.com/pelletier/go-toml/v2` — TOML config parsing
 - `github.com/yuin/goldmark` — Markdown parsing for plan indexing
-- `github.com/pablontiv/picokit` — Output formatting (text/robot/JSON), file hashing, autoupdate
+- `github.com/pablontiv/picokit` — Output formatting (text/robot/JSON), file hashing, path security, autoupdate (v0.5+ is a zero-dependency module)
 - `crypto/sha256` (stdlib) — SHA-256 hashing for incremental sync deduplication
 - `io/fs` + `path/filepath` (stdlib) — Recursive directory traversal
 - `regexp` (stdlib) — Noise filter patterns (compiled at init)
