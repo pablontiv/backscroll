@@ -8,7 +8,7 @@ Backscroll is a Go CLI tool that indexes Claude Code, Pi, and OpenCode sessions,
 
 **Status**: Go port complete — `main` branch is the active Go implementation. The Rust implementation is frozen in the `v0` branch.
 
-Implemented: `internal/config`, `internal/input_config`, `internal/models`, `internal/readers`, `internal/sync`, `internal/tagging`, `internal/plans`, `internal/sources`, `internal/storage`, `internal/projects`, `internal/reader`. CLI commands in `cmd/backscroll/` (9 v2 commands via cobra).
+Implemented: `internal/config`, `internal/input_config`, `internal/models`, `internal/readers`, `internal/sync`, `internal/tagging`, `internal/plans`, `internal/sources`, `internal/storage`, `internal/projects`, `internal/reader`, `internal/templates`. CLI commands in `cmd/backscroll/` (9 v2 commands via cobra).
 
 Stack: cobra, go-toml/v2, goldmark, modernc.org/sqlite (pure Go, no CGO), stdlib testing.
 
@@ -44,7 +44,7 @@ cmd/backscroll/
 ├── list.go            — list command (v2: --input, --order, --type, --tool)
 ├── search.go          — search command (v2: --text, --input)
 ├── read.go            — read command (v2: --path, --tail, --semantic, --pretty)
-├── patterns.go        — patterns command (v2: --kind commands|failures, --project, --tag, --json, --robot)
+├── patterns.go        — patterns command (v2: --kind commands|failures|templates, --project, --tag, --min-support, --json, --robot)
 ├── status.go          — status command
 ├── validate.go        — validate command (--indexed-only)
 ├── rebuild.go         — rebuild command (replaces reindex)
@@ -62,10 +62,11 @@ internal/
 ├── projects/          — project identity registry: LoadGlobalRegistry(), Identify(), LoadLocalHint()
 ├── reader/            — direct reading and filtering of individual session files
 ├── readers/           — SessionReader interface, Registry, ClaudeReader (text+tool_use+tool_result), PiReader (text+toolCall+custom results), OpenCodeReader (text+tool state.input+state.output); toolfmt serializer
-└── storage/           — SQLite adapter (dual FTS5 indexes: tool_fts + messages_fts, BM25, WAL mode, migrations v1–v9, search_items, session_tags, tool_events, AggregateCommands, AggregateFailures)
+├── templates/         — F2 Drain-inspired miner: Miner, ProcessLine, ExtractErrorLines, deterministic signature via SHA256
+└── storage/           — SQLite adapter (dual FTS5 indexes: tool_fts + messages_fts, BM25, WAL mode, migrations v1–v10, search_items, session_tags, tool_events, message_templates, template_matches, AggregateCommands, AggregateFailures, AggregateTemplates)
 ```
 
-Nine v2 CLI commands: `list [--project] [--all-projects] [--order timestamp:desc|asc] [--limit] [--offset] [--json]`, `search [--text <query>] [--project] [--all-projects] [--after] [--before] [--limit] [--offset] [--indexed-only] [--json]`, `read --path <path> [--tail <n>] [--semantic] [--pretty]`, `patterns --kind commands|failures [--project] [--all-projects] [--tag] [--limit] [--offset] [--indexed-only] [--json] [--robot]`, `status`, `validate [--indexed-only]`, `rebuild`, `purge --before <date>`, `config [--json]`.
+Nine v2 CLI commands: `list [--project] [--all-projects] [--order timestamp:desc|asc] [--limit] [--offset] [--json]`, `search [--text <query>] [--project] [--all-projects] [--after] [--before] [--limit] [--offset] [--indexed-only] [--json]`, `read --path <path> [--tail <n>] [--semantic] [--pretty]`, `patterns --kind commands|failures|templates [--project] [--all-projects] [--tag] [--min-support N] [--limit] [--offset] [--indexed-only] [--json] [--robot]`, `status`, `validate [--indexed-only]`, `rebuild`, `purge --before <date>`, `config [--json]`.
 
 The `SearchEngine` interface is the port; `internal/storage` is the adapter. Database opened lazily. `OpenReadOnly()` provides read-only access for external consumers.
 
@@ -105,6 +106,7 @@ Configurable in `[sources]` section of `backscroll.toml`. Source types: `ke`, `d
 - **F0a rich capture (migration v8)**: readers extract per-message identity and tool metadata BEFORE serialization/cleaning destroys the evidence — `uuid` (record uuid; tool blocks get stable `#tN`/`#rN` suffixes by block index), `tool_name`, `command_head`, `is_error` (`*bool`, three-valued: tool_result blocks carry it and it is paired back onto the tool_use message cross-record via `tool_use_id`), and `was_interrupted` (detected on raw content before `CleanContent` strips "Request interrupted"). Persisted to `search_items` (`extraction_version`, `was_interrupted` columns) and the perennial `tool_events` satellite table (`UNIQUE(source_path, ordinal)`, no CASCADE lifecycle — only `purge` deletes from it, explicitly). Claude reader only; Pi/OpenCode emit zero values and stay on the legacy path. Design: `docs/superpowers/specs/2026-07-17-pattern-discovery-northstar-design.md`.
 - **F0b perennial sync**: the DB is the perennial event store — session JSONL files expire (~30 days), indexed sessions survive them. Session files where EVERY message has a uuid sync append-only (no DELETE; `INSERT OR IGNORE` + UNIQUE constraints; row ids stable forever), with a one-time transition cleanup of legacy uuid-NULL rows per file. Files with any uuid-less message (Pi/OpenCode, legacy Claude) keep wipe-and-reload. `rebuild` is NON-destructive: re-derives both FTS indexes from `search_items` via FTS5 external-content `'rebuild'` in one transaction (`RebuildFTS()`), then runs incremental sync — it never deletes rows and never re-reads disk as source of truth. `purge --before` is the only deletion path and deletes `tool_events` satellites explicitly in the same transaction (no CASCADE).
 - **F1 exit code mining**: during sync, Bash tool_result text is parsed via regex patterns (case-insensitive matches on `exit code N` / `Exit code: N` / `returned N`; note tool text is capped at 4000 runes by toolfmt, so a code beyond the cap yields NULL indistinguishable from no match) and the extracted exit code is stored in the `tool_events.exit_code` column (migration v8; NULL for non-Bash tools or no match). The `patterns` command aggregates tool_events by (tool_name, command_head) for commands or (tool_name, is_error, exit_code) for failures, returning top N sorted by frequency with optional filters by project, session tag, and time window. Coverage metric reports the count of events with non-NULL is_error (signalled events) against the total failure count in the result set.
+- **F2 template mining (migration v10)**: unsupervised Drain-inspired template miner (`internal/templates/Miner`) discovers recurring error patterns from tool output during sync. Miner uses fixed-depth token prefix clustering (depth=2) to group messages; beyond the prefix, numeric/path/UUID tokens become `<*>` variables. Error-bearing lines (is_error=true) are extracted per tool via `ExtractErrorLines` (calibrated for Bash, Go, others) and deterministically mined with SHA256 signature. Templates stored in `message_templates` (signature, template_text, occurrence_count, first_seen, last_seen) joined via `template_matches` (template_id, source_path, ordinal, item_uuid) with UNIQUE constraint for idempotency. Mining runs inside `SyncFiles` transaction; re-syncing increments occurrence_count only for new matches (detected via INSERT OR IGNORE). Query method `AggregateTemplates(opts)` filters by min_support (default 3), project, date range; `patterns --kind templates [--min-support N]` exposes results in text/JSON/robot formats.
 - **Early input validation**: CLI commands validate flag values (e.g. `--format`) before opening the database, so invalid inputs fail fast without side effects.
 - **Coverage gate**: CI enforces ≥85% aggregate statement coverage via `go test ./... -race -coverprofile`. Local check: `bash scripts/check-coverage.sh`. Tests that depend on local machine state (e.g. `~/.config/backscroll/projects.toml`) must use `t.Setenv("HOME", tempDir)` to stay reproducible on CI. Likewise, `InputsDir` branches requiring `BACKSCROLL_CONFIG_DIR` to be unset must set it to `""` via `t.Setenv`. To test the `Validate` orphan path, insert directly into `search_items` without a matching `indexed_files` row.
 - **Zero-result guidance**: when `search`/`list` return no rows, actionable suggestions (`--all-projects`, `--content-type tool`, `backscroll status`) are printed to STDERR — never STDOUT, so `--json` stays a clean empty payload.
@@ -188,7 +190,8 @@ github.com/pablontiv/backscroll/internal/sync          — Session parsing and n
 github.com/pablontiv/backscroll/internal/plans         — Markdown plan parsing
 github.com/pablontiv/backscroll/internal/tagging       — Heuristic session auto-tagging
 github.com/pablontiv/backscroll/internal/sources       — External source parsers + SourceRegistry
-github.com/pablontiv/backscroll/internal/storage       — Database schema, migrations v1–v8, FTS5 indexes
+github.com/pablontiv/backscroll/internal/templates     — F2 Drain-inspired miner: Miner, ProcessLine, ExtractErrorLines
+github.com/pablontiv/backscroll/internal/storage       — Database schema, migrations v1–v10, FTS5 indexes
 github.com/pablontiv/backscroll/internal/projects      — Project identity registry
 github.com/pablontiv/backscroll/internal/reader        — Direct session file reader
 github.com/pablontiv/backscroll/internal/readers       — SessionReader interface, Registry, ClaudeReader (text+tool_use+tool_result), PiReader (text+toolCall+custom results), OpenCodeReader (text+tool state.input+state.output); toolfmt serializer

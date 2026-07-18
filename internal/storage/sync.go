@@ -4,6 +4,7 @@ import (
 	"fmt"
 
 	"github.com/pablontiv/backscroll/internal/sync"
+	"github.com/pablontiv/backscroll/internal/templates"
 )
 
 // CurrentExtractionVersion identifies the reader-extraction logic that
@@ -82,6 +83,9 @@ func (d *Database) SyncFiles(files []IndexedFile) error {
 		}
 
 		if !perennial {
+			if _, err := tx.Exec("DELETE FROM template_matches WHERE source_path = ?", file.SourcePath); err != nil {
+				return fmt.Errorf("delete old template_matches for %s: %w", file.SourcePath, err)
+			}
 			if _, err := tx.Exec("DELETE FROM search_items WHERE source_path = ?", file.SourcePath); err != nil {
 				return fmt.Errorf("delete old search_items for %s: %w", file.SourcePath, err)
 			}
@@ -190,6 +194,12 @@ func (d *Database) SyncFiles(files []IndexedFile) error {
 		)
 		if err != nil {
 			return fmt.Errorf("upsert indexed_files for %s: %w", file.SourcePath, err)
+		}
+
+		// Mine templates from error-bearing tool outputs (inside same tx).
+		miner := templates.NewMiner()
+		if err := d.mineTemplatesForFile(tx, file, miner); err != nil {
+			return fmt.Errorf("mine templates for %s: %w", file.SourcePath, err)
 		}
 	}
 

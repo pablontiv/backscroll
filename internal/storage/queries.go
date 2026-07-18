@@ -479,8 +479,17 @@ func (d *Database) Purge(before string) (int64, error) {
 	}
 	_ = rows.Close()
 
-	// Delete satellite tool_events for the purged rows first (explicit —
-	// perennial tables have no CASCADE lifecycle by design).
+	// Delete template_matches for purged rows (explicit — no CASCADE by design)
+	if _, err := tx.Exec(`
+		DELETE FROM template_matches
+		WHERE (source_path, ordinal) IN (
+			SELECT source_path, ordinal FROM search_items WHERE timestamp < ?
+		)
+	`, beforeStr); err != nil {
+		return 0, fmt.Errorf("delete template_matches: %w", err)
+	}
+
+	// Delete satellite tool_events for the purged rows (explicit — perennial tables have no CASCADE)
 	if _, err := tx.Exec(`
 		DELETE FROM tool_events
 		WHERE (source_path, ordinal) IN (
@@ -526,6 +535,14 @@ func (d *Database) Purge(before string) (int64, error) {
 		}
 	}
 
+	// Delete orphaned message_templates (derived table — if no matches, drop the template)
+	if _, err := tx.Exec(`
+		DELETE FROM message_templates
+		WHERE id NOT IN (SELECT DISTINCT template_id FROM template_matches)
+	`); err != nil {
+		return 0, fmt.Errorf("delete orphaned templates: %w", err)
+	}
+
 	if err := tx.Commit(); err != nil {
 		return 0, fmt.Errorf("commit transaction: %w", err)
 	}
@@ -566,4 +583,128 @@ func (d *Database) RebuildFTS() error {
 		return fmt.Errorf("rebuild tool_fts: %w", err)
 	}
 	return tx.Commit()
+}
+
+// TemplateQueryOpts controls template aggregation queries.
+type TemplateQueryOpts struct {
+	MinSupport int
+	Project    string
+	Tag        string // filter by session_tags.tag
+	After      string // RFC3339 timestamp
+	Before     string // RFC3339 timestamp
+}
+
+// TemplateRow is a result from AggregateTemplates.
+type TemplateRow struct {
+	TemplateID       int64    `json:"template_id"`
+	Signature        string   `json:"signature"`
+	TemplateText     string   `json:"template_text"`
+	OccurrenceCount  int      `json:"occurrence_count"`
+	ProjectsAffected []string `json:"projects_affected"`
+	SampleUUIDs      []string `json:"sample_uuids"`
+	FirstSeen        string   `json:"first_seen"`
+	LastSeen         string   `json:"last_seen"`
+}
+
+// AggregateTemplates returns templates meeting min_support and optional filters.
+func (d *Database) AggregateTemplates(opts TemplateQueryOpts) ([]TemplateRow, error) {
+	minSupport := opts.MinSupport
+	if minSupport < 1 {
+		minSupport = 3
+	}
+
+	// Derive count at query time from template_matches (occurrence_count column is legacy/unused)
+	query := `
+		SELECT
+			mt.id,
+			mt.signature,
+			mt.template_text,
+			mt.first_seen,
+			mt.last_seen,
+			COUNT(tm.id) as cnt,
+			GROUP_CONCAT(DISTINCT si.project) as projects,
+			GROUP_CONCAT(DISTINCT tm.item_uuid) as uuids
+		FROM message_templates mt
+		LEFT JOIN template_matches tm ON tm.template_id = mt.id
+		LEFT JOIN search_items si ON si.source_path = tm.source_path AND si.ordinal = tm.ordinal
+	`
+	args := []interface{}{}
+
+	whereAdded := false
+	if opts.Project != "" {
+		query += ` WHERE si.project = ?`
+		args = append(args, opts.Project)
+		whereAdded = true
+	}
+
+	if opts.Tag != "" {
+		if whereAdded {
+			query += ` AND tm.source_path IN (
+				SELECT DISTINCT search_items.source_path FROM search_items
+				JOIN session_tags ON search_items.source_path = session_tags.source_path
+				WHERE session_tags.tag = ?
+			)`
+		} else {
+			query += ` WHERE tm.source_path IN (
+				SELECT DISTINCT search_items.source_path FROM search_items
+				JOIN session_tags ON search_items.source_path = session_tags.source_path
+				WHERE session_tags.tag = ?
+			)`
+			whereAdded = true
+		}
+		args = append(args, opts.Tag)
+	}
+
+	if opts.After != "" {
+		if whereAdded {
+			query += ` AND si.timestamp > ?`
+		} else {
+			query += ` WHERE si.timestamp > ?`
+			whereAdded = true
+		}
+		args = append(args, opts.After)
+	}
+
+	if opts.Before != "" {
+		if whereAdded {
+			query += ` AND si.timestamp < ?`
+		} else {
+			query += ` WHERE si.timestamp < ?`
+		}
+		args = append(args, opts.Before)
+	}
+
+	query += ` GROUP BY mt.id HAVING cnt >= ? ORDER BY cnt DESC`
+	args = append(args, minSupport)
+
+	rows, err := d.db.Query(query, args...)
+	if err != nil {
+		return nil, fmt.Errorf("query templates: %w", err)
+	}
+	defer rows.Close()
+
+	var results []TemplateRow
+	for rows.Next() {
+		var r TemplateRow
+		var projectsStr, uuidsStr sql.NullString
+		if err := rows.Scan(&r.TemplateID, &r.Signature, &r.TemplateText,
+			&r.FirstSeen, &r.LastSeen, &r.OccurrenceCount, &projectsStr, &uuidsStr); err != nil {
+			return nil, fmt.Errorf("scan row: %w", err)
+		}
+
+		if projectsStr.Valid && projectsStr.String != "" {
+			r.ProjectsAffected = strings.Split(projectsStr.String, ",")
+		}
+		if uuidsStr.Valid && uuidsStr.String != "" {
+			uuids := strings.Split(uuidsStr.String, ",")
+			// Limit to 3 samples for display.
+			if len(uuids) > 3 {
+				uuids = uuids[:3]
+			}
+			r.SampleUUIDs = uuids
+		}
+
+		results = append(results, r)
+	}
+	return results, rows.Err()
 }

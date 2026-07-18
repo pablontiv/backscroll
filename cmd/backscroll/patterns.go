@@ -22,17 +22,19 @@ func newPatternsCmd(stdout, stderr io.Writer) *cobra.Command {
 		jsonFormat  bool
 		robotFormat bool
 		indexedOnly bool
+		minSupport  int
 	)
 
 	cmd := &cobra.Command{
 		Use:   "patterns",
-		Short: "Discover deterministic patterns in tool events",
+		Short: "Discover deterministic patterns in tool events and templates",
 		Long: `Patterns computes census aggregations over tool events (commands, failures)
-to expose actionable pattern candidates for agent loop classification.
+and error message templates to expose actionable pattern candidates for agent loop classification.
 
-Use --kind to select aggregation type (required; supported: commands, failures).
+Use --kind to select aggregation type (required; supported: commands, failures, templates).
 Use --project to filter to a single project.
 Use --tag to filter by session tags (e.g., debugging, testing).
+Use --min-support for template filtering (default 3; minimum occurrences).
 Use --limit, --offset for pagination.
 Use --json, --robot for output formats.
 Use --indexed-only to skip auto-sync (read existing index only).`,
@@ -40,16 +42,17 @@ Use --indexed-only to skip auto-sync (read existing index only).`,
 			if len(args) > 0 {
 				return fmt.Errorf("unexpected positional argument %q", args[0])
 			}
-			return runPatterns(stdout, stderr, kind, project, allProjects, tag, limit, offset, jsonFormat, robotFormat, indexedOnly)
+			return runPatterns(stdout, stderr, kind, project, allProjects, tag, limit, offset, jsonFormat, robotFormat, indexedOnly, minSupport)
 		},
 	}
 
-	cmd.Flags().StringVar(&kind, "kind", "", "Aggregation kind (required: commands|failures)")
+	cmd.Flags().StringVar(&kind, "kind", "", "Aggregation kind (required: commands|failures|templates)")
 	cmd.Flags().StringVar(&project, "project", "", "Filter to single project")
 	cmd.Flags().BoolVar(&allProjects, "all-projects", false, "Query across all projects (default if --project not set)")
 	cmd.Flags().StringVar(&tag, "tag", "", "Filter by session tag")
 	cmd.Flags().IntVar(&limit, "limit", 20, "Result limit")
 	cmd.Flags().IntVar(&offset, "offset", 0, "Result offset")
+	cmd.Flags().IntVar(&minSupport, "min-support", 3, "Minimum template occurrence count (for --kind templates)")
 	cmd.Flags().BoolVar(&jsonFormat, "json", false, "Output as JSON")
 	cmd.Flags().BoolVar(&robotFormat, "robot", false, "Output in robot format")
 	cmd.Flags().BoolVar(&indexedOnly, "indexed-only", false, "Read existing index without auto-sync")
@@ -61,15 +64,16 @@ Use --indexed-only to skip auto-sync (read existing index only).`,
 
 func runPatterns(stdout, stderr io.Writer,
 	kind string, project string, allProjects bool, tag string,
-	limit, offset int, jsonFormat, robotFormat, indexedOnly bool) error {
+	limit, offset int, jsonFormat, robotFormat, indexedOnly bool, minSupport int) error {
 
 	// Early flag validation before DB open
 	validKinds := map[string]bool{
-		"commands": true,
-		"failures": true,
+		"commands":  true,
+		"failures":  true,
+		"templates": true,
 	}
 	if !validKinds[kind] {
-		return fmt.Errorf("unsupported --kind %q (supported: commands, failures)", kind)
+		return fmt.Errorf("unsupported --kind %q (supported: commands, failures, templates)", kind)
 	}
 
 	if project != "" && allProjects {
@@ -200,6 +204,68 @@ func runPatterns(stdout, stderr io.Writer,
 			for i, p := range results {
 				_, _ = fmt.Fprintf(stdout, "%d. %s (is_error=%v, exit_code=%v) — %d occurrences\n",
 					i+1, p.ToolName, p.IsError, p.ExitCode, p.Count)
+			}
+		}
+
+	} else if kind == "templates" {
+		templateOpts := storage.TemplateQueryOpts{
+			MinSupport: minSupport,
+			Project:    project,
+			Tag:        tag,
+		}
+		results, err := db.AggregateTemplates(templateOpts)
+		if err != nil {
+			return fmt.Errorf("aggregate templates: %w", err)
+		}
+
+		if len(results) == 0 {
+			if !jsonFormat && !robotFormat {
+				_, _ = fmt.Fprintf(stdout, "No templates found.\n")
+			} else if jsonFormat {
+				_, _ = fmt.Fprintf(stdout, "{\"count\":0,\"patterns\":[]}\n")
+			}
+			writeSearchHints(stderr, allProjects, true)
+			return nil
+		}
+
+		// Apply pagination
+		if offset > len(results) {
+			offset = len(results)
+		}
+		if limit <= 0 {
+			limit = 20
+		}
+		end := offset + limit
+		if end > len(results) {
+			end = len(results)
+		}
+		results = results[offset:end]
+
+		if jsonFormat {
+			data := map[string]interface{}{
+				"count":    len(results),
+				"kind":     "templates",
+				"patterns": results,
+			}
+			if err := json.NewEncoder(stdout).Encode(data); err != nil {
+				return fmt.Errorf("encode JSON: %w", err)
+			}
+		} else if robotFormat {
+			_, _ = fmt.Fprintf(stdout, "*** Templates ***\n")
+			for i, r := range results {
+				_, _ = fmt.Fprintf(stdout, "result_%d_template_id=%d\n", i, r.TemplateID)
+				_, _ = fmt.Fprintf(stdout, "result_%d_template=%q\n", i, r.TemplateText)
+				_, _ = fmt.Fprintf(stdout, "result_%d_occurrence_count=%d\n", i, r.OccurrenceCount)
+			}
+			_, _ = fmt.Fprintf(stdout, "*** Total: %d patterns ***\n", len(results))
+		} else {
+			_, _ = fmt.Fprintf(stdout, "Found %d templates (min_support=%d):\n\n", len(results), minSupport)
+			for i, row := range results {
+				_, _ = fmt.Fprintf(stdout, "%d. [%s]\n", i+1, row.Signature[:8])
+				_, _ = fmt.Fprintf(stdout, "   Text: %s\n", row.TemplateText)
+				_, _ = fmt.Fprintf(stdout, "   Occurrences: %d\n", row.OccurrenceCount)
+				_, _ = fmt.Fprintf(stdout, "   Projects: %v\n", row.ProjectsAffected)
+				_, _ = fmt.Fprintf(stdout, "   Sample UUIDs: %v\n\n", row.SampleUUIDs)
 			}
 		}
 	}

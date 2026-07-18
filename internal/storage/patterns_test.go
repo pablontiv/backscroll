@@ -212,3 +212,96 @@ func TestAggregateFailuresWithMultipleTool(t *testing.T) {
 		t.Errorf("want 2 results (2 tools), got %d", len(results))
 	}
 }
+
+func TestAggregateFailuresWithTagFilter(t *testing.T) {
+	db, err := Open(filepath.Join(t.TempDir(), "test.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = db.Close() }()
+
+	files := []IndexedFile{{
+		SourcePath: "/p/s1.jsonl", Source: "session", Hash: "h1", Project: "p1",
+		Messages: []IndexedMessage{
+			{Ordinal: 0, Role: "assistant", Text: "error", UUID: "u1#t0",
+				Timestamp: "2026-01-01T00:00:00Z", ContentType: "tool",
+				ToolName: "Bash", CommandHead: "test", IsError: boolPtr(true), ExtractionVersion: 1},
+		},
+		Tags: []string{"debugging"},
+	}}
+	if err := db.SyncFiles(files); err != nil {
+		t.Fatal(err)
+	}
+
+	results, err := db.AggregateFailures(AggregateOptions{Tag: "debugging", Limit: 10})
+	if err != nil {
+		t.Fatalf("aggregate: %v", err)
+	}
+
+	if len(results) != 1 {
+		t.Errorf("want 1 result with tag filter, got %d", len(results))
+	}
+}
+
+func TestAggregateFailuresWithDateFilter(t *testing.T) {
+	db, err := Open(filepath.Join(t.TempDir(), "test.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = db.Close() }()
+
+	files := []IndexedFile{{
+		SourcePath: "/p/s1.jsonl", Source: "session", Hash: "h1", Project: "p1",
+		Messages: []IndexedMessage{
+			{Ordinal: 0, Role: "assistant", Text: "error", UUID: "u1#t0",
+				Timestamp: "2026-01-01T00:00:00Z", ContentType: "tool",
+				ToolName: "Bash", CommandHead: "test", IsError: boolPtr(true), ExtractionVersion: 1},
+			{Ordinal: 1, Role: "assistant", Text: "error", UUID: "u2#t0",
+				Timestamp: "2026-01-15T00:00:00Z", ContentType: "tool",
+				ToolName: "Bash", CommandHead: "test", IsError: boolPtr(true), ExtractionVersion: 1},
+		},
+	}}
+	if err := db.SyncFiles(files); err != nil {
+		t.Fatal(err)
+	}
+
+	// Filter to only after 2026-01-10
+	results, err := db.AggregateFailures(AggregateOptions{StartDate: "2026-01-10T00:00:00Z", Limit: 10})
+	if err != nil {
+		t.Fatalf("aggregate: %v", err)
+	}
+
+	if len(results) != 1 {
+		t.Errorf("want 1 result after date filter, got %d", len(results))
+	}
+}
+
+func TestAggregateFailuresEmptyCorpus(t *testing.T) {
+	db, err := Open(filepath.Join(t.TempDir(), "test.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = db.Close() }()
+
+	// Sync only successful runs, no failures
+	files := []IndexedFile{{
+		SourcePath: "/p/s1.jsonl", Source: "session", Hash: "h1", Project: "p1",
+		Messages: []IndexedMessage{
+			{Ordinal: 0, Role: "assistant", Text: "success", UUID: "u1#t0",
+				Timestamp: "2026-01-01T00:00:00Z", ContentType: "tool",
+				ToolName: "Bash", CommandHead: "test", IsError: boolPtr(false), ExtractionVersion: 1},
+		},
+	}}
+	if err := db.SyncFiles(files); err != nil {
+		t.Fatal(err)
+	}
+
+	results, err := db.AggregateFailures(AggregateOptions{Limit: 10})
+	if err != nil {
+		t.Fatalf("aggregate: %v", err)
+	}
+
+	if len(results) != 0 {
+		t.Errorf("want 0 results for all-success corpus, got %d", len(results))
+	}
+}

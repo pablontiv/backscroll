@@ -130,6 +130,18 @@ func (d *Database) SetupSchema() error {
 		}
 	}
 
+	// Check if version 10 is already applied
+	err = d.db.QueryRow("SELECT COUNT(*) FROM schema_migrations WHERE version = 10").Scan(&count)
+	if err != nil {
+		return fmt.Errorf("check migration version 10: %w", err)
+	}
+
+	if count == 0 {
+		if err := d.applyV10Migration(); err != nil {
+			return err
+		}
+	}
+
 	return nil
 }
 
@@ -729,6 +741,60 @@ CREATE UNIQUE INDEX IF NOT EXISTS idx_tool_events_uuid_unique ON tool_events(mes
 		VALUES (9, 'V9 tool_events uuid uniqueness index', CURRENT_TIMESTAMP, ?)
 	`, checksumHex); err != nil {
 		return fmt.Errorf("record migration v9: %w", err)
+	}
+
+	return tx.Commit()
+}
+
+// applyV10Migration adds F2 template mining surface: message_templates
+// (derived, rebuildable) and template_matches (perennial join, anchors
+// templates to search_items via ordinal + source_path, with UNIQUE to stay
+// idempotent under re-sync). Only templates with occurrence_count >= 3
+// (configurable) are reported; mining runs inside SyncFiles tx.
+func (d *Database) applyV10Migration() error {
+	tx, err := d.db.Begin()
+	if err != nil {
+		return fmt.Errorf("begin transaction: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	const sqlV10 = `
+CREATE TABLE IF NOT EXISTS message_templates (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    signature TEXT UNIQUE NOT NULL,
+    normalization_version INTEGER NOT NULL,
+    template_text TEXT NOT NULL,
+    occurrence_count INTEGER NOT NULL DEFAULT 1,
+    first_seen TEXT,
+    last_seen TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_templates_sig ON message_templates(signature);
+CREATE INDEX IF NOT EXISTS idx_templates_version ON message_templates(normalization_version);
+
+CREATE TABLE IF NOT EXISTS template_matches (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    template_id INTEGER NOT NULL,
+    item_uuid TEXT,
+    source_path TEXT NOT NULL,
+    ordinal INTEGER NOT NULL,
+    UNIQUE(source_path, ordinal, template_id),
+    FOREIGN KEY(template_id) REFERENCES message_templates(id)
+);
+CREATE INDEX IF NOT EXISTS idx_matches_template ON template_matches(template_id);
+CREATE INDEX IF NOT EXISTS idx_matches_uuid ON template_matches(item_uuid);
+`
+	if _, err := tx.Exec(sqlV10); err != nil {
+		return fmt.Errorf("apply v10 template-mining schema: %w", err)
+	}
+
+	checksum := sha256.Sum256([]byte(sqlV10))
+	checksumHex := fmt.Sprintf("%x", checksum)
+
+	if _, err := tx.Exec(`
+		INSERT INTO schema_migrations (version, name, applied_on, checksum)
+		VALUES (10, 'V10 template mining: message_templates, template_matches', CURRENT_TIMESTAMP, ?)
+	`, checksumHex); err != nil {
+		return fmt.Errorf("record migration v10: %w", err)
 	}
 
 	return tx.Commit()

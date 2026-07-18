@@ -9,8 +9,12 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/pablontiv/backscroll/internal/storage"
 	_ "modernc.org/sqlite"
 )
+
+// boolPtr is a helper for creating *bool values in tests
+func boolPtr(b bool) *bool { return &b }
 
 // testEnv creates an isolated environment for CLI tests.
 // Sets BACKSCROLL_DATABASE_PATH to a temp file and BACKSCROLL_CONFIG_DIR to a
@@ -1812,4 +1816,215 @@ func TestPatternsRobot(t *testing.T) {
 		t.Fatalf("run patterns: %v", err)
 	}
 	// Test passes if no error - empty output is ok when no patterns exist
+}
+
+func TestPatternsTemplatesCommand(t *testing.T) {
+	_, cleanup := testEnv(t)
+	defer cleanup()
+
+	// Setup: sync a session with error-bearing tool output.
+	dbPath := os.Getenv("BACKSCROLL_DATABASE_PATH")
+	db, err := storage.Open(dbPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	msgs := []storage.IndexedMessage{
+		{Ordinal: 0, UUID: "u1", Role: "assistant", Text: "error: database locked (errno 5)", ContentType: "tool",
+			ToolName: "Bash", IsError: boolPtr(true), Timestamp: "2026-01-01T00:00:00Z", ExtractionVersion: 1},
+		{Ordinal: 1, UUID: "u2", Role: "assistant", Text: "error: database locked (errno 5)", ContentType: "tool",
+			ToolName: "Bash", IsError: boolPtr(true), Timestamp: "2026-01-01T00:00:01Z", ExtractionVersion: 1},
+		{Ordinal: 2, UUID: "u3", Role: "assistant", Text: "error: database locked (errno 5)", ContentType: "tool",
+			ToolName: "Bash", IsError: boolPtr(true), Timestamp: "2026-01-01T00:00:02Z", ExtractionVersion: 1},
+	}
+	files := []storage.IndexedFile{{SourcePath: "/p/s.jsonl", Source: "session", Hash: "h1", Project: "proj", Messages: msgs}}
+	if err := db.SyncFiles(files); err != nil {
+		t.Fatalf("sync: %v", err)
+	}
+	db.Close()
+
+	// Run: patterns --kind templates
+	stdout, stderr, err := runCmd("patterns", "--kind", "templates", "--min-support", "3")
+	if err != nil {
+		t.Fatalf("patterns command: %v\nstderr: %s", err, stderr)
+	}
+
+	output := stdout
+	if !strings.Contains(output, "database locked") {
+		t.Errorf("expected template in output, got: %s", output)
+	}
+}
+
+func TestPatternsTemplatesJSON(t *testing.T) {
+	_, cleanup := testEnv(t)
+	defer cleanup()
+
+	// Setup: sync a session with error-bearing tool output.
+	dbPath := os.Getenv("BACKSCROLL_DATABASE_PATH")
+	db, err := storage.Open(dbPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	msgs := []storage.IndexedMessage{
+		{Ordinal: 0, UUID: "u1", ToolName: "Bash", IsError: boolPtr(true),
+			Text: "error: connection refused 127.0.0.1:8080", ExtractionVersion: 1},
+		{Ordinal: 1, UUID: "u2", ToolName: "Bash", IsError: boolPtr(true),
+			Text: "error: connection refused 127.0.0.1:9000", ExtractionVersion: 1},
+	}
+	files := []storage.IndexedFile{{SourcePath: "/p/s.jsonl", Source: "session", Hash: "h1", Project: "proj", Messages: msgs}}
+	if err := db.SyncFiles(files); err != nil {
+		t.Fatalf("sync: %v", err)
+	}
+	db.Close()
+
+	stdout, _, err := runCmd("patterns", "--kind", "templates", "--json", "--min-support", "1")
+	if err != nil {
+		t.Fatalf("patterns: %v", err)
+	}
+
+	var result map[string]interface{}
+	if err := json.Unmarshal([]byte(stdout), &result); err != nil {
+		t.Errorf("invalid JSON output: %v (output: %s)", err, stdout)
+	}
+}
+
+func TestPatternsFailuresTextOutput(t *testing.T) {
+	dbPath, cleanup := testEnv(t)
+	defer cleanup()
+
+	db, err := storage.Open(dbPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	msgs := []storage.IndexedMessage{
+		{Ordinal: 0, UUID: "u1", ToolName: "Bash", CommandHead: "test", IsError: boolPtr(true),
+			Text: "FAIL", Timestamp: "2026-01-01T00:00:00Z", ContentType: "tool", ExtractionVersion: 1},
+		{Ordinal: 1, UUID: "u2", ToolName: "Bash", CommandHead: "test", IsError: boolPtr(true),
+			Text: "FAIL", Timestamp: "2026-01-02T00:00:00Z", ContentType: "tool", ExtractionVersion: 1},
+	}
+	files := []storage.IndexedFile{{SourcePath: "/p/s.jsonl", Source: "session", Hash: "h1", Project: "proj", Messages: msgs}}
+	if err := db.SyncFiles(files); err != nil {
+		t.Fatalf("sync: %v", err)
+	}
+	db.Close()
+
+	stdout, _, err := runCmd("patterns", "--kind", "failures")
+	if err != nil {
+		t.Fatalf("patterns failures: %v", err)
+	}
+
+	if !strings.Contains(stdout, "Bash") || !strings.Contains(stdout, "Failure") {
+		t.Errorf("expected failure output, got: %s", stdout)
+	}
+}
+
+func TestPatternsFailuresRobotOutput(t *testing.T) {
+	dbPath, cleanup := testEnv(t)
+	defer cleanup()
+
+	db, err := storage.Open(dbPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	msgs := []storage.IndexedMessage{
+		{Ordinal: 0, UUID: "u1", ToolName: "Edit", IsError: boolPtr(true),
+			Text: "error", Timestamp: "2026-01-01T00:00:00Z", ContentType: "tool", ExtractionVersion: 1},
+	}
+	files := []storage.IndexedFile{{SourcePath: "/p/s.jsonl", Source: "session", Hash: "h1", Project: "proj", Messages: msgs}}
+	if err := db.SyncFiles(files); err != nil {
+		t.Fatalf("sync: %v", err)
+	}
+	db.Close()
+
+	stdout, _, err := runCmd("patterns", "--kind", "failures", "--robot")
+	if err != nil {
+		t.Fatalf("patterns failures robot: %v", err)
+	}
+
+	if !strings.Contains(stdout, "result_") {
+		t.Errorf("expected robot output format, got: %s", stdout)
+	}
+}
+
+func TestPatternsFailuresJSON(t *testing.T) {
+	dbPath, cleanup := testEnv(t)
+	defer cleanup()
+
+	db, err := storage.Open(dbPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	msgs := []storage.IndexedMessage{
+		{Ordinal: 0, UUID: "u1", ToolName: "Go", IsError: boolPtr(false),
+			Text: "success", Timestamp: "2026-01-01T00:00:00Z", ContentType: "tool", ExtractionVersion: 1},
+	}
+	files := []storage.IndexedFile{{SourcePath: "/p/s.jsonl", Source: "session", Hash: "h1", Project: "proj", Messages: msgs}}
+	if err := db.SyncFiles(files); err != nil {
+		t.Fatalf("sync: %v", err)
+	}
+	db.Close()
+
+	stdout, _, err := runCmd("patterns", "--kind", "failures", "--json")
+	if err != nil {
+		t.Fatalf("patterns failures json: %v", err)
+	}
+
+	var result map[string]interface{}
+	if err := json.Unmarshal([]byte(stdout), &result); err != nil {
+		t.Errorf("invalid JSON output: %v", err)
+	}
+}
+
+func TestPatternsTemplatesWithTag(t *testing.T) {
+	dbPath, cleanup := testEnv(t)
+	defer cleanup()
+
+	db, err := storage.Open(dbPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	msgs := []storage.IndexedMessage{
+		{Ordinal: 0, UUID: "u1", ToolName: "Bash", IsError: boolPtr(true),
+			Text: "error: fail", ExtractionVersion: 1},
+	}
+	files := []storage.IndexedFile{{SourcePath: "/p/s.jsonl", Source: "session", Hash: "h1", Project: "proj",
+		Messages: msgs, Tags: []string{"debugging"}}}
+	if err := db.SyncFiles(files); err != nil {
+		t.Fatalf("sync: %v", err)
+	}
+	db.Close()
+
+	stdout, _, err := runCmd("patterns", "--kind", "templates", "--min-support", "1")
+	if err != nil {
+		t.Fatalf("patterns templates: %v", err)
+	}
+
+	if !strings.Contains(stdout, "error") {
+		t.Errorf("expected template output, got: %s", stdout)
+	}
+}
+
+func TestPatternsInvalidFlags(t *testing.T) {
+	_, cleanup := testEnv(t)
+	defer cleanup()
+
+	_, _, err := runCmd("patterns", "--kind", "commands", "--project", "proj", "--all-projects")
+	if err == nil {
+		t.Errorf("expected error for conflicting flags, got none")
+	}
+}
+
+func TestPatternsNegativeLimit(t *testing.T) {
+	_, cleanup := testEnv(t)
+	defer cleanup()
+
+	_, _, err := runCmd("patterns", "--kind", "commands", "--limit", "-1")
+	if err == nil {
+		t.Errorf("expected error for negative limit, got none")
+	}
 }
