@@ -106,6 +106,18 @@ func (d *Database) SetupSchema() error {
 		}
 	}
 
+	// Check if version 8 is already applied
+	err = d.db.QueryRow("SELECT COUNT(*) FROM schema_migrations WHERE version = 8").Scan(&count)
+	if err != nil {
+		return fmt.Errorf("check migration version 8: %w", err)
+	}
+
+	if count == 0 {
+		if err := d.applyV8Migration(); err != nil {
+			return err
+		}
+	}
+
 	return nil
 }
 
@@ -628,3 +640,50 @@ CREATE INDEX IF NOT EXISTS idx_session_tags_tag ON session_tags(tag);
 
 CREATE TABLE IF NOT EXISTS dynamic_stopwords (term TEXT PRIMARY KEY);
 `
+
+// applyV8Migration adds the F0 perennity surface: extraction_version and
+// was_interrupted on search_items, and the perennial tool_events satellite
+// table (one row per tool_use, anchored by message identity). tool_events is
+// NOT re-derivable once source files expire — no CASCADE lifecycle; only
+// purge deletes from it, explicitly.
+func (d *Database) applyV8Migration() error {
+	tx, err := d.db.Begin()
+	if err != nil {
+		return fmt.Errorf("begin transaction: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	const sqlV8 = `
+ALTER TABLE search_items ADD COLUMN extraction_version INTEGER;
+ALTER TABLE search_items ADD COLUMN was_interrupted INTEGER;
+CREATE TABLE IF NOT EXISTS tool_events (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    message_uuid TEXT,
+    source_path TEXT NOT NULL,
+    ordinal INTEGER NOT NULL,
+    tool_name TEXT NOT NULL,
+    command_head TEXT,
+    is_error INTEGER,
+    exit_code INTEGER,
+    extraction_version INTEGER NOT NULL,
+    UNIQUE(source_path, ordinal)
+);
+CREATE INDEX IF NOT EXISTS idx_tool_events_tool ON tool_events(tool_name);
+CREATE INDEX IF NOT EXISTS idx_tool_events_uuid ON tool_events(message_uuid);
+`
+	if _, err := tx.Exec(sqlV8); err != nil {
+		return fmt.Errorf("apply v8 perennity schema: %w", err)
+	}
+
+	checksum := sha256.Sum256([]byte(sqlV8))
+	checksumHex := fmt.Sprintf("%x", checksum)
+
+	if _, err := tx.Exec(`
+		INSERT INTO schema_migrations (version, name, applied_on, checksum)
+		VALUES (8, 'V8 perennity: extraction_version, was_interrupted, tool_events', CURRENT_TIMESTAMP, ?)
+	`, checksumHex); err != nil {
+		return fmt.Errorf("record migration v8: %w", err)
+	}
+
+	return tx.Commit()
+}

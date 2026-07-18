@@ -93,11 +93,17 @@ func maybeAutoSync(cfg *config.Config) error {
 			for ordinal, msg := range pf.Records {
 				sessionText += msg.Content + "\n"
 				indexedMsgs = append(indexedMsgs, storage.IndexedMessage{
-					Ordinal:     ordinal,
-					Role:        msg.Role,
-					Text:        msg.Content,
-					Timestamp:   msg.Timestamp.Format("2006-01-02T15:04:05Z07:00"),
-					ContentType: msg.ContentType,
+					Ordinal:           ordinal,
+					Role:              msg.Role,
+					Text:              msg.Content,
+					UUID:              msg.UUID,
+					Timestamp:         msg.Timestamp.Format("2006-01-02T15:04:05Z07:00"),
+					ContentType:       msg.ContentType,
+					ToolName:          msg.ToolName,
+					CommandHead:       msg.CommandHead,
+					IsError:           msg.IsError,
+					WasInterrupted:    msg.WasInterrupted,
+					ExtractionVersion: storage.CurrentExtractionVersion,
 				})
 			}
 

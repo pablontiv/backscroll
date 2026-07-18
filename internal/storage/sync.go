@@ -4,6 +4,12 @@ import (
 	"fmt"
 )
 
+// CurrentExtractionVersion identifies the reader-extraction logic that
+// produced a row. Bump when extraction semantics change; rows keep the
+// version that actually produced them (perennity: old rows are never
+// silently reinterpreted).
+const CurrentExtractionVersion = 1
+
 // IndexedMessage represents a message to be indexed.
 type IndexedMessage struct {
 	Ordinal     int
@@ -12,6 +18,12 @@ type IndexedMessage struct {
 	UUID        string
 	Timestamp   string
 	ContentType string
+	// F0a rich capture
+	ToolName          string
+	CommandHead       string
+	IsError           *bool
+	WasInterrupted    bool
+	ExtractionVersion int
 }
 
 // IndexedFile represents a file to be synced into the database.
@@ -44,6 +56,12 @@ func (d *Database) SyncFiles(files []IndexedFile) error {
 			return fmt.Errorf("delete old search_items for %s: %w", file.SourcePath, err)
 		}
 
+		// Delete old tool_events for this source_path (legacy wipe-and-reload;
+		// slice 3 narrows this to non-perennial paths only)
+		if _, err := tx.Exec("DELETE FROM tool_events WHERE source_path = ?", file.SourcePath); err != nil {
+			return fmt.Errorf("delete old tool_events for %s: %w", file.SourcePath, err)
+		}
+
 		// Insert new search_items. Use OR IGNORE so that cross-file UUID
 		// collisions (rare) are silently skipped rather than aborting the
 		// transaction. Use nil (SQL NULL) when uuid is absent — SQLite's
@@ -53,10 +71,14 @@ func (d *Database) SyncFiles(files []IndexedFile) error {
 			if msg.UUID != "" {
 				uuidVal = msg.UUID
 			}
+			var isErrVal interface{}
+			if msg.IsError != nil {
+				isErrVal = *msg.IsError
+			}
 			_, err := tx.Exec(`
 				INSERT OR IGNORE INTO search_items
-				(source, source_path, ordinal, role, text, timestamp, uuid, project, content_type)
-				VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+				(source, source_path, ordinal, role, text, timestamp, uuid, project, content_type, extraction_version, was_interrupted)
+				VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 			`,
 				file.Source,
 				file.SourcePath,
@@ -67,9 +89,21 @@ func (d *Database) SyncFiles(files []IndexedFile) error {
 				uuidVal,
 				file.Project,
 				msg.ContentType,
+				msg.ExtractionVersion,
+				msg.WasInterrupted,
 			)
 			if err != nil {
 				return fmt.Errorf("insert search_item for %s: %w", file.SourcePath, err)
+			}
+
+			if msg.ToolName != "" {
+				if _, err := tx.Exec(`
+					INSERT OR IGNORE INTO tool_events
+					(message_uuid, source_path, ordinal, tool_name, command_head, is_error, exit_code, extraction_version)
+					VALUES (?, ?, ?, ?, ?, ?, NULL, ?)
+				`, uuidVal, file.SourcePath, msg.Ordinal, msg.ToolName, msg.CommandHead, isErrVal, msg.ExtractionVersion); err != nil {
+					return fmt.Errorf("insert tool_event for %s: %w", file.SourcePath, err)
+				}
 			}
 		}
 

@@ -34,6 +34,13 @@ type Message struct {
 	Content     string
 	ContentType string
 	Timestamp   time.Time
+	// F0a rich capture (perennity: not recoverable once source files expire)
+	UUID           string // per-message identity: record uuid, or uuid#tN / uuid#rN for tool blocks
+	ToolName       string // tool_use messages only
+	CommandHead    string // first token of a command-like tool input ("" otherwise)
+	ToolUseID      string // tool_use block id; used to pair tool_result is_error signals
+	IsError        *bool  // tool result signal; nil = no signal
+	WasInterrupted bool   // raw content carried an interrupt marker (detected pre-clean)
 }
 
 // Stats represents indexing statistics.
