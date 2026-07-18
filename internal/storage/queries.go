@@ -1010,10 +1010,6 @@ func (d *Database) StalePaths(currentVersion int) ([]string, error) {
 }
 
 // ReresolveProjects iterates all distinct source_paths where project='unknown' or project IS NULL,
-// calls the resolver function for each path, and updates rows with the returned project ID.
-// If resolver returns empty string or "unknown", the row is left unchanged.
-// Returns the count of rows updated.
-// ReresolveProjects iterates all distinct source_paths where project='unknown' or project IS NULL,
 // calls the resolver function for each path, and updates ALL rows for that path with the returned project ID.
 // If resolver returns empty string or "unknown", the source_path is skipped and rows remain unchanged.
 // Returns the count of DISTINCT source_paths that were successfully resolved (project changed).
