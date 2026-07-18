@@ -510,6 +510,17 @@ func (d *Database) Purge(before string) (int64, error) {
 		return 0, fmt.Errorf("delete correction_signals: %w", err)
 	}
 
+	// Delete satellite annotations for the purged rows (explicit —
+	// perennial tables have no CASCADE lifecycle by design).
+	if _, err := tx.Exec(`
+		DELETE FROM annotations
+		WHERE (source_path, ordinal) IN (
+			SELECT source_path, ordinal FROM search_items WHERE timestamp < ?
+		)
+	`, beforeStr); err != nil {
+		return 0, fmt.Errorf("delete annotations: %w", err)
+	}
+
 	// Delete from search_items
 	result, err := tx.Exec(`
 		DELETE FROM search_items
@@ -726,10 +737,12 @@ type CorrectionAggOpts struct {
 	MinConfidence float64
 	Limit         int
 	Offset        int
+	PendingOnly   bool // NEW: only candidates WITHOUT a 'correction' annotation
 }
 
 // CorrectionCandidate represents an aggregated correction signal window.
 type CorrectionCandidate struct {
+	UUID          string
 	SourcePath    string
 	Ordinal       int
 	Detectors     []string
@@ -747,19 +760,34 @@ func (d *Database) AggregateCorrections(opts CorrectionAggOpts) ([]CorrectionCan
 			cs.ordinal,
 			si.text,
 			MAX(cs.confidence) as max_confidence,
-			GROUP_CONCAT(DISTINCT cs.detector ORDER BY cs.detector) as detectors
+			GROUP_CONCAT(DISTINCT cs.detector ORDER BY cs.detector) as detectors,
+			si.uuid
 		FROM correction_signals cs
 		JOIN search_items si ON (cs.source_path = si.source_path AND cs.ordinal = si.ordinal)
-		WHERE si.source = 'session'
 	`
+	if opts.PendingOnly {
+		query += `
+		LEFT JOIN annotations a ON (
+			si.source_path = a.source_path
+			AND si.ordinal = a.ordinal
+			AND a.kind = 'correction'
+		)
+		`
+	}
+
+	query += `WHERE si.source = 'session'`
 	var args []interface{}
+
+	if opts.PendingOnly {
+		query += ` AND a.id IS NULL`
+	}
 
 	if opts.Project != "" {
 		query += " AND si.project = ?"
 		args = append(args, opts.Project)
 	}
 
-	query += ` GROUP BY cs.source_path, cs.ordinal
+	query += ` GROUP BY cs.source_path, cs.ordinal, si.uuid
 		HAVING MAX(cs.confidence) >= ?
 		ORDER BY max_confidence DESC
 	`
@@ -783,14 +811,68 @@ func (d *Database) AggregateCorrections(opts CorrectionAggOpts) ([]CorrectionCan
 	var candidates []CorrectionCandidate
 	for rows.Next() {
 		var c CorrectionCandidate
-		var detectorsStr string
-		if err := rows.Scan(&c.SourcePath, &c.Ordinal, &c.TextSnippet, &c.MaxConfidence, &detectorsStr); err != nil {
+		var detectorsStr, uuid string
+		if err := rows.Scan(&c.SourcePath, &c.Ordinal, &c.TextSnippet, &c.MaxConfidence, &detectorsStr, &uuid); err != nil {
 			return nil, fmt.Errorf("scan correction: %w", err)
 		}
+		c.UUID = uuid
 		if detectorsStr != "" {
 			c.Detectors = strings.Split(detectorsStr, ",")
 		}
 		candidates = append(candidates, c)
 	}
 	return candidates, rows.Err()
+}
+
+// UpsertAnnotation inserts or replaces an annotation for a message.
+// Resolves the target message to canonical (source_path, ordinal) coordinates.
+// If uuid is provided, resolves from uuid; otherwise uses source_path+ordinal.
+// If both are provided and differ, returns error (no write).
+// Returns error early if message not found (no write on validation failure).
+func (d *Database) UpsertAnnotation(itemUUID, sourcePath string, ordinal int, kind, label string) error {
+	var resolvedPath string
+	var resolvedOrdinal int
+
+	// Resolve canonical coordinates
+	if itemUUID != "" {
+		// Resolve from uuid
+		if err := d.db.QueryRow("SELECT source_path, ordinal FROM search_items WHERE uuid = ?", itemUUID).Scan(&resolvedPath, &resolvedOrdinal); err != nil {
+			if err == sql.ErrNoRows {
+				return fmt.Errorf("message not found: uuid=%q", itemUUID)
+			}
+			return fmt.Errorf("resolve uuid %q: %w", itemUUID, err)
+		}
+
+		// If caller also provided path/ordinal, validate they match
+		if sourcePath != "" && ordinal >= 0 {
+			if resolvedPath != sourcePath || resolvedOrdinal != ordinal {
+				return fmt.Errorf("uuid and path/ordinal refer to different messages: uuid=%q resolved to (%q,%d), caller provided (%q,%d)", itemUUID, resolvedPath, resolvedOrdinal, sourcePath, ordinal)
+			}
+		}
+	} else if sourcePath != "" && ordinal >= 0 {
+		// Resolve from source_path+ordinal and validate message exists
+		var uuid sql.NullString
+		if err := d.db.QueryRow("SELECT uuid FROM search_items WHERE source_path = ? AND ordinal = ?", sourcePath, ordinal).Scan(&uuid); err != nil {
+			if err == sql.ErrNoRows {
+				return fmt.Errorf("message not found: source_path=%q ordinal=%d", sourcePath, ordinal)
+			}
+			return fmt.Errorf("resolve source_path %q ordinal %d: %w", sourcePath, ordinal, err)
+		}
+		resolvedPath = sourcePath
+		resolvedOrdinal = ordinal
+		if uuid.Valid {
+			itemUUID = uuid.String
+		}
+	} else {
+		return fmt.Errorf("must provide either --uuid or both --path and --ordinal")
+	}
+
+	// Upsert with RESOLVED coordinates: INSERT OR REPLACE with current timestamp
+	now := time.Now().Format(time.RFC3339)
+	_, err := d.db.Exec(`
+		INSERT OR REPLACE INTO annotations
+		(item_uuid, source_path, ordinal, kind, label, source, created_at)
+		VALUES (?, ?, ?, ?, ?, 'agent', ?)
+	`, itemUUID, resolvedPath, resolvedOrdinal, kind, label, now)
+	return err
 }

@@ -154,6 +154,18 @@ func (d *Database) SetupSchema() error {
 		}
 	}
 
+	// Check if version 12 is already applied
+	err = d.db.QueryRow("SELECT COUNT(*) FROM schema_migrations WHERE version = 12").Scan(&count)
+	if err != nil {
+		return fmt.Errorf("check migration version 12: %w", err)
+	}
+
+	if count == 0 {
+		if err := d.applyV12Migration(); err != nil {
+			return err
+		}
+	}
+
 	return nil
 }
 
@@ -849,6 +861,48 @@ CREATE INDEX IF NOT EXISTS idx_correction_signals_confidence ON correction_signa
 		VALUES (11, 'V11 correction detection: correction_signals', CURRENT_TIMESTAMP, ?)
 	`, checksumHex); err != nil {
 		return fmt.Errorf("record migration v11: %w", err)
+	}
+
+	return tx.Commit()
+}
+
+// applyV12Migration adds the F3b agent-classification surface: the perennial
+// annotations table (one row per message per kind; re-annotating replaces).
+// Labels are free-form in v1; label_enum freezing is a future slice (post-calibration).
+func (d *Database) applyV12Migration() error {
+	tx, err := d.db.Begin()
+	if err != nil {
+		return fmt.Errorf("begin transaction: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	const sqlV12 = `
+CREATE TABLE IF NOT EXISTS annotations (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    item_uuid TEXT,
+    source_path TEXT NOT NULL,
+    ordinal INTEGER NOT NULL,
+    kind TEXT NOT NULL,
+    label TEXT NOT NULL,
+    source TEXT NOT NULL DEFAULT 'agent',
+    created_at TEXT NOT NULL,
+    UNIQUE(source_path, ordinal, kind)
+);
+CREATE INDEX IF NOT EXISTS idx_annotations_uuid ON annotations(item_uuid);
+CREATE INDEX IF NOT EXISTS idx_annotations_kind ON annotations(kind);
+`
+	if _, err := tx.Exec(sqlV12); err != nil {
+		return fmt.Errorf("apply v12 annotations schema: %w", err)
+	}
+
+	checksum := sha256.Sum256([]byte(sqlV12))
+	checksumHex := fmt.Sprintf("%x", checksum)
+
+	if _, err := tx.Exec(`
+		INSERT INTO schema_migrations (version, name, applied_on, checksum)
+		VALUES (12, 'V12 agent classification: annotations (free-form labels; enum freeze deferred)', CURRENT_TIMESTAMP, ?)
+	`, checksumHex); err != nil {
+		return fmt.Errorf("record migration v12: %w", err)
 	}
 
 	return tx.Commit()

@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"strings"
 
 	"github.com/spf13/cobra"
 
@@ -24,6 +25,8 @@ func newPatternsCmd(stdout, stderr io.Writer) *cobra.Command {
 		indexedOnly   bool
 		minSupport    int
 		minConfidence float64
+		pending       bool
+		batch         int
 	)
 
 	cmd := &cobra.Command{
@@ -45,7 +48,7 @@ Use --indexed-only to skip auto-sync (read existing index only).`,
 			if len(args) > 0 {
 				return fmt.Errorf("unexpected positional argument %q", args[0])
 			}
-			return runPatterns(stdout, stderr, kind, project, allProjects, tag, limit, offset, jsonFormat, robotFormat, indexedOnly, minSupport, minConfidence)
+			return runPatterns(stdout, stderr, kind, project, allProjects, tag, limit, offset, jsonFormat, robotFormat, indexedOnly, minSupport, minConfidence, pending, batch)
 		},
 	}
 
@@ -60,6 +63,8 @@ Use --indexed-only to skip auto-sync (read existing index only).`,
 	cmd.Flags().BoolVar(&jsonFormat, "json", false, "Output as JSON")
 	cmd.Flags().BoolVar(&robotFormat, "robot", false, "Output in robot format")
 	cmd.Flags().BoolVar(&indexedOnly, "indexed-only", false, "Read existing index without auto-sync")
+	cmd.Flags().BoolVar(&pending, "pending", false, "Only corrections without a 'correction' annotation (checkpoint resume)")
+	cmd.Flags().IntVar(&batch, "batch", 0, "Alias for --limit (batch size for loop)")
 
 	cmd.MarkFlagRequired("kind")
 
@@ -68,7 +73,7 @@ Use --indexed-only to skip auto-sync (read existing index only).`,
 
 func runPatterns(stdout, stderr io.Writer,
 	kind string, project string, allProjects bool, tag string,
-	limit, offset int, jsonFormat, robotFormat, indexedOnly bool, minSupport int, minConfidence float64) error {
+	limit, offset int, jsonFormat, robotFormat, indexedOnly bool, minSupport int, minConfidence float64, pending bool, batch int) error {
 
 	// Early flag validation before DB open
 	validKinds := map[string]bool{
@@ -275,11 +280,17 @@ func runPatterns(stdout, stderr io.Writer,
 		}
 
 	} else if kind == "corrections" {
+		// --batch is alias for --limit
+		if batch > 0 && limit == 20 {
+			limit = batch
+		}
+
 		correctionOpts := storage.CorrectionAggOpts{
 			Project:       project,
 			MinConfidence: minConfidence,
 			Limit:         limit,
 			Offset:        offset,
+			PendingOnly:   pending,
 		}
 		results, err := db.AggregateCorrections(correctionOpts)
 		if err != nil {
@@ -290,17 +301,21 @@ func runPatterns(stdout, stderr io.Writer,
 			if !jsonFormat && !robotFormat {
 				_, _ = fmt.Fprintf(stdout, "No correction candidates found.\n")
 			} else if jsonFormat {
-				_, _ = fmt.Fprintf(stdout, "{\"count\":0,\"corrections\":[]}\n")
+				_, _ = fmt.Fprintf(stdout, "{\"count\":0,\"kind\":\"corrections\",\"patterns\":[]}\n")
 			}
-			writeSearchHints(stderr, allProjects, true)
+			if pending {
+				_, _ = fmt.Fprintf(stderr, "hint: no pending corrections. All candidates have been annotated, or use --pending=false to view all.\n")
+			} else {
+				writeSearchHints(stderr, allProjects, true)
+			}
 			return nil
 		}
 
 		if jsonFormat {
 			data := map[string]interface{}{
-				"count":       len(results),
-				"kind":        "corrections",
-				"corrections": results,
+				"count":    len(results),
+				"kind":     "corrections",
+				"patterns": results,
 			}
 			if err := json.NewEncoder(stdout).Encode(data); err != nil {
 				return fmt.Errorf("encode JSON: %w", err)
@@ -308,20 +323,22 @@ func runPatterns(stdout, stderr io.Writer,
 		} else if robotFormat {
 			_, _ = fmt.Fprintf(stdout, "*** Corrections ***\n")
 			for i, c := range results {
+				_, _ = fmt.Fprintf(stdout, "result_%d_uuid=%s\n", i, c.UUID)
 				_, _ = fmt.Fprintf(stdout, "result_%d_source_path=%s\n", i, c.SourcePath)
 				_, _ = fmt.Fprintf(stdout, "result_%d_ordinal=%d\n", i, c.Ordinal)
-				_, _ = fmt.Fprintf(stdout, "result_%d_detectors=%v\n", i, c.Detectors)
-				_, _ = fmt.Fprintf(stdout, "result_%d_max_confidence=%.1f\n", i, c.MaxConfidence)
-				_, _ = fmt.Fprintf(stdout, "result_%d_text=%q\n", i, c.TextSnippet)
+				_, _ = fmt.Fprintf(stdout, "result_%d_detectors=%s\n", i, strings.Join(c.Detectors, ","))
+				_, _ = fmt.Fprintf(stdout, "result_%d_max_confidence=%.2f\n", i, c.MaxConfidence)
+				_, _ = fmt.Fprintf(stdout, "result_%d_text_snippet=%q\n", i, c.TextSnippet)
 			}
-			_, _ = fmt.Fprintf(stdout, "*** Total: %d candidates ***\n", len(results))
+			_, _ = fmt.Fprintf(stdout, "*** Total: %d patterns ***\n", len(results))
 		} else {
-			_, _ = fmt.Fprintf(stdout, "Found %d correction candidates (min_confidence=%.1f):\n\n", len(results), minConfidence)
+			_, _ = fmt.Fprintf(stdout, "Correction Candidates\n")
+			_, _ = fmt.Fprintf(stdout, "====================\n\n")
 			for i, c := range results {
-				_, _ = fmt.Fprintf(stdout, "%d. %s @ ordinal %d\n", i+1, c.SourcePath, c.Ordinal)
-				_, _ = fmt.Fprintf(stdout, "   Text: %s\n", c.TextSnippet)
-				_, _ = fmt.Fprintf(stdout, "   Detectors: %v\n", c.Detectors)
-				_, _ = fmt.Fprintf(stdout, "   Max Confidence: %.1f\n\n", c.MaxConfidence)
+				_, _ = fmt.Fprintf(stdout, "%d. UUID: %s\n", i+1, c.UUID)
+				_, _ = fmt.Fprintf(stdout, "   Source: %s (ordinal %d)\n", c.SourcePath, c.Ordinal)
+				_, _ = fmt.Fprintf(stdout, "   Detectors: %s (max confidence: %.2f)\n", strings.Join(c.Detectors, ", "), c.MaxConfidence)
+				_, _ = fmt.Fprintf(stdout, "   Text: %s\n\n", c.TextSnippet)
 			}
 		}
 	}
