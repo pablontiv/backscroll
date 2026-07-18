@@ -82,9 +82,14 @@ func TestEffectiveProjectUnknownCwd(t *testing.T) {
 
 	t.Chdir(tmpDir)
 
-	// When cwd is not in the registry, should return empty string
+	// When cwd is not in the registry, Identify() now returns a fallback ID from the basename
+	// So effectiveProject will return that fallback ID instead of empty string
 	result := effectiveProject("", false)
-	if result != "" {
-		t.Errorf("effectiveProject with unknown cwd should return empty string, got %q", result)
+	if result == "" {
+		t.Error("effectiveProject should return fallback ID from cwd basename, got empty string")
+	}
+	// The result should be derived from the temp directory basename (which is not "unknown")
+	if result == "unknown" {
+		t.Errorf("effectiveProject should return fallback ID, not 'unknown', got %q", result)
 	}
 }

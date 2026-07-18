@@ -212,9 +212,44 @@ func Identify(cwd string, registry ProjectRegistry) Identification {
 		}
 	}
 
+	// No registry match. Try fallback identity from cwd.
+	fallbackID := DeriveFallbackID(normalizedCwd)
+	if fallbackID != "unknown" {
+		return Identification{ProjectID: fallbackID, Confidence: ConfidenceUnknown}
+	}
+
 	return Identification{ProjectID: "unknown", Confidence: ConfidenceUnknown}
 }
 
 func ListProjects(registry ProjectRegistry) []ProjectConfig {
 	return registry.Projects
+}
+
+// DeriveFallbackID extracts and sanitizes the last path component to form a project ID.
+// Lowercases, keeps alphanumerics, dashes, and underscores; strips other chars.
+// Returns "unknown" if cwd is empty or has no valid basename.
+func DeriveFallbackID(cwd string) string {
+	if cwd == "" {
+		return "unknown"
+	}
+
+	// Extract last component
+	lastComponent := filepath.Base(filepath.Clean(cwd))
+	if lastComponent == "" || lastComponent == "." {
+		return "unknown"
+	}
+
+	// Sanitize: lowercase, keep [a-z0-9-_], drop everything else
+	var sanitized strings.Builder
+	for _, r := range strings.ToLower(lastComponent) {
+		if (r >= 'a' && r <= 'z') || (r >= '0' && r <= '9') || r == '-' || r == '_' {
+			sanitized.WriteRune(r)
+		}
+	}
+
+	result := sanitized.String()
+	if result == "" {
+		return "unknown"
+	}
+	return result
 }

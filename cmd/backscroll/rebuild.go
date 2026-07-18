@@ -1,12 +1,14 @@
 package main
 
 import (
+	"context"
 	"fmt"
 	"io"
 
 	"github.com/spf13/cobra"
 
 	"github.com/pablontiv/backscroll/internal/config"
+	"github.com/pablontiv/backscroll/internal/projects"
 	"github.com/pablontiv/backscroll/internal/storage"
 )
 
@@ -43,6 +45,29 @@ func runRebuild(stdout, stderr io.Writer) error {
 	}
 	if err != nil {
 		return fmt.Errorf("rebuild FTS: %w", err)
+	}
+
+	// Re-open for project resolution
+	db, err = storage.Open(cfg.DatabasePath)
+	if err != nil {
+		return fmt.Errorf("open database for re-resolution: %w", err)
+	}
+	defer func() { _ = db.Close() }()
+
+	// Re-resolve project identities from session paths
+	_, _ = fmt.Fprintf(stdout, "Re-resolving projects from session paths...\n")
+	resolver := func(sourcePath string) string {
+		cwd := projects.DecodeCwdFromSessionPath(sourcePath)
+		if cwd != "" {
+			return projects.DeriveFallbackID(cwd)
+		}
+		return ""
+	}
+	resolved, err := db.ReresolveProjects(context.Background(), resolver)
+	if err != nil {
+		_, _ = fmt.Fprintf(stderr, "warning: project re-resolution failed: %v\n", err)
+	} else if resolved > 0 {
+		_, _ = fmt.Fprintf(stdout, "Re-resolved %d sessions with derived project identities.\n", resolved)
 	}
 
 	_, _ = fmt.Fprintf(stdout, "Running incremental sync...\n")

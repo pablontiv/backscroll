@@ -1,6 +1,7 @@
 package storage
 
 import (
+	"context"
 	"database/sql"
 	"fmt"
 	"sort"
@@ -1006,4 +1007,74 @@ func (d *Database) StalePaths(currentVersion int) ([]string, error) {
 	}
 
 	return paths, nil
+}
+
+// ReresolveProjects iterates all distinct source_paths where project='unknown' or project IS NULL,
+// calls the resolver function for each path, and updates rows with the returned project ID.
+// If resolver returns empty string or "unknown", the row is left unchanged.
+// Returns the count of rows updated.
+// ReresolveProjects iterates all distinct source_paths where project='unknown' or project IS NULL,
+// calls the resolver function for each path, and updates ALL rows for that path with the returned project ID.
+// If resolver returns empty string or "unknown", the source_path is skipped and rows remain unchanged.
+// Returns the count of DISTINCT source_paths that were successfully resolved (project changed).
+func (d *Database) ReresolveProjects(ctx context.Context, resolver func(sourcePath string) string) (int64, error) {
+	// Find all distinct source_paths with unknown or NULL project
+	rows, err := d.db.QueryContext(ctx, `
+		SELECT DISTINCT source_path FROM search_items
+		WHERE project = 'unknown' OR project IS NULL
+	`)
+	if err != nil {
+		return 0, fmt.Errorf("query unknown source_paths: %w", err)
+	}
+	defer rows.Close()
+
+	var sourcePaths []string
+	for rows.Next() {
+		var path string
+		if err := rows.Scan(&path); err != nil {
+			return 0, fmt.Errorf("scan source_path: %w", err)
+		}
+		sourcePaths = append(sourcePaths, path)
+	}
+	if err := rows.Err(); err != nil {
+		return 0, fmt.Errorf("iterate source_paths: %w", err)
+	}
+
+	if len(sourcePaths) == 0 {
+		return 0, nil
+	}
+
+	// Resolve each path and update in a single transaction
+	tx, err := d.db.BeginTx(ctx, nil)
+	if err != nil {
+		return 0, fmt.Errorf("begin transaction: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	var resolvedPaths int64
+	for _, sourcePath := range sourcePaths {
+		resolvedID := resolver(sourcePath)
+
+		// Skip if resolver returned empty or "unknown"
+		if resolvedID == "" || resolvedID == "unknown" {
+			continue
+		}
+
+		// Update all rows for this source_path
+		_, err := tx.ExecContext(ctx, `
+			UPDATE search_items SET project = ? WHERE source_path = ?
+		`, resolvedID, sourcePath)
+		if err != nil {
+			return 0, fmt.Errorf("update source_path %s: %w", sourcePath, err)
+		}
+
+		// Count this source_path as successfully resolved
+		resolvedPaths++
+	}
+
+	if err := tx.Commit(); err != nil {
+		return 0, fmt.Errorf("commit resolution transaction: %w", err)
+	}
+
+	return resolvedPaths, nil
 }

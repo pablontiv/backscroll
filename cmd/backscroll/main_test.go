@@ -1565,7 +1565,8 @@ roots = ["/home/shared/myproject"]
 
 	// Search for the test content; it should be indexed with project "myproj" (not "unknown")
 	// Use --fields full to include ProjectPath in JSON output
-	out, _, err = runCmd("search", "--text", "crosshost", "--json", "--fields", "full")
+	// Use --all-projects since the test environment may not match the project root directory
+	out, _, err = runCmd("search", "--text", "crosshost", "--json", "--fields", "full", "--all-projects")
 	if err != nil {
 		t.Fatalf("search failed: %v", err)
 	}
@@ -1846,7 +1847,7 @@ func TestPatternsTemplatesCommand(t *testing.T) {
 	db.Close()
 
 	// Run: patterns --kind templates
-	stdout, stderr, err := runCmd("patterns", "--kind", "templates", "--min-support", "3")
+	stdout, stderr, err := runCmd("patterns", "--kind", "templates", "--min-support", "3", "--all-projects")
 	if err != nil {
 		t.Fatalf("patterns command: %v\nstderr: %s", err, stderr)
 	}
@@ -1912,7 +1913,7 @@ func TestPatternsFailuresTextOutput(t *testing.T) {
 	}
 	db.Close()
 
-	stdout, _, err := runCmd("patterns", "--kind", "failures")
+	stdout, _, err := runCmd("patterns", "--kind", "failures", "--all-projects")
 	if err != nil {
 		t.Fatalf("patterns failures: %v", err)
 	}
@@ -1941,7 +1942,7 @@ func TestPatternsFailuresRobotOutput(t *testing.T) {
 	}
 	db.Close()
 
-	stdout, _, err := runCmd("patterns", "--kind", "failures", "--robot")
+	stdout, _, err := runCmd("patterns", "--kind", "failures", "--robot", "--all-projects")
 	if err != nil {
 		t.Fatalf("patterns failures robot: %v", err)
 	}
@@ -2001,7 +2002,7 @@ func TestPatternsTemplatesWithTag(t *testing.T) {
 	}
 	db.Close()
 
-	stdout, _, err := runCmd("patterns", "--kind", "templates", "--min-support", "1")
+	stdout, _, err := runCmd("patterns", "--kind", "templates", "--min-support", "1", "--all-projects")
 	if err != nil {
 		t.Fatalf("patterns templates: %v", err)
 	}
@@ -2088,7 +2089,7 @@ func TestPatternsCorrectionsJSON(t *testing.T) {
 	db.Close()
 
 	// Run: patterns --kind corrections --json
-	stdout, _, err := runCmd("patterns", "--kind", "corrections", "--json")
+	stdout, _, err := runCmd("patterns", "--kind", "corrections", "--json", "--all-projects")
 	if err != nil {
 		t.Fatalf("patterns corrections --json: %v", err)
 	}
@@ -2227,5 +2228,121 @@ func TestAutoSyncCapsStaleParsesPerRun(t *testing.T) {
 	_ = sqlDB.QueryRow(`SELECT COUNT(*) FROM search_items WHERE uuid IS NULL`).Scan(&stillStale)
 	if stillStale == 0 {
 		t.Error("cap not enforced: all files re-parsed in one run")
+	}
+}
+
+func TestRebuildProjectResolution(t *testing.T) {
+	dbPath, cleanup := testEnv(t)
+	defer cleanup()
+
+	// Create a temp database
+	db, err := storage.Open(dbPath)
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+
+	// Insert a row with 'unknown' project from a Claude session path
+	_, err = db.DB().Exec(`INSERT INTO search_items
+		(source, source_path, ordinal, role, text, timestamp, project, content_type)
+		VALUES ('session', '/Users/pones/.claude/projects/-home-user-myapp/uuid.jsonl', 0, 'user', 'text', '2026-01-01T00:00:00Z', 'unknown', 'text')`)
+	if err != nil {
+		t.Fatalf("insert: %v", err)
+	}
+	db.Close()
+
+	// Run rebuild (this should re-resolve projects)
+	var stdout, stderr bytes.Buffer
+	err = runRebuild(&stdout, &stderr)
+	if err != nil {
+		t.Fatalf("rebuild: %v", err)
+	}
+
+	// Verify project was resolved
+	db, err = storage.Open(dbPath)
+	if err != nil {
+		t.Fatalf("reopen: %v", err)
+	}
+	defer db.Close()
+
+	var proj string
+	row := db.DB().QueryRow("SELECT project FROM search_items LIMIT 1")
+	if err := row.Scan(&proj); err != nil {
+		t.Fatalf("query project: %v", err)
+	}
+
+	// Project should be resolved from basename of decoded path ("myapp")
+	if proj == "unknown" {
+		t.Errorf("expected project to be resolved, got 'unknown'")
+	}
+	if proj != "myapp" {
+		t.Errorf("expected resolved project 'myapp', got %q", proj)
+	}
+
+	// Verify stdout mentions re-resolution
+	if !strings.Contains(stdout.String(), "Re-resolv") {
+		t.Logf("stdout: %s", stdout.String())
+		t.Error("expected 'Re-resolv' in stdout")
+	}
+}
+
+func TestRebuildMultipleProjects(t *testing.T) {
+	dbPath, cleanup := testEnv(t)
+	defer cleanup()
+
+	// Create a temp database
+	db, err := storage.Open(dbPath)
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+
+	// Insert rows with 'unknown' project from different Claude session paths
+	_, err = db.DB().Exec(`INSERT INTO search_items
+		(source, source_path, ordinal, role, text, timestamp, project, content_type)
+		VALUES
+		('session', '/Users/pones/.claude/projects/-home-user-app1/uuid.jsonl', 0, 'user', 'text', '2026-01-01T00:00:00Z', 'unknown', 'text'),
+		('session', '/Users/pones/.claude/projects/-home-user-app2/uuid.jsonl', 0, 'user', 'text', '2026-01-01T00:00:00Z', 'unknown', 'text'),
+		('session', '/Users/pones/.claude/projects/-home-user-app1/uuid2.jsonl', 1, 'user', 'text', '2026-01-01T00:00:00Z', 'unknown', 'text')`)
+	if err != nil {
+		t.Fatalf("insert: %v", err)
+	}
+	db.Close()
+
+	// Run rebuild
+	var stdout, stderr bytes.Buffer
+	err = runRebuild(&stdout, &stderr)
+	if err != nil {
+		t.Fatalf("rebuild: %v", err)
+	}
+
+	// Verify the three inserted rows were resolved correctly
+	db, err = storage.Open(dbPath)
+	if err != nil {
+		t.Fatalf("reopen: %v", err)
+	}
+	defer db.Close()
+
+	// Verify specific rows from our inserts are resolved
+	var proj string
+	row := db.DB().QueryRow(`
+		SELECT project FROM search_items
+		WHERE source_path = '/Users/pones/.claude/projects/-home-user-app1/uuid.jsonl' AND ordinal = 0
+	`)
+	if err := row.Scan(&proj); err != nil {
+		t.Fatalf("query app1 project: %v", err)
+	}
+	if proj != "app1" {
+		t.Errorf("expected 'app1', got %q", proj)
+	}
+
+	// Verify app2 row
+	row = db.DB().QueryRow(`
+		SELECT project FROM search_items
+		WHERE source_path = '/Users/pones/.claude/projects/-home-user-app2/uuid.jsonl'
+	`)
+	if err := row.Scan(&proj); err != nil {
+		t.Fatalf("query app2 project: %v", err)
+	}
+	if proj != "app2" {
+		t.Errorf("expected 'app2', got %q", proj)
 	}
 }
