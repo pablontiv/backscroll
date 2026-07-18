@@ -118,6 +118,18 @@ func (d *Database) SetupSchema() error {
 		}
 	}
 
+	// Check if version 9 is already applied
+	err = d.db.QueryRow("SELECT COUNT(*) FROM schema_migrations WHERE version = 9").Scan(&count)
+	if err != nil {
+		return fmt.Errorf("check migration version 9: %w", err)
+	}
+
+	if count == 0 {
+		if err := d.applyV9Migration(); err != nil {
+			return err
+		}
+	}
+
 	return nil
 }
 
@@ -683,6 +695,40 @@ CREATE INDEX IF NOT EXISTS idx_tool_events_uuid ON tool_events(message_uuid);
 		VALUES (8, 'V8 perennity: extraction_version, was_interrupted, tool_events', CURRENT_TIMESTAMP, ?)
 	`, checksumHex); err != nil {
 		return fmt.Errorf("record migration v8: %w", err)
+	}
+
+	return tx.Commit()
+}
+
+func (d *Database) applyV9Migration() error {
+	tx, err := d.db.Begin()
+	if err != nil {
+		return fmt.Errorf("begin transaction: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	// Dedupe before indexing: v8 code could accumulate the same message_uuid
+	// at different ordinals (ordinal drift) or across files; creating the
+	// unique index on such data would fail on every startup. Keep the oldest
+	// row per uuid.
+	const sqlV9 = `
+DELETE FROM tool_events WHERE message_uuid IS NOT NULL AND id NOT IN (
+    SELECT MIN(id) FROM tool_events WHERE message_uuid IS NOT NULL GROUP BY message_uuid
+);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_tool_events_uuid_unique ON tool_events(message_uuid) WHERE message_uuid IS NOT NULL;
+`
+	if _, err := tx.Exec(sqlV9); err != nil {
+		return fmt.Errorf("apply v9 tool_events uuid uniqueness: %w", err)
+	}
+
+	checksum := sha256.Sum256([]byte(sqlV9))
+	checksumHex := fmt.Sprintf("%x", checksum)
+
+	if _, err := tx.Exec(`
+		INSERT INTO schema_migrations (version, name, applied_on, checksum)
+		VALUES (9, 'V9 tool_events uuid uniqueness index', CURRENT_TIMESTAMP, ?)
+	`, checksumHex); err != nil {
+		return fmt.Errorf("record migration v9: %w", err)
 	}
 
 	return tx.Commit()

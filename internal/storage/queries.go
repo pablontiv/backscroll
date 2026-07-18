@@ -479,6 +479,17 @@ func (d *Database) Purge(before string) (int64, error) {
 	}
 	_ = rows.Close()
 
+	// Delete satellite tool_events for the purged rows first (explicit —
+	// perennial tables have no CASCADE lifecycle by design).
+	if _, err := tx.Exec(`
+		DELETE FROM tool_events
+		WHERE (source_path, ordinal) IN (
+			SELECT source_path, ordinal FROM search_items WHERE timestamp < ?
+		)
+	`, beforeStr); err != nil {
+		return 0, fmt.Errorf("delete tool_events: %w", err)
+	}
+
 	// Delete from search_items
 	result, err := tx.Exec(`
 		DELETE FROM search_items
@@ -535,4 +546,24 @@ func (d *Database) OptimizeFTS() error {
 		return fmt.Errorf("optimize tool_fts: %w", err)
 	}
 	return nil
+}
+
+// RebuildFTS re-derives both FTS indexes from search_items using FTS5's
+// external-content 'rebuild' command. It never touches search_items rows —
+// the DB, not the filesystem, is the source of truth (perennity contract).
+func (d *Database) RebuildFTS() error {
+	// Single transaction: either both indexes re-derive or neither does —
+	// a partial rebuild would leave one index stale and queries inconsistent.
+	tx, err := d.db.Begin()
+	if err != nil {
+		return fmt.Errorf("begin transaction: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }()
+	if _, err := tx.Exec(`INSERT INTO messages_fts(messages_fts) VALUES('rebuild')`); err != nil {
+		return fmt.Errorf("rebuild messages_fts: %w", err)
+	}
+	if _, err := tx.Exec(`INSERT INTO tool_fts(tool_fts) VALUES('rebuild')`); err != nil {
+		return fmt.Errorf("rebuild tool_fts: %w", err)
+	}
+	return tx.Commit()
 }

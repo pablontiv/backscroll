@@ -51,22 +51,66 @@ func (d *Database) SyncFiles(files []IndexedFile) error {
 	defer func() { _ = tx.Rollback() }()
 
 	for _, file := range files {
-		// Delete old search_items for this source_path
-		if _, err := tx.Exec("DELETE FROM search_items WHERE source_path = ?", file.SourcePath); err != nil {
-			return fmt.Errorf("delete old search_items for %s: %w", file.SourcePath, err)
+		// Perennial path: session files where every message carries a UUID
+		// sync append-only — existing rows (and their ids) are never touched.
+		// Flap guard: if the file was previously perennial (DB has uuid-bearing rows),
+		// keep it perennial even if this sync has some uuid-less messages (prevents
+		// wiping rows during temporary parsing drift).
+		// Anything else keeps wipe-and-reload (correct for mutable sources).
+		isSession := file.Source == "session" && len(file.Messages) > 0
+		allCurrentHaveUUIDs := true
+		for _, m := range file.Messages {
+			if m.UUID == "" {
+				allCurrentHaveUUIDs = false
+				break
+			}
+		}
+		perennial := isSession && allCurrentHaveUUIDs
+
+		// Flap guard: a file that was perennial in an earlier sync (DB has
+		// uuid-bearing rows) stays perennial even if this parse has uuid-less
+		// messages — it must never be wiped.
+		if isSession && !perennial {
+			var uuidCount int
+			err := tx.QueryRow("SELECT COUNT(*) FROM search_items WHERE source_path = ? AND uuid IS NOT NULL", file.SourcePath).Scan(&uuidCount)
+			if err != nil {
+				return fmt.Errorf("check perennial status for %s: %w", file.SourcePath, err)
+			}
+			perennial = uuidCount > 0
 		}
 
-		// Delete old tool_events for this source_path (legacy wipe-and-reload;
-		// slice 3 narrows this to non-perennial paths only)
-		if _, err := tx.Exec("DELETE FROM tool_events WHERE source_path = ?", file.SourcePath); err != nil {
-			return fmt.Errorf("delete old tool_events for %s: %w", file.SourcePath, err)
+		if !perennial {
+			if _, err := tx.Exec("DELETE FROM search_items WHERE source_path = ?", file.SourcePath); err != nil {
+				return fmt.Errorf("delete old search_items for %s: %w", file.SourcePath, err)
+			}
+			if _, err := tx.Exec("DELETE FROM tool_events WHERE source_path = ?", file.SourcePath); err != nil {
+				return fmt.Errorf("delete old tool_events for %s: %w", file.SourcePath, err)
+			}
+		} else {
+			// Transition cleanup: rows indexed BEFORE v8 for this same file
+			// have uuid NULL; without this one-time delete the uuid-carrying
+			// re-parse would duplicate the whole file. Expired files never
+			// re-sync, so their legacy rows persist untouched (perennity).
+			if _, err := tx.Exec("DELETE FROM search_items WHERE source_path = ? AND uuid IS NULL", file.SourcePath); err != nil {
+				return fmt.Errorf("delete legacy rows for %s: %w", file.SourcePath, err)
+			}
+			if _, err := tx.Exec("DELETE FROM tool_events WHERE source_path = ? AND message_uuid IS NULL", file.SourcePath); err != nil {
+				return fmt.Errorf("delete legacy tool_events for %s: %w", file.SourcePath, err)
+			}
 		}
 
 		// Insert new search_items. Use OR IGNORE so that cross-file UUID
 		// collisions (rare) are silently skipped rather than aborting the
 		// transaction. Use nil (SQL NULL) when uuid is absent — SQLite's
 		// UNIQUE constraint allows multiple NULLs but not multiple "".
+		// For perennial files, skip messages without UUIDs (flap guard: don't
+		// introduce uuid-less rows into a perennial file).
 		for _, msg := range file.Messages {
+			// Skip uuid-less messages if file is perennial
+			if perennial && msg.UUID == "" {
+				continue
+			}
+
 			var uuidVal interface{}
 			if msg.UUID != "" {
 				uuidVal = msg.UUID

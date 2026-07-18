@@ -3113,7 +3113,7 @@ func TestSyncFilesMultipleMessageDeletion(t *testing.T) {
 	db, cleanup := newTestDB(t)
 	defer cleanup()
 
-	// First sync with 3 messages
+	// First sync with 3 messages (no UUIDs → legacy wipe-and-reload path)
 	_ = db.SyncFiles([]IndexedFile{
 		{
 			SourcePath: "/test/msgs.jsonl",
@@ -3121,9 +3121,9 @@ func TestSyncFilesMultipleMessageDeletion(t *testing.T) {
 			Hash:       "h1",
 			Project:    "test",
 			Messages: []IndexedMessage{
-				{Ordinal: 0, Role: "user", Text: "m1", UUID: getTestUUID(), ContentType: "text"},
-				{Ordinal: 1, Role: "assistant", Text: "m2", UUID: getTestUUID(), ContentType: "text"},
-				{Ordinal: 2, Role: "user", Text: "m3", UUID: getTestUUID(), ContentType: "text"},
+				{Ordinal: 0, Role: "user", Text: "m1", ContentType: "text"},
+				{Ordinal: 1, Role: "assistant", Text: "m2", ContentType: "text"},
+				{Ordinal: 2, Role: "user", Text: "m3", ContentType: "text"},
 			},
 		},
 	})
@@ -3134,7 +3134,7 @@ func TestSyncFilesMultipleMessageDeletion(t *testing.T) {
 		t.Fatalf("expected 3 items, got %d", count)
 	}
 
-	// Resync with only 2 messages (should delete the third)
+	// Resync with only 2 messages (legacy: should delete the third since no UUIDs)
 	_ = db.SyncFiles([]IndexedFile{
 		{
 			SourcePath: "/test/msgs.jsonl",
@@ -3142,8 +3142,8 @@ func TestSyncFilesMultipleMessageDeletion(t *testing.T) {
 			Hash:       "h2",
 			Project:    "test",
 			Messages: []IndexedMessage{
-				{Ordinal: 0, Role: "user", Text: "m1_new", UUID: getTestUUID(), ContentType: "text"},
-				{Ordinal: 1, Role: "assistant", Text: "m2_new", UUID: getTestUUID(), ContentType: "text"},
+				{Ordinal: 0, Role: "user", Text: "m1_new", ContentType: "text"},
+				{Ordinal: 1, Role: "assistant", Text: "m2_new", ContentType: "text"},
 			},
 		},
 	})

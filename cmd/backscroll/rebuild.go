@@ -13,13 +13,11 @@ import (
 func newRebuildCmd(stdout, stderr io.Writer) *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "rebuild",
-		Short: "Clear and rebuild the entire index (v2 maintenance command)",
-		Long: `Rebuild deletes all indexed content and rebuilds the database from scratch.
-
-This command clears the entire index and then performs a full sync of all
-session directories. Use this to recover from corruption or reset the database.
-
-This is the v2 maintenance surface name for the rebuild operation.`,
+		Short: "Rebuild the FTS search indexes from the database",
+		Long: `Rebuild re-derives the FTS search indexes from the database itself and
+runs an incremental sync. It never deletes indexed content: sessions whose
+source files have expired from disk are preserved (the database is the
+perennial event store). Use 'purge' to delete data explicitly.`,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			return runRebuild(stdout, stderr)
 		},
@@ -34,25 +32,23 @@ func runRebuild(stdout, stderr io.Writer) error {
 		return fmt.Errorf("load config: %w", err)
 	}
 
-	// Open database, purge, then close before sync so VACUUM in --optimize
-	// doesn't deadlock against our open WAL connection.
-	{
-		db, err := storage.Open(cfg.DatabasePath)
-		if err != nil {
-			return fmt.Errorf("open database: %w", err)
-		}
-		_, _ = fmt.Fprintf(stdout, "Clearing index...\n")
-		_, err = db.Purge("2099-12-31")
-		if closeErr := db.Close(); closeErr != nil && err == nil {
-			err = closeErr
-		}
-		if err != nil {
-			return fmt.Errorf("purge database: %w", err)
-		}
+	db, err := storage.Open(cfg.DatabasePath)
+	if err != nil {
+		return fmt.Errorf("open database: %w", err)
+	}
+	_, _ = fmt.Fprintf(stdout, "Re-deriving FTS indexes from database...\n")
+	err = db.RebuildFTS()
+	if closeErr := db.Close(); closeErr != nil && err == nil {
+		err = closeErr
+	}
+	if err != nil {
+		return fmt.Errorf("rebuild FTS: %w", err)
 	}
 
-	_, _ = fmt.Fprintf(stdout, "Index cleared. Running full sync...\n")
-
-	// Now run sync (this will re-index everything)
-	return runSync(stdout, stderr, "", false, false, true, false)
+	_, _ = fmt.Fprintf(stdout, "Running incremental sync...\n")
+	if err := maybeAutoSync(cfg); err != nil {
+		_, _ = fmt.Fprintf(stderr, "warning: sync failed: %v\n", err)
+	}
+	_, _ = fmt.Fprintf(stdout, "Rebuild complete. No indexed data was deleted (perennity contract).\n")
+	return nil
 }
