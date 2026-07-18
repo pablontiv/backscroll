@@ -9,7 +9,9 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/pablontiv/backscroll/internal/config"
 	"github.com/pablontiv/backscroll/internal/storage"
+	"github.com/pablontiv/picokit/hashfile"
 	_ "modernc.org/sqlite"
 )
 
@@ -2103,5 +2105,127 @@ func TestPatternsCorrectionsJSON(t *testing.T) {
 	count, ok := data["count"].(float64)
 	if !ok || count == 0 {
 		t.Errorf("expected count > 0, got %v", data["count"])
+	}
+}
+
+func TestAutoSyncReParsesStalePaths(t *testing.T) {
+	// Setup: session with legacy uuid-NULL row in DB, same file on disk.
+	// Expected: re-sync discovers the file, skips it due to unchanged hash,
+	// but re-parses anyway because it's in stale-set. Rich row replaces legacy.
+
+	dbPath, cleanup := testEnv(t)
+	defer cleanup()
+
+	sessionDir := t.TempDir()
+	t.Setenv("BACKSCROLL_SESSION_DIRS", sessionDir)
+
+	// Create session file with proper Claude JSONL format including uuid
+	sessionFile := filepath.Join(sessionDir, "legacy.jsonl")
+	legacyContent := `{"uuid":"u1","timestamp":"2026-01-01T00:00:00Z","type":"user","message":{"role":"user","content":"hello"}}`
+	if err := os.WriteFile(sessionFile, []byte(legacyContent), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	// Compute hash for indexed_files
+	hash, _ := hashfile.HashFile(sessionFile)
+
+	// Manually create DB with legacy row (uuid NULL, extraction_version NULL)
+	db, err := storage.Open(dbPath)
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+
+	sqlDB := db.DB()
+	_, _ = sqlDB.Exec(`INSERT INTO search_items
+		(source, source_path, ordinal, role, text, timestamp, uuid, project, content_type, extraction_version, was_interrupted)
+		VALUES (?, ?, 0, 'user', 'hello', '2026-01-01T00:00:00Z', NULL, 'proj', 'text', NULL, 0)`,
+		"session", sessionFile)
+
+	// Record file in indexed_files with the SAME hash
+	_, _ = sqlDB.Exec(`INSERT OR REPLACE INTO indexed_files (path, hash, last_indexed)
+		VALUES (?, ?, CURRENT_TIMESTAMP)`, sessionFile, hash)
+
+	if err := db.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	// Run maybeAutoSync — should re-parse despite hash match
+	cfg := &config.Config{
+		DatabasePath: dbPath,
+		SessionDirs:  []string{sessionDir},
+	}
+	if err := maybeAutoSync(cfg); err != nil {
+		t.Logf("sync warning (acceptable): %v", err)
+	}
+
+	// Verify: legacy row deleted, rich row present (uuid not NULL)
+	db, _ = storage.Open(dbPath)
+	defer func() { _ = db.Close() }()
+
+	sqlDB = db.DB()
+	var n int
+	_ = sqlDB.QueryRow(`SELECT COUNT(*) FROM search_items WHERE uuid IS NULL AND source_path = ?`, sessionFile).Scan(&n)
+	if n != 0 {
+		t.Errorf("legacy rows must be deleted, %d remain", n)
+	}
+
+	_ = sqlDB.QueryRow(`SELECT COUNT(*) FROM search_items WHERE uuid IS NOT NULL AND source_path = ?`, sessionFile).Scan(&n)
+	if n != 1 {
+		t.Errorf("rich row must replace legacy, got %d", n)
+	}
+}
+
+func TestAutoSyncCapsStaleParsesPerRun(t *testing.T) {
+	// Setup: 250 stale files. Expected: only 200 re-parsed in one run,
+	// 50 remain in stale-set for next invocation.
+
+	dbPath, cleanup := testEnv(t)
+	defer cleanup()
+
+	sessionDir := t.TempDir()
+	t.Setenv("BACKSCROLL_SESSION_DIRS", sessionDir)
+
+	// Create 250 stale files and DB rows
+	db, _ := storage.Open(dbPath)
+	sqlDB := db.DB()
+	for i := 0; i < 250; i++ {
+		sessionFile := filepath.Join(sessionDir, fmt.Sprintf("s%d.jsonl", i))
+		content := fmt.Sprintf(`{"type":"message","timestamp":"2026-01-01T00:00:00Z","message":{"role":"user","content":"msg %d"}}`, i)
+		_ = os.WriteFile(sessionFile, []byte(content), 0o644)
+
+		hash, _ := hashfile.HashFile(sessionFile)
+		_, _ = sqlDB.Exec(`INSERT INTO search_items
+			(source, source_path, ordinal, role, text, timestamp, uuid, project, content_type, extraction_version, was_interrupted)
+			VALUES (?, ?, 0, 'user', ?, '2026-01-01T00:00:00Z', NULL, 'proj', 'text', NULL, 0)`,
+			"session", sessionFile, fmt.Sprintf("msg %d", i))
+		_, _ = sqlDB.Exec(`INSERT INTO indexed_files (path, hash, last_indexed) VALUES (?, ?, CURRENT_TIMESTAMP)`, sessionFile, hash)
+	}
+	_ = db.Close()
+
+	// Run sync — should only re-parse up to cap
+	cfg := &config.Config{
+		DatabasePath: dbPath,
+		SessionDirs:  []string{sessionDir},
+	}
+	_ = maybeAutoSync(cfg)
+
+	// Count how many were re-parsed (uuid not NULL)
+	db, _ = storage.Open(dbPath)
+	defer func() { _ = db.Close() }()
+
+	sqlDB = db.DB()
+	var reparsed int
+	_ = sqlDB.QueryRow(`SELECT COUNT(*) FROM search_items WHERE uuid IS NOT NULL`).Scan(&reparsed)
+
+	// Should be at most 200 (cap)
+	if reparsed > 200 {
+		t.Errorf("re-parsed %d files, cap is 200", reparsed)
+	}
+
+	// Some should remain stale for next run
+	var stillStale int
+	_ = sqlDB.QueryRow(`SELECT COUNT(*) FROM search_items WHERE uuid IS NULL`).Scan(&stillStale)
+	if stillStale == 0 {
+		t.Error("cap not enforced: all files re-parsed in one run")
 	}
 }

@@ -3,6 +3,7 @@ package main
 import (
 	"fmt"
 	"io"
+	"os"
 
 	"github.com/pablontiv/backscroll/internal/config"
 	"github.com/pablontiv/backscroll/internal/input_config"
@@ -29,6 +30,21 @@ func maybeAutoSync(cfg *config.Config) error {
 	if err != nil {
 		return fmt.Errorf("get file hashes: %w", err)
 	}
+
+	// Build stale-set once per run (files needing re-parse for rich metadata backfill)
+	stalePaths, err := db.StalePaths(storage.CurrentExtractionVersion)
+	if err != nil {
+		// Warn but continue if stale query fails
+		fmt.Fprintf(os.Stderr, "warning: stale paths query failed: %v\n", err)
+		stalePaths = nil
+	}
+	staleSet := make(map[string]bool)
+	for _, p := range stalePaths {
+		staleSet[p] = true
+	}
+
+	const staleParsesCap = 200
+	staleParsesDone := 0
 
 	// Build reader registry
 	reg := readers.NewRegistry()
@@ -72,8 +88,14 @@ func maybeAutoSync(cfg *config.Config) error {
 				continue
 			}
 
+			// Skip unchanged files UNLESS they are in the stale-set and cap allows.
+			// Stale files need re-parsing for extraction_version backfill (perennity).
 			if existingHashes[ref] == hash {
-				continue
+				if !staleSet[ref] || staleParsesDone >= staleParsesCap {
+					continue
+				}
+				staleParsesDone++
+				fmt.Fprintf(os.Stderr, "Re-parsing stale file %d/%d: %s\n", staleParsesDone, len(stalePaths), ref)
 			}
 
 			pf, err := reader.Parse(ref, def)

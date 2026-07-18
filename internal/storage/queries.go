@@ -972,3 +972,38 @@ func (d *Database) LoadToolSequences(opts LoadSequencesOpts) ([]sequences.Sequen
 
 	return result, nil
 }
+
+// StalePaths returns source paths from session rows whose extraction_version is NULL
+// or older than currentVersion. Rows are ordered by last_indexed ASC (FIFO draining).
+// This powers incremental re-parsing of files whose rich metadata needs backfill.
+func (d *Database) StalePaths(currentVersion int) ([]string, error) {
+	query := `
+		SELECT DISTINCT search_items.source_path
+		FROM search_items
+		LEFT JOIN indexed_files ON search_items.source_path = indexed_files.path
+		WHERE search_items.source = 'session'
+		  AND (search_items.extraction_version IS NULL OR search_items.extraction_version < ?)
+		ORDER BY indexed_files.last_indexed ASC, search_items.source_path ASC
+	`
+
+	rows, err := d.db.Query(query, currentVersion)
+	if err != nil {
+		return nil, fmt.Errorf("query stale paths: %w", err)
+	}
+	defer func() { _ = rows.Close() }()
+
+	var paths []string
+	for rows.Next() {
+		var path string
+		if err := rows.Scan(&path); err != nil {
+			return nil, fmt.Errorf("scan stale path: %w", err)
+		}
+		paths = append(paths, path)
+	}
+
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate stale paths: %w", err)
+	}
+
+	return paths, nil
+}
