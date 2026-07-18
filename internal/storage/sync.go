@@ -2,7 +2,10 @@ package storage
 
 import (
 	"fmt"
+	"time"
 
+	"github.com/pablontiv/backscroll/internal/corrections"
+	"github.com/pablontiv/backscroll/internal/models"
 	"github.com/pablontiv/backscroll/internal/sync"
 	"github.com/pablontiv/backscroll/internal/templates"
 )
@@ -200,6 +203,44 @@ func (d *Database) SyncFiles(files []IndexedFile) error {
 		miner := templates.NewMiner()
 		if err := d.mineTemplatesForFile(tx, file, miner); err != nil {
 			return fmt.Errorf("mine templates for %s: %w", file.SourcePath, err)
+		}
+
+		// F3: Run detectors and write correction_signals
+		if file.Source == "session" && !perennial {
+			// Delete old corrections for non-perennial files
+			if _, err := tx.Exec("DELETE FROM correction_signals WHERE source_path = ?", file.SourcePath); err != nil {
+				return fmt.Errorf("delete old corrections for %s: %w", file.SourcePath, err)
+			}
+		}
+
+		// Convert IndexedMessage to models.Message for detector input
+		detectionMsgs := make([]models.Message, len(file.Messages))
+		for i, im := range file.Messages {
+			detectionMsgs[i] = models.Message{
+				Role:           im.Role,
+				Content:        im.Text,
+				ContentType:    im.ContentType,
+				Timestamp:      time.Time{}, // not needed for detection
+				UUID:           im.UUID,
+				ToolName:       im.ToolName,
+				IsError:        im.IsError,
+				WasInterrupted: im.WasInterrupted,
+			}
+		}
+
+		// Run detectors over this session's messages
+		detections := corrections.RunDetectors(detectionMsgs)
+		for ordinal, dets := range detections {
+			for _, det := range dets {
+				_, err := tx.Exec(`
+					INSERT OR IGNORE INTO correction_signals
+					(item_uuid, source_path, ordinal, detector, confidence, extraction_version)
+					VALUES (?, ?, ?, ?, ?, ?)
+				`, file.Messages[ordinal].UUID, file.SourcePath, ordinal, det.DetectorName, det.Confidence, CurrentExtractionVersion)
+				if err != nil {
+					return fmt.Errorf("insert correction_signal for %s: %w", file.SourcePath, err)
+				}
+			}
 		}
 	}
 

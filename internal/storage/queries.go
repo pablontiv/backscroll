@@ -499,6 +499,17 @@ func (d *Database) Purge(before string) (int64, error) {
 		return 0, fmt.Errorf("delete tool_events: %w", err)
 	}
 
+	// Delete satellite correction_signals for the purged rows (explicit —
+	// perennial tables have no CASCADE lifecycle by design).
+	if _, err := tx.Exec(`
+		DELETE FROM correction_signals
+		WHERE (source_path, ordinal) IN (
+			SELECT source_path, ordinal FROM search_items WHERE timestamp < ?
+		)
+	`, beforeStr); err != nil {
+		return 0, fmt.Errorf("delete correction_signals: %w", err)
+	}
+
 	// Delete from search_items
 	result, err := tx.Exec(`
 		DELETE FROM search_items
@@ -707,4 +718,79 @@ func (d *Database) AggregateTemplates(opts TemplateQueryOpts) ([]TemplateRow, er
 		results = append(results, r)
 	}
 	return results, rows.Err()
+}
+
+// CorrectionAggOpts filters and paginates correction aggregation.
+type CorrectionAggOpts struct {
+	Project       string
+	MinConfidence float64
+	Limit         int
+	Offset        int
+}
+
+// CorrectionCandidate represents an aggregated correction signal window.
+type CorrectionCandidate struct {
+	SourcePath    string
+	Ordinal       int
+	Detectors     []string
+	MaxConfidence float64
+	TextSnippet   string
+}
+
+// AggregateCorrections returns correction candidates grouped by ordinal,
+// ordered by max confidence descending. Detectors are sorted by name within
+// each ordinal for determinism.
+func (d *Database) AggregateCorrections(opts CorrectionAggOpts) ([]CorrectionCandidate, error) {
+	query := `
+		SELECT
+			cs.source_path,
+			cs.ordinal,
+			si.text,
+			MAX(cs.confidence) as max_confidence,
+			GROUP_CONCAT(DISTINCT cs.detector ORDER BY cs.detector) as detectors
+		FROM correction_signals cs
+		JOIN search_items si ON (cs.source_path = si.source_path AND cs.ordinal = si.ordinal)
+		WHERE si.source = 'session'
+	`
+	var args []interface{}
+
+	if opts.Project != "" {
+		query += " AND si.project = ?"
+		args = append(args, opts.Project)
+	}
+
+	query += ` GROUP BY cs.source_path, cs.ordinal
+		HAVING MAX(cs.confidence) >= ?
+		ORDER BY max_confidence DESC
+	`
+	args = append(args, opts.MinConfidence)
+
+	if opts.Limit > 0 {
+		query += ` LIMIT ?`
+		args = append(args, opts.Limit)
+		if opts.Offset > 0 {
+			query += ` OFFSET ?`
+			args = append(args, opts.Offset)
+		}
+	}
+
+	rows, err := d.db.Query(query, args...)
+	if err != nil {
+		return nil, fmt.Errorf("query corrections: %w", err)
+	}
+	defer func() { _ = rows.Close() }()
+
+	var candidates []CorrectionCandidate
+	for rows.Next() {
+		var c CorrectionCandidate
+		var detectorsStr string
+		if err := rows.Scan(&c.SourcePath, &c.Ordinal, &c.TextSnippet, &c.MaxConfidence, &detectorsStr); err != nil {
+			return nil, fmt.Errorf("scan correction: %w", err)
+		}
+		if detectorsStr != "" {
+			c.Detectors = strings.Split(detectorsStr, ",")
+		}
+		candidates = append(candidates, c)
+	}
+	return candidates, rows.Err()
 }

@@ -2028,3 +2028,80 @@ func TestPatternsNegativeLimit(t *testing.T) {
 		t.Errorf("expected error for negative limit, got none")
 	}
 }
+
+func TestPatternsCorrectionsCommand(t *testing.T) {
+	_, cleanup := testEnv(t)
+	defer cleanup()
+
+	// Setup: sync a session with a detectable correction
+	dbPath := os.Getenv("BACKSCROLL_DATABASE_PATH")
+	db, err := storage.Open(dbPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	msgs := []storage.IndexedMessage{
+		{Ordinal: 0, UUID: "u1", Role: "user", Text: "Do X", Timestamp: "2026-01-01T00:00:00Z", ContentType: "text", ExtractionVersion: 1},
+		{Ordinal: 1, UUID: "u2", Role: "assistant", Text: "Doing X", Timestamp: "2026-01-01T00:00:01Z", ContentType: "text", ExtractionVersion: 1},
+		{Ordinal: 2, UUID: "u3", Role: "user", Text: "no, te pedí otra cosa", Timestamp: "2026-01-01T00:00:02Z", ContentType: "text", ExtractionVersion: 1},
+	}
+	files := []storage.IndexedFile{{SourcePath: "/p/s.jsonl", Source: "session", Hash: "h1", Project: "proj", Messages: msgs}}
+	if err := db.SyncFiles(files); err != nil {
+		t.Fatalf("sync: %v", err)
+	}
+	db.Close()
+
+	// Run: patterns --kind corrections
+	stdout, stderr, err := runCmd("patterns", "--kind", "corrections")
+	if err != nil {
+		t.Fatalf("patterns corrections: %v\nstderr: %s", err, stderr)
+	}
+
+	// Should find the correction candidate
+	if !strings.Contains(stdout, "no, te pedí") && !strings.Contains(stdout, "correction") {
+		t.Errorf("expected correction output, got: %s", stdout)
+	}
+}
+
+func TestPatternsCorrectionsJSON(t *testing.T) {
+	_, cleanup := testEnv(t)
+	defer cleanup()
+
+	// Setup: sync a session with a detectable correction
+	dbPath := os.Getenv("BACKSCROLL_DATABASE_PATH")
+	db, err := storage.Open(dbPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	msgs := []storage.IndexedMessage{
+		{Ordinal: 0, UUID: "u1", Role: "user", Text: "Do X", Timestamp: "2026-01-01T00:00:00Z", ContentType: "text", ExtractionVersion: 1},
+		{Ordinal: 1, UUID: "u2", Role: "assistant", Text: "Doing X", Timestamp: "2026-01-01T00:00:01Z", ContentType: "text", ExtractionVersion: 1},
+		{Ordinal: 2, UUID: "u3", Role: "user", Text: "no, te pedí otra cosa", Timestamp: "2026-01-01T00:00:02Z", ContentType: "text", ExtractionVersion: 1},
+	}
+	files := []storage.IndexedFile{{SourcePath: "/p/s.jsonl", Source: "session", Hash: "h1", Project: "proj", Messages: msgs}}
+	if err := db.SyncFiles(files); err != nil {
+		t.Fatalf("sync: %v", err)
+	}
+	db.Close()
+
+	// Run: patterns --kind corrections --json
+	stdout, _, err := runCmd("patterns", "--kind", "corrections", "--json")
+	if err != nil {
+		t.Fatalf("patterns corrections --json: %v", err)
+	}
+
+	var data map[string]interface{}
+	if err := json.Unmarshal([]byte(stdout), &data); err != nil {
+		t.Fatalf("parse JSON output: %v", err)
+	}
+
+	if data["kind"] != "corrections" {
+		t.Errorf("expected kind=corrections, got %v", data["kind"])
+	}
+
+	count, ok := data["count"].(float64)
+	if !ok || count == 0 {
+		t.Errorf("expected count > 0, got %v", data["count"])
+	}
+}

@@ -13,28 +13,31 @@ import (
 
 func newPatternsCmd(stdout, stderr io.Writer) *cobra.Command {
 	var (
-		kind        string
-		project     string
-		allProjects bool
-		tag         string
-		limit       int
-		offset      int
-		jsonFormat  bool
-		robotFormat bool
-		indexedOnly bool
-		minSupport  int
+		kind          string
+		project       string
+		allProjects   bool
+		tag           string
+		limit         int
+		offset        int
+		jsonFormat    bool
+		robotFormat   bool
+		indexedOnly   bool
+		minSupport    int
+		minConfidence float64
 	)
 
 	cmd := &cobra.Command{
 		Use:   "patterns",
-		Short: "Discover deterministic patterns in tool events and templates",
-		Long: `Patterns computes census aggregations over tool events (commands, failures)
-and error message templates to expose actionable pattern candidates for agent loop classification.
+		Short: "Discover deterministic patterns in tool events, templates, and corrections",
+		Long: `Patterns computes census aggregations over tool events (commands, failures),
+error message templates, and message-level corrections to expose actionable pattern candidates
+for agent loop classification.
 
-Use --kind to select aggregation type (required; supported: commands, failures, templates).
+Use --kind to select aggregation type (required; supported: commands, failures, templates, corrections).
 Use --project to filter to a single project.
 Use --tag to filter by session tags (e.g., debugging, testing).
 Use --min-support for template filtering (default 3; minimum occurrences).
+Use --min-confidence for correction filtering (default 0.6; detector confidence threshold).
 Use --limit, --offset for pagination.
 Use --json, --robot for output formats.
 Use --indexed-only to skip auto-sync (read existing index only).`,
@@ -42,17 +45,18 @@ Use --indexed-only to skip auto-sync (read existing index only).`,
 			if len(args) > 0 {
 				return fmt.Errorf("unexpected positional argument %q", args[0])
 			}
-			return runPatterns(stdout, stderr, kind, project, allProjects, tag, limit, offset, jsonFormat, robotFormat, indexedOnly, minSupport)
+			return runPatterns(stdout, stderr, kind, project, allProjects, tag, limit, offset, jsonFormat, robotFormat, indexedOnly, minSupport, minConfidence)
 		},
 	}
 
-	cmd.Flags().StringVar(&kind, "kind", "", "Aggregation kind (required: commands|failures|templates)")
+	cmd.Flags().StringVar(&kind, "kind", "", "Aggregation kind (required: commands|failures|templates|corrections)")
 	cmd.Flags().StringVar(&project, "project", "", "Filter to single project")
 	cmd.Flags().BoolVar(&allProjects, "all-projects", false, "Query across all projects (default if --project not set)")
 	cmd.Flags().StringVar(&tag, "tag", "", "Filter by session tag")
 	cmd.Flags().IntVar(&limit, "limit", 20, "Result limit")
 	cmd.Flags().IntVar(&offset, "offset", 0, "Result offset")
 	cmd.Flags().IntVar(&minSupport, "min-support", 3, "Minimum template occurrence count (for --kind templates)")
+	cmd.Flags().Float64Var(&minConfidence, "min-confidence", 0.6, "Minimum detector confidence (for --kind corrections)")
 	cmd.Flags().BoolVar(&jsonFormat, "json", false, "Output as JSON")
 	cmd.Flags().BoolVar(&robotFormat, "robot", false, "Output in robot format")
 	cmd.Flags().BoolVar(&indexedOnly, "indexed-only", false, "Read existing index without auto-sync")
@@ -64,16 +68,17 @@ Use --indexed-only to skip auto-sync (read existing index only).`,
 
 func runPatterns(stdout, stderr io.Writer,
 	kind string, project string, allProjects bool, tag string,
-	limit, offset int, jsonFormat, robotFormat, indexedOnly bool, minSupport int) error {
+	limit, offset int, jsonFormat, robotFormat, indexedOnly bool, minSupport int, minConfidence float64) error {
 
 	// Early flag validation before DB open
 	validKinds := map[string]bool{
-		"commands":  true,
-		"failures":  true,
-		"templates": true,
+		"commands":    true,
+		"failures":    true,
+		"templates":   true,
+		"corrections": true,
 	}
 	if !validKinds[kind] {
-		return fmt.Errorf("unsupported --kind %q (supported: commands, failures, templates)", kind)
+		return fmt.Errorf("unsupported --kind %q (supported: commands, failures, templates, corrections)", kind)
 	}
 
 	if project != "" && allProjects {
@@ -266,6 +271,57 @@ func runPatterns(stdout, stderr io.Writer,
 				_, _ = fmt.Fprintf(stdout, "   Occurrences: %d\n", row.OccurrenceCount)
 				_, _ = fmt.Fprintf(stdout, "   Projects: %v\n", row.ProjectsAffected)
 				_, _ = fmt.Fprintf(stdout, "   Sample UUIDs: %v\n\n", row.SampleUUIDs)
+			}
+		}
+
+	} else if kind == "corrections" {
+		correctionOpts := storage.CorrectionAggOpts{
+			Project:       project,
+			MinConfidence: minConfidence,
+			Limit:         limit,
+			Offset:        offset,
+		}
+		results, err := db.AggregateCorrections(correctionOpts)
+		if err != nil {
+			return fmt.Errorf("aggregate corrections: %w", err)
+		}
+
+		if len(results) == 0 {
+			if !jsonFormat && !robotFormat {
+				_, _ = fmt.Fprintf(stdout, "No correction candidates found.\n")
+			} else if jsonFormat {
+				_, _ = fmt.Fprintf(stdout, "{\"count\":0,\"corrections\":[]}\n")
+			}
+			writeSearchHints(stderr, allProjects, true)
+			return nil
+		}
+
+		if jsonFormat {
+			data := map[string]interface{}{
+				"count":       len(results),
+				"kind":        "corrections",
+				"corrections": results,
+			}
+			if err := json.NewEncoder(stdout).Encode(data); err != nil {
+				return fmt.Errorf("encode JSON: %w", err)
+			}
+		} else if robotFormat {
+			_, _ = fmt.Fprintf(stdout, "*** Corrections ***\n")
+			for i, c := range results {
+				_, _ = fmt.Fprintf(stdout, "result_%d_source_path=%s\n", i, c.SourcePath)
+				_, _ = fmt.Fprintf(stdout, "result_%d_ordinal=%d\n", i, c.Ordinal)
+				_, _ = fmt.Fprintf(stdout, "result_%d_detectors=%v\n", i, c.Detectors)
+				_, _ = fmt.Fprintf(stdout, "result_%d_max_confidence=%.1f\n", i, c.MaxConfidence)
+				_, _ = fmt.Fprintf(stdout, "result_%d_text=%q\n", i, c.TextSnippet)
+			}
+			_, _ = fmt.Fprintf(stdout, "*** Total: %d candidates ***\n", len(results))
+		} else {
+			_, _ = fmt.Fprintf(stdout, "Found %d correction candidates (min_confidence=%.1f):\n\n", len(results), minConfidence)
+			for i, c := range results {
+				_, _ = fmt.Fprintf(stdout, "%d. %s @ ordinal %d\n", i+1, c.SourcePath, c.Ordinal)
+				_, _ = fmt.Fprintf(stdout, "   Text: %s\n", c.TextSnippet)
+				_, _ = fmt.Fprintf(stdout, "   Detectors: %v\n", c.Detectors)
+				_, _ = fmt.Fprintf(stdout, "   Max Confidence: %.1f\n\n", c.MaxConfidence)
 			}
 		}
 	}

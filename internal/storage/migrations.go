@@ -142,6 +142,18 @@ func (d *Database) SetupSchema() error {
 		}
 	}
 
+	// Check if version 11 is already applied
+	err = d.db.QueryRow("SELECT COUNT(*) FROM schema_migrations WHERE version = 11").Scan(&count)
+	if err != nil {
+		return fmt.Errorf("check migration version 11: %w", err)
+	}
+
+	if count == 0 {
+		if err := d.applyV11Migration(); err != nil {
+			return err
+		}
+	}
+
 	return nil
 }
 
@@ -795,6 +807,48 @@ CREATE INDEX IF NOT EXISTS idx_matches_uuid ON template_matches(item_uuid);
 		VALUES (10, 'V10 template mining: message_templates, template_matches', CURRENT_TIMESTAMP, ?)
 	`, checksumHex); err != nil {
 		return fmt.Errorf("record migration v10: %w", err)
+	}
+
+	return tx.Commit()
+}
+
+// applyV11Migration adds the F3 correction-detection surface: the perennial
+// correction_signals table (candidates from deterministic detectors, anchored
+// by message identity). One row per (source_path, ordinal, detector) tuple.
+// extraction_version tracks detector evolution (like message extraction_version).
+func (d *Database) applyV11Migration() error {
+	tx, err := d.db.Begin()
+	if err != nil {
+		return fmt.Errorf("begin transaction: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	const sqlV11 = `
+CREATE TABLE IF NOT EXISTS correction_signals (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    item_uuid TEXT,
+    source_path TEXT NOT NULL,
+    ordinal INTEGER NOT NULL,
+    detector TEXT NOT NULL,
+    confidence REAL NOT NULL,
+    extraction_version INTEGER NOT NULL,
+    UNIQUE(source_path, ordinal, detector)
+);
+CREATE INDEX IF NOT EXISTS idx_correction_signals_detector ON correction_signals(detector);
+CREATE INDEX IF NOT EXISTS idx_correction_signals_confidence ON correction_signals(confidence DESC);
+`
+	if _, err := tx.Exec(sqlV11); err != nil {
+		return fmt.Errorf("apply v11 correction_signals schema: %w", err)
+	}
+
+	checksum := sha256.Sum256([]byte(sqlV11))
+	checksumHex := fmt.Sprintf("%x", checksum)
+
+	if _, err := tx.Exec(`
+		INSERT INTO schema_migrations (version, name, applied_on, checksum)
+		VALUES (11, 'V11 correction detection: correction_signals', CURRENT_TIMESTAMP, ?)
+	`, checksumHex); err != nil {
+		return fmt.Errorf("record migration v11: %w", err)
 	}
 
 	return tx.Commit()
