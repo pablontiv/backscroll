@@ -9,6 +9,7 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/pablontiv/backscroll/internal/config"
+	"github.com/pablontiv/backscroll/internal/sequences"
 	"github.com/pablontiv/backscroll/internal/storage"
 )
 
@@ -27,19 +28,25 @@ func newPatternsCmd(stdout, stderr io.Writer) *cobra.Command {
 		minConfidence float64
 		pending       bool
 		batch         int
+		minLength     int
+		maxLength     int
+		after         string
+		before        string
 	)
 
 	cmd := &cobra.Command{
 		Use:   "patterns",
-		Short: "Discover deterministic patterns in tool events, templates, and corrections",
+		Short: "Discover deterministic patterns in tool events, templates, sequences, and corrections",
 		Long: `Patterns computes census aggregations over tool events (commands, failures),
-error message templates, and message-level corrections to expose actionable pattern candidates
+error message templates, frequent tool-call sequences (PrefixSpan mining),
+and message-level corrections to expose actionable pattern candidates
 for agent loop classification.
 
-Use --kind to select aggregation type (required; supported: commands, failures, templates, corrections).
+Use --kind to select aggregation type (required; supported: commands, failures, templates, sequences, corrections).
 Use --project to filter to a single project.
 Use --tag to filter by session tags (e.g., debugging, testing).
-Use --min-support for template filtering (default 3; minimum occurrences).
+Use --min-support for template/sequence filtering (default 3; minimum occurrences).
+Use --min-length, --max-length for sequence pattern length bounds (default 2, 6).
 Use --min-confidence for correction filtering (default 0.6; detector confidence threshold).
 Use --limit, --offset for pagination.
 Use --json, --robot for output formats.
@@ -48,18 +55,22 @@ Use --indexed-only to skip auto-sync (read existing index only).`,
 			if len(args) > 0 {
 				return fmt.Errorf("unexpected positional argument %q", args[0])
 			}
-			return runPatterns(stdout, stderr, kind, project, allProjects, tag, limit, offset, jsonFormat, robotFormat, indexedOnly, minSupport, minConfidence, pending, batch)
+			return runPatterns(stdout, stderr, kind, project, allProjects, tag, limit, offset, jsonFormat, robotFormat, indexedOnly, minSupport, minConfidence, pending, batch, minLength, maxLength, after, before)
 		},
 	}
 
-	cmd.Flags().StringVar(&kind, "kind", "", "Aggregation kind (required: commands|failures|templates|corrections)")
+	cmd.Flags().StringVar(&kind, "kind", "", "Aggregation kind (required: commands|failures|templates|sequences|corrections)")
 	cmd.Flags().StringVar(&project, "project", "", "Filter to single project")
 	cmd.Flags().BoolVar(&allProjects, "all-projects", false, "Query across all projects (default if --project not set)")
 	cmd.Flags().StringVar(&tag, "tag", "", "Filter by session tag")
 	cmd.Flags().IntVar(&limit, "limit", 20, "Result limit")
 	cmd.Flags().IntVar(&offset, "offset", 0, "Result offset")
-	cmd.Flags().IntVar(&minSupport, "min-support", 3, "Minimum template occurrence count (for --kind templates)")
+	cmd.Flags().IntVar(&minSupport, "min-support", 3, "Minimum template/sequence occurrence count")
+	cmd.Flags().IntVar(&minLength, "min-length", 2, "Minimum sequence pattern length (for --kind sequences, default 2)")
+	cmd.Flags().IntVar(&maxLength, "max-length", 6, "Maximum sequence pattern length (for --kind sequences, default 6; prevents combinatorial explosion)")
 	cmd.Flags().Float64Var(&minConfidence, "min-confidence", 0.6, "Minimum detector confidence (for --kind corrections)")
+	cmd.Flags().StringVar(&after, "after", "", "Filter after date (ISO 8601, for --kind sequences)")
+	cmd.Flags().StringVar(&before, "before", "", "Filter before date (ISO 8601, for --kind sequences)")
 	cmd.Flags().BoolVar(&jsonFormat, "json", false, "Output as JSON")
 	cmd.Flags().BoolVar(&robotFormat, "robot", false, "Output in robot format")
 	cmd.Flags().BoolVar(&indexedOnly, "indexed-only", false, "Read existing index without auto-sync")
@@ -73,17 +84,19 @@ Use --indexed-only to skip auto-sync (read existing index only).`,
 
 func runPatterns(stdout, stderr io.Writer,
 	kind string, project string, allProjects bool, tag string,
-	limit, offset int, jsonFormat, robotFormat, indexedOnly bool, minSupport int, minConfidence float64, pending bool, batch int) error {
+	limit, offset int, jsonFormat, robotFormat, indexedOnly bool, minSupport int, minConfidence float64, pending bool, batch int,
+	minLength, maxLength int, after, before string) error {
 
 	// Early flag validation before DB open
 	validKinds := map[string]bool{
 		"commands":    true,
 		"failures":    true,
 		"templates":   true,
+		"sequences":   true,
 		"corrections": true,
 	}
 	if !validKinds[kind] {
-		return fmt.Errorf("unsupported --kind %q (supported: commands, failures, templates, corrections)", kind)
+		return fmt.Errorf("unsupported --kind %q (supported: commands, failures, templates, sequences, corrections)", kind)
 	}
 
 	if project != "" && allProjects {
@@ -339,6 +352,88 @@ func runPatterns(stdout, stderr io.Writer,
 				_, _ = fmt.Fprintf(stdout, "   Source: %s (ordinal %d)\n", c.SourcePath, c.Ordinal)
 				_, _ = fmt.Fprintf(stdout, "   Detectors: %s (max confidence: %.2f)\n", strings.Join(c.Detectors, ", "), c.MaxConfidence)
 				_, _ = fmt.Fprintf(stdout, "   Text: %s\n\n", c.TextSnippet)
+			}
+		}
+
+	} else if kind == "sequences" {
+		// Defaults for sequences
+		if minSupport == 0 {
+			minSupport = 3
+		}
+		if minLength == 0 {
+			minLength = 2
+		}
+		if maxLength == 0 {
+			maxLength = 6
+		}
+
+		seqs, err := db.LoadToolSequences(storage.LoadSequencesOpts{
+			Project: project,
+			After:   after,
+			Before:  before,
+			Limit:   limit,
+			Offset:  offset,
+		})
+		if err != nil {
+			// A load failure (e.g. malformed categories.toml) must fail the
+			// command — exit code zero would be indistinguishable from a
+			// legitimate empty result for scripts and agents.
+			return fmt.Errorf("load sequences: %w", err)
+		}
+
+		patterns := sequences.Mine(seqs, minSupport, minLength, maxLength)
+		if len(patterns) == 0 {
+			if !jsonFormat && !robotFormat {
+				_, _ = fmt.Fprintf(stdout, "No patterns found. Try --min-support <lower> or --min-length <lower>.\n")
+			} else if jsonFormat {
+				_, _ = fmt.Fprintf(stdout, "{\"count\":0,\"kind\":\"sequences\",\"patterns\":[]}\n")
+			}
+			writeSearchHints(stderr, allProjects, true)
+			return nil
+		}
+
+		// Format results
+		totalSessions := len(seqs)
+		if jsonFormat {
+			type sequencePattern struct {
+				Pattern string `json:"pattern"`
+				Support int    `json:"support"`
+				Share   string `json:"share"`
+			}
+			var results []sequencePattern
+			for _, p := range patterns {
+				share := float64(p.Support) * 100.0 / float64(totalSessions)
+				results = append(results, sequencePattern{
+					Pattern: strings.Join(p.Items, " → "),
+					Support: p.Support,
+					Share:   fmt.Sprintf("%.1f%%", share),
+				})
+			}
+			data := map[string]interface{}{
+				"count":    len(results),
+				"kind":     "sequences",
+				"patterns": results,
+			}
+			if err := json.NewEncoder(stdout).Encode(data); err != nil {
+				return fmt.Errorf("encode JSON: %w", err)
+			}
+		} else if robotFormat {
+			_, _ = fmt.Fprintf(stdout, "*** Sequences ***\n")
+			for i, p := range patterns {
+				share := float64(p.Support) * 100.0 / float64(totalSessions)
+				_, _ = fmt.Fprintf(stdout, "result_%d_pattern=%s\n", i, strings.Join(p.Items, " → "))
+				_, _ = fmt.Fprintf(stdout, "result_%d_support=%d\n", i, p.Support)
+				_, _ = fmt.Fprintf(stdout, "result_%d_share=%.1f%%\n", i, share)
+			}
+			_, _ = fmt.Fprintf(stdout, "*** Total: %d patterns ***\n", len(patterns))
+		} else {
+			_, _ = fmt.Fprintf(stdout, "Frequent Tool Sequences (exploratory)\n")
+			_, _ = fmt.Fprintf(stdout, "======================================\n\n")
+			_, _ = fmt.Fprintf(stdout, "Total sessions analyzed: %d\n\n", totalSessions)
+			for i, p := range patterns {
+				share := float64(p.Support) * 100.0 / float64(totalSessions)
+				_, _ = fmt.Fprintf(stdout, "%d. %s\n", i+1, strings.Join(p.Items, " → "))
+				_, _ = fmt.Fprintf(stdout, "   Support: %d sessions (%.1f%%)\n\n", p.Support, share)
 			}
 		}
 	}

@@ -1,0 +1,51 @@
+version = 1
+
+# Go toolchain (testing, compilation, linting, vendoring)
+[[rule]]
+pattern = "^(go|Bash) (test|vet|build|mod|get|fmt|generate|install|run)"
+category = "GO_EXEC"
+
+# Git operations
+[[rule]]
+tool = "Bash"
+pattern = "^git"
+category = "GIT"
+
+# Generic test runners (pytest, npm test, cargo test, etc.)
+[[rule]]
+pattern = "^(Bash|Shell) (pytest|npm test|cargo test|./test|make test)"
+category = "TEST_EXEC"
+
+# Package managers (npm, pip, cargo, go mod, brew)
+[[rule]]
+pattern = "^(Bash|npm|pip|cargo|Homebrew) (install|add|remove|update|publish)"
+category = "PKG"
+
+# File read operations
+[[rule]]
+tool = "Read"
+category = "FILE_READ"
+
+[[rule]]
+tool = "Glob"
+category = "FILE_READ"
+
+[[rule]]
+tool = "Grep"
+category = "FILE_READ"
+
+# File write operations
+[[rule]]
+tool = "Edit"
+category = "FILE_WRITE"
+
+[[rule]]
+tool = "Write"
+category = "FILE_WRITE"
+
+# Other shell / subprocess operations (catch-all for Bash commands not matched above)
+[[rule]]
+pattern = "^Bash"
+category = "SHELL_OTHER"
+
+# Passthrough: any tool not matched falls through to its tool_name

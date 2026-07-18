@@ -6,6 +6,9 @@ import (
 	"sort"
 	"strings"
 	"time"
+
+	"github.com/pablontiv/backscroll/internal/categories"
+	"github.com/pablontiv/backscroll/internal/sequences"
 )
 
 // Stats represents indexing statistics.
@@ -875,4 +878,97 @@ func (d *Database) UpsertAnnotation(itemUUID, sourcePath string, ordinal int, ki
 		VALUES (?, ?, ?, ?, ?, 'agent', ?)
 	`, itemUUID, resolvedPath, resolvedOrdinal, kind, label, now)
 	return err
+}
+
+// LoadSequencesOpts specifies filters for loading tool sequences.
+type LoadSequencesOpts struct {
+	Project string // if set, filter to this project
+	After   string // ISO 8601 date, exclusive lower bound (tool_events.timestamp > After)
+	Before  string // ISO 8601 date, exclusive upper bound (tool_events.timestamp < Before)
+	Limit   int    // max sequences to return (0 = no limit)
+	Offset  int    // skip first N sequences
+}
+
+// LoadToolSequences loads tool sequences for PrefixSpan mining.
+// Returns per-session sequences derived from tool_events, with categories applied.
+func (d *Database) LoadToolSequences(opts LoadSequencesOpts) ([]sequences.Sequence, error) {
+	mapper, err := categories.Load()
+	if err != nil {
+		return nil, fmt.Errorf("load categories: %w", err)
+	}
+
+	// Build SQL with filters
+	query := `
+		SELECT source_path, tool_name, command_head
+		FROM tool_events
+		WHERE 1=1
+	`
+	var args []interface{}
+
+	if opts.Project != "" {
+		query += ` AND source_path IN (
+			SELECT DISTINCT source_path FROM search_items WHERE project = ?
+		)`
+		args = append(args, opts.Project)
+	}
+
+	if opts.After != "" {
+		query += ` AND (SELECT timestamp FROM search_items WHERE search_items.source_path = tool_events.source_path
+			AND search_items.ordinal = tool_events.ordinal LIMIT 1) > ?`
+		args = append(args, opts.After)
+	}
+
+	if opts.Before != "" {
+		query += ` AND (SELECT timestamp FROM search_items WHERE search_items.source_path = tool_events.source_path
+			AND search_items.ordinal = tool_events.ordinal LIMIT 1) < ?`
+		args = append(args, opts.Before)
+	}
+
+	query += ` ORDER BY source_path, ordinal ASC`
+
+	rows, err := d.db.Query(query, args...)
+	if err != nil {
+		return nil, fmt.Errorf("query tool_events: %w", err)
+	}
+	defer rows.Close()
+
+	// Group by source_path, categorize each tool, collect into sequences
+	seqsByPath := make(map[string][]string)
+	for rows.Next() {
+		var sourcePath, toolName string
+		var commandHead *string
+		if err := rows.Scan(&sourcePath, &toolName, &commandHead); err != nil {
+			return nil, fmt.Errorf("scan: %w", err)
+		}
+		head := ""
+		if commandHead != nil {
+			head = *commandHead
+		}
+		cat := mapper.Categorize(toolName, head)
+		seqsByPath[sourcePath] = append(seqsByPath[sourcePath], cat)
+	}
+
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("rows error: %w", err)
+	}
+
+	// Convert to []Sequence
+	var result []sequences.Sequence
+	for path, items := range seqsByPath {
+		result = append(result, sequences.Sequence{SessionID: path, Items: items})
+	}
+
+	// Apply limit/offset (in-memory to avoid pagination complexity in this query)
+	if opts.Offset > 0 {
+		if opts.Offset >= len(result) {
+			result = nil
+		} else {
+			result = result[opts.Offset:]
+		}
+	}
+	if opts.Limit > 0 && len(result) > opts.Limit {
+		result = result[:opts.Limit]
+	}
+
+	return result, nil
 }
