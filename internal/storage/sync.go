@@ -228,8 +228,9 @@ func (d *Database) SyncFiles(files []IndexedFile) error {
 			}
 		}
 
-		// Run detectors over this session's messages
-		detections := corrections.RunDetectors(detectionMsgs)
+		// Run detectors with prose-only filter: lexicon, rephrase, denial on
+		// content_type='text'|'code' + role='user'; interrupt on all user messages.
+		detections := corrections.RunDetectorsFiltered(detectionMsgs)
 		for ordinal, dets := range detections {
 			for _, det := range dets {
 				_, err := tx.Exec(`

@@ -47,6 +47,29 @@ func runRebuild(stdout, stderr io.Writer) error {
 		return fmt.Errorf("rebuild FTS: %w", err)
 	}
 
+	// Backfill templates, corrections, and lossy tool_events for expired files
+	_, _ = fmt.Fprintf(stdout, "Backfilling derived data from stored text...\n")
+	var backfillStats struct {
+		filesProcessed  int
+		templatesFound  int
+		signalsFound    int
+		eventsExtracted int
+	}
+	if err := db.BackfillDerived(storage.BackfillDerivedOpts{
+		OnProgress: func(processed, templateCount, signalCount, eventCount int) {
+			backfillStats.filesProcessed = processed
+			backfillStats.templatesFound = templateCount
+			backfillStats.signalsFound = signalCount
+			backfillStats.eventsExtracted = eventCount
+		},
+	}); err != nil {
+		_, _ = fmt.Fprintf(stderr, "warning: backfill derived failed: %v\n", err)
+	}
+	if backfillStats.filesProcessed > 0 {
+		_, _ = fmt.Fprintf(stdout, "Backfill complete: %d files processed, %d templates, %d corrections, %d lossy events.\n",
+			backfillStats.filesProcessed, backfillStats.templatesFound, backfillStats.signalsFound, backfillStats.eventsExtracted)
+	}
+
 	// Re-open for project resolution
 	db, err = storage.Open(cfg.DatabasePath)
 	if err != nil {

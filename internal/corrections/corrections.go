@@ -45,6 +45,55 @@ func RunDetectors(msgs []models.Message) map[int][]Detection {
 	return result
 }
 
+// RunDetectorsFiltered executes detectors with prose-only filtering:
+// Lexicon, rephrase, and denial detectors run only on messages where
+// role='user' AND content_type IN ('text', 'code'). Interrupt detector
+// runs on all user messages (interrupt is a message-level property).
+// Returns a map of message ordinal -> slice of Detections.
+func RunDetectorsFiltered(msgs []models.Message) map[int][]Detection {
+	if len(msgs) == 0 {
+		return nil
+	}
+	result := make(map[int][]Detection)
+
+	for i, msg := range msgs {
+		isProse := msg.Role == "user" && (msg.ContentType == "text" || msg.ContentType == "code")
+
+		// Lexicon detector: prose only
+		if isProse {
+			if detection := cCorrectionLexiconDetector(msgs, i); detection != nil {
+				detection.DetectorName = "lexicon"
+				result[i] = append(result[i], *detection)
+			}
+		}
+
+		// Interrupt detector: all user messages
+		if msg.Role == "user" {
+			if detection := cInterruptDetector(msgs, i); detection != nil {
+				detection.DetectorName = "interrupt"
+				result[i] = append(result[i], *detection)
+			}
+		}
+
+		// Denial detector: prose only
+		if isProse {
+			if detection := cDenialDetector(msgs, i); detection != nil {
+				detection.DetectorName = "denial"
+				result[i] = append(result[i], *detection)
+			}
+		}
+
+		// Rephrase detector: prose only
+		if isProse {
+			if detection := cRephraseDetector(msgs, i); detection != nil {
+				detection.DetectorName = "rephrase"
+				result[i] = append(result[i], *detection)
+			}
+		}
+	}
+	return result
+}
+
 // correctionLexicon is the comprehensive es+en lexicon for correction signals.
 // Patterns are lowercase; matching is case-insensitive.
 // NOTE: Spanish is primary (first-class); English is secondary.
@@ -71,8 +120,9 @@ var correctionLexicon = []string{
 	"that is wrong",
 }
 
-// cCorrectionLexiconDetector checks if a user message matches the correction
-// lexicon (es+en). Confidence 0.8 (relatively high; lexicon is well-curated).
+// cCorrectionLexiconDetector checks if a user prose message (content_type='text'|'code')
+// matches the correction lexicon (es+en). Tool-result text is excluded by caller
+// (RunDetectorsFiltered). Confidence 0.8 (relatively high; lexicon is well-curated).
 func cCorrectionLexiconDetector(msgs []models.Message, idx int) *Detection {
 	if idx >= len(msgs) || msgs[idx].Role != "user" {
 		return nil
@@ -100,8 +150,9 @@ func cInterruptDetector(msgs []models.Message, idx int) *Detection {
 	return nil
 }
 
-// cDenialDetector checks if a user message follows a permission denial
-// in an assistant or tool-result message. Detects "denied" or "rechazado".
+// cDenialDetector checks if a user prose message (content_type='text'|'code')
+// follows a permission denial in an assistant or tool-result message. Detects
+// "denied" or "rechazado". Tool-result text is excluded by caller (RunDetectorsFiltered).
 // Confidence 0.4 (lower: only predictive of correction if user responds).
 func cDenialDetector(msgs []models.Message, idx int) *Detection {
 	if idx >= len(msgs) || msgs[idx].Role != "user" {
@@ -181,8 +232,9 @@ func jaccardSimilarity(text1, text2 string) float64 {
 	return float64(overlap) / float64(len(union))
 }
 
-// cRephraseDetector checks if a user message is a rephrase of the previous
-// user message (via Jaccard token overlap >= 0.6).
+// cRephraseDetector checks if a user prose message (content_type='text'|'code')
+// is a rephrase of the previous user message (via Jaccard token overlap >= 0.6).
+// Tool-result text is excluded by caller (RunDetectorsFiltered).
 // Confidence 0.6 (moderate; similarity alone doesn't prove correction).
 func cRephraseDetector(msgs []models.Message, idx int) *Detection {
 	if idx >= len(msgs) || msgs[idx].Role != "user" {
