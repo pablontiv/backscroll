@@ -2,6 +2,8 @@ package storage
 
 import (
 	"fmt"
+
+	"github.com/pablontiv/backscroll/internal/sync"
 )
 
 // CurrentExtractionVersion identifies the reader-extraction logic that
@@ -141,11 +143,16 @@ func (d *Database) SyncFiles(files []IndexedFile) error {
 			}
 
 			if msg.ToolName != "" {
+				exitCode := sync.ExtractExitCode(msg.Text, msg.ToolName)
+				exitCodeVal := interface{}(nil)
+				if exitCode != nil {
+					exitCodeVal = *exitCode
+				}
 				if _, err := tx.Exec(`
 					INSERT OR IGNORE INTO tool_events
 					(message_uuid, source_path, ordinal, tool_name, command_head, is_error, exit_code, extraction_version)
-					VALUES (?, ?, ?, ?, ?, ?, NULL, ?)
-				`, uuidVal, file.SourcePath, msg.Ordinal, msg.ToolName, msg.CommandHead, isErrVal, msg.ExtractionVersion); err != nil {
+					VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+				`, uuidVal, file.SourcePath, msg.Ordinal, msg.ToolName, msg.CommandHead, isErrVal, exitCodeVal, msg.ExtractionVersion); err != nil {
 					return fmt.Errorf("insert tool_event for %s: %w", file.SourcePath, err)
 				}
 			}

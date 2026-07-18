@@ -47,3 +47,32 @@ func TestSyncFilesWritesToolEvents(t *testing.T) {
 		t.Errorf("tool_events row: %s %s %d", toolName, commandHead, isError)
 	}
 }
+
+func TestSyncFilesPopulatesExitCode(t *testing.T) {
+	db, err := Open(filepath.Join(t.TempDir(), "test.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = db.Close() }()
+
+	files := []IndexedFile{{
+		SourcePath: "/p/s.jsonl", Source: "session", Hash: "h1", Project: "proj",
+		Messages: []IndexedMessage{
+			{Ordinal: 0, Role: "assistant", Text: "exit code 0", UUID: "u1#t0",
+				Timestamp: "2026-01-01T00:00:00Z", ContentType: "tool",
+				ToolName: "Bash", CommandHead: "go", ExtractionVersion: 1},
+		},
+	}}
+	if err := db.SyncFiles(files); err != nil {
+		t.Fatalf("sync: %v", err)
+	}
+
+	var exitCode interface{}
+	if err := db.db.QueryRow(`SELECT exit_code FROM tool_events WHERE message_uuid = 'u1#t0'`).
+		Scan(&exitCode); err != nil {
+		t.Fatalf("query: %v", err)
+	}
+	if exitCode == nil || exitCode.(int64) != 0 {
+		t.Errorf("exit_code not extracted: got %v", exitCode)
+	}
+}

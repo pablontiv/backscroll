@@ -8,7 +8,7 @@ Backscroll is a Go CLI tool that indexes Claude Code, Pi, and OpenCode sessions,
 
 **Status**: Go port complete — `main` branch is the active Go implementation. The Rust implementation is frozen in the `v0` branch.
 
-Implemented: `internal/config`, `internal/input_config`, `internal/models`, `internal/readers`, `internal/sync`, `internal/tagging`, `internal/plans`, `internal/sources`, `internal/storage`, `internal/projects`, `internal/reader`. CLI commands in `cmd/backscroll/` (8 v2 commands via cobra).
+Implemented: `internal/config`, `internal/input_config`, `internal/models`, `internal/readers`, `internal/sync`, `internal/tagging`, `internal/plans`, `internal/sources`, `internal/storage`, `internal/projects`, `internal/reader`. CLI commands in `cmd/backscroll/` (9 v2 commands via cobra).
 
 Stack: cobra, go-toml/v2, goldmark, modernc.org/sqlite (pure Go, no CGO), stdlib testing.
 
@@ -44,6 +44,7 @@ cmd/backscroll/
 ├── list.go            — list command (v2: --input, --order, --type, --tool)
 ├── search.go          — search command (v2: --text, --input)
 ├── read.go            — read command (v2: --path, --tail, --semantic, --pretty)
+├── patterns.go        — patterns command (v2: --kind commands|failures, --project, --tag, --json, --robot)
 ├── status.go          — status command
 ├── validate.go        — validate command (--indexed-only)
 ├── rebuild.go         — rebuild command (replaces reindex)
@@ -61,10 +62,10 @@ internal/
 ├── projects/          — project identity registry: LoadGlobalRegistry(), Identify(), LoadLocalHint()
 ├── reader/            — direct reading and filtering of individual session files
 ├── readers/           — SessionReader interface, Registry, ClaudeReader (text+tool_use+tool_result), PiReader (text+toolCall+custom results), OpenCodeReader (text+tool state.input+state.output); toolfmt serializer
-└── storage/           — SQLite adapter (dual FTS5 indexes: tool_fts + messages_fts, BM25, WAL mode, migrations v1–v8, search_items, session_tags, tool_events)
+└── storage/           — SQLite adapter (dual FTS5 indexes: tool_fts + messages_fts, BM25, WAL mode, migrations v1–v9, search_items, session_tags, tool_events, AggregateCommands, AggregateFailures)
 ```
 
-Eight v2 CLI commands: `list [--project] [--all-projects] [--order timestamp:desc|asc] [--limit] [--offset] [--json]`, `search [--text <query>] [--project] [--all-projects] [--after] [--before] [--limit] [--offset] [--indexed-only] [--json]`, `read --path <path> [--tail <n>] [--semantic] [--pretty]`, `status`, `validate [--indexed-only]`, `rebuild`, `purge --before <date>`, `config [--json]`.
+Nine v2 CLI commands: `list [--project] [--all-projects] [--order timestamp:desc|asc] [--limit] [--offset] [--json]`, `search [--text <query>] [--project] [--all-projects] [--after] [--before] [--limit] [--offset] [--indexed-only] [--json]`, `read --path <path> [--tail <n>] [--semantic] [--pretty]`, `patterns --kind commands|failures [--project] [--all-projects] [--tag] [--limit] [--offset] [--indexed-only] [--json] [--robot]`, `status`, `validate [--indexed-only]`, `rebuild`, `purge --before <date>`, `config [--json]`.
 
 The `SearchEngine` interface is the port; `internal/storage` is the adapter. Database opened lazily. `OpenReadOnly()` provides read-only access for external consumers.
 
@@ -103,6 +104,7 @@ Configurable in `[sources]` section of `backscroll.toml`. Source types: `ke`, `d
 - **Schema migration rule**: Every new table or column MUST be introduced as a new migration version (increment the version number and add a new version-check block in `SetupSchema()`). Never modify existing migration blocks — existing databases that already passed that version will never re-run them. Migration v5 drops the phantom `session_events` table (and its indexes `idx_session_events_order` and `idx_session_events_project`) — the table was write-only dead weight after structured-stats filtering was removed. Migration v6 drops the phantom `search_items.source_metadata` column via `ALTER TABLE ... DROP COLUMN` — it had a setter but zero production callers and was never read.
 - **F0a rich capture (migration v8)**: readers extract per-message identity and tool metadata BEFORE serialization/cleaning destroys the evidence — `uuid` (record uuid; tool blocks get stable `#tN`/`#rN` suffixes by block index), `tool_name`, `command_head`, `is_error` (`*bool`, three-valued: tool_result blocks carry it and it is paired back onto the tool_use message cross-record via `tool_use_id`), and `was_interrupted` (detected on raw content before `CleanContent` strips "Request interrupted"). Persisted to `search_items` (`extraction_version`, `was_interrupted` columns) and the perennial `tool_events` satellite table (`UNIQUE(source_path, ordinal)`, no CASCADE lifecycle — only `purge` deletes from it, explicitly). Claude reader only; Pi/OpenCode emit zero values and stay on the legacy path. Design: `docs/superpowers/specs/2026-07-17-pattern-discovery-northstar-design.md`.
 - **F0b perennial sync**: the DB is the perennial event store — session JSONL files expire (~30 days), indexed sessions survive them. Session files where EVERY message has a uuid sync append-only (no DELETE; `INSERT OR IGNORE` + UNIQUE constraints; row ids stable forever), with a one-time transition cleanup of legacy uuid-NULL rows per file. Files with any uuid-less message (Pi/OpenCode, legacy Claude) keep wipe-and-reload. `rebuild` is NON-destructive: re-derives both FTS indexes from `search_items` via FTS5 external-content `'rebuild'` in one transaction (`RebuildFTS()`), then runs incremental sync — it never deletes rows and never re-reads disk as source of truth. `purge --before` is the only deletion path and deletes `tool_events` satellites explicitly in the same transaction (no CASCADE).
+- **F1 exit code mining**: during sync, Bash tool_result text is parsed via regex patterns (case-insensitive matches on `exit code N` / `Exit code: N` / `returned N`; note tool text is capped at 4000 runes by toolfmt, so a code beyond the cap yields NULL indistinguishable from no match) and the extracted exit code is stored in the `tool_events.exit_code` column (migration v8; NULL for non-Bash tools or no match). The `patterns` command aggregates tool_events by (tool_name, command_head) for commands or (tool_name, is_error, exit_code) for failures, returning top N sorted by frequency with optional filters by project, session tag, and time window. Coverage metric reports the count of events with non-NULL is_error (signalled events) against the total failure count in the result set.
 - **Early input validation**: CLI commands validate flag values (e.g. `--format`) before opening the database, so invalid inputs fail fast without side effects.
 - **Coverage gate**: CI enforces ≥85% aggregate statement coverage via `go test ./... -race -coverprofile`. Local check: `bash scripts/check-coverage.sh`. Tests that depend on local machine state (e.g. `~/.config/backscroll/projects.toml`) must use `t.Setenv("HOME", tempDir)` to stay reproducible on CI. Likewise, `InputsDir` branches requiring `BACKSCROLL_CONFIG_DIR` to be unset must set it to `""` via `t.Setenv`. To test the `Validate` orphan path, insert directly into `search_items` without a matching `indexed_files` row.
 - **Zero-result guidance**: when `search`/`list` return no rows, actionable suggestions (`--all-projects`, `--content-type tool`, `backscroll status`) are printed to STDERR — never STDOUT, so `--json` stays a clean empty payload.
