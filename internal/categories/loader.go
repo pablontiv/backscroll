@@ -24,20 +24,49 @@ type tomlFile struct {
 
 // Load reads the category map from config dir, or falls back to embedded default.
 // Consults BACKSCROLL_CONFIG_DIR env var (matching input_config pattern).
+// If config file exists but is older than the embedded default, uses the embedded
+// default and prints a notice to stderr.
 func Load() (*Mapper, error) {
+	// Always load embedded default to get its version
+	embeddedData, err := defaultCategoriesFS.ReadFile("default_categories.toml")
+	if err != nil {
+		return nil, fmt.Errorf("read embedded default categories: %w", err)
+	}
+
+	embeddedVersion, err := getVersion(embeddedData)
+	if err != nil {
+		return nil, fmt.Errorf("parse embedded version: %w", err)
+	}
+
+	// Try to load from config dir
 	configPath, err := configPath()
 	if err == nil {
 		if data, err := os.ReadFile(configPath); err == nil {
-			return parseMapper(data)
+			configVersion, err := getVersion(data)
+			if err == nil && configVersion < embeddedVersion {
+				// Config is stale; use embedded and print notice
+				_, _ = fmt.Fprintf(os.Stderr, "categories: config version %d older than built-in %d; using built-in (update your categories.toml or set BACKSCROLL_FORCE_INPUTS=1 on install)\n",
+					configVersion, embeddedVersion)
+				return parseMapper(embeddedData)
+			}
+			// Config is current or newer; use it
+			if err == nil {
+				return parseMapper(data)
+			}
 		}
 	}
 
 	// Fallback to embedded default
-	data, err := defaultCategoriesFS.ReadFile("default_categories.toml")
-	if err != nil {
-		return nil, fmt.Errorf("read embedded default categories: %w", err)
+	return parseMapper(embeddedData)
+}
+
+// getVersion extracts the version field from TOML data without full parsing.
+func getVersion(data []byte) (int, error) {
+	var f tomlFile
+	if err := toml.Unmarshal(data, &f); err != nil {
+		return 0, err
 	}
-	return parseMapper(data)
+	return f.Version, nil
 }
 
 func configPath() (string, error) {

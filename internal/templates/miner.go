@@ -43,7 +43,7 @@ func (m *Miner) ProcessLine(line string) Template {
 		Text:                 normalized,
 		Signature:            sig,
 		VariableCount:        varCount,
-		NormalizationVersion: 1,
+		NormalizationVersion: 2,
 	}
 }
 

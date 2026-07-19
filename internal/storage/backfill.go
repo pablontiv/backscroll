@@ -3,6 +3,7 @@ package storage
 import (
 	"database/sql"
 	"fmt"
+	"strings"
 
 	"github.com/pablontiv/backscroll/internal/corrections"
 	"github.com/pablontiv/backscroll/internal/models"
@@ -161,10 +162,12 @@ func (d *Database) BackfillDerived(opts BackfillDerivedOpts) error {
 }
 
 // backfillTemplatesForFile mines templates from tool messages in the file.
-// For backfilled (expired) files, we mine from all tool text rows without
-// is_error knowledge (lossy). Returns count of unique templates inserted.
+// For backfilled (expired) files, we mine only from ERROR-bearing tool text:
+// - rows with "error: " prefix (case-insensitive), OR
+// - rows in tool_events with is_error=1
+// Input serializations (toolName detected by ParseToolFromSerialized) are always skipped.
+// Returns count of unique templates inserted.
 func (d *Database) backfillTemplatesForFile(tx *sql.Tx, sourcePath string, messages []IndexedMessage, miner *templates.Miner) (int, error) {
-	// Collect tool message text (treat all tool messages as potential error lines for mining)
 	type errorLine struct {
 		toolName string
 		text     string
@@ -173,15 +176,50 @@ func (d *Database) backfillTemplatesForFile(tx *sql.Tx, sourcePath string, messa
 	}
 	var errorLines []errorLine
 
+	// Pre-load tool_events with is_error=1 for this file to avoid per-message queries.
+	errorEventOrdinals := make(map[int]bool)
+	errRows, err := tx.Query(`
+		SELECT DISTINCT ordinal FROM tool_events
+		WHERE source_path = ? AND is_error = 1
+	`, sourcePath)
+	if err != nil {
+		return 0, fmt.Errorf("query tool_events: %w", err)
+	}
+	defer errRows.Close()
+	for errRows.Next() {
+		var ordinal int
+		if err := errRows.Scan(&ordinal); err != nil {
+			return 0, fmt.Errorf("scan ordinal: %w", err)
+		}
+		errorEventOrdinals[ordinal] = true
+	}
+	if err := errRows.Err(); err != nil {
+		return 0, err
+	}
+
+	// Collect tool message text: only rows that are error-bearing.
 	for _, msg := range messages {
-		// Mine from all tool-content messages (without is_error knowledge in backfilled case)
 		if msg.ContentType != "tool" {
 			continue
 		}
-		// Try to extract error lines using heuristic extraction (no tool_name needed for lossy recovery)
-		relevantLines := templates.ExtractErrorLines("Bash", msg.Text) // Bash is fallback for unknown tools
+
+		// Determine if this row is error-bearing: has error prefix OR error signal.
+		trimmed := strings.TrimSpace(msg.Text)
+		hasErrorPrefix := strings.HasPrefix(strings.ToLower(trimmed), "error: ")
+		hasErrorSignal := errorEventOrdinals[msg.Ordinal]
+
+		// Determine if this row is an input serialization (should always be excluded).
+		toolName, _ := ParseToolFromSerialized(msg.Text)
+		isInputSerialization := toolName != ""
+
+		// Include only if (error prefix OR error signal) AND NOT input serialization.
+		if (!hasErrorPrefix && !hasErrorSignal) || isInputSerialization {
+			continue
+		}
+
+		// Extract error lines using heuristic extraction (fallback Bash for unknown tools).
+		relevantLines := templates.ExtractErrorLines("Bash", msg.Text)
 		if len(relevantLines) == 0 {
-			// If no structured error lines, treat the whole text as a line
 			relevantLines = []string{msg.Text}
 		}
 		for _, line := range relevantLines {
@@ -194,7 +232,7 @@ func (d *Database) backfillTemplatesForFile(tx *sql.Tx, sourcePath string, messa
 		}
 	}
 
-	// Mine templates and record matches (similar to mineTemplatesForFile)
+	// Mine templates and record matches (unchanged from original).
 	templateMap := make(map[string]*templateRecord)
 	for _, errLine := range errorLines {
 		tmpl := miner.ProcessLine(errLine.text)
@@ -219,9 +257,8 @@ func (d *Database) backfillTemplatesForFile(tx *sql.Tx, sourcePath string, messa
 		})
 	}
 
-	// Write templates and matches to database
+	// Write templates and matches to database.
 	for _, rec := range templateMap {
-		// INSERT OR IGNORE ensures idempotency
 		_, err := tx.Exec(`
 			INSERT OR IGNORE INTO message_templates (signature, normalization_version, template_text, occurrence_count, first_seen, last_seen)
 			VALUES (?, ?, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
@@ -230,14 +267,12 @@ func (d *Database) backfillTemplatesForFile(tx *sql.Tx, sourcePath string, messa
 			return 0, fmt.Errorf("insert template: %w", err)
 		}
 
-		// Get template ID
 		var tmplID int64
 		err = tx.QueryRow(`SELECT id FROM message_templates WHERE signature = ?`, rec.signature).Scan(&tmplID)
 		if err != nil {
 			return 0, fmt.Errorf("query template id: %w", err)
 		}
 
-		// Insert matches
 		for _, m := range rec.matches {
 			_, err := tx.Exec(`
 				INSERT OR IGNORE INTO template_matches (template_id, item_uuid, source_path, ordinal)
@@ -249,9 +284,8 @@ func (d *Database) backfillTemplatesForFile(tx *sql.Tx, sourcePath string, messa
 		}
 	}
 
-	// Count unique templates inserted
 	var count int
-	err := tx.QueryRow(`
+	err = tx.QueryRow(`
 		SELECT COUNT(DISTINCT template_id) FROM template_matches WHERE source_path = ?
 	`, sourcePath).Scan(&count)
 	if err != nil {

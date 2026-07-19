@@ -41,6 +41,10 @@ func TestMinerProcessLine(t *testing.T) {
 				if tmpl.Text != tt.want {
 					t.Errorf("template text = %q, want %q", tmpl.Text, tt.want)
 				}
+				// Q1 correction: new templates must carry version 2
+				if tmpl.NormalizationVersion != 2 {
+					t.Errorf("NormalizationVersion = %d, want 2", tmpl.NormalizationVersion)
+				}
 			}
 			if tmpl.Signature == "" && tt.want != "" {
 				t.Errorf("signature empty but template non-empty")

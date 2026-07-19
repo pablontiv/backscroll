@@ -207,7 +207,7 @@ func runPatterns(stdout, stderr io.Writer,
 		} else if robotFormat {
 			_, _ = fmt.Fprintf(stdout, "*** Failures ***\n")
 			for i, p := range results {
-				exitCodeStr := "null"
+				exitCodeStr := "?"
 				if p.ExitCode != nil {
 					exitCodeStr = fmt.Sprintf("%d", *p.ExitCode)
 				}
@@ -225,8 +225,12 @@ func runPatterns(stdout, stderr io.Writer,
 				_, _ = fmt.Fprintf(stdout, "Signalled events (with error signal): %d\n\n", results[0].SignalledEvents)
 			}
 			for i, p := range results {
-				_, _ = fmt.Fprintf(stdout, "%d. %s (is_error=%v, exit_code=%v) — %d occurrences\n",
-					i+1, p.ToolName, p.IsError, p.ExitCode, p.Count)
+				exitCodeStr := "?"
+				if p.ExitCode != nil {
+					exitCodeStr = fmt.Sprintf("%d", *p.ExitCode)
+				}
+				_, _ = fmt.Fprintf(stdout, "%d. %s (is_error=%v, exit_code=%s) — %d occurrences\n",
+					i+1, p.ToolName, p.IsError, exitCodeStr, p.Count)
 			}
 		}
 

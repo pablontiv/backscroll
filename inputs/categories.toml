@@ -1,14 +1,68 @@
-version = 1
+version = 2
+
+# Navigation
+[[rule]]
+tool = "Bash"
+pattern = "^Bash (cd)"
+category = "NAV"
+
+# Search/grep
+[[rule]]
+tool = "Bash"
+pattern = "^Bash (rg|grep|fd|find)"
+category = "SEARCH"
+
+# File inspect
+[[rule]]
+tool = "Bash"
+pattern = "^Bash (eza|ls|bat|cat|wc|head|tail)"
+category = "FILE_INSPECT"
+
+# Text transform
+[[rule]]
+tool = "Bash"
+pattern = "^Bash (sd|sed|awk|jq)"
+category = "TEXT_TRANSFORM"
+
+# Database
+[[rule]]
+tool = "Bash"
+pattern = "^Bash sqlite3"
+category = "DB"
+
+# Review tool
+[[rule]]
+tool = "Bash"
+pattern = "^Bash gentle-ai"
+category = "REVIEW_TOOL"
+
+# Task runner
+[[rule]]
+tool = "Bash"
+pattern = "^Bash just"
+category = "TASK_RUNNER"
+
+# Shell state
+[[rule]]
+tool = "Bash"
+pattern = "^Bash (echo|printf|export|set)"
+category = "SHELL_STATE"
+
+# Filesystem operations
+[[rule]]
+tool = "Bash"
+pattern = "^Bash (mktemp|mkdir|mv|cp|rm)"
+category = "FS_OP"
 
 # Go toolchain (testing, compilation, linting, vendoring)
 [[rule]]
 pattern = "^(go|Bash) (test|vet|build|mod|get|fmt|generate|install|run)"
 category = "GO_EXEC"
 
-# Git operations
+# Git
 [[rule]]
 tool = "Bash"
-pattern = "^git"
+pattern = "^Bash (git|gh)"
 category = "GIT"
 
 # Generic test runners (pytest, npm test, cargo test, etc.)
@@ -43,9 +97,7 @@ category = "FILE_WRITE"
 tool = "Write"
 category = "FILE_WRITE"
 
-# Other shell / subprocess operations (catch-all for Bash commands not matched above)
+# Catch-all for remaining Bash
 [[rule]]
 pattern = "^Bash"
 category = "SHELL_OTHER"
-
-# Passthrough: any tool not matched falls through to its tool_name

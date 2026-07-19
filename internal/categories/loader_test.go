@@ -1,6 +1,7 @@
 package categories
 
 import (
+	"os"
 	"path/filepath"
 	"regexp"
 	"testing"
@@ -44,8 +45,8 @@ func TestLoadEmbedded(t *testing.T) {
 	if err != nil {
 		t.Fatalf("load: %v", err)
 	}
-	if m.Version() != 1 {
-		t.Errorf("version: %d, want 1", m.Version())
+	if m.Version() != 2 {
+		t.Errorf("version: %d, want 2", m.Version())
 	}
 	if cat := m.Categorize("Read", ""); cat != "FILE_READ" {
 		t.Errorf("embedded Read: %q, want FILE_READ", cat)
@@ -153,5 +154,110 @@ func TestLoadConfigDirWithHome(t *testing.T) {
 	expected := filepath.Join(tmpDir, ".config", "backscroll", "inputs", "categories.toml")
 	if path != expected {
 		t.Errorf("path: %q, want %q", path, expected)
+	}
+}
+
+// TestCategorizeV2Categories tests new v2 categories are available and map correctly
+func TestCategorizeV2Categories(t *testing.T) {
+	m, err := Load()
+	if err != nil {
+		t.Fatalf("load: %v", err)
+	}
+
+	tests := []struct {
+		tool        string
+		commandHead string
+		want        string
+	}{
+		{"Bash", "cd /tmp", "NAV"},
+		{"Bash", "rg pattern", "SEARCH"},
+		{"Bash", "grep text file", "SEARCH"},
+		{"Bash", "fd name", "SEARCH"},
+		{"Bash", "find . -type f", "SEARCH"},
+		{"Bash", "ls -la", "FILE_INSPECT"},
+		{"Bash", "cat file.txt", "FILE_INSPECT"},
+		{"Bash", "eza -l", "FILE_INSPECT"},
+		{"Bash", "bat file", "FILE_INSPECT"},
+		{"Bash", "sd old new file", "TEXT_TRANSFORM"},
+		{"Bash", "jq .field", "TEXT_TRANSFORM"},
+		{"Bash", "awk '{print $1}'", "TEXT_TRANSFORM"},
+		{"Bash", "sed 's/a/b/'", "TEXT_TRANSFORM"},
+		{"Bash", "sqlite3 db.db", "DB"},
+		{"Bash", "gentle-ai review", "REVIEW_TOOL"},
+		{"Bash", "just test", "TASK_RUNNER"},
+		{"Bash", "echo hello", "SHELL_STATE"},
+		{"Bash", "export VAR=value", "SHELL_STATE"},
+		{"Bash", "mkdir dir", "FS_OP"},
+		{"Bash", "mv old new", "FS_OP"},
+		{"Bash", "git status", "GIT"},
+		{"Bash", "gh pr list", "GIT"},
+		{"go", "test ./...", "GO_EXEC"},
+		{"Bash", "unknown command", "SHELL_OTHER"},
+	}
+
+	for _, tt := range tests {
+		got := m.Categorize(tt.tool, tt.commandHead)
+		if got != tt.want {
+			t.Errorf("Categorize(%q, %q) = %q, want %q", tt.tool, tt.commandHead, got, tt.want)
+		}
+	}
+}
+
+// TestCategorizeV2Precedence verifies that earlier rules take precedence (first match wins)
+func TestCategorizeV2Precedence(t *testing.T) {
+	m, err := Load()
+	if err != nil {
+		t.Fatalf("load: %v", err)
+	}
+
+	// "cd" should map to NAV, not SHELL_OTHER (even though it matches ^Bash)
+	if cat := m.Categorize("Bash", "cd /path"); cat != "NAV" {
+		t.Errorf("cd: %q, want NAV (not SHELL_OTHER)", cat)
+	}
+
+	// "git status" should map to GIT, not SHELL_OTHER
+	if cat := m.Categorize("Bash", "git status"); cat != "GIT" {
+		t.Errorf("git: %q, want GIT (not SHELL_OTHER)", cat)
+	}
+
+	// "ls" should map to FILE_INSPECT, not SHELL_OTHER
+	if cat := m.Categorize("Bash", "ls"); cat != "FILE_INSPECT" {
+		t.Errorf("ls: %q, want FILE_INSPECT (not SHELL_OTHER)", cat)
+	}
+}
+
+// TestStaleConfigFallsbackToEmbedded tests that a v1 config file falls back to embedded v2
+func TestStaleConfigFallsbackToEmbedded(t *testing.T) {
+	// Write a v1 config file to a temp directory
+	tmpDir := t.TempDir()
+	t.Setenv("BACKSCROLL_CONFIG_DIR", tmpDir)
+
+	// Create the directory structure
+	configDir := filepath.Join(tmpDir, "backscroll", "inputs")
+	if err := os.MkdirAll(configDir, 0755); err != nil {
+		t.Fatal(err)
+	}
+
+	// Write a v1 config file
+	v1ConfigPath := filepath.Join(configDir, "categories.toml")
+	v1ConfigContent := `version = 1
+
+[[rule]]
+pattern = "^Bash"
+category = "SHELL_OTHER"
+`
+	if err := os.WriteFile(v1ConfigPath, []byte(v1ConfigContent), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	// Load should use embedded v2 instead
+	m, err := Load()
+	if err != nil {
+		t.Fatalf("load: %v", err)
+	}
+
+	// Verify that v2 rules apply (cd → NAV is a v2 rule)
+	if cat := m.Categorize("Bash", "cd /path"); cat != "NAV" {
+		t.Errorf("cd: %q, want NAV (v2 rule); config was not replaced with embedded default", cat)
 	}
 }

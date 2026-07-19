@@ -68,10 +68,15 @@ func extractBashErrors(lines []string) []string {
 	return result
 }
 
-// extractGoErrors returns the first error line and any FAIL lines.
+// extractGoErrors returns Go compiler/test error lines and FAIL markers.
+// Matches: "--- FAIL:" (test header), "error:" (compiler error), "FAIL\t" (summary),
+// and panic invocations.
 func extractGoErrors(lines []string) []string {
 	var result []string
-	errorPattern := regexp.MustCompile(`^(.*?):\s*error:|FAIL\s+|panic\(`)
+	// Pattern matches: --- FAIL: (test failure header), error: (compiler error),
+	// FAIL<space/tab> (test summary), panic(
+	// Removed ^ anchors to allow FAIL to match anywhere on the line (e.g., after "---")
+	errorPattern := regexp.MustCompile(`(\-\-\-\s+FAIL:|:\s*error:|FAIL\s+|panic\()`)
 
 	for _, line := range lines {
 		line = strings.TrimSpace(line)

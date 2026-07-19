@@ -133,3 +133,41 @@ func TestPatternsTemplatesMinSupportSeeded(t *testing.T) {
 		t.Fatalf("run: %v", err)
 	}
 }
+
+// TestPatternsFailuresTextFormatNullExitCode tests that NULL exit_code prints "?" in text format
+func TestPatternsFailuresTextFormatNullExitCode(t *testing.T) {
+	_, cleanup := testEnv(t)
+	defer cleanup()
+	seedToolEvents(t)
+	stdout, _, err := runCmd("patterns", "--kind", "failures", "--all-projects", "--indexed-only")
+	if err != nil {
+		t.Fatalf("run: %v", err)
+	}
+	// Check that text output uses "exit_code=?" for NULL values
+	if !strings.Contains(stdout, "exit_code=?") {
+		t.Errorf("text format must show exit_code=? for NULL; output:\n%s", stdout)
+	}
+	// Verify that <nil> doesn't appear in output
+	if strings.Contains(stdout, "<nil>") {
+		t.Errorf("text format must not show <nil>; output:\n%s", stdout)
+	}
+}
+
+// TestPatternsFailuresRobotFormatNullExitCode tests that NULL exit_code prints "?" in robot format
+func TestPatternsFailuresRobotFormatNullExitCode(t *testing.T) {
+	_, cleanup := testEnv(t)
+	defer cleanup()
+	seedToolEvents(t)
+	stdout, _, err := runCmd("patterns", "--kind", "failures", "--robot", "--all-projects", "--indexed-only")
+	if err != nil {
+		t.Fatalf("run: %v", err)
+	}
+	// Check that robot output uses exit_code=? for NULL values
+	if !strings.Contains(stdout, "exit_code=?") {
+		t.Errorf("robot format must show exit_code=? for NULL; output:\n%s", stdout)
+	}
+	// Verify that "null" doesn't appear in exit_code lines
+	if strings.Contains(stdout, "exit_code=null") {
+		t.Errorf("robot format must not show exit_code=null; output:\n%s", stdout)
+	}
+}
