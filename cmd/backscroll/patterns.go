@@ -32,6 +32,7 @@ func newPatternsCmd(stdout, stderr io.Writer) *cobra.Command {
 		maxLength     int
 		after         string
 		before        string
+		trend         bool
 	)
 
 	cmd := &cobra.Command{
@@ -55,7 +56,7 @@ Use --indexed-only to skip auto-sync (read existing index only).`,
 			if len(args) > 0 {
 				return fmt.Errorf("unexpected positional argument %q", args[0])
 			}
-			return runPatterns(stdout, stderr, kind, project, allProjects, tag, limit, offset, jsonFormat, robotFormat, indexedOnly, minSupport, minConfidence, pending, batch, minLength, maxLength, after, before)
+			return runPatterns(stdout, stderr, kind, project, allProjects, tag, limit, offset, jsonFormat, robotFormat, indexedOnly, minSupport, minConfidence, pending, batch, minLength, maxLength, after, before, trend)
 		},
 	}
 
@@ -76,6 +77,7 @@ Use --indexed-only to skip auto-sync (read existing index only).`,
 	cmd.Flags().BoolVar(&indexedOnly, "indexed-only", false, "Read existing index without auto-sync")
 	cmd.Flags().BoolVar(&pending, "pending", false, "Only corrections without a 'correction' annotation (checkpoint resume)")
 	cmd.Flags().IntVar(&batch, "batch", 0, "Alias for --limit (batch size for loop)")
+	cmd.Flags().BoolVar(&trend, "trend", false, "Week-over-week bucketing (--kind commands|failures only)")
 
 	cmd.MarkFlagRequired("kind")
 
@@ -85,7 +87,7 @@ Use --indexed-only to skip auto-sync (read existing index only).`,
 func runPatterns(stdout, stderr io.Writer,
 	kind string, project string, allProjects bool, tag string,
 	limit, offset int, jsonFormat, robotFormat, indexedOnly bool, minSupport int, minConfidence float64, pending bool, batch int,
-	minLength, maxLength int, after, before string) error {
+	minLength, maxLength int, after, before string, trend bool) error {
 
 	// Early flag validation before DB open
 	validKinds := map[string]bool{
@@ -97,6 +99,10 @@ func runPatterns(stdout, stderr io.Writer,
 	}
 	if !validKinds[kind] {
 		return fmt.Errorf("unsupported --kind %q (supported: commands, failures, templates, sequences, corrections)", kind)
+	}
+
+	if trend && kind != "commands" && kind != "failures" {
+		return fmt.Errorf("--trend only supported for --kind commands|failures, got %q", kind)
 	}
 
 	if project != "" && allProjects {
@@ -131,106 +137,262 @@ func runPatterns(stdout, stderr io.Writer,
 	defer func() { _ = db.Close() }()
 
 	opts := storage.AggregateOptions{
-		Project: project,
-		Tag:     tag,
-		Limit:   limit,
-		Offset:  offset,
+		Project:     project,
+		Tag:         tag,
+		Limit:       limit,
+		Offset:      offset,
+		TrendWeekly: trend,
 	}
 
 	// Execute aggregation
 	if kind == "commands" {
-		results, err := db.AggregateCommands(opts)
-		if err != nil {
-			return fmt.Errorf("aggregate commands: %w", err)
-		}
+		if trend {
+			var excluded int
+			results, err := db.AggregateCommandsTrend(opts, &excluded)
+			if err != nil {
+				return fmt.Errorf("aggregate commands trend: %w", err)
+			}
 
-		if len(results) == 0 {
-			if !jsonFormat && !robotFormat {
-				_, _ = fmt.Fprintf(stdout, "No patterns found.\n")
-			} else if jsonFormat {
-				_, _ = fmt.Fprintf(stdout, "{\"count\":0,\"patterns\":[]}\n")
+			if excluded > 0 {
+				_, _ = fmt.Fprintf(stderr, "trend: %d events excluded (no timestamp)\n", excluded)
 			}
-			writeSearchHints(stderr, allProjects, true)
-			return nil
-		}
 
-		if jsonFormat {
-			data := map[string]interface{}{
-				"count":    len(results),
-				"kind":     "commands",
-				"patterns": results,
+			if len(results) == 0 {
+				if !jsonFormat && !robotFormat {
+					_, _ = fmt.Fprintf(stdout, "No patterns found. Try --min-support <lower> or --min-length <lower>.\n")
+				} else if jsonFormat {
+					_, _ = fmt.Fprintf(stdout, "{\"count\":0,\"kind\":\"commands\",\"trends\":[]}\n")
+				}
+				writeSearchHints(stderr, allProjects, true)
+				return nil
 			}
-			if err := json.NewEncoder(stdout).Encode(data); err != nil {
-				return fmt.Errorf("encode JSON: %w", err)
+
+			// Group results by week for text/json output
+			weekMap := make(map[string][]storage.CommandPatternWeekly)
+			var weeks []string
+			for _, r := range results {
+				if _, exists := weekMap[r.Week]; !exists {
+					weeks = append(weeks, r.Week)
+				}
+				weekMap[r.Week] = append(weekMap[r.Week], r)
 			}
-		} else if robotFormat {
-			_, _ = fmt.Fprintf(stdout, "*** Commands ***\n")
-			for i, p := range results {
-				_, _ = fmt.Fprintf(stdout, "result_%d_tool_name=%s\n", i, p.ToolName)
-				_, _ = fmt.Fprintf(stdout, "result_%d_command_head=%s\n", i, p.CommandHead)
-				_, _ = fmt.Fprintf(stdout, "result_%d_count=%d\n", i, p.Count)
+
+			if jsonFormat {
+				type trendBucket struct {
+					Week     string                         `json:"week"`
+					Patterns []storage.CommandPatternWeekly `json:"patterns"`
+				}
+				var trends []trendBucket
+				for _, w := range weeks {
+					trends = append(trends, trendBucket{Week: w, Patterns: weekMap[w]})
+				}
+				data := map[string]interface{}{
+					"count":  len(results),
+					"kind":   "commands",
+					"trends": trends,
+				}
+				if err := json.NewEncoder(stdout).Encode(data); err != nil {
+					return fmt.Errorf("encode JSON: %w", err)
+				}
+			} else if robotFormat {
+				_, _ = fmt.Fprintf(stdout, "*** Trends ***\n")
+				for weekIdx, w := range weeks {
+					_, _ = fmt.Fprintf(stdout, "week_%d=%s\n", weekIdx, w)
+					for i, p := range weekMap[w] {
+						_, _ = fmt.Fprintf(stdout, "result_%d_tool_name=%s\n", i, p.ToolName)
+						_, _ = fmt.Fprintf(stdout, "result_%d_command_head=%s\n", i, p.CommandHead)
+						_, _ = fmt.Fprintf(stdout, "result_%d_count=%d\n", i, p.Count)
+					}
+				}
+				_, _ = fmt.Fprintf(stdout, "*** Total: %d patterns ***\n", len(results))
+			} else {
+				_, _ = fmt.Fprintf(stdout, "Trends in Commands (Week-over-Week)\n")
+				_, _ = fmt.Fprintf(stdout, "==================================\n\n")
+				for _, w := range weeks {
+					_, _ = fmt.Fprintf(stdout, "%s\n", w)
+					for i, p := range weekMap[w] {
+						_, _ = fmt.Fprintf(stdout, "  %d. %s %s (%d times)\n", i+1, p.ToolName, p.CommandHead, p.Count)
+					}
+					_, _ = fmt.Fprintf(stdout, "\n")
+				}
 			}
-			_, _ = fmt.Fprintf(stdout, "*** Total: %d patterns ***\n", len(results))
 		} else {
-			_, _ = fmt.Fprintf(stdout, "Top Commands\n")
-			_, _ = fmt.Fprintf(stdout, "============\n\n")
-			for i, p := range results {
-				_, _ = fmt.Fprintf(stdout, "%d. %s %s (%d times)\n", i+1, p.ToolName, p.CommandHead, p.Count)
+			results, err := db.AggregateCommands(opts)
+			if err != nil {
+				return fmt.Errorf("aggregate commands: %w", err)
+			}
+
+			if len(results) == 0 {
+				if !jsonFormat && !robotFormat {
+					_, _ = fmt.Fprintf(stdout, "No patterns found.\n")
+				} else if jsonFormat {
+					_, _ = fmt.Fprintf(stdout, "{\"count\":0,\"patterns\":[]}\n")
+				}
+				writeSearchHints(stderr, allProjects, true)
+				return nil
+			}
+
+			if jsonFormat {
+				data := map[string]interface{}{
+					"count":    len(results),
+					"kind":     "commands",
+					"patterns": results,
+				}
+				if err := json.NewEncoder(stdout).Encode(data); err != nil {
+					return fmt.Errorf("encode JSON: %w", err)
+				}
+			} else if robotFormat {
+				_, _ = fmt.Fprintf(stdout, "*** Commands ***\n")
+				for i, p := range results {
+					_, _ = fmt.Fprintf(stdout, "result_%d_tool_name=%s\n", i, p.ToolName)
+					_, _ = fmt.Fprintf(stdout, "result_%d_command_head=%s\n", i, p.CommandHead)
+					_, _ = fmt.Fprintf(stdout, "result_%d_count=%d\n", i, p.Count)
+				}
+				_, _ = fmt.Fprintf(stdout, "*** Total: %d patterns ***\n", len(results))
+			} else {
+				_, _ = fmt.Fprintf(stdout, "Top Commands\n")
+				_, _ = fmt.Fprintf(stdout, "============\n\n")
+				for i, p := range results {
+					_, _ = fmt.Fprintf(stdout, "%d. %s %s (%d times)\n", i+1, p.ToolName, p.CommandHead, p.Count)
+				}
 			}
 		}
 
 	} else if kind == "failures" {
-		results, err := db.AggregateFailures(opts)
-		if err != nil {
-			return fmt.Errorf("aggregate failures: %w", err)
-		}
+		if trend {
+			var excluded int
+			results, err := db.AggregateFailuresTrend(opts, &excluded)
+			if err != nil {
+				return fmt.Errorf("aggregate failures trend: %w", err)
+			}
 
-		if len(results) == 0 {
-			if !jsonFormat && !robotFormat {
-				_, _ = fmt.Fprintf(stdout, "No failure patterns found.\n")
-			} else if jsonFormat {
-				_, _ = fmt.Fprintf(stdout, "{\"count\":0,\"patterns\":[]}\n")
+			if excluded > 0 {
+				_, _ = fmt.Fprintf(stderr, "trend: %d events excluded (no timestamp)\n", excluded)
 			}
-			writeSearchHints(stderr, allProjects, true)
-			return nil
-		}
 
-		if jsonFormat {
-			data := map[string]interface{}{
-				"count":    len(results),
-				"kind":     "failures",
-				"patterns": results,
-			}
-			if err := json.NewEncoder(stdout).Encode(data); err != nil {
-				return fmt.Errorf("encode JSON: %w", err)
-			}
-		} else if robotFormat {
-			_, _ = fmt.Fprintf(stdout, "*** Failures ***\n")
-			for i, p := range results {
-				exitCodeStr := "?"
-				if p.ExitCode != nil {
-					exitCodeStr = fmt.Sprintf("%d", *p.ExitCode)
+			if len(results) == 0 {
+				if !jsonFormat && !robotFormat {
+					_, _ = fmt.Fprintf(stdout, "No patterns found. Try --min-support <lower> or --min-length <lower>.\n")
+				} else if jsonFormat {
+					_, _ = fmt.Fprintf(stdout, "{\"count\":0,\"kind\":\"failures\",\"trends\":[]}\n")
 				}
-				_, _ = fmt.Fprintf(stdout, "result_%d_tool_name=%s\n", i, p.ToolName)
-				_, _ = fmt.Fprintf(stdout, "result_%d_is_error=%v\n", i, p.IsError)
-				_, _ = fmt.Fprintf(stdout, "result_%d_exit_code=%s\n", i, exitCodeStr)
-				_, _ = fmt.Fprintf(stdout, "result_%d_count=%d\n", i, p.Count)
-				_, _ = fmt.Fprintf(stdout, "result_%d_coverage=%d/%d\n", i, p.Count, p.SignalledEvents)
+				writeSearchHints(stderr, allProjects, true)
+				return nil
 			}
-			_, _ = fmt.Fprintf(stdout, "*** Total: %d patterns ***\n", len(results))
+
+			// Group results by week for text/json output
+			weekMap := make(map[string][]storage.FailurePatternWeekly)
+			var weeks []string
+			for _, r := range results {
+				if _, exists := weekMap[r.Week]; !exists {
+					weeks = append(weeks, r.Week)
+				}
+				weekMap[r.Week] = append(weekMap[r.Week], r)
+			}
+
+			if jsonFormat {
+				type trendBucket struct {
+					Week     string                         `json:"week"`
+					Patterns []storage.FailurePatternWeekly `json:"patterns"`
+				}
+				var trends []trendBucket
+				for _, w := range weeks {
+					trends = append(trends, trendBucket{Week: w, Patterns: weekMap[w]})
+				}
+				data := map[string]interface{}{
+					"count":  len(results),
+					"kind":   "failures",
+					"trends": trends,
+				}
+				if err := json.NewEncoder(stdout).Encode(data); err != nil {
+					return fmt.Errorf("encode JSON: %w", err)
+				}
+			} else if robotFormat {
+				_, _ = fmt.Fprintf(stdout, "*** Trends ***\n")
+				for weekIdx, w := range weeks {
+					_, _ = fmt.Fprintf(stdout, "week_%d=%s\n", weekIdx, w)
+					for i, p := range weekMap[w] {
+						exitCodeStr := "?"
+						if p.ExitCode != nil {
+							exitCodeStr = fmt.Sprintf("%d", *p.ExitCode)
+						}
+						_, _ = fmt.Fprintf(stdout, "result_%d_tool_name=%s\n", i, p.ToolName)
+						_, _ = fmt.Fprintf(stdout, "result_%d_is_error=%v\n", i, p.IsError)
+						_, _ = fmt.Fprintf(stdout, "result_%d_exit_code=%s\n", i, exitCodeStr)
+						_, _ = fmt.Fprintf(stdout, "result_%d_count=%d\n", i, p.Count)
+						_, _ = fmt.Fprintf(stdout, "result_%d_coverage=%d/%d\n", i, p.Count, p.SignalledEvents)
+					}
+				}
+				_, _ = fmt.Fprintf(stdout, "*** Total: %d patterns ***\n", len(results))
+			} else {
+				_, _ = fmt.Fprintf(stdout, "Trends in Failures (Week-over-Week)\n")
+				_, _ = fmt.Fprintf(stdout, "===================================\n\n")
+				for _, w := range weeks {
+					_, _ = fmt.Fprintf(stdout, "%s\n", w)
+					for i, p := range weekMap[w] {
+						exitCodeStr := "?"
+						if p.ExitCode != nil {
+							exitCodeStr = fmt.Sprintf("%d", *p.ExitCode)
+						}
+						_, _ = fmt.Fprintf(stdout, "  %d. %s (is_error=%v, exit_code=%s) — %d occurrences\n",
+							i+1, p.ToolName, p.IsError, exitCodeStr, p.Count)
+					}
+					_, _ = fmt.Fprintf(stdout, "\n")
+				}
+			}
 		} else {
-			_, _ = fmt.Fprintf(stdout, "Failure Patterns\n")
-			_, _ = fmt.Fprintf(stdout, "================\n\n")
-			if len(results) > 0 {
-				_, _ = fmt.Fprintf(stdout, "Signalled events (with error signal): %d\n\n", results[0].SignalledEvents)
+			results, err := db.AggregateFailures(opts)
+			if err != nil {
+				return fmt.Errorf("aggregate failures: %w", err)
 			}
-			for i, p := range results {
-				exitCodeStr := "?"
-				if p.ExitCode != nil {
-					exitCodeStr = fmt.Sprintf("%d", *p.ExitCode)
+
+			if len(results) == 0 {
+				if !jsonFormat && !robotFormat {
+					_, _ = fmt.Fprintf(stdout, "No failure patterns found.\n")
+				} else if jsonFormat {
+					_, _ = fmt.Fprintf(stdout, "{\"count\":0,\"patterns\":[]}\n")
 				}
-				_, _ = fmt.Fprintf(stdout, "%d. %s (is_error=%v, exit_code=%s) — %d occurrences\n",
-					i+1, p.ToolName, p.IsError, exitCodeStr, p.Count)
+				writeSearchHints(stderr, allProjects, true)
+				return nil
+			}
+
+			if jsonFormat {
+				data := map[string]interface{}{
+					"count":    len(results),
+					"kind":     "failures",
+					"patterns": results,
+				}
+				if err := json.NewEncoder(stdout).Encode(data); err != nil {
+					return fmt.Errorf("encode JSON: %w", err)
+				}
+			} else if robotFormat {
+				_, _ = fmt.Fprintf(stdout, "*** Failures ***\n")
+				for i, p := range results {
+					exitCodeStr := "?"
+					if p.ExitCode != nil {
+						exitCodeStr = fmt.Sprintf("%d", *p.ExitCode)
+					}
+					_, _ = fmt.Fprintf(stdout, "result_%d_tool_name=%s\n", i, p.ToolName)
+					_, _ = fmt.Fprintf(stdout, "result_%d_is_error=%v\n", i, p.IsError)
+					_, _ = fmt.Fprintf(stdout, "result_%d_exit_code=%s\n", i, exitCodeStr)
+					_, _ = fmt.Fprintf(stdout, "result_%d_count=%d\n", i, p.Count)
+					_, _ = fmt.Fprintf(stdout, "result_%d_coverage=%d/%d\n", i, p.Count, p.SignalledEvents)
+				}
+				_, _ = fmt.Fprintf(stdout, "*** Total: %d patterns ***\n", len(results))
+			} else {
+				_, _ = fmt.Fprintf(stdout, "Failure Patterns\n")
+				_, _ = fmt.Fprintf(stdout, "================\n\n")
+				if len(results) > 0 {
+					_, _ = fmt.Fprintf(stdout, "Signalled events (with error signal): %d\n\n", results[0].SignalledEvents)
+				}
+				for i, p := range results {
+					exitCodeStr := "?"
+					if p.ExitCode != nil {
+						exitCodeStr = fmt.Sprintf("%d", *p.ExitCode)
+					}
+					_, _ = fmt.Fprintf(stdout, "%d. %s (is_error=%v, exit_code=%s) — %d occurrences\n",
+						i+1, p.ToolName, p.IsError, exitCodeStr, p.Count)
+				}
 			}
 		}
 
