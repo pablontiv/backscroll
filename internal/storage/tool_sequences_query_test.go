@@ -1,6 +1,7 @@
 package storage
 
 import (
+	"fmt"
 	"path/filepath"
 	"testing"
 
@@ -420,71 +421,37 @@ func TestUpsertAnnotationWithUuid(t *testing.T) {
 	}
 }
 
-func TestLoadToolSequencesLimitOffset(t *testing.T) {
-	db, err := Open(filepath.Join(t.TempDir(), "test.db"))
+// TestLoadToolSequencesIgnoresLimitOffset pins the contract: Limit/Offset
+// paginate mined patterns at the CLI layer — the input corpus must never be
+// truncated (a pre-mining cut corrupts support counts nondeterministically).
+func TestLoadToolSequencesIgnoresLimitOffset(t *testing.T) {
+	db, err := Open(t.TempDir() + "/t.db")
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer func() { _ = db.Close() }()
 
-	// Create 3 sessions
-	files := []IndexedFile{
-		{
-			SourcePath: "/p/s1.jsonl",
-			Source:     "session",
-			Hash:       "h1",
-			Project:    "proj",
+	var files []IndexedFile
+	for i := 0; i < 5; i++ {
+		files = append(files, IndexedFile{
+			SourcePath: fmt.Sprintf("/p/s%d.jsonl", i), Source: "session", Hash: fmt.Sprintf("h%d", i), Project: "proj",
 			Messages: []IndexedMessage{
-				{Ordinal: 0, Role: "assistant", UUID: "u0", Timestamp: "2026-01-01T00:00:00Z", ContentType: "tool", ToolName: "Read", ExtractionVersion: 1},
+				{Ordinal: 0, UUID: fmt.Sprintf("sq%d-a", i), Role: "assistant", Text: "Read file_path=/x", ContentType: "tool",
+					ToolName: "Read", Timestamp: "2026-01-01T00:00:00Z", ExtractionVersion: 1},
+				{Ordinal: 1, UUID: fmt.Sprintf("sq%d-b", i), Role: "assistant", Text: "Edit file_path=/x", ContentType: "tool",
+					ToolName: "Edit", Timestamp: "2026-01-01T00:00:01Z", ExtractionVersion: 1},
 			},
-		},
-		{
-			SourcePath: "/p/s2.jsonl",
-			Source:     "session",
-			Hash:       "h2",
-			Project:    "proj",
-			Messages: []IndexedMessage{
-				{Ordinal: 0, Role: "assistant", UUID: "u1", Timestamp: "2026-01-02T00:00:00Z", ContentType: "tool", ToolName: "Read", ExtractionVersion: 1},
-			},
-		},
-		{
-			SourcePath: "/p/s3.jsonl",
-			Source:     "session",
-			Hash:       "h3",
-			Project:    "proj",
-			Messages: []IndexedMessage{
-				{Ordinal: 0, Role: "assistant", UUID: "u2", Timestamp: "2026-01-03T00:00:00Z", ContentType: "tool", ToolName: "Write", ExtractionVersion: 1},
-			},
-		},
+		})
 	}
 	if err := db.SyncFiles(files); err != nil {
 		t.Fatal(err)
 	}
 
-	// Test with limit
-	seqs, err := db.LoadToolSequences(LoadSequencesOpts{Limit: 2})
+	seqs, err := db.LoadToolSequences(LoadSequencesOpts{Limit: 2, Offset: 1})
 	if err != nil {
-		t.Fatalf("load with limit: %v", err)
+		t.Fatal(err)
 	}
-	if len(seqs) != 2 {
-		t.Errorf("want 2 sequences with limit=2, got %d", len(seqs))
-	}
-
-	// Test with offset
-	seqs, err = db.LoadToolSequences(LoadSequencesOpts{Offset: 1, Limit: 1})
-	if err != nil {
-		t.Fatalf("load with offset: %v", err)
-	}
-	if len(seqs) != 1 {
-		t.Errorf("want 1 sequence with offset=1, limit=1, got %d", len(seqs))
-	}
-
-	// Test with offset > total
-	seqs, err = db.LoadToolSequences(LoadSequencesOpts{Offset: 100})
-	if err != nil {
-		t.Fatalf("load with large offset: %v", err)
-	}
-	if len(seqs) != 0 {
-		t.Errorf("want 0 sequences with large offset, got %d", len(seqs))
+	if len(seqs) != 5 {
+		t.Errorf("input corpus truncated: got %d sequences, want all 5 (Limit/Offset must not apply pre-mining)", len(seqs))
 	}
 }

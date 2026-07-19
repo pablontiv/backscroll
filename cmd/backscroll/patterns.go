@@ -533,12 +533,11 @@ func runPatterns(stdout, stderr io.Writer,
 			maxLength = 6
 		}
 
+		// Limit/Offset paginate mined patterns below, never the input corpus.
 		seqs, err := db.LoadToolSequences(storage.LoadSequencesOpts{
 			Project: project,
 			After:   after,
 			Before:  before,
-			Limit:   limit,
-			Offset:  offset,
 		})
 		if err != nil {
 			// A load failure (e.g. malformed categories.toml) must fail the
@@ -548,6 +547,17 @@ func runPatterns(stdout, stderr io.Writer,
 		}
 
 		patterns := sequences.Mine(seqs, minSupport, minLength, maxLength)
+		// Paginate the mined patterns (the input corpus is never truncated).
+		if offset > 0 {
+			if offset >= len(patterns) {
+				patterns = nil
+			} else {
+				patterns = patterns[offset:]
+			}
+		}
+		if limit > 0 && len(patterns) > limit {
+			patterns = patterns[:limit]
+		}
 		if len(patterns) == 0 {
 			if !jsonFormat && !robotFormat {
 				_, _ = fmt.Fprintf(stdout, "No patterns found. Try --min-support <lower> or --min-length <lower>.\n")

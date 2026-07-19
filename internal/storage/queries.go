@@ -954,22 +954,13 @@ func (d *Database) LoadToolSequences(opts LoadSequencesOpts) ([]sequences.Sequen
 		return nil, fmt.Errorf("rows error: %w", err)
 	}
 
-	// Convert to []Sequence
+	// Convert to []Sequence. Limit/Offset intentionally do NOT apply here:
+	// they paginate the MINED PATTERNS at the CLI layer, never the input
+	// corpus — truncating sessions before mining silently corrupts support
+	// counts (and map order made the truncation nondeterministic).
 	var result []sequences.Sequence
 	for path, items := range seqsByPath {
 		result = append(result, sequences.Sequence{SessionID: path, Items: items})
-	}
-
-	// Apply limit/offset (in-memory to avoid pagination complexity in this query)
-	if opts.Offset > 0 {
-		if opts.Offset >= len(result) {
-			result = nil
-		} else {
-			result = result[opts.Offset:]
-		}
-	}
-	if opts.Limit > 0 && len(result) > opts.Limit {
-		result = result[:opts.Limit]
 	}
 
 	return result, nil
