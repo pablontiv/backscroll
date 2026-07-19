@@ -18,11 +18,34 @@ type BackfillDerivedOpts struct {
 	OnProgress func(processed, templateCount, signalCount, eventCount int)
 }
 
+// CurrentNormalizationVersion is the target version for template normalization.
+// Incremented when template mining heuristics change (e.g., v1→v2).
+const CurrentNormalizationVersion = 2
+
 // BackfillDerived mines templates, corrections, and lossy tool_events from
-// stored text for files that are EXPIRED (absent from disk). Results are inserted
-// idempotently (INSERT OR IGNORE). Extraction_version=0 marks lossy (reverse-parsed) rows.
-// On-disk files are handled by B1's rich re-parse path; this path avoids duplicate lossy rows.
+// stored text for files that are EXPIRED (absent from disk) or have STALE TEMPLATES
+// (with normalization_version < current). Results are inserted idempotently (INSERT OR IGNORE).
+// Extraction_version=0 marks lossy (reverse-parsed) rows. On-disk files are handled by B1's
+// rich re-parse path; this path avoids duplicate lossy rows.
 func (d *Database) BackfillDerived(opts BackfillDerivedOpts) error {
+	type fileToBackfill struct {
+		SourcePath string
+		Source     string
+	}
+
+	// First, discover and process stale templates (v1 → v2 epoch upgrade).
+	// These are templates with normalization_version < CurrentNormalizationVersion.
+	stalePaths, err := d.StaleTemplatePaths(CurrentNormalizationVersion)
+	if err != nil {
+		return fmt.Errorf("query stale template paths: %w", err)
+	}
+
+	// Deduplicate stale paths and expired files using a map.
+	pathsToProcess := make(map[string]string)
+	for _, p := range stalePaths {
+		pathsToProcess[p] = "session"
+	}
+
 	// Find files in search_items that are EXPIRED: absent from indexed_files.
 	// Within expired files, process only those missing at least one of the three derivations:
 	// - template_matches (templates mined), OR
@@ -44,17 +67,18 @@ func (d *Database) BackfillDerived(opts BackfillDerivedOpts) error {
 	}
 	defer rows.Close()
 
-	type fileToBackfill struct {
-		SourcePath string
-		Source     string
-	}
-	var filesToBackfill []fileToBackfill
 	for rows.Next() {
 		var sourcePath, source string
 		if err := rows.Scan(&sourcePath, &source); err != nil {
 			return fmt.Errorf("scan file: %w", err)
 		}
-		filesToBackfill = append(filesToBackfill, fileToBackfill{sourcePath, source})
+		pathsToProcess[sourcePath] = source
+	}
+
+	// Convert map to list of files to backfill
+	var filesToBackfill []fileToBackfill
+	for path, source := range pathsToProcess {
+		filesToBackfill = append(filesToBackfill, fileToBackfill{path, source})
 	}
 	if err := rows.Err(); err != nil {
 		return fmt.Errorf("iterate expired files: %w", err)
@@ -267,6 +291,17 @@ func (d *Database) backfillTemplatesForFile(tx *sql.Tx, sourcePath string, messa
 			return 0, fmt.Errorf("insert template: %w", err)
 		}
 
+		// Upsert: if template exists with lower normalization_version, update to current version.
+		// This handles the case where a v1 template is being re-mined under v2 heuristics.
+		_, err = tx.Exec(`
+			UPDATE message_templates
+			SET normalization_version = ?
+			WHERE signature = ? AND normalization_version < ?
+		`, rec.normalizationVersion, rec.signature, rec.normalizationVersion)
+		if err != nil {
+			return 0, fmt.Errorf("update template normalization_version: %w", err)
+		}
+
 		var tmplID int64
 		err = tx.QueryRow(`SELECT id FROM message_templates WHERE signature = ?`, rec.signature).Scan(&tmplID)
 		if err != nil {
@@ -366,6 +401,33 @@ func (d *Database) backfillToolEventsForFile(tx *sql.Tx, sourcePath string, mess
 		count++
 	}
 	return count, nil
+}
+
+// StaleTemplatePaths returns source_paths with templates whose normalization_version is older
+// than currentVersion. Results are ordered by ascending source_path (deterministic).
+// Used to discover which files need re-mining under newer template heuristics.
+func (d *Database) StaleTemplatePaths(currentVersion int) ([]string, error) {
+	rows, err := d.db.Query(`
+		SELECT DISTINCT tm.source_path
+		FROM template_matches tm
+		JOIN message_templates mt ON tm.template_id = mt.id
+		WHERE mt.normalization_version < ?
+		ORDER BY tm.source_path ASC
+	`, currentVersion)
+	if err != nil {
+		return nil, fmt.Errorf("query stale template paths: %w", err)
+	}
+	defer rows.Close()
+
+	var paths []string
+	for rows.Next() {
+		var path string
+		if err := rows.Scan(&path); err != nil {
+			return nil, fmt.Errorf("scan path: %w", err)
+		}
+		paths = append(paths, path)
+	}
+	return paths, rows.Err()
 }
 
 // backfillDetectCorrections runs detectors with prose-only filter.

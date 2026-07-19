@@ -450,3 +450,197 @@ func TestBackfillTemplatesFilterInputs(t *testing.T) {
 		t.Errorf("expected ordinals 2 or 3 to be mined (error-bearing); got %v", minedOrdinals)
 	}
 }
+
+// TestStaleTemplatePaths discovers templates older than currentVersion (RED test - task 3.1)
+func TestStaleTemplatePaths(t *testing.T) {
+	db, err := Open(filepath.Join(t.TempDir(), "test.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = db.Close() }()
+
+	// Insert templates with mixed normalization versions
+	_, err = db.db.Exec(`
+		INSERT INTO message_templates (signature, normalization_version, template_text, occurrence_count, first_seen, last_seen)
+		VALUES
+		('sig1', 1, 'error: v1 template', 1, '2026-01-01T00:00:00Z', '2026-06-01T00:00:00Z'),
+		('sig2', 1, 'error: another v1', 1, '2026-01-01T00:00:00Z', '2026-06-01T00:00:00Z'),
+		('sig3', 2, 'error: v2 template', 1, '2026-01-01T00:00:00Z', '2026-06-01T00:00:00Z')
+	`)
+	if err != nil {
+		t.Fatalf("insert templates: %v", err)
+	}
+
+	// Insert template_matches linking templates to source paths
+	_, err = db.db.Exec(`
+		INSERT INTO template_matches (template_id, item_uuid, source_path, ordinal)
+		SELECT id, 'uuid1', '/path/s1.jsonl', 0 FROM message_templates WHERE signature = 'sig1'
+		UNION ALL
+		SELECT id, 'uuid2', '/path/s2.jsonl', 0 FROM message_templates WHERE signature = 'sig2'
+		UNION ALL
+		SELECT id, 'uuid3', '/path/s3.jsonl', 0 FROM message_templates WHERE signature = 'sig3'
+	`)
+	if err != nil {
+		t.Fatalf("insert matches: %v", err)
+	}
+
+	// Call StaleTemplatePaths with currentVersion=2 - should return paths for v1 templates
+	stalePaths, err := db.StaleTemplatePaths(2)
+	if err != nil {
+		t.Fatalf("StaleTemplatePaths: %v", err)
+	}
+
+	// Should find 2 stale paths (sig1 and sig2 are v1)
+	if len(stalePaths) != 2 {
+		t.Errorf("expected 2 stale paths, got %d: %v", len(stalePaths), stalePaths)
+	}
+
+	// Verify paths are returned
+	pathSet := make(map[string]bool)
+	for _, p := range stalePaths {
+		pathSet[p] = true
+	}
+	if !pathSet["/path/s1.jsonl"] || !pathSet["/path/s2.jsonl"] {
+		t.Errorf("expected /path/s1.jsonl and /path/s2.jsonl in stale paths, got %v", stalePaths)
+	}
+}
+
+// TestStaleTemplatePathsEmpty returns empty when all templates at current version
+func TestStaleTemplatePathsEmpty(t *testing.T) {
+	db, err := Open(filepath.Join(t.TempDir(), "test.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = db.Close() }()
+
+	// Insert only v2 templates (current version)
+	_, err = db.db.Exec(`
+		INSERT INTO message_templates (signature, normalization_version, template_text, occurrence_count, first_seen, last_seen)
+		VALUES ('sig1', 2, 'error: v2 template', 1, '2026-01-01T00:00:00Z', '2026-06-01T00:00:00Z')
+	`)
+	if err != nil {
+		t.Fatalf("insert: %v", err)
+	}
+
+	// Call StaleTemplatePaths with currentVersion=2 - should return empty
+	stalePaths, err := db.StaleTemplatePaths(2)
+	if err != nil {
+		t.Fatalf("StaleTemplatePaths: %v", err)
+	}
+
+	if len(stalePaths) != 0 {
+		t.Errorf("expected 0 stale paths when all templates at current version, got %d", len(stalePaths))
+	}
+}
+
+// TestBackfillDerivedReminesToUpsertSemantics verifies upsert path behavior (RED test - task 3.3)
+func TestBackfillDerivedReminesToUpsertSemantics(t *testing.T) {
+	db, err := Open(filepath.Join(t.TempDir(), "test.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = db.Close() }()
+
+	// First, sync one message to naturally generate a v2 template
+	msgs := []IndexedMessage{
+		{Ordinal: 0, UUID: "u1", ToolName: "Bash", IsError: boolPtr(true), Text: "error: database locked", ExtractionVersion: 1},
+	}
+	files := []IndexedFile{
+		{SourcePath: "/s.jsonl", Source: "session", Hash: "h1", Project: "proj", Messages: msgs},
+	}
+	if err := db.SyncFiles(files); err != nil {
+		t.Fatalf("sync: %v", err)
+	}
+
+	// Get the template that was created (should have normalization_version=2 from miner)
+	var tmplID int64
+	var sig string
+	var normVersion int
+	if err := db.db.QueryRow("SELECT id, signature, normalization_version FROM message_templates ORDER BY id DESC LIMIT 1").Scan(&tmplID, &sig, &normVersion); err != nil {
+		t.Fatal(err)
+	}
+
+	// Manually downgrade template to v1 to simulate historical template
+	_, err = db.db.Exec(`UPDATE message_templates SET normalization_version = 1 WHERE id = ?`, tmplID)
+	if err != nil {
+		t.Fatalf("downgrade template: %v", err)
+	}
+
+	// Add another error message that will mine to the SAME template (use numeric suffix to force variable matching)
+	// The Drain miner with depth=2 keeps first 2 tokens, so:
+	// "error: database 999" → normalized to "error: database <*>" (third token is numeric)
+	// This will generate the same template signature as "error: database locked" only if
+	// ExtractErrorLines makes the change. Let's use the same message to ensure same signature.
+	_, err = db.db.Exec(`
+		INSERT INTO search_items (source, source_path, ordinal, role, text, uuid, project, content_type, extraction_version)
+		VALUES ('session', '/s.jsonl', 1, 'assistant', 'error: database locked', 'u2#t0', 'proj', 'tool', 1)
+	`)
+	if err != nil {
+		t.Fatalf("insert search_items: %v", err)
+	}
+
+	// Call BackfillDerived - should update normalization_version back to 2 via upsert
+	if err := db.BackfillDerived(BackfillDerivedOpts{}); err != nil {
+		t.Fatalf("backfill: %v", err)
+	}
+
+	// Verify template normalization_version was updated to 2
+	var updatedNormVersion int
+	if err := db.db.QueryRow("SELECT normalization_version FROM message_templates WHERE id = ?", tmplID).Scan(&updatedNormVersion); err != nil {
+		t.Fatal(err)
+	}
+	if updatedNormVersion != 2 {
+		t.Errorf("expected normalization_version=2 after upsert, got %d", updatedNormVersion)
+	}
+}
+
+// TestBackfillDerivedRemineIdempotency verifies re-run doesn't duplicate rows
+func TestBackfillDerivedRemineIdempotency(t *testing.T) {
+	db, err := Open(filepath.Join(t.TempDir(), "test.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = db.Close() }()
+
+	// Insert v1 template
+	_, err = db.db.Exec(`
+		INSERT INTO message_templates (signature, normalization_version, template_text, occurrence_count, first_seen, last_seen)
+		VALUES ('sig1', 1, 'error: <*> timeout', 1, '2026-01-01T00:00:00Z', '2026-06-01T00:00:00Z')
+	`)
+	if err != nil {
+		t.Fatalf("insert: %v", err)
+	}
+
+	// Insert search_items
+	_, err = db.db.Exec(`
+		INSERT INTO search_items (source, source_path, ordinal, role, text, uuid, project, content_type, extraction_version)
+		VALUES ('session', '/s.jsonl', 0, 'assistant', 'error: timeout', 'u1#t0', 'proj', 'tool', 1)
+	`)
+	if err != nil {
+		t.Fatalf("insert: %v", err)
+	}
+
+	// Run BackfillDerived twice
+	if err := db.BackfillDerived(BackfillDerivedOpts{}); err != nil {
+		t.Fatalf("first backfill: %v", err)
+	}
+
+	var matchesAfterFirst int
+	if err := db.db.QueryRow("SELECT COUNT(*) FROM template_matches").Scan(&matchesAfterFirst); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := db.BackfillDerived(BackfillDerivedOpts{}); err != nil {
+		t.Fatalf("second backfill: %v", err)
+	}
+
+	var matchesAfterSecond int
+	if err := db.db.QueryRow("SELECT COUNT(*) FROM template_matches").Scan(&matchesAfterSecond); err != nil {
+		t.Fatal(err)
+	}
+
+	// Counts should be the same (idempotent)
+	if matchesAfterFirst != matchesAfterSecond {
+		t.Errorf("expected idempotent count, got %d then %d", matchesAfterFirst, matchesAfterSecond)
+	}
+}
