@@ -189,3 +189,32 @@ The CLI will truncate output if needed; the agent reads truncation as "got what 
 - **v1.4.0+ improvements**: Split FTS index (Slice 1) — `tool_fts` with trigram tokenizer for exact command/error matching; `messages_fts` with porter tokenizer for prose. Switched by `--content-type`.
 - **Deployable version check**: `backscroll version` or `backscroll status` shows deployed build.
 - **Diagnostic skill**: `backscroll-doctor` self-audits the index for bugs, gaps, enhancements.
+
+## Pattern Discovery (v2.7+): census, not retrieval
+
+`search` answers "find what I can already name". For DISCOVERY — "what
+recurs that nobody named?" — use the census commands instead; asking
+BM25 for patterns only yields anecdotes.
+
+| Question | Command |
+|---|---|
+| What errors recur? | `patterns --kind templates --min-support 3` |
+| What breaks, and is it growing? | `patterns --kind failures [--trend]` |
+| Where did the user correct me/us? | `patterns --kind corrections --min-confidence 0.6` |
+| What workflows repeat? | `patterns --kind sequences --min-support 20 --min-length 3` |
+| What runs most (per project/tag)? | `patterns --kind commands --project X` |
+
+Agent-grade: add `--robot --indexed-only --all-projects`. Interpret the
+COMPLETE table returned — the census already did the counting; the
+agent's job is judgment, not sampling.
+
+### Classification loop (resumable by construction)
+
+```bash
+patterns --kind corrections --pending --batch 50 --robot   # fetch unlabeled
+annotate --uuid <u> --kind correction --label "<free-form>" # write back
+# re-run fetch: labeled candidates vanish (LEFT JOIN) — no loop state needed
+```
+
+Full doc: `docs/patterns.md`. Calibration gate before trusting
+confidences: `docs/eval/corrections-calibration.md`.
