@@ -316,11 +316,13 @@ func TestReresolveProjectsWithRegistryNoUpdate(t *testing.T) {
 	}
 	defer func() { _ = db.Close() }()
 
-	// Insert row with a project already matching what registry would assign
+	// Insert row with a project already matching what registry would assign.
+	// Use path format that enables DecodeCwdFromSessionPath: /home/user/.claude/projects/-home-user-proj/uuid.jsonl
+	// This allows decode to succeed, registry branch to execute, but no update since IDs already match.
 	_, err = db.db.Exec(`
 		INSERT INTO search_items
 		(source, source_path, ordinal, role, text, uuid, project, content_type)
-		VALUES ('session', '/home/user/proj/file.jsonl', 0, 'user', 'text', 'u1', 'proj', 'text')
+		VALUES ('session', '/home/user/.claude/projects/-home-user-proj/file.jsonl', 0, 'user', 'text', 'u1', 'proj', 'text')
 	`)
 	if err != nil {
 		t.Fatalf("insert: %v", err)
@@ -421,5 +423,58 @@ func TestAggregateCommandsWithOffsetPagination(t *testing.T) {
 
 	if len(all) <= len(paginated) {
 		t.Errorf("pagination should return fewer results")
+	}
+}
+
+// TestReresolveProjectsWithRegistryUpdate verifies FromRegistry branch update behavior (RED test - task 1.1)
+func TestReresolveProjectsWithRegistryUpdate(t *testing.T) {
+	db, err := Open(filepath.Join(t.TempDir(), "test.db"))
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	defer func() { _ = db.Close() }()
+
+	// Insert row with initial project ID "proj", using path format that enables DecodeCwdFromSessionPath
+	// Path format: /home/user/.claude/projects/-home-user-proj/uuid.jsonl
+	// This allows DecodeCwdFromSessionPath to extract cwd=/home/user/proj (fallback from encoded dir)
+	_, err = db.db.Exec(`
+		INSERT INTO search_items
+		(source, source_path, ordinal, role, text, uuid, project, content_type)
+		VALUES ('session', '/home/user/.claude/projects/-home-user-proj/abc123.jsonl', 0, 'user', 'text', 'u1', 'proj', 'text')
+	`)
+	if err != nil {
+		t.Fatalf("insert: %v", err)
+	}
+
+	// Registry with entry that differs from stored "proj"
+	registry := projects.ProjectRegistry{
+		Projects: []projects.ProjectConfig{
+			{
+				ID:    "proj-correct",
+				Roots: []string{"/home/user/proj"},
+			},
+		},
+	}
+
+	// Call ReresolveProjectsWithRegistry - should update project from "proj" to "proj-correct"
+	updated, err := db.ReresolveProjectsWithRegistry(context.Background(), registry)
+	if err != nil {
+		t.Fatalf("reresolve: %v", err)
+	}
+
+	// Should have updated 1 row (FromRegistry matched and ID differed)
+	if updated != 1 {
+		t.Errorf("expected 1 update when registry ID differs, got %d", updated)
+	}
+
+	// Verify the project was actually updated in DB
+	var storedProject string
+	err = db.db.QueryRow("SELECT project FROM search_items WHERE source_path = ?",
+		"/home/user/.claude/projects/-home-user-proj/abc123.jsonl").Scan(&storedProject)
+	if err != nil {
+		t.Fatalf("query updated project: %v", err)
+	}
+	if storedProject != "proj-correct" {
+		t.Errorf("expected project to be updated to 'proj-correct', got %q", storedProject)
 	}
 }
