@@ -166,6 +166,18 @@ func (d *Database) SetupSchema() error {
 		}
 	}
 
+	// Check if version 13 is already applied
+	err = d.db.QueryRow("SELECT COUNT(*) FROM schema_migrations WHERE version = 13").Scan(&count)
+	if err != nil {
+		return fmt.Errorf("check migration version 13: %w", err)
+	}
+
+	if count == 0 {
+		if err := d.applyV13Migration(); err != nil {
+			return err
+		}
+	}
+
 	return nil
 }
 
@@ -903,6 +915,37 @@ CREATE INDEX IF NOT EXISTS idx_annotations_kind ON annotations(kind);
 		VALUES (12, 'V12 agent classification: annotations (free-form labels; enum freeze deferred)', CURRENT_TIMESTAMP, ?)
 	`, checksumHex); err != nil {
 		return fmt.Errorf("record migration v12: %w", err)
+	}
+
+	return tx.Commit()
+}
+
+// applyV13Migration adds indexes on template_matches and correction_signals
+// for efficient backfill discovery queries. The queries use NOT EXISTS subqueries
+// on source_path; indexes reduce from O(N·M) table scans to O(N·log M) index lookups.
+func (d *Database) applyV13Migration() error {
+	tx, err := d.db.Begin()
+	if err != nil {
+		return fmt.Errorf("begin transaction: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	const sqlV13 = `
+CREATE INDEX IF NOT EXISTS idx_template_matches_source ON template_matches(source_path);
+CREATE INDEX IF NOT EXISTS idx_correction_signals_source ON correction_signals(source_path);
+`
+	if _, err := tx.Exec(sqlV13); err != nil {
+		return fmt.Errorf("apply v13 indexes: %w", err)
+	}
+
+	checksum := sha256.Sum256([]byte(sqlV13))
+	checksumHex := fmt.Sprintf("%x", checksum)
+
+	if _, err := tx.Exec(`
+		INSERT INTO schema_migrations (version, name, applied_on, checksum)
+		VALUES (13, 'V13 backfill discovery indexes', CURRENT_TIMESTAMP, ?)
+	`, checksumHex); err != nil {
+		return fmt.Errorf("record migration v13: %w", err)
 	}
 
 	return tx.Commit()

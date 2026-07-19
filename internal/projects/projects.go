@@ -34,8 +34,9 @@ const (
 )
 
 type Identification struct {
-	ProjectID  string
-	Confidence Confidence
+	ProjectID    string
+	Confidence   Confidence
+	FromRegistry bool // true iff the match came from registry.Projects (not fallback)
 }
 
 func LoadGlobalRegistry() ProjectRegistry {
@@ -166,9 +167,10 @@ func slicesEqualFold(a, b []string) bool {
 // Identify resolves the canonical project for cwd.
 // Resolution order: local hint → exact root → worktree pattern → subpath → truncated suffix → unknown.
 // Paths are normalized for cross-host equivalence (e.g., /home/shared vs /Users/Shared roots).
+// FromRegistry=true only if the match came from registry.Projects (not fallback).
 func Identify(cwd string, registry ProjectRegistry) Identification {
 	if hint := LoadLocalHint(cwd); hint != nil {
-		return Identification{ProjectID: hint.ProjectID, Confidence: ConfidenceHint}
+		return Identification{ProjectID: hint.ProjectID, Confidence: ConfidenceHint, FromRegistry: false}
 	}
 
 	// Normalize cwd for cross-host equivalence
@@ -178,7 +180,7 @@ func Identify(cwd string, registry ProjectRegistry) Identification {
 	for _, p := range registry.Projects {
 		for _, root := range p.Roots {
 			if normalizedCwd == root {
-				return Identification{ProjectID: p.ID, Confidence: ConfidenceExact}
+				return Identification{ProjectID: p.ID, Confidence: ConfidenceExact, FromRegistry: true}
 			}
 		}
 	}
@@ -187,7 +189,7 @@ func Identify(cwd string, registry ProjectRegistry) Identification {
 	for _, p := range registry.Projects {
 		for _, pattern := range p.WorktreePatterns {
 			if matched, _ := filepath.Match(pattern, normalizedCwd); matched {
-				return Identification{ProjectID: p.ID, Confidence: ConfidencePattern}
+				return Identification{ProjectID: p.ID, Confidence: ConfidencePattern, FromRegistry: true}
 			}
 		}
 	}
@@ -196,7 +198,7 @@ func Identify(cwd string, registry ProjectRegistry) Identification {
 	for _, p := range registry.Projects {
 		for _, root := range p.Roots {
 			if strings.HasPrefix(normalizedCwd, root+string(filepath.Separator)) {
-				return Identification{ProjectID: p.ID, Confidence: ConfidenceExact}
+				return Identification{ProjectID: p.ID, Confidence: ConfidenceExact, FromRegistry: true}
 			}
 		}
 	}
@@ -207,7 +209,7 @@ func Identify(cwd string, registry ProjectRegistry) Identification {
 		for _, root := range p.Roots {
 			rootClean := strings.TrimPrefix(root, string(filepath.Separator))
 			if strings.HasSuffix(rootClean, cwdClean) || strings.HasSuffix(cwdClean, rootClean) {
-				return Identification{ProjectID: p.ID, Confidence: ConfidenceTruncated}
+				return Identification{ProjectID: p.ID, Confidence: ConfidenceTruncated, FromRegistry: true}
 			}
 		}
 	}
@@ -215,10 +217,10 @@ func Identify(cwd string, registry ProjectRegistry) Identification {
 	// No registry match. Try fallback identity from cwd.
 	fallbackID := DeriveFallbackID(normalizedCwd)
 	if fallbackID != "unknown" {
-		return Identification{ProjectID: fallbackID, Confidence: ConfidenceUnknown}
+		return Identification{ProjectID: fallbackID, Confidence: ConfidenceUnknown, FromRegistry: false}
 	}
 
-	return Identification{ProjectID: "unknown", Confidence: ConfidenceUnknown}
+	return Identification{ProjectID: "unknown", Confidence: ConfidenceUnknown, FromRegistry: false}
 }
 
 func ListProjects(registry ProjectRegistry) []ProjectConfig {

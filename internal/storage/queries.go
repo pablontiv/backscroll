@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/pablontiv/backscroll/internal/categories"
+	"github.com/pablontiv/backscroll/internal/projects"
 	"github.com/pablontiv/backscroll/internal/sequences"
 )
 
@@ -1073,4 +1074,89 @@ func (d *Database) ReresolveProjects(ctx context.Context, resolver func(sourcePa
 	}
 
 	return resolvedPaths, nil
+}
+
+// ReresolveProjectsWithRegistry re-resolves project identities using the global
+// registry, correcting historical fallback labels when a registry entry matches.
+// It iterates DISTINCT (source_path, project) tuples; for each path, decodes cwd,
+// calls Identify with the registry, and updates rows if the registry ID differs
+// from the stored fallback. Returns count of source_paths updated.
+// Only registry matches count — fallback-only paths are skipped (no churn).
+func (d *Database) ReresolveProjectsWithRegistry(ctx context.Context, registry projects.ProjectRegistry) (int64, error) {
+	if len(registry.Projects) == 0 {
+		return 0, nil // no registry entries, nothing to resolve
+	}
+
+	// Find all distinct (source_path, project) tuples where we might have a fallback label
+	rows, err := d.db.QueryContext(ctx, `
+		SELECT DISTINCT si.source_path, si.project
+		FROM search_items si
+		WHERE si.project IS NOT NULL
+		ORDER BY si.source_path
+	`)
+	if err != nil {
+		return 0, fmt.Errorf("query paths for registry re-resolution: %w", err)
+	}
+	defer rows.Close()
+
+	type pathLabel struct {
+		path    string
+		project string
+	}
+	var pathLabels []pathLabel
+	for rows.Next() {
+		var path, proj string
+		if err := rows.Scan(&path, &proj); err != nil {
+			return 0, fmt.Errorf("scan path/project: %w", err)
+		}
+		pathLabels = append(pathLabels, pathLabel{path, proj})
+	}
+	if err := rows.Err(); err != nil {
+		return 0, fmt.Errorf("iterate path/project: %w", err)
+	}
+
+	if len(pathLabels) == 0 {
+		return 0, nil
+	}
+
+	// Re-resolve each path against the registry
+	tx, err := d.db.BeginTx(ctx, nil)
+	if err != nil {
+		return 0, fmt.Errorf("begin transaction: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	var updatedPaths int64
+	for _, pl := range pathLabels {
+		cwd := projects.DecodeCwdFromSessionPath(pl.path)
+		if cwd == "" {
+			continue // can't decode path, skip
+		}
+
+		// Normalize cross-host equivalences
+		cwd = projects.NormalizeRootEquivalence(cwd, registry)
+
+		// Try registry match
+		id := projects.Identify(cwd, registry)
+		if !id.FromRegistry {
+			continue // registry didn't match, skip (no churn on fallback-only)
+		}
+
+		// Update only if the registry ID differs from stored project
+		if id.ProjectID != pl.project {
+			_, err := tx.ExecContext(ctx, `
+				UPDATE search_items SET project = ? WHERE source_path = ?
+			`, id.ProjectID, pl.path)
+			if err != nil {
+				return 0, fmt.Errorf("update source_path %s: %w", pl.path, err)
+			}
+			updatedPaths++
+		}
+	}
+
+	if err := tx.Commit(); err != nil {
+		return 0, fmt.Errorf("commit registry re-resolution transaction: %w", err)
+	}
+
+	return updatedPaths, nil
 }

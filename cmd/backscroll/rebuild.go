@@ -93,6 +93,16 @@ func runRebuild(stdout, stderr io.Writer) error {
 		_, _ = fmt.Fprintf(stdout, "Re-resolved %d sessions with derived project identities.\n", resolved)
 	}
 
+	// Registry-aware re-resolution: correct historical fallback labels
+	_, _ = fmt.Fprintf(stdout, "Checking registry for project label corrections...\n")
+	registry := projects.LoadGlobalRegistry()
+	registryMatched, err := db.ReresolveProjectsWithRegistry(context.Background(), registry)
+	if err != nil {
+		_, _ = fmt.Fprintf(stderr, "warning: registry re-resolution failed: %v\n", err)
+	} else if registryMatched > 0 {
+		_, _ = fmt.Fprintf(stdout, "Registry matched and corrected %d sessions.\n", registryMatched)
+	}
+
 	_, _ = fmt.Fprintf(stdout, "Running incremental sync...\n")
 	if err := maybeAutoSync(cfg); err != nil {
 		_, _ = fmt.Fprintf(stderr, "warning: sync failed: %v\n", err)

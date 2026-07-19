@@ -89,3 +89,47 @@ func TestPatternsProjectAllProjectsConflict(t *testing.T) {
 		t.Fatal("project + all-projects must be rejected")
 	}
 }
+
+func TestPatternsCommandsRobotSeeded(t *testing.T) {
+	_, cleanup := testEnv(t)
+	defer cleanup()
+	seedToolEvents(t)
+	stdout, _, err := runCmd("patterns", "--kind", "commands", "--robot", "--all-projects", "--indexed-only")
+	if err != nil {
+		t.Fatalf("run: %v", err)
+	}
+	if !strings.Contains(stdout, "result_") {
+		t.Errorf("robot output missing result lines: %q", stdout)
+	}
+}
+
+func TestPatternsFailuresJSONSeeded(t *testing.T) {
+	_, cleanup := testEnv(t)
+	defer cleanup()
+	seedToolEvents(t)
+	stdout, _, err := runCmd("patterns", "--kind", "failures", "--json", "--all-projects", "--indexed-only")
+	if err != nil {
+		t.Fatalf("run: %v", err)
+	}
+	if !strings.Contains(stdout, "Bash") {
+		t.Errorf("failures json missing seeded tool: %q", stdout)
+	}
+}
+
+func TestPatternsFailuresTextWithTag(t *testing.T) {
+	_, cleanup := testEnv(t)
+	defer cleanup()
+	seedToolEvents(t)
+	if _, _, err := runCmd("patterns", "--kind", "failures", "--tag", "debugging", "--all-projects", "--indexed-only"); err != nil {
+		t.Fatalf("run: %v", err)
+	}
+}
+
+func TestPatternsTemplatesMinSupportSeeded(t *testing.T) {
+	_, cleanup := testEnv(t)
+	defer cleanup()
+	seedToolEvents(t)
+	if _, _, err := runCmd("patterns", "--kind", "templates", "--min-support", "1", "--all-projects", "--indexed-only"); err != nil {
+		t.Fatalf("run: %v", err)
+	}
+}

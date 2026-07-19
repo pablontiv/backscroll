@@ -535,3 +535,47 @@ func TestIdentifyFallbackWithCrossHostEquiv(t *testing.T) {
 		t.Errorf("expected 'myproj' from cross-host subpath, got %q", id.ProjectID)
 	}
 }
+
+func TestIdentifyFromRegistry(t *testing.T) {
+	registry := projects.ProjectRegistry{
+		Projects: []projects.ProjectConfig{
+			{
+				ID:    "proj-a",
+				Roots: []string{"/home/shared/proj-a"},
+			},
+		},
+	}
+
+	// Exact registry match
+	id := projects.Identify("/home/shared/proj-a", registry)
+	if id.ProjectID != "proj-a" || !id.FromRegistry || id.Confidence != projects.ConfidenceExact {
+		t.Errorf("exact registry match: got %#v", id)
+	}
+
+	// Subpath of registry match
+	id = projects.Identify("/home/shared/proj-a/src", registry)
+	if id.ProjectID != "proj-a" || !id.FromRegistry || id.Confidence != projects.ConfidenceExact {
+		t.Errorf("subpath of registry root: got %#v", id)
+	}
+
+	// Fallback (no registry match)
+	id = projects.Identify("/Users/pones/mycode", registry)
+	if id.FromRegistry {
+		t.Errorf("fallback should have FromRegistry=false: got %#v", id)
+	}
+
+	// Local hint (not from registry)
+	dir := t.TempDir()
+	hintDir := filepath.Join(dir, ".backscroll")
+	if err := os.MkdirAll(hintDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	content := `project_id = "local-proj"`
+	if err := os.WriteFile(filepath.Join(hintDir, "project.toml"), []byte(content), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	id = projects.Identify(dir, registry)
+	if id.ProjectID != "local-proj" || id.FromRegistry || id.Confidence != projects.ConfidenceHint {
+		t.Errorf("hint should have FromRegistry=false: got %#v", id)
+	}
+}
