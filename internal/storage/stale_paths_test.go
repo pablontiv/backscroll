@@ -38,11 +38,11 @@ func TestStalePathsReturnsPreV8Files(t *testing.T) {
 		t.Fatalf("stale paths: %v", err)
 	}
 
-	if len(paths) != 2 {
-		t.Fatalf("want 2 stale paths (legacy + stale), got %d: %v", len(paths), paths)
+	if len(paths) != 3 {
+		t.Fatalf("want 3 stale paths (v1 + legacy + v0), got %d: %v", len(paths), paths)
 	}
-	if paths[0] != "/p/legacy.jsonl" || paths[1] != "/p/stale.jsonl" {
-		t.Errorf("stale paths = %v, want [/p/legacy.jsonl /p/stale.jsonl]", paths)
+	if paths[0] != "/p/legacy.jsonl" || paths[1] != "/p/rich.jsonl" || paths[2] != "/p/stale.jsonl" {
+		t.Errorf("stale paths = %v, want [/p/legacy.jsonl /p/rich.jsonl /p/stale.jsonl]", paths)
 	}
 
 	// Non-session source must not appear

@@ -61,8 +61,16 @@ func ParseToolFromSerialized(text string) (toolName, commandHead string) {
 		if strings.HasPrefix(f, "command=") {
 			cmd := strings.TrimPrefix(f, "command=")
 			cmdFields := strings.Fields(cmd)
-			if len(cmdFields) > 0 {
-				commandHead = cmdFields[0]
+			// Skip leading POSIX variable assignments (tokens containing '=')
+			for i, field := range cmdFields {
+				if !strings.Contains(field, "=") {
+					commandHead = field
+					break
+				}
+				// If this is the last field and it's an assignment, no command found
+				if i == len(cmdFields)-1 {
+					commandHead = ""
+				}
 			}
 			break
 		}

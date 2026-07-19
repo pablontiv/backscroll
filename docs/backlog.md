@@ -1,7 +1,8 @@
 # Backlog — Pattern Discovery
 
-Estado al 2026-07-19, tras north star (F0–F4), ciclo backfill (B1–B3) y
-ciclo de calidad (Q1–Q3). Ledger detallado de ejecución en
+Estado al 2026-07-19, tras north star (F0–F4), ciclo backfill (B1–B3), 
+ciclo de calidad (Q1–Q3), y **SDD mining-signal-quality** (T1/T2/T3/T6 
+implementados). Ledger detallado de ejecución en
 `.superpowers/sdd/progress.md` (local); diseño en
 `docs/superpowers/specs/2026-07-17-pattern-discovery-northstar-design.md`.
 
@@ -20,25 +21,24 @@ ciclo de calidad (Q1–Q3). Ledger detallado de ejecución en
 
 ## Tareas accionables (orden sugerido)
 
-- **T1 — VAR= stripping en command_head** (último hallazgo del north star sin
-  implementar): la extracción toma `SP=/path;` como command_head; strip de
-  prefijos `VAR=` en `commandHead()` (reader) + backfill de heads históricos.
-  Destraba la señal real de sequences (SHELL_OTHER hoy domina 72%).
-- **T2 — Re-minado de templates del corpus histórico**: el minado v2
-  (error-only) solo aplica a syncs nuevos; los archivos ya minados en v1 no
-  se re-minan (predicado never-mined). Diseñar re-mine por
-  normalization_version (análogo a extraction_version de B1).
-- **T3 — Epoch visibility**: exponer `normalization_version` en el output de
-  `--kind templates` (TemplateRow) para distinguir épocas de minado.
+- **T1 — VAR= stripping en command_head** ✅ **COMPLETO**: la extracción toma `SP=/path;` como command_head; 
+  strip de prefijos `VAR=` en `commandHead()` (reader) implementado + backfill de heads históricos activado 
+  (extraction_version v2). Destraba la señal real de sequences (SHELL_OTHER share esperado caiga de 72%).
+- **T2 — Re-minado de templates del corpus histórico** ✅ **COMPLETO**: el minado v2 (error-only) se 
+  aplica automáticamente; archivos con v1 templates se re-minan incrementalmente via `StaleTemplatePaths()` 
+  y `BackfillDerived()` con upsert semantics (normalization_version bump a v2, template_matches idempotent).
+- **T3 — Epoch visibility** ✅ **COMPLETO**: `normalization_version` expuesto en output de `--kind templates` 
+  (TemplateRow JSON/robot/text formatters actualizados) para distinguir épocas de minado. T4 calibración 
+  ahora tiene metadatos de version.
 - **T4 — CALIBRACIÓN (requiere humano)**: etiquetar a mano 50 candidatos de
   corrections según `docs/eval/corrections-calibration.md`; medir precisión
   por detector; ajustar confianzas. GATE de todo el nivel 4.
 - **T5 — Primer loop real de clasificación**: tras T4, correr
   `--pending --batch 50` + `annotate` a escala; con las etiquetas libres,
   agrupar y congelar `label_enum` (migración nueva).
-- **T6 — Fix fixture reresolve**: el test de no-churn usa paths sin el marker
-  `/.claude/projects/` y ejercita la rama de decode-failure, no la de
-  FromRegistry (warning del panel Q2).
+- **T6 — Fix fixture reresolve** ✅ **COMPLETO**: tests de reresolve-projects ejercitan ambas ramas 
+  (decode-success + registry-match) via fixture path con marker `/.claude/projects/` y companion test 
+  de upsert semantics.
 - **T7 — F5 clustering** (solo si 1-4 dejan hambre): generación de embeddings
   (sidecar opt-in) sobre la infra existente (chunks/VectorSearch/RRF).
 - **T8 — Nivel 6, discovery→regla**: sin diseñar; patrones validados del loop

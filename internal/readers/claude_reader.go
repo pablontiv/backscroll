@@ -106,7 +106,8 @@ func (r *ClaudeReader) Parse(path string, _ input_config.InputDefinition) (model
 const interruptMarker = "Request interrupted"
 
 // commandHead extracts the first whitespace token of a command-like tool
-// input ({"command": "go test ./..."} -> "go"). Empty for non-command inputs.
+// input ({"command": "go test ./..."} -> "go"). Skips leading POSIX variable
+// assignments ({"command": "SP=/path; go test ./..."} -> "go"). Empty for non-command inputs.
 func commandHead(input json.RawMessage) string {
 	var obj struct {
 		Command string `json:"command"`
@@ -118,7 +119,18 @@ func commandHead(input json.RawMessage) string {
 	if len(fields) == 0 {
 		return ""
 	}
-	return fields[0]
+
+	// Skip leading POSIX variable assignments (tokens containing '=')
+	for i, field := range fields {
+		if !strings.Contains(field, "=") {
+			return field
+		}
+		// If this is the last field and it's an assignment, no command found
+		if i == len(fields)-1 {
+			return ""
+		}
+	}
+	return ""
 }
 
 // blockUUID derives a stable per-block identity from the record uuid.

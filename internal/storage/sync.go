@@ -14,7 +14,7 @@ import (
 // produced a row. Bump when extraction semantics change; rows keep the
 // version that actually produced them (perennity: old rows are never
 // silently reinterpreted).
-const CurrentExtractionVersion = 1
+const CurrentExtractionVersion = 2
 
 // IndexedMessage represents a message to be indexed.
 type IndexedMessage struct {

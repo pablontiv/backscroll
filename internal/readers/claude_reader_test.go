@@ -1,6 +1,7 @@
 package readers
 
 import (
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"testing"
@@ -83,5 +84,60 @@ func TestClaudeReader_CapturesToolUseAndResult(t *testing.T) {
 	}
 	if !gotToolErr {
 		t.Error("missing tool_result error message")
+	}
+}
+
+// Test cases for commandHead() VAR= prefix stripping (RED test - task 4.1)
+func TestCommandHeadVarPrefixStripping(t *testing.T) {
+	tests := []struct {
+		name     string
+		input    string
+		expected string
+	}{
+		{
+			name:     "simple command",
+			input:    "go test ./internal/...",
+			expected: "go",
+		},
+		{
+			name:     "VAR= single prefix",
+			input:    "SP=/path/to/code; go test ./internal/...",
+			expected: "go",
+		},
+		{
+			name:     "VAR= multiple prefixes",
+			input:    "FOO=1 BAR=2 BAZ=3; rg --type go error",
+			expected: "rg",
+		},
+		{
+			name:     "VAR=value without semicolon",
+			input:    "PYTHONPATH=/app python script.py",
+			expected: "python",
+		},
+		{
+			name:     "only assignment no command",
+			input:    "MY_VAR=some_value",
+			expected: "",
+		},
+		{
+			name:     "empty input",
+			input:    "",
+			expected: "",
+		},
+		{
+			name:     "command with equals in args",
+			input:    "go test --args=value ./...",
+			expected: "go",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			inputJSON, _ := json.Marshal(map[string]string{"command": tt.input})
+			result := commandHead(inputJSON)
+			if result != tt.expected {
+				t.Errorf("commandHead(%q) = %q, want %q", tt.input, result, tt.expected)
+			}
+		})
 	}
 }
