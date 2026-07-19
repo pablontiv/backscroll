@@ -1,6 +1,7 @@
 package storage
 
 import (
+	"encoding/json"
 	"path/filepath"
 	"testing"
 )
@@ -243,5 +244,110 @@ func TestAggregateTemplatesTagFilter(t *testing.T) {
 	}
 	if len(rows) != 0 {
 		t.Errorf("expected 0 templates with non-existent tag, got %d", len(rows))
+	}
+}
+
+// TestTemplateRowNormalizationVersionJSON tests JSON marshaling includes normalization_version (RED test - task 2.1)
+func TestTemplateRowNormalizationVersionJSON(t *testing.T) {
+	row := TemplateRow{
+		TemplateID:           1,
+		Signature:            "sig1",
+		TemplateText:         "error: timeout",
+		OccurrenceCount:      5,
+		NormalizationVersion: 2,
+	}
+
+	data, err := json.Marshal(row)
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+
+	var m map[string]interface{}
+	if err := json.Unmarshal(data, &m); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+
+	// Verify normalization_version key exists
+	if _, ok := m["normalization_version"]; !ok {
+		t.Errorf("normalization_version key not found in JSON output")
+	}
+
+	// Verify value is correct
+	if v, ok := m["normalization_version"].(float64); ok {
+		if int(v) != 2 {
+			t.Errorf("normalization_version = %d, want 2", int(v))
+		}
+	} else {
+		t.Errorf("normalization_version not a number")
+	}
+}
+
+// TestTemplateRowNormalizationVersionDefault tests JSON with default (0) normalization version
+func TestTemplateRowNormalizationVersionDefault(t *testing.T) {
+	row := TemplateRow{
+		TemplateID:           1,
+		Signature:            "sig1",
+		TemplateText:         "error: timeout",
+		OccurrenceCount:      5,
+		NormalizationVersion: 0, // default/legacy
+	}
+
+	data, err := json.Marshal(row)
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+
+	var m map[string]interface{}
+	if err := json.Unmarshal(data, &m); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+
+	// Verify normalization_version is 0, not null
+	if v, ok := m["normalization_version"].(float64); ok {
+		if int(v) != 0 {
+			t.Errorf("normalization_version = %d, want 0", int(v))
+		}
+	} else {
+		t.Errorf("normalization_version not properly serialized")
+	}
+}
+
+// TestAggregateTemplatesNormalizationVersion tests AggregateTemplates returns normalization_version field (RED test - task 2.1)
+func TestAggregateTemplatesNormalizationVersion(t *testing.T) {
+	db, err := Open(filepath.Join(t.TempDir(), "test.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = db.Close() }()
+
+	msgs := []IndexedMessage{
+		{Ordinal: 0, UUID: "u1", ToolName: "Bash", IsError: boolPtr(true), Text: "error: failed", ExtractionVersion: 1},
+	}
+	files := []IndexedFile{
+		{SourcePath: "/p/s.jsonl", Source: "session", Hash: "h1", Project: "proj", Messages: msgs},
+	}
+	if err := db.SyncFiles(files); err != nil {
+		t.Fatal(err)
+	}
+
+	// Manually set normalization_version in DB for testing
+	_, err = db.db.Exec(`
+		UPDATE message_templates SET normalization_version = 2
+	`)
+	if err != nil {
+		t.Fatalf("update normalization_version: %v", err)
+	}
+
+	rows, err := db.AggregateTemplates(TemplateQueryOpts{MinSupport: 1})
+	if err != nil {
+		t.Fatalf("aggregate: %v", err)
+	}
+	if len(rows) == 0 {
+		t.Fatal("expected 1 template")
+	}
+
+	// Verify NormalizationVersion field is populated
+	if rows[0].NormalizationVersion != 2 {
+		t.Errorf("NormalizationVersion = %d, want 2", rows[0].NormalizationVersion)
 	}
 }

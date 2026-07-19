@@ -445,6 +445,7 @@ func runPatterns(stdout, stderr io.Writer,
 				_, _ = fmt.Fprintf(stdout, "result_%d_template_id=%d\n", i, r.TemplateID)
 				_, _ = fmt.Fprintf(stdout, "result_%d_template=%q\n", i, r.TemplateText)
 				_, _ = fmt.Fprintf(stdout, "result_%d_occurrence_count=%d\n", i, r.OccurrenceCount)
+				_, _ = fmt.Fprintf(stdout, "result_%d_normalization_version=%d\n", i, r.NormalizationVersion)
 			}
 			_, _ = fmt.Fprintf(stdout, "*** Total: %d patterns ***\n", len(results))
 		} else {
@@ -453,6 +454,7 @@ func runPatterns(stdout, stderr io.Writer,
 				_, _ = fmt.Fprintf(stdout, "%d. [%s]\n", i+1, row.Signature[:8])
 				_, _ = fmt.Fprintf(stdout, "   Text: %s\n", row.TemplateText)
 				_, _ = fmt.Fprintf(stdout, "   Occurrences: %d\n", row.OccurrenceCount)
+				_, _ = fmt.Fprintf(stdout, "   Normalization: v%d\n", row.NormalizationVersion)
 				_, _ = fmt.Fprintf(stdout, "   Projects: %v\n", row.ProjectsAffected)
 				_, _ = fmt.Fprintf(stdout, "   Sample UUIDs: %v\n\n", row.SampleUUIDs)
 			}

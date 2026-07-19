@@ -623,14 +623,15 @@ type TemplateQueryOpts struct {
 
 // TemplateRow is a result from AggregateTemplates.
 type TemplateRow struct {
-	TemplateID       int64    `json:"template_id"`
-	Signature        string   `json:"signature"`
-	TemplateText     string   `json:"template_text"`
-	OccurrenceCount  int      `json:"occurrence_count"`
-	ProjectsAffected []string `json:"projects_affected"`
-	SampleUUIDs      []string `json:"sample_uuids"`
-	FirstSeen        string   `json:"first_seen"`
-	LastSeen         string   `json:"last_seen"`
+	TemplateID           int64    `json:"template_id"`
+	Signature            string   `json:"signature"`
+	TemplateText         string   `json:"template_text"`
+	OccurrenceCount      int      `json:"occurrence_count"`
+	ProjectsAffected     []string `json:"projects_affected"`
+	SampleUUIDs          []string `json:"sample_uuids"`
+	FirstSeen            string   `json:"first_seen"`
+	LastSeen             string   `json:"last_seen"`
+	NormalizationVersion int      `json:"normalization_version"`
 }
 
 // AggregateTemplates returns templates meeting min_support and optional filters.
@@ -648,6 +649,7 @@ func (d *Database) AggregateTemplates(opts TemplateQueryOpts) ([]TemplateRow, er
 			mt.template_text,
 			mt.first_seen,
 			mt.last_seen,
+			mt.normalization_version,
 			COUNT(tm.id) as cnt,
 			GROUP_CONCAT(DISTINCT si.project) as projects,
 			GROUP_CONCAT(DISTINCT tm.item_uuid) as uuids
@@ -715,7 +717,7 @@ func (d *Database) AggregateTemplates(opts TemplateQueryOpts) ([]TemplateRow, er
 		var r TemplateRow
 		var projectsStr, uuidsStr sql.NullString
 		if err := rows.Scan(&r.TemplateID, &r.Signature, &r.TemplateText,
-			&r.FirstSeen, &r.LastSeen, &r.OccurrenceCount, &projectsStr, &uuidsStr); err != nil {
+			&r.FirstSeen, &r.LastSeen, &r.NormalizationVersion, &r.OccurrenceCount, &projectsStr, &uuidsStr); err != nil {
 			return nil, fmt.Errorf("scan row: %w", err)
 		}
 
