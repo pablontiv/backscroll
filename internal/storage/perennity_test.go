@@ -245,3 +245,46 @@ func TestToolEventsUUIDDedupesAcrossOrdinals(t *testing.T) {
 		t.Errorf("want 1 tool_event row after re-sync (deduped), got %d", n)
 	}
 }
+
+func TestTeammateMessageWrapperCleanedInFTSRebuild(t *testing.T) {
+	// Verify that FTS rebuild correctly re-derives from cleaned content in search_items.
+	// Messages are cleaned during extraction (readers call CleanContent), so IndexedMessage
+	// always has cleaned text. This test verifies rebuild re-derives FTS from cleaned content.
+	db, err := Open(filepath.Join(t.TempDir(), "test.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = db.Close() }()
+
+	// Sync a message with cleaned content (wrapper already removed).
+	// In the real flow, readers extract content via CleanContent before creating IndexedMessage.
+	m := IndexedMessage{Ordinal: 0, Role: "user",
+		Text: "Please fix this.", UUID: "u1",
+		Timestamp: "2026-01-01T00:00:00Z", ContentType: "text", ExtractionVersion: 1}
+	if err := db.SyncFiles(sessionFile("h1", []IndexedMessage{m})); err != nil {
+		t.Fatal(err)
+	}
+
+	// Rebuild FTS to re-derive indexes from search_items
+	if err := db.RebuildFTS(); err != nil {
+		t.Fatalf("rebuild fts: %v", err)
+	}
+
+	// Verify message text is searchable after rebuild
+	var hits int
+	if err := db.db.QueryRow("SELECT COUNT(*) FROM messages_fts WHERE messages_fts MATCH 'fix'").Scan(&hits); err != nil {
+		t.Fatalf("query fts: %v", err)
+	}
+	if hits != 1 {
+		t.Errorf("message text should match after rebuild, want 1 hit for 'fix', got %d", hits)
+	}
+
+	// Verify search_items row still exists (perennity)
+	var n int
+	if err := db.db.QueryRow("SELECT COUNT(*) FROM search_items WHERE uuid='u1'").Scan(&n); err != nil {
+		t.Fatalf("search_items query: %v", err)
+	}
+	if n != 1 {
+		t.Errorf("message should survive rebuild, got %d rows", n)
+	}
+}

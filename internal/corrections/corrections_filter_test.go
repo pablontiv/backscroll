@@ -57,8 +57,8 @@ func TestRephraseDetectorIgnoresToolResultText(t *testing.T) {
 func TestInterruptDetectorRunsOnAllUserMessages(t *testing.T) {
 	// Interrupt detector should trigger on ALL user messages, including tool-content messages
 	msgs := []models.Message{
-		{Role: "user", Content: "run this", ContentType: "text", WasInterrupted: true, Timestamp: time.Now()},
-		{Role: "user", Content: "error text", ContentType: "tool", WasInterrupted: true, Timestamp: time.Now()},
+		{Role: "user", Content: "Let me try a completely different approach", ContentType: "text", WasInterrupted: true, Timestamp: time.Now()},
+		{Role: "user", Content: "I need to reconsider this strategy now", ContentType: "tool", WasInterrupted: true, Timestamp: time.Now()},
 	}
 
 	result := RunDetectorsFiltered(msgs)

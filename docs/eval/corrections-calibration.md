@@ -15,14 +15,32 @@ Before running the F3b agent-classification loop, we must establish baseline pre
    backscroll sync
    ```
 
-2. Extract 50 candidates from the live DB:
+2. Extract 50 candidates from the live DB (stratified by detector, capped per session):
    ```bash
-   backscroll patterns --kind corrections --min-confidence 0.0 --limit 50 --json > /tmp/corrections-sample.json
+   go run scripts/calibration-extract/main.go \
+     --total 50 \
+     --per-detector 12 \
+     --per-session 10 \
+     --output ~/calibration/corrections-labeling-$(date +%Y-%m-%d).csv
    ```
+   **CRITICAL**: The worksheet contains private session text. Write it **OUTSIDE the repository** (e.g., `~/calibration/` or `/tmp/`), never inside `docs/eval/`.
 
-3. For each candidate:
+3. For each candidate in the CSV:
    - Note `source_path`, `ordinal`, `detectors` (array), `max_confidence`.
-   - Read the 3-message window (the user message + the preceding 2 messages for context).
+   - Read the labeling window (see Labeling Windows below for context definitions).
+
+### Labeling Windows (Detection Context)
+
+Each correction candidate requires a labeling window to establish judgment context. Window definitions vary by detector:
+
+| Detector | Window Definition | Includes |
+|----------|-------------------|----------|
+| **Lexicon** | Current message only | The user message flagged by lexicon match |
+| **Rephrase** | Current message only | The user message with Jaccard ≥0.6 rephrase |
+| **Interrupt** | Preceding (assistant) + current (user) + following (user) | Last assistant message before interrupt; the resumed user message; user's next message (if exists) to see if correction follows |
+| **Denial** | Preceding (assistant/tool) + current (user) + following (user) | The permission denial or error message; the user's response; follow-up if present |
+
+**Window Retrieval**: The extraction tool (`scripts/calibration-extract/main.go`) populates `labeling_window_before` and `labeling_window_after` columns in the output CSV for interrupt/denial strata. For lexicon/rephrase, only the current message is required.
 
 ### Phase 2: Hand Labeling (manual)
 
@@ -37,9 +55,16 @@ Before running the F3b agent-classification loop, we must establish baseline pre
    - **Correction Type** (if yes): lexicon|interrupt|denial|rephrase|unknown
    - **Notes** (any ambiguity, edge case, or false-positive reason)
 
-5. For each candidate, read the 3-message window and judge: Is the message a genuine correction of agent behavior?
-   - **True**: user explicitly says "wrong", "again", "denied", etc., or message is a rephrase seeking different action.
-   - **False**: user is asking a normal follow-up, rephrasing an unrelated thought, or using correction-like language in a non-correction context (the documented "no, eso no es un bug, es esperado" case).
+5. For each candidate, read the labeling window and apply **per-detector judgment criteria** (see below).
+
+### Per-Detector Judgment Criteria
+
+| Detector | "Correction" is TRUE when | FALSE when | Example True | Example False |
+|----------|---------------------------|-----------|--------------|---------------|
+| **Lexicon** | User explicitly steers toward **different action** due to agent misunderstanding. Es ej., "no, not X, do Y instead." | User expresses preference, disagreement, or heated tone without changing instruction. Example: "no, eso no es un bug, es esperado" (user says it's NOT a bug—information, not correction). | Message: "No, I need you to search for files named X, not Y" | Message: "No thanks, I prefer X to Y" |
+| **Rephrase** | User re-phrased **because agent misunderstood**, and follow-up shows changed instruction or clarification of intent. | User restates same preference, asks the same question again, or polishes wording without changing substance. | Initial: "Fix auth"; Agent: "fixed it"; User rephrase: "Actually, I mean fix the JWT validation in the login endpoint" (clarification, different scope). | Initial: "Fix auth"; Agent: "fixing..."; User: "Please fix auth again" (same intent, just repeated). |
+| **Denial** | Context window shows permission/access denial from agent, **followed by user pivot to alternative approach** (signals user corrected strategy). Requires manual session lookup to disambiguate. | Context shows procedural denial (e.g., "I cannot execute root commands") without user strategy change, or user message is unrelated to denial. | Assistant: "That command requires sudo, denied."; User: "OK, let me try a non-root alternative instead." | Assistant: "That requires admin permission, denied."; User: "OK" (acceptance, not correction). |
+| **Interrupt** | User's resumed message (after interrupt) **changes instruction or strategy** compared to the paused message. Co-occurrence measure: interruption + new direction = correction signal. | Message resumes same instruction unchanged, or interrupt flag is noise. | Paused: "Implement feature X"; Resumed: "Actually, let me try a different approach for feature Y instead." (changed scope/strategy). | Paused: "Implement feature X"; Resumed: "OK, let me implement feature X now" (same instruction, just resumed). |
 
 ### Phase 3: Analysis (automated + manual)
 

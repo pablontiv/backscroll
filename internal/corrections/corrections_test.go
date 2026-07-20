@@ -211,7 +211,7 @@ func TestInterruptDetector(t *testing.T) {
 			name: "user message with WasInterrupted=true",
 			messages: []models.Message{
 				testMsg("user", "Do X"),
-				{Role: "user", Content: "Do Y", Timestamp: time.Now(), WasInterrupted: true},
+				{Role: "user", Content: "Let me try a different approach", Timestamp: time.Now(), WasInterrupted: true},
 			},
 			idx:        1,
 			expectFire: true,
@@ -233,6 +233,33 @@ func TestInterruptDetector(t *testing.T) {
 			},
 			idx:        1,
 			expectFire: false,
+		},
+		{
+			name: "user message WasInterrupted=true with stub text < 20 chars (should not fire)",
+			messages: []models.Message{
+				testMsg("user", "Do X"),
+				{Role: "user", Content: "[ by user]", Timestamp: time.Now(), WasInterrupted: true},
+			},
+			idx:        1,
+			expectFire: false,
+		},
+		{
+			name: "user message WasInterrupted=true with substantive text >= 20 chars (should fire)",
+			messages: []models.Message{
+				testMsg("user", "Do X"),
+				{Role: "user", Content: "Let me try a different approach here now", Timestamp: time.Now(), WasInterrupted: true},
+			},
+			idx:        1,
+			expectFire: true,
+		},
+		{
+			name: "user message WasInterrupted=true with exactly 20 chars (should fire)",
+			messages: []models.Message{
+				testMsg("user", "Do X"),
+				{Role: "user", Content: "12345678901234567890", Timestamp: time.Now(), WasInterrupted: true},
+			},
+			idx:        1,
+			expectFire: true,
 		},
 	}
 

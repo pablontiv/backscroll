@@ -138,6 +138,11 @@ func cCorrectionLexiconDetector(msgs []models.Message, idx int) *Detection {
 	return nil
 }
 
+// minInterruptLength is the minimum message length (in Unicode code points) required
+// to signal an interrupt. Messages shorter than this are considered stubs (e.g., "[ by user]")
+// and are not considered meaningful interrupts. Tunable as a v1 trade-off.
+const minInterruptLength = 20
+
 // cInterruptDetector checks if a user message was interrupted (F0a signal).
 // Confidence 0.5 (moderate; interrupt is real evidence but incomplete).
 func cInterruptDetector(msgs []models.Message, idx int) *Detection {
@@ -145,6 +150,10 @@ func cInterruptDetector(msgs []models.Message, idx int) *Detection {
 		return nil
 	}
 	if msgs[idx].WasInterrupted {
+		// Skip stubs: messages shorter than minInterruptLength (in runes/code points)
+		if len([]rune(msgs[idx].Content)) < minInterruptLength {
+			return nil
+		}
 		return &Detection{Confidence: 0.5}
 	}
 	return nil

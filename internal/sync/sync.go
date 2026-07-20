@@ -252,6 +252,7 @@ func CleanContent(content string) string {
 		{"<command-name>", "</command-name>"},
 		{"<command-message>", "</command-message>"},
 		{"<command-args>", "</command-args>"},
+		{"<teammate-message>", "</teammate-message>"},
 	}
 
 	for _, pattern := range tagPatternsWithContent {

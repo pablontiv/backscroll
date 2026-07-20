@@ -428,6 +428,21 @@ func TestCleanContent(t *testing.T) {
 			input: "",
 			want:  "",
 		},
+		{
+			name:  "teammate-message wrapper with content",
+			input: "msg <teammate-message>internal</teammate-message>",
+			want:  "msg",
+		},
+		{
+			name:  "teammate-message wrapper only",
+			input: "<teammate-message>only</teammate-message>",
+			want:  "",
+		},
+		{
+			name:  "teammate-message wrapper in middle",
+			input: "msg <teammate-message>internal</teammate-message> more",
+			want:  "msg more",
+		},
 	}
 
 	for _, tt := range tests {
