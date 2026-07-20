@@ -23,3 +23,7 @@ graphify-out/
 # Local Pi runtime state
 .atl/
 .codegraph/
+
+# Calibration worksheets carry private session text — never commit
+docs/eval/corrections-labeling-*.csv
+docs/eval/corrections-labeling-*.md
