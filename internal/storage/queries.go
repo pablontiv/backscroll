@@ -768,7 +768,7 @@ func (d *Database) AggregateCorrections(opts CorrectionAggOpts) ([]CorrectionCan
 			si.text,
 			MAX(cs.confidence) as max_confidence,
 			GROUP_CONCAT(DISTINCT cs.detector ORDER BY cs.detector) as detectors,
-			si.uuid
+			COALESCE(si.uuid, '')
 		FROM correction_signals cs
 		JOIN search_items si ON (cs.source_path = si.source_path AND cs.ordinal = si.ordinal)
 	`

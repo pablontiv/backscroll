@@ -79,3 +79,61 @@ func TestAggregateCorrections(t *testing.T) {
 		t.Error("expected at least one candidate with detectors slice populated")
 	}
 }
+
+// TestAggregateCorrectionNullUUID tests that AggregateCorrections handles
+// search_items rows with NULL uuid (legacy/B3-backfilled rows).
+// This reproduces the bug: "scan correction: sql: Scan error on column index 5, name "uuid": converting NULL to string is unsupported".
+func TestAggregateCorrectionNullUUID(t *testing.T) {
+	db, err := Open(filepath.Join(t.TempDir(), "test.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = db.Close() }()
+
+	// Insert a search_items row with NULL uuid (legacy or B3-backfilled row)
+	_, err = db.db.Exec(`
+		INSERT INTO search_items (source, source_path, ordinal, role, text, timestamp, uuid, project, content_type)
+		VALUES ('session', '/p/legacy.jsonl', 0, 'user', 'Corrected message', '2026-01-01T00:00:00Z', NULL, 'proj', 'text')
+	`)
+	if err != nil {
+		t.Fatalf("insert search_items row: %v", err)
+	}
+
+	// Insert a correction_signals row for that message
+	_, err = db.db.Exec(`
+		INSERT INTO correction_signals (source_path, ordinal, detector, confidence, extraction_version)
+		VALUES ('/p/legacy.jsonl', 0, 'lexicon', 0.8, 1)
+	`)
+	if err != nil {
+		t.Fatalf("insert correction_signals row: %v", err)
+	}
+
+	// Query corrections with MinConfidence 0 to include all candidates
+	candidates, err := db.AggregateCorrections(CorrectionAggOpts{
+		Project:       "proj",
+		MinConfidence: 0.0,
+		Limit:         10,
+	})
+	if err != nil {
+		t.Fatalf("aggregate: %v", err)
+	}
+
+	if len(candidates) != 1 {
+		t.Fatalf("expected 1 correction, got %d", len(candidates))
+	}
+
+	c := candidates[0]
+	if c.Ordinal != 0 {
+		t.Errorf("expected ordinal 0, got %d", c.Ordinal)
+	}
+	// NULL uuid should be returned as empty string (via COALESCE)
+	if c.UUID != "" {
+		t.Errorf("expected empty UUID for NULL row, got %q", c.UUID)
+	}
+	if len(c.Detectors) != 1 || c.Detectors[0] != "lexicon" {
+		t.Errorf("expected detectors=[\"lexicon\"], got %v", c.Detectors)
+	}
+	if c.MaxConfidence != 0.8 {
+		t.Errorf("expected confidence 0.8, got %v", c.MaxConfidence)
+	}
+}
