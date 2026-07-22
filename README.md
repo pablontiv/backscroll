@@ -2,7 +2,7 @@
 
 [![CI](https://github.com/pablontiv/backscroll/actions/workflows/ci.yml/badge.svg)](https://github.com/pablontiv/backscroll/actions/workflows/ci.yml)
 [![Go](https://img.shields.io/badge/Go-1.22+-00ADD8?logo=go&logoColor=white)](https://go.dev)
-[![License: PolyForm NC](https://img.shields.io/badge/License-PolyForm%20NC-blue.svg)](LICENSE)
+[![License: Apache 2.0](https://img.shields.io/badge/License-Apache%202.0-blue.svg)](LICENSE)
 
 A **full-text search engine** for your AI session history — one unified search layer over every coding-agent session, whatever assistant produced it.
 
@@ -323,4 +323,4 @@ Commits follow [Conventional Commits](https://www.conventionalcommits.org/) (`ty
 
 ## License
 
-[PolyForm Noncommercial 1.0.0](LICENSE) — free for non-commercial use.
+[Apache License 2.0](LICENSE) — free for commercial and non-commercial use.
