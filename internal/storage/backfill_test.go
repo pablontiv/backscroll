@@ -644,3 +644,45 @@ func TestBackfillDerivedRemineIdempotency(t *testing.T) {
 		t.Errorf("expected idempotent count, got %d then %d", matchesAfterFirst, matchesAfterSecond)
 	}
 }
+
+// TestLoadMessagesForPath verifies that LoadMessagesForPath correctly retrieves
+// messages from the database for a given source path (Q3 helper).
+func TestLoadMessagesForPath(t *testing.T) {
+	db, err := Open(filepath.Join(t.TempDir(), "test.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = db.Close() }()
+
+	sourcePath := "path/to/session.json"
+
+	// Insert sample search_items rows
+	_, err = db.db.Exec(`
+		INSERT INTO search_items
+		(source, source_path, ordinal, role, text, timestamp, uuid, project, content_type, extraction_version)
+		VALUES
+		('session', ?, 0, 'user', 'hello', '2026-01-01T00:00:00Z', 'u1', 'proj', 'text', 3),
+		('session', ?, 1, 'assistant', 'hi there', '2026-01-01T00:00:01Z', 'u2', 'proj', 'text', 3)
+	`, sourcePath, sourcePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Test: load messages for the path
+	loaded, err := db.LoadMessagesForPath(sourcePath)
+	if err != nil {
+		t.Fatalf("LoadMessagesForPath failed: %v", err)
+	}
+
+	if len(loaded) != 2 {
+		t.Errorf("expected 2 messages, got %d", len(loaded))
+	}
+
+	if loaded[0].Ordinal != 0 || loaded[0].UUID != "u1" {
+		t.Errorf("message 0 mismatch: got %+v", loaded[0])
+	}
+
+	if loaded[1].Ordinal != 1 || loaded[1].UUID != "u2" {
+		t.Errorf("message 1 mismatch: got %+v", loaded[1])
+	}
+}
