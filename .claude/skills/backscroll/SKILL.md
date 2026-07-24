@@ -145,7 +145,7 @@ curl -fsSL https://raw.githubusercontent.com/pablontiv/backscroll/master/install
 
 **Database locked (SQLITE_BUSY):**
 ```bash
-BACKSCROLL_AUTOUPDATE_DISABLE=1 backscroll status
+backscroll status
 ```
 Wait a few seconds and retry. If persistent, the database file is locked by another process (another backscroll invocation, or stale file handle). Check `lsof /path/to/.backscroll.db`.
 
