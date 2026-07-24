@@ -95,38 +95,24 @@ func RunDetectorsFiltered(msgs []models.Message) map[int][]Detection {
 	return result
 }
 
-// Chat-export detection constants and regexes
-const minChatExportLines = 3
+// Chat-export detection constants and regexes.
+//
+// NOTE: detection counts MARKERS, not lines. By the time text reaches a detector,
+// CleanContent has collapsed all whitespace (internal/sync/sync.go: strings.Join(
+// strings.Fields(content), " ")), so a pasted transcript arrives as a single line.
+// A line-based rule could therefore never fire on synced content.
+const minChatExportMarkers = 3
 
-var (
-	// chatExportWhatsApp matches WhatsApp timestamp format: [HH:MM ...] SenderName:
-	chatExportWhatsApp = regexp.MustCompile(`^\[\d{2}:\d{2}[^\]]*\]\s+\w+:`)
-	// chatExportSignal matches Signal format: SenderName: [HH:MM ...]
-	chatExportSignal = regexp.MustCompile(`^\w+:\s+\[\d{2}:\d{2}`)
-)
+// chatExportMarker matches either chat-export sender marker:
+// WhatsApp/Telegram "[HH:MM ...] SenderName:" or Signal "SenderName: [HH:MM ...]".
+// Deliberately unanchored so it works on both multi-line and whitespace-collapsed text.
+var chatExportMarker = regexp.MustCompile(`\[\d{2}:\d{2}[^\]]*\]\s+\w+:|\w+:\s+\[\d{2}:\d{2}`)
 
-// isChatExport checks if text contains ≥minChatExportLines consecutive lines matching
-// chat-export markers (WhatsApp "[HH:MM] Name:" or Signal "Name: [HH:MM]" format).
-// Returns true if transcript detected, false otherwise.
+// isChatExport reports whether text carries at least minChatExportMarkers chat-export
+// sender markers, which signals a pasted transcript rather than a genuine correction.
+// Requiring several markers keeps an incidental timestamp from tripping the filter.
 func isChatExport(text string) bool {
-	lines := strings.Split(text, "\n")
-	if len(lines) < minChatExportLines {
-		return false
-	}
-
-	// Count consecutive lines matching either pattern
-	consecutiveCount := 0
-	for _, line := range lines {
-		if chatExportWhatsApp.MatchString(line) || chatExportSignal.MatchString(line) {
-			consecutiveCount++
-			if consecutiveCount >= minChatExportLines {
-				return true
-			}
-		} else {
-			consecutiveCount = 0 // Reset on non-matching line
-		}
-	}
-	return false
+	return len(chatExportMarker.FindAllStringIndex(text, minChatExportMarkers)) >= minChatExportMarkers
 }
 
 // correctionLexicon is the comprehensive es+en lexicon for correction signals.
