@@ -437,9 +437,19 @@ func (d *Database) StaleTemplatePaths(currentVersion int) ([]string, error) {
 // LoadMessagesForPath loads all IndexedMessage rows from search_items for a given source path,
 // ordered by ordinal. Used by incremental template re-mining in sync_helpers.go.
 func (d *Database) LoadMessagesForPath(sourcePath string) ([]IndexedMessage, error) {
+	// uuid, timestamp and extraction_version are the nullable columns here, and legacy
+	// and Pi/OpenCode rows do carry NULLs in them; a plain Scan fails on those and
+	// would abort the whole caller. Same reason AggregateCorrections coalesces uuid.
 	rows, err := d.db.Query(`
 		SELECT
-			ordinal, uuid, role, text, timestamp, content_type, extraction_version, was_interrupted
+			ordinal,
+			COALESCE(uuid, ''),
+			role,
+			text,
+			COALESCE(timestamp, ''),
+			content_type,
+			COALESCE(extraction_version, 0),
+			was_interrupted
 		FROM search_items
 		WHERE source_path = ?
 		ORDER BY ordinal ASC
@@ -535,19 +545,31 @@ func (d *Database) RederiveSupersededCorrections(limit int) (int, error) {
 	}
 	defer func() { _ = tx.Rollback() }()
 
+	// A path that cannot be read is skipped rather than failing the batch. Discovery
+	// order is deterministic, so aborting on the first bad path would park the same
+	// path at the head of every run and no other path would ever be re-derived.
+	processed := 0
+	var firstErr error
 	for _, sourcePath := range paths {
 		msgs, err := d.LoadMessagesForPath(sourcePath)
 		if err != nil {
-			return 0, fmt.Errorf("load messages for %s: %w", sourcePath, err)
+			if firstErr == nil {
+				firstErr = fmt.Errorf("load messages for %s: %w", sourcePath, err)
+			}
+			continue
 		}
 		if _, err := d.backfillCorrectionsForFile(tx, sourcePath, msgs); err != nil {
-			return 0, fmt.Errorf("re-derive corrections for %s: %w", sourcePath, err)
+			if firstErr == nil {
+				firstErr = fmt.Errorf("re-derive corrections for %s: %w", sourcePath, err)
+			}
+			continue
 		}
+		processed++
 	}
 	if err := tx.Commit(); err != nil {
 		return 0, fmt.Errorf("commit re-derivation: %w", err)
 	}
-	return len(paths), nil
+	return processed, firstErr
 }
 
 // queryPaths runs a query returning a single source_path column and collects it.

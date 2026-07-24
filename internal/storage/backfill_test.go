@@ -4,6 +4,8 @@ import (
 	"fmt"
 	"path/filepath"
 	"testing"
+
+	"github.com/pablontiv/backscroll/internal/templates"
 )
 
 func TestBackfillDerivedMinesTemplatesFromExpiredFile(t *testing.T) {
@@ -943,5 +945,146 @@ func TestRederiveSupersededCorrectionsPropagatesErrors(t *testing.T) {
 	}
 	if processed != 0 {
 		t.Errorf("processed = %d on a failed run, want 0", processed)
+	}
+}
+
+// TestLoadMessagesForPathHandlesNullColumns pins the failure that made re-derivation
+// inert on the real corpus: legacy and Pi/OpenCode rows carry NULL uuid, and a plain
+// string Scan aborts on them. Because discovery order is deterministic, one such path
+// sat at the head of every batch and no path was ever re-derived.
+func TestLoadMessagesForPathHandlesNullColumns(t *testing.T) {
+	db, err := Open(filepath.Join(t.TempDir(), "test.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = db.Close() }()
+
+	if _, err := db.db.Exec(`
+		INSERT INTO search_items (source_path, source, ordinal, role, text, timestamp, uuid, project, content_type, extraction_version)
+		VALUES ('/legacy/s.jsonl', 'session', 0, 'user', 'no, eso no es un bug', NULL, NULL, 'proj', 'text', NULL)
+	`); err != nil {
+		t.Fatalf("seed NULL-uuid row: %v", err)
+	}
+
+	msgs, err := db.LoadMessagesForPath("/legacy/s.jsonl")
+	if err != nil {
+		t.Fatalf("LoadMessagesForPath must tolerate NULL columns: %v", err)
+	}
+	if len(msgs) != 1 {
+		t.Fatalf("loaded %d messages, want 1", len(msgs))
+	}
+	if msgs[0].UUID != "" {
+		t.Errorf("UUID = %q, want empty string for a NULL uuid", msgs[0].UUID)
+	}
+	if msgs[0].Timestamp != "" {
+		t.Errorf("Timestamp = %q, want empty string for a NULL timestamp", msgs[0].Timestamp)
+	}
+	if msgs[0].ExtractionVersion != 0 {
+		t.Errorf("ExtractionVersion = %d, want 0 for a NULL value", msgs[0].ExtractionVersion)
+	}
+}
+
+// TestRederiveSupersededCorrectionsSkipsUnreadablePaths pins batch resilience: a path
+// that cannot be read must not abort the run, or the deterministic ordering would park
+// the same bad path at the head of every batch forever.
+func TestRederiveSupersededCorrectionsSkipsUnreadablePaths(t *testing.T) {
+	db, err := Open(filepath.Join(t.TempDir(), "test.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = db.Close() }()
+
+	// Two paths with superseded signals; the first sorts ahead of the second.
+	for _, p := range []string{"/a/first.jsonl", "/b/second.jsonl"} {
+		if _, err := db.db.Exec(`
+			INSERT INTO search_items (source_path, source, ordinal, role, text, timestamp, uuid, project, content_type, extraction_version)
+			VALUES (?, 'session', 0, 'user', 'no, eso no es un bug', '2026-01-01T00:00:00Z', NULL, 'proj', 'text', 1)
+		`, p); err != nil {
+			t.Fatalf("seed search_item %s: %v", p, err)
+		}
+		if _, err := db.db.Exec(`
+			INSERT INTO correction_signals (item_uuid, source_path, ordinal, detector, confidence, extraction_version)
+			VALUES ('x', ?, 0, 'lexicon', 0.8, 0)
+		`, p); err != nil {
+			t.Fatalf("seed signal %s: %v", p, err)
+		}
+	}
+
+	if _, err := db.RederiveSupersededCorrections(200); err != nil {
+		t.Fatalf("re-derive: %v", err)
+	}
+
+	var stale int
+	if err := db.db.QueryRow(`
+		SELECT COUNT(*) FROM correction_signals WHERE extraction_version IS NULL OR extraction_version < ?
+	`, CurrentExtractionVersion).Scan(&stale); err != nil {
+		t.Fatalf("count stale: %v", err)
+	}
+	if stale != 0 {
+		t.Errorf("%d superseded signal(s) remain; NULL-bearing paths were not processed", stale)
+	}
+}
+
+// TestBackfillTemplatesForFileUpgradesAndIsIdempotent covers the storage-level entry
+// point the incremental Q3 re-mining calls for each stale path: it must lift a
+// template to the current normalization version and stay a no-op when re-run.
+func TestBackfillTemplatesForFileUpgradesAndIsIdempotent(t *testing.T) {
+	db, err := Open(filepath.Join(t.TempDir(), "test.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = db.Close() }()
+
+	const path = "/p/errors.jsonl"
+	msgs := []IndexedMessage{
+		{Ordinal: 0, Role: "assistant", Text: "error: cannot find package /tmp/a/b.go", UUID: "e#0",
+			Timestamp: "2026-01-01T00:00:00Z", ContentType: "tool", ExtractionVersion: CurrentExtractionVersion},
+	}
+
+	miner := templates.NewMiner()
+	if err := db.BackfillTemplatesForFile(miner, path, msgs); err != nil {
+		t.Fatalf("first re-mine: %v", err)
+	}
+
+	var mined int
+	if err := db.db.QueryRow(`SELECT COUNT(*) FROM message_templates WHERE normalization_version = ?`, CurrentNormalizationVersion).Scan(&mined); err != nil {
+		t.Fatalf("count current-version templates: %v", err)
+	}
+	if mined == 0 {
+		t.Fatal("re-mining produced no template at the current normalization version")
+	}
+
+	// Age it, then re-mine: the row must be lifted back to the current version.
+	if _, err := db.db.Exec(`UPDATE message_templates SET normalization_version = 1`); err != nil {
+		t.Fatalf("age template: %v", err)
+	}
+	if err := db.BackfillTemplatesForFile(templates.NewMiner(), path, msgs); err != nil {
+		t.Fatalf("re-mine after aging: %v", err)
+	}
+	var stale int
+	if err := db.db.QueryRow(`SELECT COUNT(*) FROM message_templates WHERE normalization_version < ?`, CurrentNormalizationVersion).Scan(&stale); err != nil {
+		t.Fatalf("count stale: %v", err)
+	}
+	if stale != 0 {
+		t.Errorf("%d template(s) left below the current normalization version", stale)
+	}
+
+	// Idempotence: occurrence counts and matches must not grow on a repeat run.
+	var occBefore, matchBefore int
+	_ = db.db.QueryRow(`SELECT COALESCE(SUM(occurrence_count),0) FROM message_templates`).Scan(&occBefore)
+	_ = db.db.QueryRow(`SELECT COUNT(*) FROM template_matches`).Scan(&matchBefore)
+	if err := db.BackfillTemplatesForFile(templates.NewMiner(), path, msgs); err != nil {
+		t.Fatalf("third re-mine: %v", err)
+	}
+	var occAfter, matchAfter int
+	_ = db.db.QueryRow(`SELECT COALESCE(SUM(occurrence_count),0) FROM message_templates`).Scan(&occAfter)
+	_ = db.db.QueryRow(`SELECT COUNT(*) FROM template_matches`).Scan(&matchAfter)
+	if occAfter != occBefore || matchAfter != matchBefore {
+		t.Errorf("re-mining is not idempotent: occurrences %d->%d, matches %d->%d", occBefore, occAfter, matchBefore, matchAfter)
+	}
+
+	// An empty message set must be a clean no-op, not an error.
+	if err := db.BackfillTemplatesForFile(templates.NewMiner(), "/p/empty.jsonl", nil); err != nil {
+		t.Errorf("empty re-mine should be a no-op: %v", err)
 	}
 }
