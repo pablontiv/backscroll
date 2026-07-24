@@ -98,3 +98,48 @@ func TestSyncFilesPopulatesExitCode(t *testing.T) {
 		t.Errorf("SyncFiles re-derived exit_code %d from Text; extraction belongs to the reader", *unset)
 	}
 }
+
+// TestSyncFilesClearsSupersededCorrectionSignals pins the recovery path for detector
+// fixes: correction_signals is append-only with INSERT OR IGNORE, so a false positive
+// recorded under older detector rules would otherwise outlive the fix and keep topping
+// the census. Re-syncing a file must drop its signals from superseded epochs.
+func TestSyncFilesClearsSupersededCorrectionSignals(t *testing.T) {
+	db, err := Open(filepath.Join(t.TempDir(), "test.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = db.Close() }()
+
+	const path = "/p/chat.jsonl"
+
+	// A signal recorded by an older detector epoch on content the current rules reject.
+	if _, err := db.db.Exec(`
+		INSERT INTO correction_signals (item_uuid, source_path, ordinal, detector, confidence, extraction_version)
+		VALUES ('old#0', ?, 0, 'lexicon', 0.8, ?)
+	`, path, CurrentExtractionVersion-1); err != nil {
+		t.Fatalf("seed stale signal: %v", err)
+	}
+
+	files := []IndexedFile{{
+		SourcePath: path, Source: "session", Hash: "h1", Project: "proj",
+		Messages: []IndexedMessage{
+			// A pasted transcript: current rules must produce no lexicon signal for it.
+			{Ordinal: 0, Role: "user", UUID: "u#0",
+				Text:      "[3:06 p.m., 2/7/2026] Pedro Chan: eso no es un bug [3:07 p.m., 2/7/2026] Pablo: te dije que no [3:08 p.m., 2/7/2026] Ana: arreglado",
+				Timestamp: "2026-01-01T00:00:00Z", ContentType: "text", ExtractionVersion: CurrentExtractionVersion},
+		},
+	}}
+	if err := db.SyncFiles(files); err != nil {
+		t.Fatalf("sync: %v", err)
+	}
+
+	var n int
+	if err := db.db.QueryRow(`
+		SELECT COUNT(*) FROM correction_signals WHERE source_path = ? AND detector = 'lexicon'
+	`, path).Scan(&n); err != nil {
+		t.Fatalf("count signals: %v", err)
+	}
+	if n != 0 {
+		t.Errorf("stale lexicon signal survived re-sync: got %d, want 0", n)
+	}
+}

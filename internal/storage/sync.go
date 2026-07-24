@@ -231,6 +231,19 @@ func (d *Database) SyncFiles(files []IndexedFile) error {
 			}
 		}
 
+		// Drop this file's signals from superseded detector epochs before re-detecting.
+		// correction_signals is append-only with INSERT OR IGNORE, so without this a
+		// false positive recorded under older detector rules would survive forever —
+		// a detector fix would stop producing NEW bad candidates while the old ones
+		// kept topping the census. Signals at the current version are left alone, so
+		// re-syncing an up-to-date file is still a no-op.
+		if _, err := tx.Exec(`
+			DELETE FROM correction_signals
+			WHERE source_path = ? AND (extraction_version IS NULL OR extraction_version < ?)
+		`, file.SourcePath, CurrentExtractionVersion); err != nil {
+			return fmt.Errorf("clear superseded correction_signals for %s: %w", file.SourcePath, err)
+		}
+
 		// Run detectors with prose-only filter: lexicon, rephrase, denial on
 		// content_type='text'|'code' + role='user'; interrupt on all user messages.
 		detections := corrections.RunDetectorsFiltered(detectionMsgs)

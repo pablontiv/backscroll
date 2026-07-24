@@ -106,7 +106,13 @@ const minChatExportMarkers = 3
 // chatExportMarker matches either chat-export sender marker:
 // WhatsApp/Telegram "[HH:MM ...] SenderName:" or Signal "SenderName: [HH:MM ...]".
 // Deliberately unanchored so it works on both multi-line and whitespace-collapsed text.
-var chatExportMarker = regexp.MustCompile(`\[\d{2}:\d{2}[^\]]*\]\s+\w+:|\w+:\s+\[\d{2}:\d{2}`)
+// The hour is \d{1,2}: real exports write "[3:06 p.m., 2/7/2026] Name:" with an
+// unpadded hour, so requiring two digits misses the exports this filter exists for.
+// The hour is \d{1,2} because real exports write an unpadded hour, and the sender
+// is [^:\]]{1,40} rather than \w+ because display names carry spaces and accents
+// ("[3:06 p.m., 2/7/2026] Pedro Chan:"). Both were observed in the corpus; a
+// two-digit hour or a single-word sender silently misses them.
+var chatExportMarker = regexp.MustCompile(`\[\d{1,2}:\d{2}[^\]]*\]\s+[^:\]\n]{1,40}:|[^:\]\n]{1,40}:\s+\[\d{1,2}:\d{2}`)
 
 // isChatExport reports whether text carries at least minChatExportMarkers chat-export
 // sender markers, which signals a pasted transcript rather than a genuine correction.

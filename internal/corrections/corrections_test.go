@@ -536,3 +536,21 @@ func TestCorrectionLexiconDetectorSkipsChatExport(t *testing.T) {
 		})
 	}
 }
+
+// TestIsChatExportRealWorldFormat pins the filter to the export format actually
+// observed in the corpus: an unpadded hour plus a locale date, e.g.
+// "[3:06 p.m., 2/7/2026] Pedro Chan:". A two-digit-hour regex silently misses it,
+// which would leave the reported false positive unfixed.
+func TestIsChatExportRealWorldFormat(t *testing.T) {
+	realExport := "mas info [3:06 p.m., 2/7/2026] Pedro Chan: no debe haber referencia a SOAP " +
+		"[3:06 p.m., 2/7/2026] Pedro Chan: tampoco se requiere " +
+		"[3:07 p.m., 2/7/2026] Pablo: o sea ya no se conectara?"
+	if !isChatExport(realExport) {
+		t.Error("real WhatsApp export with unpadded hour was not detected as a chat export")
+	}
+
+	// A lone timestamp in ordinary prose must still pass through to the detectors.
+	if isChatExport("lo corri a las [3:06 p.m., 2/7/2026] y fallo") {
+		t.Error("a single timestamp was treated as a chat export")
+	}
+}
