@@ -1088,3 +1088,73 @@ func TestBackfillTemplatesForFileUpgradesAndIsIdempotent(t *testing.T) {
 		t.Errorf("empty re-mine should be a no-op: %v", err)
 	}
 }
+
+// TestRederiveSupersededCorrectionsRollsBackFailedPath pins the atomicity of a skipped
+// path. Re-deriving deletes a path's superseded signals before writing the new ones,
+// so a failure between the two must roll back: otherwise the path is left with its old
+// signals destroyed and its new ones missing — strictly worse than not touching it,
+// and reported as a skip. A trigger makes the INSERT fail after the DELETE has run.
+func TestRederiveSupersededCorrectionsRollsBackFailedPath(t *testing.T) {
+	db, err := Open(filepath.Join(t.TempDir(), "test.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = db.Close() }()
+
+	const poison = "/a/poison.jsonl"
+	const healthy = "/b/healthy.jsonl"
+
+	for i, p := range []string{poison, healthy} {
+		uuid := fmt.Sprintf("p%d#0", i)
+		if _, err := db.db.Exec(`
+			INSERT INTO search_items (source_path, source, ordinal, role, text, timestamp, uuid, project, content_type, extraction_version)
+			VALUES (?, 'session', 0, 'user', 'no, eso no es un bug', '2026-01-01T00:00:00Z', ?, 'proj', 'text', 1)
+		`, p, uuid); err != nil {
+			t.Fatalf("seed search_item %s: %v", p, err)
+		}
+		if _, err := db.db.Exec(`
+			INSERT INTO correction_signals (item_uuid, source_path, ordinal, detector, confidence, extraction_version)
+			VALUES (?, ?, 0, 'lexicon', 0.8, 0)
+		`, uuid, p); err != nil {
+			t.Fatalf("seed stale signal %s: %v", p, err)
+		}
+	}
+
+	// Fail every INSERT for the poison path, leaving its DELETE already executed.
+	if _, err := db.db.Exec(`
+		CREATE TRIGGER poison_insert BEFORE INSERT ON correction_signals
+		WHEN NEW.source_path = '` + poison + `'
+		BEGIN SELECT RAISE(ABORT, 'poisoned'); END;
+	`); err != nil {
+		t.Fatalf("create trigger: %v", err)
+	}
+
+	processed, err := db.RederiveSupersededCorrections(200)
+	if err == nil {
+		t.Error("expected the failing path to be reported, got nil error")
+	}
+	if processed != 1 {
+		t.Errorf("processed = %d, want 1 (the healthy path must still be re-derived)", processed)
+	}
+
+	// The failing path must be untouched: its original signal survives.
+	var poisonSignals int
+	if err := db.db.QueryRow(`SELECT COUNT(*) FROM correction_signals WHERE source_path = ?`, poison).Scan(&poisonSignals); err != nil {
+		t.Fatalf("count poison signals: %v", err)
+	}
+	if poisonSignals != 1 {
+		t.Errorf("failing path has %d signal(s), want 1: its DELETE was committed despite the failure", poisonSignals)
+	}
+
+	// The healthy path must be fully re-derived and stamped current.
+	var healthyStale int
+	if err := db.db.QueryRow(`
+		SELECT COUNT(*) FROM correction_signals
+		WHERE source_path = ? AND (extraction_version IS NULL OR extraction_version < ?)
+	`, healthy, CurrentExtractionVersion).Scan(&healthyStale); err != nil {
+		t.Fatalf("count healthy stale: %v", err)
+	}
+	if healthyStale != 0 {
+		t.Errorf("healthy path still carries %d superseded signal(s)", healthyStale)
+	}
+}

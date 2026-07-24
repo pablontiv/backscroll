@@ -536,38 +536,44 @@ func (d *Database) RederiveSupersededCorrections(limit int) (int, error) {
 		return 0, nil
 	}
 
-	// One transaction for the bounded batch: the batch either lands whole or not at
-	// all, so a crash mid-run cannot leave a path with its old signals deleted and
-	// its new ones missing.
-	tx, err := d.db.Begin()
-	if err != nil {
-		return 0, fmt.Errorf("begin transaction: %w", err)
-	}
-	defer func() { _ = tx.Rollback() }()
-
-	// A path that cannot be read is skipped rather than failing the batch. Discovery
-	// order is deterministic, so aborting on the first bad path would park the same
-	// path at the head of every run and no other path would ever be re-derived.
+	// One transaction PER PATH, not one for the batch. Re-deriving a path deletes its
+	// superseded signals before writing the new ones, so that pair must be atomic —
+	// but only per path, since paths are independent and partial batch progress is
+	// both harmless and convergent. A shared batch transaction would be worse than
+	// useless here: a path failing midway would leave its DELETE staged, and skipping
+	// to the next path would still commit that DELETE at the end, wiping the signals
+	// of the very path the loop claims to have skipped.
+	//
+	// A path that fails is skipped rather than aborting the run. Discovery order is
+	// deterministic, so failing fast would park the same path at the head of every
+	// run and nothing behind it would ever be re-derived.
 	processed := 0
 	var firstErr error
+	recordErr := func(err error) {
+		if firstErr == nil {
+			firstErr = err
+		}
+	}
 	for _, sourcePath := range paths {
 		msgs, err := d.LoadMessagesForPath(sourcePath)
 		if err != nil {
-			if firstErr == nil {
-				firstErr = fmt.Errorf("load messages for %s: %w", sourcePath, err)
-			}
+			recordErr(fmt.Errorf("load messages for %s: %w", sourcePath, err))
 			continue
 		}
+		tx, err := d.db.Begin()
+		if err != nil {
+			return processed, fmt.Errorf("begin transaction for %s: %w", sourcePath, err)
+		}
 		if _, err := d.backfillCorrectionsForFile(tx, sourcePath, msgs); err != nil {
-			if firstErr == nil {
-				firstErr = fmt.Errorf("re-derive corrections for %s: %w", sourcePath, err)
-			}
+			_ = tx.Rollback()
+			recordErr(fmt.Errorf("re-derive corrections for %s: %w", sourcePath, err))
+			continue
+		}
+		if err := tx.Commit(); err != nil {
+			recordErr(fmt.Errorf("commit re-derivation for %s: %w", sourcePath, err))
 			continue
 		}
 		processed++
-	}
-	if err := tx.Commit(); err != nil {
-		return 0, fmt.Errorf("commit re-derivation: %w", err)
 	}
 	return processed, firstErr
 }
