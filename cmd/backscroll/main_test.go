@@ -11,6 +11,7 @@ import (
 
 	"github.com/pablontiv/backscroll/internal/config"
 	"github.com/pablontiv/backscroll/internal/storage"
+	"github.com/pablontiv/picokit/autoupdate"
 	"github.com/pablontiv/picokit/hashfile"
 	_ "modernc.org/sqlite"
 )
@@ -987,13 +988,9 @@ func TestStatusWithDeclarativeInputs(t *testing.T) {
 }
 
 func TestMain_AutoupdateConstructorParams(t *testing.T) {
-	// Verify autoupdate is initialized with correct repo, binary, and env var.
-	// We verify by calling run() which initializes the updater; if params are
-	// wrong, FetchAndStage would fail. Since we use the disable env var in this
-	// test, no network calls occur.
-	_ = os.Setenv("BACKSCROLL_AUTOUPDATE_DISABLE", "1")
-	defer func() { _ = os.Unsetenv("BACKSCROLL_AUTOUPDATE_DISABLE") }()
-
+	// Verify run() initializes the updater with the correct repo and binary by
+	// exercising --version. In tests version == "dev", so the updater performs
+	// no network calls (picokit dev-build exemption).
 	_, cleanup := testEnv(t)
 	defer cleanup()
 
@@ -1006,18 +1003,14 @@ func TestMain_AutoupdateConstructorParams(t *testing.T) {
 	}
 }
 
-func TestMain_AutoupdateSkipsOnEnv(t *testing.T) {
-	// Verify that setting BACKSCROLL_AUTOUPDATE_DISABLE=1 disables autoupdate.
-	// CLI completes without hanging.
-	_ = os.Setenv("BACKSCROLL_AUTOUPDATE_DISABLE", "1")
-	defer func() { _ = os.Unsetenv("BACKSCROLL_AUTOUPDATE_DISABLE") }()
-
-	_, cleanup := testEnv(t)
-	defer cleanup()
-
-	_, _, err := runCmd("status")
-	if err != nil {
-		t.Fatalf("status command should not error when autoupdate disabled: %v", err)
+func TestMain_AutoupdateHasNoEnvOptOut(t *testing.T) {
+	// A released binary must have no environment opt-out: the only exemption is
+	// version == "dev", which an end user cannot set. Constructing the updater
+	// exactly as run() does and asserting EnvDisable == "" proves this with no
+	// network call.
+	u := autoupdate.New("pablontiv/backscroll", "backscroll")
+	if u.EnvDisable != "" {
+		t.Errorf("released binary must have no env opt-out; EnvDisable = %q", u.EnvDisable)
 	}
 }
 
@@ -1041,9 +1034,6 @@ func TestMain_AutoupdateFetchRunsInGoroutine(t *testing.T) {
 	// Verify that FetchAndStage runs in a goroutine and doesn't block CLI execution.
 	// We measure this by ensuring --version returns quickly even if autoupdate is
 	// doing work in the background.
-	_ = os.Setenv("BACKSCROLL_AUTOUPDATE_DISABLE", "1")
-	defer func() { _ = os.Unsetenv("BACKSCROLL_AUTOUPDATE_DISABLE") }()
-
 	_, cleanup := testEnv(t)
 	defer cleanup()
 

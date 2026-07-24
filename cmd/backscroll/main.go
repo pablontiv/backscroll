@@ -20,7 +20,7 @@ func main() {
 }
 
 func run(stdout, stderr io.Writer, args []string) error {
-	u := autoupdate.New("pablontiv/backscroll", "backscroll", "BACKSCROLL_AUTOUPDATE_DISABLE")
+	u := autoupdate.New("pablontiv/backscroll", "backscroll")
 	u.CurrentVersion = version
 	_ = u.ApplyStagedIfAvailable()
 
