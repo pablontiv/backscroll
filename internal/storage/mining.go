@@ -34,6 +34,10 @@ func (d *Database) mineTemplatesForFile(tx *sql.Tx, file IndexedFile, miner *tem
 		if msg.ToolName == "" || msg.IsError == nil || !*msg.IsError {
 			continue
 		}
+		// Skip input serializations (not error output).
+		if isInputSerialization(msg.Text) {
+			continue
+		}
 		// Extract error lines from the message text.
 		relevantLines := templates.ExtractErrorLines(msg.ToolName, msg.Text)
 		for _, line := range relevantLines {
