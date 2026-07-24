@@ -59,9 +59,11 @@ func (d *Database) BackfillDerived(opts BackfillDerivedOpts) error {
 			ifx.path IS NULL AND
 			(NOT EXISTS (SELECT 1 FROM template_matches WHERE source_path = si.source_path) OR
 			 NOT EXISTS (SELECT 1 FROM correction_signals WHERE source_path = si.source_path) OR
+			 EXISTS (SELECT 1 FROM correction_signals WHERE source_path = si.source_path
+			         AND (extraction_version IS NULL OR extraction_version < ?)) OR
 			 NOT EXISTS (SELECT 1 FROM tool_events WHERE source_path = si.source_path AND extraction_version = 0))
 		ORDER BY si.source_path
-	`)
+	`, CurrentExtractionVersion)
 	if err != nil {
 		return fmt.Errorf("query expired files: %w", err)
 	}
@@ -344,10 +346,24 @@ func (d *Database) backfillCorrectionsForFile(tx *sql.Tx, sourcePath string, mes
 		}
 	}
 
+	// Drop signals from superseded detector epochs first. These sessions have expired
+	// from disk, so SyncFiles will never run for them again — this is their only route
+	// to a detector fix. Without it a false positive recorded under older rules would
+	// be permanent for exactly the sessions the perennial store exists to preserve.
+	if _, err := tx.Exec(`
+		DELETE FROM correction_signals
+		WHERE source_path = ? AND (extraction_version IS NULL OR extraction_version < ?)
+	`, sourcePath, CurrentExtractionVersion); err != nil {
+		return 0, fmt.Errorf("clear superseded correction_signals: %w", err)
+	}
+
 	// Run detectors with prose filter
 	detections := backfillDetectCorrections(detectionMsgs)
 
-	// Insert signals (idempotent)
+	// Insert signals (idempotent). Stamped with the current extraction version, not
+	// the lossy 0 marker: the detector read the same stored prose either way, so the
+	// signal is not lossy, and stamping it current is what lets this converge — a
+	// path re-derived under today's rules is no longer discovered as stale.
 	count := 0
 	for ordinal, dets := range detections {
 		for _, det := range dets {
@@ -355,7 +371,7 @@ func (d *Database) backfillCorrectionsForFile(tx *sql.Tx, sourcePath string, mes
 				INSERT OR IGNORE INTO correction_signals
 				(item_uuid, source_path, ordinal, detector, confidence, extraction_version)
 				VALUES (?, ?, ?, ?, ?, ?)
-			`, messages[ordinal].UUID, sourcePath, ordinal, det.DetectorName, det.Confidence, 0) // extraction_version=0 (lossy)
+			`, messages[ordinal].UUID, sourcePath, ordinal, det.DetectorName, det.Confidence, CurrentExtractionVersion)
 			if err != nil {
 				return 0, fmt.Errorf("insert correction_signal: %w", err)
 			}

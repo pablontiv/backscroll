@@ -686,3 +686,80 @@ func TestLoadMessagesForPath(t *testing.T) {
 		t.Errorf("message 1 mismatch: got %+v", loaded[1])
 	}
 }
+
+// TestBackfillRederivesSupersededSignalsForExpiredSession covers the only route a
+// detector fix has to an EXPIRED session: its JSONL is gone from disk, so SyncFiles
+// will never run for it again and the sync-time epoch clear can never fire. Without
+// backfill re-derivation a false positive recorded under older detector rules would
+// be permanent for exactly the sessions the perennial store exists to preserve.
+func TestBackfillRederivesSupersededSignalsForExpiredSession(t *testing.T) {
+	db, err := Open(filepath.Join(t.TempDir(), "test.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = db.Close() }()
+
+	const path = "/expired/chat.jsonl"
+
+	// A perennial row whose source file is gone: present in search_items, absent
+	// from indexed_files. Its text is a pasted transcript current rules reject.
+	if _, err := db.db.Exec(`
+		INSERT INTO search_items (source_path, source, ordinal, role, text, timestamp, uuid, project, content_type, extraction_version)
+		VALUES (?, 'session', 0, 'user', ?, '2026-01-01T00:00:00Z', 'x#0', 'proj', 'text', ?)
+	`, path, "[3:06 p.m., 2/7/2026] Pedro Chan: eso no es un bug [3:07 p.m., 2/7/2026] Pablo: te dije que no [3:08 p.m., 2/7/2026] Ana: arreglado", CurrentExtractionVersion); err != nil {
+		t.Fatalf("seed expired search_item: %v", err)
+	}
+	// A genuine single-message correction on the same expired path. It must survive
+	// re-derivation, and its stamp is what the convergence check below reads — a
+	// fixture where every message is filtered would make that check vacuous.
+	if _, err := db.db.Exec(`
+		INSERT INTO search_items (source_path, source, ordinal, role, text, timestamp, uuid, project, content_type, extraction_version)
+		VALUES (?, 'session', 1, 'user', 'no, eso no es un bug', '2026-01-01T00:00:01Z', 'x#1', 'proj', 'text', ?)
+	`, path, CurrentExtractionVersion); err != nil {
+		t.Fatalf("seed genuine correction: %v", err)
+	}
+	// A stale false positive from an older detector epoch.
+	if _, err := db.db.Exec(`
+		INSERT INTO correction_signals (item_uuid, source_path, ordinal, detector, confidence, extraction_version)
+		VALUES ('x#0', ?, 0, 'lexicon', 0.8, 0)
+	`, path); err != nil {
+		t.Fatalf("seed stale signal: %v", err)
+	}
+
+	if err := db.BackfillDerived(BackfillDerivedOpts{}); err != nil {
+		t.Fatalf("BackfillDerived: %v", err)
+	}
+
+	var transcriptSignals int
+	if err := db.db.QueryRow(`
+		SELECT COUNT(*) FROM correction_signals WHERE source_path = ? AND ordinal = 0 AND detector = 'lexicon'
+	`, path).Scan(&transcriptSignals); err != nil {
+		t.Fatalf("count transcript signals: %v", err)
+	}
+	if transcriptSignals != 0 {
+		t.Errorf("stale lexicon signal on the pasted transcript survived backfill: got %d, want 0", transcriptSignals)
+	}
+
+	var genuineSignals int
+	if err := db.db.QueryRow(`
+		SELECT COUNT(*) FROM correction_signals WHERE source_path = ? AND ordinal = 1 AND detector = 'lexicon'
+	`, path).Scan(&genuineSignals); err != nil {
+		t.Fatalf("count genuine signals: %v", err)
+	}
+	if genuineSignals != 1 {
+		t.Fatalf("genuine correction was not re-derived: got %d lexicon signals, want 1", genuineSignals)
+	}
+
+	// Convergence: re-derived signals are stamped current, so a second pass must not
+	// keep rediscovering this path forever.
+	var stale int
+	if err := db.db.QueryRow(`
+		SELECT COUNT(*) FROM correction_signals
+		WHERE source_path = ? AND (extraction_version IS NULL OR extraction_version < ?)
+	`, path, CurrentExtractionVersion).Scan(&stale); err != nil {
+		t.Fatalf("count stale-epoch signals: %v", err)
+	}
+	if stale != 0 {
+		t.Errorf("backfill left %d signal(s) below the current epoch; discovery would never converge", stale)
+	}
+}
