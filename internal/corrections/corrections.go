@@ -1,6 +1,7 @@
 package corrections
 
 import (
+	"regexp"
 	"strings"
 
 	"github.com/pablontiv/backscroll/internal/models"
@@ -94,6 +95,40 @@ func RunDetectorsFiltered(msgs []models.Message) map[int][]Detection {
 	return result
 }
 
+// Chat-export detection constants and regexes
+const minChatExportLines = 3
+
+var (
+	// chatExportWhatsApp matches WhatsApp timestamp format: [HH:MM ...] SenderName:
+	chatExportWhatsApp = regexp.MustCompile(`^\[\d{2}:\d{2}[^\]]*\]\s+\w+:`)
+	// chatExportSignal matches Signal format: SenderName: [HH:MM ...]
+	chatExportSignal = regexp.MustCompile(`^\w+:\s+\[\d{2}:\d{2}`)
+)
+
+// isChatExport checks if text contains ≥minChatExportLines consecutive lines matching
+// chat-export markers (WhatsApp "[HH:MM] Name:" or Signal "Name: [HH:MM]" format).
+// Returns true if transcript detected, false otherwise.
+func isChatExport(text string) bool {
+	lines := strings.Split(text, "\n")
+	if len(lines) < minChatExportLines {
+		return false
+	}
+
+	// Count consecutive lines matching either pattern
+	consecutiveCount := 0
+	for _, line := range lines {
+		if chatExportWhatsApp.MatchString(line) || chatExportSignal.MatchString(line) {
+			consecutiveCount++
+			if consecutiveCount >= minChatExportLines {
+				return true
+			}
+		} else {
+			consecutiveCount = 0 // Reset on non-matching line
+		}
+	}
+	return false
+}
+
 // correctionLexicon is the comprehensive es+en lexicon for correction signals.
 // Patterns are lowercase; matching is case-insensitive.
 // NOTE: Spanish is primary (first-class); English is secondary.
@@ -128,6 +163,12 @@ func cCorrectionLexiconDetector(msgs []models.Message, idx int) *Detection {
 		return nil
 	}
 	content := msgs[idx].Content
+
+	// Q5: Skip chat-export spans (pasted transcripts)
+	if isChatExport(content) {
+		return nil
+	}
+
 	lowerContent := strings.ToLower(content)
 
 	for _, pattern := range correctionLexicon {

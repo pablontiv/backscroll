@@ -432,3 +432,107 @@ func TestRephraseDetector(t *testing.T) {
 		})
 	}
 }
+
+// TestIsChatExport verifies detection of multi-line chat message formats.
+func TestIsChatExport(t *testing.T) {
+	tests := []struct {
+		name string
+		text string
+		want bool
+	}{
+		{
+			name: "WhatsApp 3+ lines",
+			text: "[12:34] Alice: eso no es un bug\n[12:35] Bob: correcto\n[12:36] Carol: arreglado",
+			want: true,
+		},
+		{
+			name: "Signal format 3+ lines",
+			text: "Alice: [12:34] message 1\nBob: [12:35] message 2\nCarol: [12:36] message 3",
+			want: true,
+		},
+		{
+			name: "WhatsApp only 2 lines (below threshold)",
+			text: "[12:34] Alice: message\n[12:35] Bob: response",
+			want: false,
+		},
+		{
+			name: "Single message (no chat export)",
+			text: "eso no es un bug, es esperado",
+			want: false,
+		},
+		{
+			name: "Single timestamp (no chat export)",
+			text: "[12:34] Just one line",
+			want: false,
+		},
+		{
+			name: "Mixed content with timestamp",
+			text: "some code\n[12:34] Alice: oops\n[12:35] Bob: fixed\n[12:36] Carol: done\nmore code",
+			want: true, // 3+ consecutive lines match pattern
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := isChatExport(tt.text)
+			if got != tt.want {
+				t.Errorf("isChatExport(%q) = %v, want %v", tt.text, got, tt.want)
+			}
+		})
+	}
+}
+
+// TestCorrectionLexiconDetectorSkipsChatExport verifies that the lexicon detector
+// filters out pasted chat transcripts.
+func TestCorrectionLexiconDetectorSkipsChatExport(t *testing.T) {
+	tests := []struct {
+		name       string
+		messages   []models.Message
+		idx        int
+		expectFire bool
+		reason     string
+	}{
+		{
+			name: "pasted WhatsApp with Spanish lexicon — should NOT fire",
+			messages: []models.Message{
+				testMsg("user", "help me"),
+				testMsg("assistant", "doing something"),
+				testMsg("user", "[12:34] Alice: eso no es un bug\n[12:35] Bob: correcto\n[12:36] Carol: arreglado"),
+			},
+			idx:        2,
+			expectFire: false,
+			reason:     "chat-export filter should suppress lexicon detection",
+		},
+		{
+			name: "genuine single-line Spanish correction — SHOULD fire",
+			messages: []models.Message{
+				testMsg("user", "do this"),
+				testMsg("assistant", "doing it"),
+				testMsg("user", "no, eso no es un bug"),
+			},
+			idx:        2,
+			expectFire: true,
+			reason:     "single-line genuine correction should still be detected",
+		},
+		{
+			name: "only 2 lines of chat export (below threshold) with lexicon — SHOULD fire",
+			messages: []models.Message{
+				testMsg("user", "help"),
+				testMsg("assistant", "ok"),
+				testMsg("user", "[12:34] Alice: eso no es\n[12:35] Bob: ok"),
+			},
+			idx:        2,
+			expectFire: true,
+			reason:     "only 2 lines don't meet threshold, so lexicon should fire",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result := cCorrectionLexiconDetector(tt.messages, tt.idx)
+			gotFire := result != nil
+			if gotFire != tt.expectFire {
+				t.Errorf("%s: detector fired=%v, expected=%v (%s)",
+					tt.name, gotFire, tt.expectFire, tt.reason)
+			}
+		})
+	}
+}
