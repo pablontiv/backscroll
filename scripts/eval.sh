@@ -28,7 +28,10 @@ done
 # wait. We must NOT fall back to an installed release binary: since the runtime
 # opt-out was removed, a release binary would fetch+wait ~10s per invocation.
 BACKSCROLL_BIN="$REPO_ROOT/backscroll"
-if ! go build -o "$BACKSCROLL_BIN" "$REPO_ROOT/cmd/backscroll"; then
+# Build from inside the module (cd into REPO_ROOT) so this works regardless of
+# the caller's cwd — `go build <abs-path>` resolves the module from the current
+# directory, not the target, and fails "outside main module" when run elsewhere.
+if ! ( cd "$REPO_ROOT" && go build -o "$BACKSCROLL_BIN" ./cmd/backscroll ); then
   echo "❌ failed to build dev backscroll binary from $REPO_ROOT/cmd/backscroll"
   exit 1
 fi

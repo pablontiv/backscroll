@@ -1014,6 +1014,23 @@ func TestMain_AutoupdateHasNoEnvOptOut(t *testing.T) {
 	}
 }
 
+func TestMain_AutoupdateSingleWiringPoint(t *testing.T) {
+	// The wiring test above only proves newUpdater() is clean. It would still
+	// pass if run() bypassed the factory with its own autoupdate.New(...,
+	// "SOME_ENV") call. Guard against that: autoupdate.New must appear exactly
+	// once in main.go — inside newUpdater — with no envDisable argument.
+	src, err := os.ReadFile("main.go")
+	if err != nil {
+		t.Fatalf("read main.go: %v", err)
+	}
+	if n := strings.Count(string(src), "autoupdate.New("); n != 1 {
+		t.Fatalf("expected exactly one autoupdate.New call site (inside newUpdater), found %d — a second call site could reintroduce an opt-out", n)
+	}
+	if !strings.Contains(string(src), `autoupdate.New("pablontiv/backscroll", "backscroll")`) {
+		t.Error(`the sole autoupdate.New call must pass no envDisable argument: autoupdate.New("pablontiv/backscroll", "backscroll")`)
+	}
+}
+
 func TestMain_AutoupdateSkipsOnDevVersion(t *testing.T) {
 	// Verify that version == "dev" (the default) doesn't trigger network requests.
 	// The goroutine runs but exits quickly. We verify by checking that --help
