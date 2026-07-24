@@ -430,6 +430,63 @@ func (d *Database) StaleTemplatePaths(currentVersion int) ([]string, error) {
 	return paths, rows.Err()
 }
 
+// LoadMessagesForPath loads all IndexedMessage rows from search_items for a given source path,
+// ordered by ordinal. Used by incremental template re-mining in sync_helpers.go.
+func (d *Database) LoadMessagesForPath(sourcePath string) ([]IndexedMessage, error) {
+	rows, err := d.db.Query(`
+		SELECT
+			ordinal, uuid, role, text, timestamp, content_type, extraction_version, was_interrupted
+		FROM search_items
+		WHERE source_path = ?
+		ORDER BY ordinal ASC
+	`, sourcePath)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var msgs []IndexedMessage
+	for rows.Next() {
+		var msg IndexedMessage
+		var wasInterrupted *int
+		if err := rows.Scan(
+			&msg.Ordinal, &msg.UUID, &msg.Role, &msg.Text, &msg.Timestamp,
+			&msg.ContentType, &msg.ExtractionVersion, &wasInterrupted,
+		); err != nil {
+			return nil, err
+		}
+		if wasInterrupted != nil {
+			msg.WasInterrupted = *wasInterrupted != 0
+		}
+		msgs = append(msgs, msg)
+	}
+	return msgs, rows.Err()
+}
+
+// BackfillTemplatesForFile re-mines templates for a single source path under current normalization heuristics.
+// Used by incremental template re-mining in sync_helpers.go (Q3).
+// The sourcePath is needed to update database records and should be provided by the caller
+// (obtained from LoadMessagesForPath or StaleTemplatePaths).
+func (d *Database) BackfillTemplatesForFile(miner *templates.Miner, sourcePath string, msgs []IndexedMessage) error {
+	tx, err := d.db.Begin()
+	if err != nil {
+		return fmt.Errorf("begin transaction: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	if len(msgs) == 0 {
+		return tx.Commit()
+	}
+
+	// Re-mine templates using internal backfillTemplatesForFile
+	_, err = d.backfillTemplatesForFile(tx, sourcePath, msgs, miner)
+	if err != nil {
+		return err
+	}
+
+	return tx.Commit()
+}
+
 // backfillDetectCorrections runs detectors with prose-only filter.
 // Replicates the SyncFiles filtering logic: lexicon, rephrase, denial on
 // content_type='text'|'code' + role='user' only; interrupt on all user.
