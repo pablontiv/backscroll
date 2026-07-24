@@ -2354,136 +2354,192 @@ func TestRebuildMultipleProjects(t *testing.T) {
 	}
 }
 
-// TestB1StaleSetExtractionVersionBackfill verifies Q2: exit codes are extracted
-// from Bash tool results and marked with extraction_version=3.
-func TestB1StaleSetExtractionVersionBackfill(t *testing.T) {
+// TestQ2ExitCodeSurvivesTruncation verifies Q2 end-to-end: an exit code that sits
+// past the 4000-rune toolfmt truncation cap is still stored in tool_events.exit_code,
+// because extraction happens in the reader BEFORE truncation. This is the whole point
+// of Q2 — a test that only checks extraction_version would pass with the fix reverted.
+func TestQ2ExitCodeSurvivesTruncation(t *testing.T) {
 	dbPath, cleanup := testEnv(t)
 	defer cleanup()
 
 	sessionDir := t.TempDir()
 	t.Setenv("BACKSCROLL_SESSION_DIRS", sessionDir)
 
-	// Create a Claude JSONL file with Bash tool result containing exit code
+	// Build a Bash tool_result whose exit code is beyond the truncation cap.
+	padding := strings.Repeat("noise line to push the exit code past the cap\\n", 200)
 	sessionFile := filepath.Join(sessionDir, "claude.jsonl")
 	sessionContent := `{"type":"assistant","timestamp":"2026-01-01T00:00:00Z","uuid":"u1","message":{"role":"assistant","content":[{"type":"tool_use","id":"t1","name":"Bash","input":{"command":"go test ./..."}}]}}
-{"type":"user","timestamp":"2026-01-01T00:00:01Z","uuid":"u2","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"t1","is_error":true,"content":"FAIL
-exit code 1"}]}}`
+{"type":"user","timestamp":"2026-01-01T00:00:01Z","uuid":"u2","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"t1","is_error":true,"content":"FAIL\\n` + padding + `exit code 7"}]}}`
 	if err := os.WriteFile(sessionFile, []byte(sessionContent), 0o644); err != nil {
-		t.Fatalf("failed to write session: %v", err)
+		t.Fatalf("write session: %v", err)
 	}
 
-	// Run sync (which should extract exit code from Bash tool result)
-	_, _, _ = runCmd("list")
-
-	// Verify: exit-code extraction is marked via extraction_version=3
-	db, _ := storage.Open(dbPath)
-	defer db.Close()
-	sqlDB := db.DB()
-
-	// Check that the message was synced with extraction_version=3 (Q2 feature)
-	var version *int
-	err := sqlDB.QueryRow(`SELECT MAX(extraction_version) FROM search_items WHERE source_path = ?`, sessionFile).Scan(&version)
-	if err != nil || version == nil || *version < 3 {
-		t.Logf("extraction_version not bumped to 3: got %v", version)
-	} else {
-		t.Logf("OK: extraction_version bumped to 3 (exit-code extraction enabled)")
-	}
-}
-
-// TestAutoSyncReminesStaleFIFO verifies Q3: stale templates are progressively
-// re-mined from v1 to v2 after sync completes.
-func TestAutoSyncReminesStaleFIFO(t *testing.T) {
-	dbPath, cleanup := testEnv(t)
-	defer cleanup()
-
-	sessionDir := t.TempDir()
-	t.Setenv("BACKSCROLL_SESSION_DIRS", sessionDir)
-
-	db, _ := storage.Open(dbPath)
-	sqlDB := db.DB()
-
-	// Insert v1 templates to simulate old corpus
-	for i := 0; i < 5; i++ {
-		sig := fmt.Sprintf("sig-%d", i)
-		_, _ = sqlDB.Exec(`
-			INSERT INTO message_templates (signature, normalization_version, template_text, occurrence_count)
-			VALUES (?, ?, ?, 1)
-		`, sig, 1, "error: <*>")
+	if _, _, err := runCmd("list"); err != nil {
+		t.Fatalf("list (triggers sync): %v", err)
 	}
 
-	// Create session file with error messages
-	sessionFile := filepath.Join(sessionDir, "errors.jsonl")
-	sessionContent := `{"type":"user","timestamp":"2026-01-01T00:00:00Z","uuid":"u1","message":{"role":"user","content":"help"}}`
-	if err := os.WriteFile(sessionFile, []byte(sessionContent), 0o644); err != nil {
-		t.Fatalf("failed to write session: %v", err)
-	}
-
-	_ = db.Close()
-
-	// Run sync (should trigger template re-mining)
-	cfg := &config.Config{DatabasePath: dbPath, SessionDirs: []string{sessionDir}}
-	_ = maybeAutoSync(cfg)
-
-	// Verify: at least some templates should still be v1 or upgraded to v2
-	db, _ = storage.Open(dbPath)
-	defer db.Close()
-	sqlDB = db.DB()
-
-	var v1Count, v2Count int
-	_ = sqlDB.QueryRow(`SELECT COUNT(*) FROM message_templates WHERE normalization_version = 1`).Scan(&v1Count)
-	_ = sqlDB.QueryRow(`SELECT COUNT(*) FROM message_templates WHERE normalization_version = 2`).Scan(&v2Count)
-
-	totalCount := v1Count + v2Count
-	if totalCount != 5 {
-		t.Logf("template count: v1=%d, v2=%d (total %d, expected 5)", v1Count, v2Count, totalCount)
-	}
-}
-
-// TestCorrectionsQuerySkipsTranscripts verifies Q5: chat-export transcripts
-// are filtered out by the lexicon detector.
-func TestCorrectionsQuerySkipsTranscripts(t *testing.T) {
-	dbPath, cleanup := testEnv(t)
-	defer cleanup()
-
-	sessionDir := t.TempDir()
-	t.Setenv("BACKSCROLL_SESSION_DIRS", sessionDir)
-
-	// Create session with genuine correction and multi-line chat
-	sessionFile := filepath.Join(sessionDir, "corrections.jsonl")
-	// Note: use actual newlines in the JSON, not escaped \n
-	sessionContent := `{"type":"user","timestamp":"2026-01-01T00:00:00Z","uuid":"u1","message":{"role":"user","content":"no, eso no es un bug"}}
-{"type":"user","timestamp":"2026-01-01T00:00:01Z","uuid":"u2","message":{"role":"user","content":"[12:34] Alice: eso no es un bug
-[12:35] Bob: correcto
-[12:36] Carol: arreglado"}}`
-	if err := os.WriteFile(sessionFile, []byte(sessionContent), 0o644); err != nil {
-		t.Fatalf("failed to write session: %v", err)
-	}
-
-	// Sync
-	out, _, _ := runCmd("list")
-	_ = out
-
-	// Verify: genuine single-line message detected, multi-line chat filtered
-	db, _ := storage.Open(dbPath)
-	defer db.Close()
-	sqlDB := db.DB()
-
-	var count int
-	err := sqlDB.QueryRow(`
-		SELECT COUNT(*) FROM correction_signals
-		WHERE detector = 'lexicon' AND source_path = ?
-	`, sessionFile).Scan(&count)
+	db, err := storage.Open(dbPath)
 	if err != nil {
-		t.Logf("query error: %v", err)
-		return
+		t.Fatalf("open db: %v", err)
+	}
+	defer db.Close()
+
+	var exitCode *int
+	err = db.DB().QueryRow(`
+		SELECT exit_code FROM tool_events
+		WHERE source_path = ? AND tool_name = 'Bash'
+		ORDER BY ordinal LIMIT 1
+	`, sessionFile).Scan(&exitCode)
+	if err != nil {
+		t.Fatalf("query tool_events.exit_code (no Bash tool_event was written): %v", err)
+	}
+	if exitCode == nil {
+		t.Fatal("exit_code is NULL: the code past the truncation cap was lost, so extraction still runs on truncated text")
+	}
+	if *exitCode != 7 {
+		t.Errorf("exit_code = %d, want 7", *exitCode)
+	}
+}
+
+// TestQ3AutoSyncUpgradesStaleTemplates verifies Q3 end-to-end: when a corpus carries
+// templates below the current normalization version, auto-sync alone re-mines that
+// path — no manual rebuild — producing current-version templates, and doing so
+// idempotently.
+//
+// Note on scope: sync-time mining stores tool INPUT serializations, which backfill
+// re-mining deliberately excludes (they are not error lines). Such a template can
+// therefore never be upgraded in place; what re-mining guarantees is that the path is
+// re-processed and current-version templates are produced. This test asserts that
+// guarantee, not a blanket "no v1 row survives".
+func TestQ3AutoSyncUpgradesStaleTemplates(t *testing.T) {
+	dbPath, cleanup := testEnv(t)
+	defer cleanup()
+
+	sessionDir := t.TempDir()
+	t.Setenv("BACKSCROLL_SESSION_DIRS", sessionDir)
+
+	sessionFile := filepath.Join(sessionDir, "errors.jsonl")
+	sessionContent := `{"type":"assistant","timestamp":"2026-01-01T00:00:00Z","uuid":"u1","message":{"role":"assistant","content":[{"type":"tool_use","id":"t1","name":"Bash","input":{"command":"go build ./..."}}]}}
+{"type":"user","timestamp":"2026-01-01T00:00:01Z","uuid":"u2","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"t1","is_error":true,"content":"error: cannot find package /tmp/a/b.go"}]}}`
+	if err := os.WriteFile(sessionFile, []byte(sessionContent), 0o644); err != nil {
+		t.Fatalf("write session: %v", err)
 	}
 
-	// Should have 1 signal (genuine correction), not 2 (chat filtered out)
-	if count > 1 {
-		t.Errorf("expected ≤1 lexicon signal, got %d (chat transcript should be filtered)", count)
-	} else if count == 1 {
-		t.Logf("OK: found 1 lexicon signal (genuine correction detected, chat filtered)")
-	} else {
-		t.Logf("no lexicon signals found (may be expected if corpus too small)")
+	if _, _, err := runCmd("list"); err != nil {
+		t.Fatalf("initial list: %v", err)
+	}
+
+	// Age the corpus: mark stored templates stale so the path needs re-mining.
+	db, err := storage.Open(dbPath)
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	res, err := db.DB().Exec(`UPDATE message_templates SET normalization_version = 1`)
+	if err != nil {
+		t.Fatalf("age templates to v1: %v", err)
+	}
+	aged, _ := res.RowsAffected()
+	_ = db.Close()
+	if aged == 0 {
+		t.Fatal("precondition failed: first sync mined no templates at all")
+	}
+
+	// Auto-sync alone must re-mine the stale path — no rebuild.
+	cfg := &config.Config{DatabasePath: dbPath, SessionDirs: []string{sessionDir}}
+	if err := maybeAutoSync(cfg); err != nil {
+		t.Fatalf("maybeAutoSync: %v", err)
+	}
+
+	db, err = storage.Open(dbPath)
+	if err != nil {
+		t.Fatalf("reopen db: %v", err)
+	}
+	defer db.Close()
+
+	var currentVersionTemplates int
+	if err := db.DB().QueryRow(`
+		SELECT COUNT(*) FROM message_templates WHERE normalization_version = ?
+	`, storage.CurrentNormalizationVersion).Scan(&currentVersionTemplates); err != nil {
+		t.Fatalf("count current-version templates: %v", err)
+	}
+	if currentVersionTemplates == 0 {
+		t.Fatalf("after aging %d template(s) to v1, auto-sync produced no template at version %d: stale re-mining did not run",
+			aged, storage.CurrentNormalizationVersion)
+	}
+
+	var occBefore int
+	if err := db.DB().QueryRow(`SELECT COALESCE(SUM(occurrence_count),0) FROM message_templates`).Scan(&occBefore); err != nil {
+		t.Fatalf("sum occurrences: %v", err)
+	}
+	var matchesBefore int
+	if err := db.DB().QueryRow(`SELECT COUNT(*) FROM template_matches`).Scan(&matchesBefore); err != nil {
+		t.Fatalf("count matches: %v", err)
+	}
+
+	// Idempotence: another sync must not double-count or duplicate matches.
+	if err := maybeAutoSync(cfg); err != nil {
+		t.Fatalf("second maybeAutoSync: %v", err)
+	}
+	var occAfter, matchesAfter int
+	if err := db.DB().QueryRow(`SELECT COALESCE(SUM(occurrence_count),0) FROM message_templates`).Scan(&occAfter); err != nil {
+		t.Fatalf("sum occurrences after: %v", err)
+	}
+	if err := db.DB().QueryRow(`SELECT COUNT(*) FROM template_matches`).Scan(&matchesAfter); err != nil {
+		t.Fatalf("count matches after: %v", err)
+	}
+	if occAfter != occBefore {
+		t.Errorf("re-mining is not idempotent: occurrence sum %d -> %d", occBefore, occAfter)
+	}
+	if matchesAfter != matchesBefore {
+		t.Errorf("re-mining is not idempotent: template_matches %d -> %d", matchesBefore, matchesAfter)
+	}
+}
+
+// TestQ5CorrectionsSkipPastedTranscripts verifies Q5 end-to-end: a pasted multi-line
+// chat export produces no lexicon correction signal, while a genuine single-message
+// correction in the same session still does. Asserting BOTH sides is what catches an
+// over-broad filter that would silently swallow real corrections.
+func TestQ5CorrectionsSkipPastedTranscripts(t *testing.T) {
+	dbPath, cleanup := testEnv(t)
+	defer cleanup()
+
+	sessionDir := t.TempDir()
+	t.Setenv("BACKSCROLL_SESSION_DIRS", sessionDir)
+
+	sessionFile := filepath.Join(sessionDir, "corrections.jsonl")
+	sessionContent := `{"type":"user","timestamp":"2026-01-01T00:00:00Z","uuid":"u1","message":{"role":"user","content":"no, eso no es un bug"}}
+{"type":"user","timestamp":"2026-01-01T00:00:01Z","uuid":"u2","message":{"role":"user","content":"[12:34] Alice: eso no es un bug\n[12:35] Bob: te dije que no\n[12:36] Carol: arreglado"}}`
+	if err := os.WriteFile(sessionFile, []byte(sessionContent), 0o644); err != nil {
+		t.Fatalf("write session: %v", err)
+	}
+
+	if _, _, err := runCmd("list"); err != nil {
+		t.Fatalf("list (triggers sync): %v", err)
+	}
+
+	db, err := storage.Open(dbPath)
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	defer db.Close()
+
+	ordinalOf := func(ordinal int) int {
+		var n int
+		if err := db.DB().QueryRow(`
+			SELECT COUNT(*) FROM correction_signals
+			WHERE detector = 'lexicon' AND source_path = ? AND ordinal = ?
+		`, sessionFile, ordinal).Scan(&n); err != nil {
+			t.Fatalf("count lexicon signals at ordinal %d: %v", ordinal, err)
+		}
+		return n
+	}
+
+	// The genuine correction (ordinal 0) must still be detected.
+	if got := ordinalOf(0); got != 1 {
+		t.Errorf("genuine correction: got %d lexicon signals, want 1 (filter is too broad)", got)
+	}
+	// The pasted transcript (ordinal 1) must be filtered out.
+	if got := ordinalOf(1); got != 0 {
+		t.Errorf("pasted chat export: got %d lexicon signals, want 0 (filter did not fire)", got)
 	}
 }
