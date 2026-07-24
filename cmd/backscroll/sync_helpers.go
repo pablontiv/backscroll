@@ -11,6 +11,7 @@ import (
 	"github.com/pablontiv/backscroll/internal/readers"
 	"github.com/pablontiv/backscroll/internal/storage"
 	"github.com/pablontiv/backscroll/internal/tagging"
+	"github.com/pablontiv/backscroll/internal/templates"
 )
 
 // maybeAutoSync performs an incremental sync operation if the database exists.
@@ -146,6 +147,33 @@ func maybeAutoSync(cfg *config.Config) error {
 	if len(indexedFiles) > 0 {
 		if err := db.SyncFiles(indexedFiles); err != nil {
 			return fmt.Errorf("sync files: %w", err)
+		}
+	}
+
+	// Q3: Auto-upgrade stale templates from v1 to v2 after sync completes
+	// Run in separate transaction for crash-safety
+	miner := templates.NewMiner()
+	const staleTemplateCap = 200
+	const currentNormalizationVersion = 2
+	staleTemplatePaths, err := db.StaleTemplatePaths(currentNormalizationVersion)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "warning: failed to discover stale templates: %v\n", err)
+	} else if len(staleTemplatePaths) > 0 {
+		// Cap at staleTemplateCap per run; FIFO processing across runs
+		if len(staleTemplatePaths) > staleTemplateCap {
+			staleTemplatePaths = staleTemplatePaths[:staleTemplateCap]
+		}
+
+		for _, sourcePath := range staleTemplatePaths {
+			msgs, err := db.LoadMessagesForPath(sourcePath)
+			if err != nil {
+				fmt.Fprintf(os.Stderr, "warning: failed to load messages for %s: %v\n", sourcePath, err)
+				continue
+			}
+
+			if err := db.BackfillTemplatesForFile(miner, sourcePath, msgs); err != nil {
+				fmt.Fprintf(os.Stderr, "warning: failed to re-mine templates for %s: %v\n", sourcePath, err)
+			}
 		}
 	}
 
