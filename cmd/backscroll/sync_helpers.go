@@ -126,6 +126,7 @@ func maybeAutoSync(cfg *config.Config) error {
 					CommandHead:       msg.CommandHead,
 					IsError:           msg.IsError,
 					WasInterrupted:    msg.WasInterrupted,
+					ExitCode:          msg.ExitCode,
 					ExtractionVersion: storage.CurrentExtractionVersion,
 				})
 			}

@@ -91,10 +91,21 @@ func (r *ClaudeReader) Parse(path string, _ input_config.InputDefinition) (model
 		}
 	}
 	for i := range msgs {
-		if msgs[i].ToolName == "" && msgs[i].ToolUseID != "" && msgs[i].IsError != nil {
-			if j, ok := useIdx[msgs[i].ToolUseID]; ok {
-				msgs[j].IsError = msgs[i].IsError
-			}
+		if msgs[i].ToolName != "" || msgs[i].ToolUseID == "" {
+			continue
+		}
+		j, ok := useIdx[msgs[i].ToolUseID]
+		if !ok {
+			continue
+		}
+		if msgs[i].IsError != nil {
+			msgs[j].IsError = msgs[i].IsError
+		}
+		// Q2: the exit code is parsed off the tool_result, but tool_events rows are
+		// written from the tool_use message (the one carrying ToolName), so pair it
+		// across the same way.
+		if msgs[i].ExitCode != nil && msgs[j].ToolName == "Bash" {
+			msgs[j].ExitCode = msgs[i].ExitCode
 		}
 	}
 
@@ -193,13 +204,16 @@ func extractClaudeMessages(rec claudeRecord) []models.Message {
 				toolNameByID[b.ID] = b.Name
 			}
 		case "tool_result":
+			// Q2: extract the exit code from the FULL serialization, before any
+			// truncation. SerializeToolOutput caps output at MaxToolTextLen and a
+			// Bash exit code is typically on the last line, so extracting from the
+			// capped text loses exactly the codes this fix exists to recover.
+			// The tool name lives on the tool_use record, which is usually a
+			// different JSONL line, so it is not knowable here — the Bash gate is
+			// applied when result and use are paired further below.
+			exitCode := sync.ExtractExitCodeText(serializeValue(b.Content))
+
 			body := SerializeToolOutput(b.Content)
-			// Q2: Extract exit code from tool result BEFORE prepending error marker
-			var exitCode *int
-			toolName := toolNameByID[b.ToolUseID]
-			if toolName != "" {
-				exitCode = sync.ExtractExitCode(body, toolName)
-			}
 
 			if b.IsError != nil && *b.IsError {
 				body = "error: " + body

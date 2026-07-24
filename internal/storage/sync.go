@@ -6,7 +6,6 @@ import (
 
 	"github.com/pablontiv/backscroll/internal/corrections"
 	"github.com/pablontiv/backscroll/internal/models"
-	"github.com/pablontiv/backscroll/internal/sync"
 	"github.com/pablontiv/backscroll/internal/templates"
 )
 
@@ -29,6 +28,7 @@ type IndexedMessage struct {
 	CommandHead       string
 	IsError           *bool
 	WasInterrupted    bool
+	ExitCode          *int // extracted by the reader from FULL tool output, before truncation
 	ExtractionVersion int
 }
 
@@ -150,7 +150,10 @@ func (d *Database) SyncFiles(files []IndexedFile) error {
 			}
 
 			if msg.ToolName != "" {
-				exitCode := sync.ExtractExitCode(msg.Text, msg.ToolName)
+				// Q2: use the code the reader extracted from the untruncated output.
+				// Re-extracting from msg.Text here would miss any code beyond the
+				// toolfmt truncation cap — the exact bug Q2 exists to fix.
+				exitCode := msg.ExitCode
 				exitCodeVal := interface{}(nil)
 				if exitCode != nil {
 					exitCodeVal = *exitCode

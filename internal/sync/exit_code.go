@@ -19,6 +19,14 @@ func ExtractExitCode(text, toolName string) *int {
 	if toolName != "Bash" {
 		return nil
 	}
+	return ExtractExitCodeText(text)
+}
+
+// ExtractExitCodeText parses an exit-code pattern from text without gating on a
+// tool name. Claude session records carry a tool_result in a different record
+// from its tool_use, so a reader parsing the result does not yet know which tool
+// produced it; it extracts here and applies the Bash gate once the two are paired.
+func ExtractExitCodeText(text string) *int {
 	if text == "" {
 		return nil
 	}
