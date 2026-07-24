@@ -69,6 +69,21 @@ A subtraction, not a feature.
    - The `autoupdate-reverts-local-builds` memory is updated to say the same:
      validate against a dev build; there is no env-var pin.
 
+4. **Fix the live scripts that consume the env var.** Both are living surfaces,
+   not historical:
+   - `scripts/test-autoupdate-smoke.sh` — its entire purpose was to assert
+     `BACKSCROLL_AUTOUPDATE_DISABLE=1 ./backscroll --version` makes no HTTP call.
+     That capability is gone. Repoint it at the surviving invariant: a **dev
+     build** makes no network call. It runs after `just build` (which produces
+     `version="dev"`), so it becomes `./backscroll --version` with no env var and
+     asserts the same fast/no-HTTP outcome — now exercising the real exemption
+     rather than the deleted switch.
+   - `scripts/eval.sh` (lines 35, 43, 151) — the env-var prefix was there to keep
+     the eval loop from lingering up to 10s per invocation on the post-command
+     staging wait. Drop the dead prefixes and require `BACKSCROLL_BIN` to point at
+     a dev build (document it at the top of the script); a dev build neither
+     fetches nor waits, so the loop stays fast without any switch.
+
 ### Out of scope: historical records (must NOT be edited)
 
 These name the env var but describe past decisions and completed work; they are
@@ -99,9 +114,22 @@ backgrounded and mandatory by design, which is the intended behavior.
 
 ## Verification
 
-- `go build -o /tmp/bs ./cmd/backscroll` then run a command with the network
-  unreachable/slow: no fetch attempt, no hang (dev exemption).
-- Grep the tree for `BACKSCROLL_AUTOUPDATE_DISABLE`: only historical records
-  (roadmap task files, the dated M1 plan) and this spec remain; no live code
-  path, no living doc, and no agent skill references it.
+Hermetic and deterministic — no network dependence, consistent with the project's
+testing contract (`testEnv`, scrubbed `HOME`, reproduced by `just ci`):
+
+- **Wiring test (new, hermetic).** In `cmd/backscroll/main_test.go`, assert that
+  the updater backscroll constructs carries no env opt-out:
+  `autoupdate.New("pablontiv/backscroll", "backscroll").EnvDisable == ""`. This
+  proves, without any network call, that no environment variable can disable a
+  released binary — the invariant this change establishes. It replaces the three
+  `BACKSCROLL_AUTOUPDATE_DISABLE`-setting tests at lines 994–1045, whose asserted
+  capability no longer exists.
+- **Dev-exemption behavior** is guaranteed by picokit's own tests
+  (`apply.go:19`, `updater.go:69`); backscroll does not re-test the library, it
+  tests only its own call site (above).
+- **`just ci`** green (build + scrubbed-`HOME` tests + coverage ≥85%) is the
+  release-blocking gate and runs entirely offline.
+- **Grep gate.** `BACKSCROLL_AUTOUPDATE_DISABLE` survives only in historical
+  records (roadmap task files, the dated M1 plan) and this spec: no live code
+  path, no living doc, no agent skill, and no script references it.
 - `just ci` green (build + scrubbed-HOME tests + coverage ≥85%).
