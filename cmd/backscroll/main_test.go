@@ -2599,3 +2599,66 @@ func TestQ5AutoSyncClearsSupersededSignalsWithoutRebuild(t *testing.T) {
 		t.Errorf("auto-sync left %d superseded signal(s) on an expired-but-indexed session; the detector fix never reaches it", n)
 	}
 }
+
+func TestSyncReportsDeletedTemplateCount(t *testing.T) {
+	dbPath, cleanup := testEnv(t)
+	defer cleanup()
+
+	// Create a database with a stuck v1 template
+	db, err := storage.Open(dbPath)
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+
+	// Insert a v1 stuck template with a match
+	if _, err := db.DB().Exec(`
+		INSERT INTO message_templates (signature, normalization_version, template_text, occurrence_count, first_seen, last_seen)
+		VALUES ('stuck_sig', 1, 'Bash command=<*>', 1, '2026-01-01T00:00:00Z', '2026-01-01T00:00:00Z')
+	`); err != nil {
+		t.Fatalf("insert template: %v", err)
+	}
+
+	var tmplID int64
+	if err := db.DB().QueryRow(`SELECT id FROM message_templates WHERE signature = ?`, "stuck_sig").Scan(&tmplID); err != nil {
+		t.Fatalf("query template ID: %v", err)
+	}
+
+	if _, err := db.DB().Exec(`
+		INSERT INTO template_matches (template_id, item_uuid, source_path, ordinal)
+		VALUES (?, 'u1', '/test/s.jsonl', 0)
+	`, tmplID); err != nil {
+		t.Fatalf("insert match: %v", err)
+	}
+
+	var countBefore int
+	if err := db.DB().QueryRow(`SELECT COUNT(*) FROM message_templates`).Scan(&countBefore); err != nil {
+		t.Fatalf("count templates before: %v", err)
+	}
+	db.Close()
+
+	// Run list command to trigger auto-sync with template backfill
+	_, _, err = runCmd("list")
+	if err != nil {
+		t.Fatalf("list: %v", err)
+	}
+
+	// Re-open database and verify stuck template was deleted
+	db, err = storage.Open(dbPath)
+	if err != nil {
+		t.Fatalf("reopen db: %v", err)
+	}
+	defer db.Close()
+
+	var countAfter int
+	if err := db.DB().QueryRow(`SELECT COUNT(*) FROM message_templates`).Scan(&countAfter); err != nil {
+		t.Fatalf("count templates after: %v", err)
+	}
+
+	// The stuck template should have been deleted during backfill
+	if countBefore != 1 {
+		t.Fatalf("expected 1 template before sync, got %d", countBefore)
+	}
+	if countAfter != 0 {
+		t.Errorf("expected 0 templates after sync (stuck template should be deleted), got %d", countAfter)
+	}
+}

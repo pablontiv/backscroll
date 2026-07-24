@@ -171,9 +171,12 @@ func maybeAutoSync(cfg *config.Config) error {
 				continue
 			}
 
-			_, err = db.BackfillTemplatesForFile(miner, sourcePath, msgs)
+			deletedCount, err := db.BackfillTemplatesForFile(miner, sourcePath, msgs)
 			if err != nil {
 				fmt.Fprintf(os.Stderr, "warning: failed to re-mine templates for %s: %v\n", sourcePath, err)
+			}
+			if deletedCount > 0 {
+				fmt.Fprintf(os.Stderr, "Deleted %d stuck templates from %s\n", deletedCount, sourcePath)
 			}
 		}
 	}
