@@ -19,8 +19,17 @@ func main() {
 	}
 }
 
+// newUpdater is the single wiring point for autoupdate. It is called with no
+// envDisable argument, so no environment variable can disable a released binary
+// — the only exemption is version=="dev", which picokit applies intrinsically.
+// run() and the wiring test both go through here, so the test covers the real
+// call site rather than a copy of it.
+func newUpdater() *autoupdate.Updater {
+	return autoupdate.New("pablontiv/backscroll", "backscroll")
+}
+
 func run(stdout, stderr io.Writer, args []string) error {
-	u := autoupdate.New("pablontiv/backscroll", "backscroll")
+	u := newUpdater()
 	u.CurrentVersion = version
 	_ = u.ApplyStagedIfAvailable()
 

@@ -23,14 +23,13 @@ while [[ $# -gt 0 ]]; do
   esac
 done
 
-# Check preflight: backscroll installed + index populated
-# Prefer locally built binary if it exists, otherwise use PATH
-if [ -x "$REPO_ROOT/backscroll" ]; then
-  BACKSCROLL_BIN="$REPO_ROOT/backscroll"
-elif command -v backscroll &>/dev/null; then
-  BACKSCROLL_BIN="backscroll"
-else
-  echo "❌ backscroll not found in PATH or local directory"
+# Build a dev binary and run against it. A dev build (version="dev") is exempt
+# from autoupdate, so the eval loop never stalls on the post-command staging
+# wait. We must NOT fall back to an installed release binary: since the runtime
+# opt-out was removed, a release binary would fetch+wait ~10s per invocation.
+BACKSCROLL_BIN="$REPO_ROOT/backscroll"
+if ! go build -o "$BACKSCROLL_BIN" "$REPO_ROOT/cmd/backscroll"; then
+  echo "❌ failed to build dev backscroll binary from $REPO_ROOT/cmd/backscroll"
   exit 1
 fi
 

@@ -11,7 +11,6 @@ import (
 
 	"github.com/pablontiv/backscroll/internal/config"
 	"github.com/pablontiv/backscroll/internal/storage"
-	"github.com/pablontiv/picokit/autoupdate"
 	"github.com/pablontiv/picokit/hashfile"
 	_ "modernc.org/sqlite"
 )
@@ -1004,13 +1003,14 @@ func TestMain_AutoupdateConstructorParams(t *testing.T) {
 }
 
 func TestMain_AutoupdateHasNoEnvOptOut(t *testing.T) {
-	// A released binary must have no environment opt-out: the only exemption is
-	// version == "dev", which an end user cannot set. Constructing the updater
-	// exactly as run() does and asserting EnvDisable == "" proves this with no
+	// newUpdater is the production wiring point — run() constructs its updater
+	// through it. Asserting EnvDisable == "" here covers the real call site, so
+	// re-adding an envDisable argument in production would fail this test. If
+	// this test instead built its own autoupdate.New(...), it would only re-test
+	// the picokit library and pass regardless of what run() does. Hermetic: no
 	// network call.
-	u := autoupdate.New("pablontiv/backscroll", "backscroll")
-	if u.EnvDisable != "" {
-		t.Errorf("released binary must have no env opt-out; EnvDisable = %q", u.EnvDisable)
+	if got := newUpdater().EnvDisable; got != "" {
+		t.Errorf("released binary must have no env opt-out; EnvDisable = %q", got)
 	}
 }
 
