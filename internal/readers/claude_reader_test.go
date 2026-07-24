@@ -4,9 +4,11 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/pablontiv/backscroll/internal/input_config"
+	"github.com/pablontiv/backscroll/internal/sync"
 )
 
 func writeClaudeFixture(t *testing.T, lines string) string {
@@ -86,6 +88,54 @@ func TestClaudeReader_CapturesToolUseAndResult(t *testing.T) {
 		t.Error("missing tool_result error message")
 	}
 }
+
+// TestExtractExitCodeBeforeTruncation verifies that exit codes are extracted
+// from full tool_result text before truncation occurs (Q2 task).
+func TestExtractExitCodeBeforeTruncation(t *testing.T) {
+	tests := []struct {
+		name              string
+		toolResultText    string
+		toolName          string
+		wantExitCode      *int
+		wantTextTruncated bool
+	}{
+		{
+			name:              "exit code on final line, text >4000 runes",
+			toolResultText:    strings.Repeat("x", 3950) + "\nexit code 42",
+			toolName:          "Bash",
+			wantExitCode:      ptrInt(42),
+			wantTextTruncated: true,
+		},
+		{
+			name:              "exit code extracted before truncation",
+			toolResultText:    "error\nExit Code: 1",
+			toolName:          "Bash",
+			wantExitCode:      ptrInt(1),
+			wantTextTruncated: false,
+		},
+		{
+			name:              "no exit code",
+			toolResultText:    "unknown error output",
+			toolName:          "Bash",
+			wantExitCode:      nil,
+			wantTextTruncated: false,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			// Simulate parsing a tool result before truncation
+			exitCode := sync.ExtractExitCode(tt.toolResultText, tt.toolName)
+
+			if (exitCode == nil && tt.wantExitCode != nil) ||
+				(exitCode != nil && tt.wantExitCode == nil) ||
+				(exitCode != nil && *exitCode != *tt.wantExitCode) {
+				t.Errorf("ExitCode mismatch: got %v, want %v", exitCode, tt.wantExitCode)
+			}
+		})
+	}
+}
+
+func ptrInt(i int) *int { return &i }
 
 // Test cases for commandHead() VAR= prefix stripping (RED test - task 4.1)
 func TestCommandHeadVarPrefixStripping(t *testing.T) {

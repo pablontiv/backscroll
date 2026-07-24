@@ -166,6 +166,10 @@ func extractClaudeMessages(rec claudeRecord) []models.Message {
 	if err := json.Unmarshal(rec.Message.Content, &blocks); err != nil {
 		return nil
 	}
+
+	// Track tool names by ToolUseID for pairing with tool_result blocks
+	toolNameByID := make(map[string]string)
+
 	var out []models.Message
 	var textParts []string
 	interrupted := false
@@ -186,9 +190,17 @@ func extractClaudeMessages(rec claudeRecord) []models.Message {
 					CommandHead: commandHead(b.Input),
 					ToolUseID:   b.ID,
 				})
+				toolNameByID[b.ID] = b.Name
 			}
 		case "tool_result":
 			body := SerializeToolOutput(b.Content)
+			// Q2: Extract exit code from tool result BEFORE prepending error marker
+			var exitCode *int
+			toolName := toolNameByID[b.ToolUseID]
+			if toolName != "" {
+				exitCode = sync.ExtractExitCode(body, toolName)
+			}
+
 			if b.IsError != nil && *b.IsError {
 				body = "error: " + body
 			}
@@ -197,6 +209,7 @@ func extractClaudeMessages(rec claudeRecord) []models.Message {
 					UUID:      blockUUID(rec.UUID, "r", i),
 					ToolUseID: b.ToolUseID,
 					IsError:   b.IsError,
+					ExitCode:  exitCode,
 				})
 			}
 		}
