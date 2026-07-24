@@ -16,6 +16,8 @@ remediation: recover
 
 Snapshot-read, metadata-read, and mutation owners validate active manifests and attempt one incremental sync before executing. Remediation (`recover`) is different: it acquires and retains the mutation-grade startup lock, skips ordinary compatible-open/index preparation and pre-handler sync, and lets the recovery handler inspect or replace an index that ordinary startup might reject. Session, plan, and Markdown files are ingestion inputs; SQLite is the perennial record used by search, context, list, patterns, status, and validate. Search is ranked discovery; context retrieves an exact neighborhood from SQLite once an opaque UUID or exact source-path-plus-ordinal identity exists.
 
+Ordinary handlers share read-only access to the invocation's prepared configuration and report a controlled error when it is unavailable. Recovery retains its independent configuration-load fallback; startup coordination and lease release remain responsible for lock ownership.
+
 ## Coordinated startup pipeline
 
 ```text

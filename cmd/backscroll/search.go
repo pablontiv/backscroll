@@ -80,11 +80,11 @@ protected. All scope filters remain fixed.`,
 		},
 		RunE: func(cmd *cobra.Command, args []string) error {
 			query := searchQuery(text, args)
-			startup := startupResultFrom(cmd)
-			if startup.Config == nil {
-				return fmt.Errorf("startup configuration unavailable")
+			cfg, err := startupResultFrom(cmd).requireConfig()
+			if err != nil {
+				return err
 			}
-			return runSearch(cmd.Context(), stdout, stderr, startup.Config, query, project, allProjects, invocationOutputMode(cmd),
+			return runSearch(cmd.Context(), stdout, stderr, cfg, query, project, allProjects, invocationOutputMode(cmd),
 				source, sourcePath, after, before, role, limit, offset, contentType, tag,
 				fields, maxTokens, relax)
 		},

@@ -88,11 +88,11 @@ func newContextCmd(stdout, stderr io.Writer) *cobra.Command {
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			opts.captureSelectorFlags(cmd)
 			opts.mode = invocationOutputMode(cmd)
-			startup := startupResultFrom(cmd)
-			if startup.Config == nil {
-				return fmt.Errorf("startup configuration unavailable")
+			cfg, err := startupResultFrom(cmd).requireConfig()
+			if err != nil {
+				return err
 			}
-			return runContextCommand(cmd.Context(), stdout, stderr, startup.Config, opts)
+			return runContextCommand(cmd.Context(), stdout, stderr, cfg, opts)
 		},
 	}
 

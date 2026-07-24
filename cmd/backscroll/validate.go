@@ -33,11 +33,11 @@ Command startup may synchronize active inputs before this handler runs. The
 validate handler then checks the prepared SQLite index without performing a
 second sync.`,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			startup := startupResultFrom(cmd)
-			if startup.Config == nil {
-				return fmt.Errorf("startup configuration unavailable")
+			cfg, err := startupResultFrom(cmd).requireConfig()
+			if err != nil {
+				return err
 			}
-			return runValidate(cmd.Context(), stdout, stderr, startup.Config, invocationOutputMode(cmd))
+			return runValidate(cmd.Context(), stdout, stderr, cfg, invocationOutputMode(cmd))
 		},
 	}
 

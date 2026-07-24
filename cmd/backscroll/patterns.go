@@ -79,11 +79,11 @@ Use --json, --robot for output formats.`,
 			})
 		},
 		RunE: func(cmd *cobra.Command, args []string) error {
-			startup := startupResultFrom(cmd)
-			if startup.Config == nil {
-				return fmt.Errorf("startup configuration unavailable")
+			cfg, err := startupResultFrom(cmd).requireConfig()
+			if err != nil {
+				return err
 			}
-			return runPatterns(cmd.Context(), stdout, stderr, startup.Config, kind, project, allProjects, tag, limit, offset,
+			return runPatterns(cmd.Context(), stdout, stderr, cfg, kind, project, allProjects, tag, limit, offset,
 				invocationOutputMode(cmd), minSupport, minConfidence, pending, batch,
 				minLength, maxLength, after, before, trend, origin)
 		},

@@ -70,11 +70,11 @@ Use --json to output as JSON.`,
 			})
 		},
 		RunE: func(cmd *cobra.Command, args []string) error {
-			startup := startupResultFrom(cmd)
-			if startup.Config == nil {
-				return fmt.Errorf("startup configuration unavailable")
+			cfg, err := startupResultFrom(cmd).requireConfig()
+			if err != nil {
+				return err
 			}
-			return runList(cmd.Context(), stdout, stderr, startup.Config, project, allProjects, recent, invocationOutputMode(cmd),
+			return runList(cmd.Context(), stdout, stderr, cfg, project, allProjects, recent, invocationOutputMode(cmd),
 				order, limit, offset)
 		},
 	}

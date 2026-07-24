@@ -36,10 +36,11 @@ Use --json to output as JSON.
 Startup preflight may sync before status runs; status itself only reads current index state.`,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			startup := startupResultFrom(cmd)
-			if startup.Config == nil {
-				return fmt.Errorf("startup configuration unavailable")
+			cfg, err := startup.requireConfig()
+			if err != nil {
+				return err
 			}
-			return runStatus(cmd.Context(), stdout, stderr, startup.Config, startup.inputs, invocationOutputMode(cmd))
+			return runStatus(cmd.Context(), stdout, stderr, cfg, startup.inputs, invocationOutputMode(cmd))
 		},
 	}
 

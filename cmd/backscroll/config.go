@@ -29,10 +29,11 @@ Config displays the effective configuration, including:
 Use --json to output as JSON.`,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			startup := startupResultFrom(cmd)
-			if startup.Config == nil {
-				return fmt.Errorf("startup configuration unavailable")
+			cfg, err := startup.requireConfig()
+			if err != nil {
+				return err
 			}
-			return runConfig(stdout, stderr, startup.Config, startup.inputs, invocationOutputMode(cmd))
+			return runConfig(stdout, stderr, cfg, startup.inputs, invocationOutputMode(cmd))
 		},
 	}
 
