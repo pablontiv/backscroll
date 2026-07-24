@@ -322,6 +322,46 @@ func TestMessageLargeContent(t *testing.T) {
 	}
 }
 
+// TestMessageExitCode tests Message.ExitCode field with nil and non-nil values.
+func TestMessageExitCode(t *testing.T) {
+	tests := []struct {
+		name string
+		msg  Message
+		want *int
+	}{
+		{
+			name: "nil ExitCode",
+			msg: Message{
+				Role:     "assistant",
+				Content:  "test",
+				ExitCode: nil,
+			},
+			want: nil,
+		},
+		{
+			name: "non-nil ExitCode",
+			msg: Message{
+				Role:     "assistant",
+				Content:  "test",
+				ExitCode: ptrInt(42),
+			},
+			want: ptrInt(42),
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if (tt.msg.ExitCode == nil && tt.want != nil) || (tt.msg.ExitCode != nil && tt.want == nil) {
+				t.Errorf("Message.ExitCode mismatch: got %v, want %v", tt.msg.ExitCode, tt.want)
+			}
+			if tt.msg.ExitCode != nil && tt.want != nil && *tt.msg.ExitCode != *tt.want {
+				t.Errorf("Message.ExitCode value mismatch: got %d, want %d", *tt.msg.ExitCode, *tt.want)
+			}
+		})
+	}
+}
+
+func ptrInt(i int) *int { return &i }
+
 // TestStatsCreation tests Stats struct creation and field access.
 func TestStatsCreation(t *testing.T) {
 	now := time.Date(2024, 5, 14, 10, 30, 0, 0, time.UTC)

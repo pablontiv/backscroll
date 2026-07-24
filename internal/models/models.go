@@ -41,6 +41,7 @@ type Message struct {
 	ToolUseID      string // tool_use block id; used to pair tool_result is_error signals
 	IsError        *bool  // tool result signal; nil = no signal
 	WasInterrupted bool   // raw content carried an interrupt marker (detected pre-clean)
+	ExitCode       *int   // Extracted exit code from Bash tool result (e.g., "exit code 1"), before truncation
 }
 
 // Stats represents indexing statistics.
