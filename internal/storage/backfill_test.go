@@ -1158,3 +1158,137 @@ func TestRederiveSupersededCorrectionsRollsBackFailedPath(t *testing.T) {
 		t.Errorf("healthy path still carries %d superseded signal(s)", healthyStale)
 	}
 }
+
+func TestBackfillTemplatesForFileDeletesStuckTemplates(t *testing.T) {
+	db, err := Open(filepath.Join(t.TempDir(), "test.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = db.Close() }()
+
+	// Insert a v1 template from input serialization + a matching row
+	// This simulates a stuck template that was mined before isInputSerialization guard
+	_, err = db.db.Exec(`
+		INSERT INTO message_templates (signature, normalization_version, template_text, occurrence_count, first_seen, last_seen)
+		VALUES ('v1_input_sig', 1, 'Bash command=<*>', 1, '2026-01-01T00:00:00Z', '2026-01-01T00:00:00Z')
+	`)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	var tmplID int64
+	err = db.db.QueryRow(`SELECT id FROM message_templates WHERE signature = ?`, "v1_input_sig").Scan(&tmplID)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	_, err = db.db.Exec(`
+		INSERT INTO template_matches (template_id, item_uuid, source_path, ordinal)
+		VALUES (?, 'u1', '/test/s.jsonl', 0)
+	`, tmplID)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Count templates before backfill
+	var countBefore int
+	if err := db.db.QueryRow(`SELECT COUNT(*) FROM message_templates`).Scan(&countBefore); err != nil {
+		t.Fatal(err)
+	}
+	if countBefore != 1 {
+		t.Fatalf("expected 1 template before backfill, got %d", countBefore)
+	}
+
+	// Load messages for backfill (empty set — no error lines, so re-mining finds nothing)
+	msgs := []IndexedMessage{}
+
+	miner := templates.NewMiner()
+	deletedCount, err := db.BackfillTemplatesForFile(miner, "/test/s.jsonl", msgs)
+	if err != nil {
+		t.Fatalf("BackfillTemplatesForFile: %v", err)
+	}
+
+	// The stuck template should have been deleted
+	var countAfter int
+	if err := db.db.QueryRow(`SELECT COUNT(*) FROM message_templates`).Scan(&countAfter); err != nil {
+		t.Fatal(err)
+	}
+	if countAfter != 0 {
+		t.Errorf("stuck template should be deleted; expected 0, got %d", countAfter)
+	}
+	if deletedCount != 1 {
+		t.Errorf("deletedCount should be 1, got %d", deletedCount)
+	}
+}
+
+func TestBackfillTemplatesForFilePreservesMultiPathTemplates(t *testing.T) {
+	db, err := Open(filepath.Join(t.TempDir(), "test.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = db.Close() }()
+
+	// Insert a v1 template with matches on TWO different paths
+	_, err = db.db.Exec(`
+		INSERT INTO message_templates (signature, normalization_version, template_text, occurrence_count, first_seen, last_seen)
+		VALUES ('multi_path_sig', 1, 'error: <*>', 2, '2026-01-01T00:00:00Z', '2026-01-01T00:00:00Z')
+	`)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	var tmplID int64
+	err = db.db.QueryRow(`SELECT id FROM message_templates WHERE signature = ?`, "multi_path_sig").Scan(&tmplID)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Matches on path A and B
+	_, err = db.db.Exec(`
+		INSERT INTO template_matches (template_id, item_uuid, source_path, ordinal)
+		VALUES (?, 'u1', '/test/a.jsonl', 0), (?, 'u2', '/test/b.jsonl', 0)
+	`, tmplID, tmplID)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Re-mine only path A with empty messages (no error lines → re-mining finds nothing)
+	miner := templates.NewMiner()
+	msgs := []IndexedMessage{}
+
+	deletedCount, err := db.BackfillTemplatesForFile(miner, "/test/a.jsonl", msgs)
+	if err != nil {
+		t.Fatalf("BackfillTemplatesForFile: %v", err)
+	}
+
+	// Template should NOT be deleted (still has matches on B)
+	var countAfter int
+	if err := db.db.QueryRow(`SELECT COUNT(*) FROM message_templates WHERE signature = ?`, "multi_path_sig").Scan(&countAfter); err != nil {
+		t.Fatal(err)
+	}
+	if countAfter != 1 {
+		t.Errorf("multi-path template should be preserved; expected 1, got %d", countAfter)
+	}
+
+	// But matches on path A should be deleted
+	var matchesOnA int
+	if err := db.db.QueryRow(`SELECT COUNT(*) FROM template_matches WHERE template_id = ? AND source_path = ?`, tmplID, "/test/a.jsonl").Scan(&matchesOnA); err != nil {
+		t.Fatal(err)
+	}
+	if matchesOnA != 0 {
+		t.Errorf("matches on path A should be deleted; expected 0, got %d", matchesOnA)
+	}
+
+	// Matches on path B should remain
+	var matchesOnB int
+	if err := db.db.QueryRow(`SELECT COUNT(*) FROM template_matches WHERE template_id = ? AND source_path = ?`, tmplID, "/test/b.jsonl").Scan(&matchesOnB); err != nil {
+		t.Fatal(err)
+	}
+	if matchesOnB != 1 {
+		t.Errorf("matches on path B should be preserved; expected 1, got %d", matchesOnB)
+	}
+
+	if deletedCount != 0 {
+		t.Errorf("no templates should be deleted (still reachable via path B); got %d", deletedCount)
+	}
+}

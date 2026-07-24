@@ -319,14 +319,40 @@ func (d *Database) backfillTemplatesForFile(tx *sql.Tx, sourcePath string, messa
 		}
 	}
 
-	var count int
-	err = tx.QueryRow(`
-		SELECT COUNT(DISTINCT template_id) FROM template_matches WHERE source_path = ?
-	`, sourcePath).Scan(&count)
+	// Delete templates that were not re-mined (stuck templates with old version).
+	// First, delete all matches on this path for old-version templates.
+	result1, err := tx.Exec(`
+		DELETE FROM template_matches
+		WHERE source_path = ?
+		AND template_id IN (
+			SELECT id FROM message_templates
+			WHERE normalization_version < ?
+		)
+	`, sourcePath, CurrentNormalizationVersion)
 	if err != nil {
-		return 0, err
+		return 0, fmt.Errorf("delete template_matches for old-version templates: %w", err)
 	}
-	return count, nil
+	_ = result1 // unused for now
+
+	// Then, delete any orphaned templates (those with no matches anywhere).
+	var deletedCount int
+	result, err := tx.Exec(`
+		DELETE FROM message_templates
+		WHERE normalization_version < ?
+		AND id NOT IN (
+			SELECT DISTINCT template_id FROM template_matches
+		)
+	`, CurrentNormalizationVersion)
+	if err != nil {
+		return 0, fmt.Errorf("delete orphaned templates: %w", err)
+	}
+	rowsAffected, err := result.RowsAffected()
+	if err != nil {
+		return 0, fmt.Errorf("get deleted row count: %w", err)
+	}
+	deletedCount = int(rowsAffected)
+
+	return deletedCount, nil
 }
 
 // backfillCorrectionsForFile detects corrections in prose user messages.
@@ -489,14 +515,8 @@ func (d *Database) BackfillTemplatesForFile(miner *templates.Miner, sourcePath s
 	}
 	defer func() { _ = tx.Rollback() }()
 
-	if len(msgs) == 0 {
-		if err := tx.Commit(); err != nil {
-			return 0, err
-		}
-		return 0, nil
-	}
-
 	// Re-mine templates using internal backfillTemplatesForFile
+	// This handles all cases including empty messages (which allows stuck template deletion)
 	deletedCount, err := d.backfillTemplatesForFile(tx, sourcePath, msgs, miner)
 	if err != nil {
 		return 0, err
