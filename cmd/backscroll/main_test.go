@@ -2543,3 +2543,59 @@ func TestQ5CorrectionsSkipPastedTranscripts(t *testing.T) {
 		t.Errorf("pasted chat export: got %d lexicon signals, want 0 (filter did not fire)", got)
 	}
 }
+
+// TestQ5AutoSyncClearsSupersededSignalsWithoutRebuild pins the user-facing promise
+// for the dead-zone case: a session whose JSONL has expired while its indexed_files
+// row remains is invisible to both SyncFiles (not on disk) and BackfillDerived (not
+// absent from indexed_files). Its stale false positives must still clear through an
+// ordinary auto-sync — no manual rebuild — or the detector fix never reaches the
+// census the user actually reads.
+func TestQ5AutoSyncClearsSupersededSignalsWithoutRebuild(t *testing.T) {
+	dbPath, cleanup := testEnv(t)
+	defer cleanup()
+
+	sessionDir := t.TempDir()
+	t.Setenv("BACKSCROLL_SESSION_DIRS", sessionDir)
+
+	const gone = "/expired/whatsapp.jsonl"
+
+	db, err := storage.Open(dbPath)
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	if _, err := db.DB().Exec(`INSERT INTO indexed_files (path, hash, last_indexed) VALUES (?, 'h', '2026-01-01T00:00:00Z')`, gone); err != nil {
+		t.Fatalf("seed indexed_files: %v", err)
+	}
+	if _, err := db.DB().Exec(`
+		INSERT INTO search_items (source_path, source, ordinal, role, text, timestamp, uuid, project, content_type, extraction_version)
+		VALUES (?, 'session', 0, 'user', ?, '2026-01-01T00:00:00Z', 'g#0', 'proj', 'text', 3)
+	`, gone, "[3:06 p.m., 2/7/2026] Pedro Chan: eso no es un bug [3:07 p.m., 2/7/2026] Pablo: te dije que no [3:08 p.m., 2/7/2026] Ana: arreglado"); err != nil {
+		t.Fatalf("seed search_item: %v", err)
+	}
+	if _, err := db.DB().Exec(`
+		INSERT INTO correction_signals (item_uuid, source_path, ordinal, detector, confidence, extraction_version)
+		VALUES ('g#0', ?, 0, 'lexicon', 0.8, 0)
+	`, gone); err != nil {
+		t.Fatalf("seed stale signal: %v", err)
+	}
+	_ = db.Close()
+
+	cfg := &config.Config{DatabasePath: dbPath, SessionDirs: []string{sessionDir}}
+	if err := maybeAutoSync(cfg); err != nil {
+		t.Fatalf("maybeAutoSync: %v", err)
+	}
+
+	db, err = storage.Open(dbPath)
+	if err != nil {
+		t.Fatalf("reopen db: %v", err)
+	}
+	defer db.Close()
+
+	var n int
+	if err := db.DB().QueryRow(`SELECT COUNT(*) FROM correction_signals WHERE source_path = ?`, gone).Scan(&n); err != nil {
+		t.Fatalf("count signals: %v", err)
+	}
+	if n != 0 {
+		t.Errorf("auto-sync left %d superseded signal(s) on an expired-but-indexed session; the detector fix never reaches it", n)
+	}
+}

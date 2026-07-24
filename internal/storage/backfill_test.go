@@ -1,6 +1,7 @@
 package storage
 
 import (
+	"fmt"
 	"path/filepath"
 	"testing"
 )
@@ -761,5 +762,186 @@ func TestBackfillRederivesSupersededSignalsForExpiredSession(t *testing.T) {
 	}
 	if stale != 0 {
 		t.Errorf("backfill left %d signal(s) below the current epoch; discovery would never converge", stale)
+	}
+}
+
+// TestRederiveSupersededCorrectionsReachesDeadZone covers the session state neither
+// existing path can reach: the JSONL has expired from disk (so SyncFiles never runs
+// for it) while its indexed_files row remains (so BackfillDerived does not consider
+// it expired). Nothing prunes indexed_files when a file disappears, so this is the
+// common state, not an edge case — a detector fix that misses it is inert in practice.
+//
+// It also pins convergence for the empty case: a path that re-derives to NO signals
+// must not be rediscovered forever.
+func TestRederiveSupersededCorrectionsReachesDeadZone(t *testing.T) {
+	db, err := Open(filepath.Join(t.TempDir(), "test.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = db.Close() }()
+
+	const path = "/gone/from/disk.jsonl"
+
+	// indexed_files row survives the file's disappearance: this is the dead zone.
+	if _, err := db.db.Exec(`INSERT INTO indexed_files (path, hash, last_indexed) VALUES (?, 'h', '2026-01-01T00:00:00Z')`, path); err != nil {
+		t.Fatalf("seed indexed_files: %v", err)
+	}
+	// Only content is a pasted transcript, so current rules yield NO signals at all.
+	if _, err := db.db.Exec(`
+		INSERT INTO search_items (source_path, source, ordinal, role, text, timestamp, uuid, project, content_type, extraction_version)
+		VALUES (?, 'session', 0, 'user', ?, '2026-01-01T00:00:00Z', 'd#0', 'proj', 'text', ?)
+	`, path, "[3:06 p.m., 2/7/2026] Pedro Chan: eso no es un bug [3:07 p.m., 2/7/2026] Pablo: te dije que no [3:08 p.m., 2/7/2026] Ana: arreglado", CurrentExtractionVersion); err != nil {
+		t.Fatalf("seed search_item: %v", err)
+	}
+	if _, err := db.db.Exec(`
+		INSERT INTO correction_signals (item_uuid, source_path, ordinal, detector, confidence, extraction_version)
+		VALUES ('d#0', ?, 0, 'lexicon', 0.8, 0)
+	`, path); err != nil {
+		t.Fatalf("seed stale signal: %v", err)
+	}
+
+	// BackfillDerived must NOT be what fixes this — the path is not "expired" by its
+	// definition. Running it first proves the dead zone is real.
+	if err := db.BackfillDerived(BackfillDerivedOpts{}); err != nil {
+		t.Fatalf("BackfillDerived: %v", err)
+	}
+	var afterBackfill int
+	if err := db.db.QueryRow(`SELECT COUNT(*) FROM correction_signals WHERE source_path = ?`, path).Scan(&afterBackfill); err != nil {
+		t.Fatalf("count after backfill: %v", err)
+	}
+	if afterBackfill == 0 {
+		t.Fatal("precondition void: BackfillDerived already cleared this path, so the dead zone this test guards no longer exists")
+	}
+
+	processed, err := db.RederiveSupersededCorrections(200)
+	if err != nil {
+		t.Fatalf("RederiveSupersededCorrections: %v", err)
+	}
+	if processed != 1 {
+		t.Errorf("processed %d paths, want 1: the dead-zone path was not discovered", processed)
+	}
+
+	var remaining int
+	if err := db.db.QueryRow(`SELECT COUNT(*) FROM correction_signals WHERE source_path = ?`, path).Scan(&remaining); err != nil {
+		t.Fatalf("count after re-derivation: %v", err)
+	}
+	if remaining != 0 {
+		t.Errorf("stale signal survived re-derivation: got %d, want 0", remaining)
+	}
+
+	// Convergence for the empty case: nothing left below the current epoch, so a
+	// second pass finds nothing and the path stops being reprocessed.
+	again, err := db.RederiveSupersededCorrections(200)
+	if err != nil {
+		t.Fatalf("second RederiveSupersededCorrections: %v", err)
+	}
+	if again != 0 {
+		t.Errorf("second pass reprocessed %d path(s); empty re-derivation never converges", again)
+	}
+}
+
+// TestRederiveSupersededCorrectionsIsBoundedAndDrains pins the per-run bound: a large
+// backlog must not be re-derived in one pass (auto-sync runs on ordinary commands and
+// cannot stall on it), and successive runs must drain the rest in deterministic order
+// rather than revisiting the same head forever.
+func TestRederiveSupersededCorrectionsIsBoundedAndDrains(t *testing.T) {
+	db, err := Open(filepath.Join(t.TempDir(), "test.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = db.Close() }()
+
+	const total = 5
+	for i := 0; i < total; i++ {
+		path := fmt.Sprintf("/p/s%02d.jsonl", i)
+		if _, err := db.db.Exec(`
+			INSERT INTO search_items (source_path, source, ordinal, role, text, timestamp, uuid, project, content_type, extraction_version)
+			VALUES (?, 'session', 0, 'user', 'no, eso no es un bug', '2026-01-01T00:00:00Z', ?, 'proj', 'text', ?)
+		`, path, fmt.Sprintf("u%02d#0", i), CurrentExtractionVersion); err != nil {
+			t.Fatalf("seed search_item %d: %v", i, err)
+		}
+		if _, err := db.db.Exec(`
+			INSERT INTO correction_signals (item_uuid, source_path, ordinal, detector, confidence, extraction_version)
+			VALUES (?, ?, 0, 'lexicon', 0.8, 0)
+		`, fmt.Sprintf("u%02d#0", i), path); err != nil {
+			t.Fatalf("seed stale signal %d: %v", i, err)
+		}
+	}
+
+	const limit = 2
+	first, err := db.RederiveSupersededCorrections(limit)
+	if err != nil {
+		t.Fatalf("first pass: %v", err)
+	}
+	if first != limit {
+		t.Errorf("first pass processed %d paths, want %d: the per-run bound is not applied", first, limit)
+	}
+
+	// The head of the ordering must be done, and the tail untouched.
+	var headStale, tailStale int
+	if err := db.db.QueryRow(`
+		SELECT COUNT(*) FROM correction_signals
+		WHERE source_path = '/p/s00.jsonl' AND (extraction_version IS NULL OR extraction_version < ?)
+	`, CurrentExtractionVersion).Scan(&headStale); err != nil {
+		t.Fatalf("count head: %v", err)
+	}
+	if headStale != 0 {
+		t.Errorf("first path still carries %d superseded signal(s) after being processed", headStale)
+	}
+	if err := db.db.QueryRow(`
+		SELECT COUNT(*) FROM correction_signals
+		WHERE source_path = ? AND (extraction_version IS NULL OR extraction_version < ?)
+	`, fmt.Sprintf("/p/s%02d.jsonl", total-1), CurrentExtractionVersion).Scan(&tailStale); err != nil {
+		t.Fatalf("count tail: %v", err)
+	}
+	if tailStale == 0 {
+		t.Error("last path was processed despite the per-run bound")
+	}
+
+	// Successive passes drain the backlog and then stop.
+	runs := 0
+	for {
+		n, err := db.RederiveSupersededCorrections(limit)
+		if err != nil {
+			t.Fatalf("drain pass: %v", err)
+		}
+		if n == 0 {
+			break
+		}
+		runs++
+		if runs > total {
+			t.Fatal("draining did not terminate: the same paths are being reprocessed")
+		}
+	}
+
+	var remaining int
+	if err := db.db.QueryRow(`
+		SELECT COUNT(*) FROM correction_signals WHERE extraction_version IS NULL OR extraction_version < ?
+	`, CurrentExtractionVersion).Scan(&remaining); err != nil {
+		t.Fatalf("count remaining: %v", err)
+	}
+	if remaining != 0 {
+		t.Errorf("%d superseded signal(s) left after draining", remaining)
+	}
+}
+
+// TestRederiveSupersededCorrectionsPropagatesErrors pins failure behaviour: this runs
+// inside ordinary auto-sync, where a database problem must surface as an error the
+// caller can warn about rather than a panic that kills a routine command.
+func TestRederiveSupersededCorrectionsPropagatesErrors(t *testing.T) {
+	db, err := Open(filepath.Join(t.TempDir(), "test.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Close(); err != nil {
+		t.Fatalf("close: %v", err)
+	}
+
+	processed, err := db.RederiveSupersededCorrections(10)
+	if err == nil {
+		t.Error("expected an error from a closed database, got nil")
+	}
+	if processed != 0 {
+		t.Errorf("processed = %d on a failed run, want 0", processed)
 	}
 }

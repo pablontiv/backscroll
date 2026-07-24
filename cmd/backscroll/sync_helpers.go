@@ -2,7 +2,6 @@ package main
 
 import (
 	"fmt"
-	"io"
 	"os"
 
 	"github.com/pablontiv/backscroll/internal/config"
@@ -178,13 +177,14 @@ func maybeAutoSync(cfg *config.Config) error {
 		}
 	}
 
-	return nil
-}
+	// Re-derive correction signals recorded under a superseded detector epoch. This
+	// is the only route for a session whose JSONL has expired while its indexed_files
+	// row remains: SyncFiles skips it (not on disk) and BackfillDerived skips it (not
+	// absent from indexed_files), so without this a detector fix never reaches it.
+	// Bounded per run and convergent — see RederiveSupersededCorrections.
+	if _, err := db.RederiveSupersededCorrections(staleTemplateCap); err != nil {
+		fmt.Fprintf(os.Stderr, "warning: failed to re-derive superseded correction signals: %v\n", err)
+	}
 
-// runSync is called by rebuild to perform a full sync.
-func runSync(stdout, stderr io.Writer, path string, includePlans, includeSources, optimize, noEmbed bool) error {
-	// For now, this is a stub that prints a message
-	// In v2, rebuild calls this but the actual sync logic is in maybeAutoSync
-	_, _ = fmt.Fprintf(stdout, "Sync: no-op in v2 (auto-sync handles incremental updates)\n")
 	return nil
 }

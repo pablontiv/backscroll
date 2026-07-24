@@ -59,11 +59,9 @@ func (d *Database) BackfillDerived(opts BackfillDerivedOpts) error {
 			ifx.path IS NULL AND
 			(NOT EXISTS (SELECT 1 FROM template_matches WHERE source_path = si.source_path) OR
 			 NOT EXISTS (SELECT 1 FROM correction_signals WHERE source_path = si.source_path) OR
-			 EXISTS (SELECT 1 FROM correction_signals WHERE source_path = si.source_path
-			         AND (extraction_version IS NULL OR extraction_version < ?)) OR
 			 NOT EXISTS (SELECT 1 FROM tool_events WHERE source_path = si.source_path AND extraction_version = 0))
 		ORDER BY si.source_path
-	`, CurrentExtractionVersion)
+	`)
 	if err != nil {
 		return fmt.Errorf("query expired files: %w", err)
 	}
@@ -423,7 +421,7 @@ func (d *Database) backfillToolEventsForFile(tx *sql.Tx, sourcePath string, mess
 // than currentVersion. Results are ordered by ascending source_path (deterministic).
 // Used to discover which files need re-mining under newer template heuristics.
 func (d *Database) StaleTemplatePaths(currentVersion int) ([]string, error) {
-	rows, err := d.db.Query(`
+	paths, err := d.queryPaths(`
 		SELECT DISTINCT tm.source_path
 		FROM template_matches tm
 		JOIN message_templates mt ON tm.template_id = mt.id
@@ -433,17 +431,7 @@ func (d *Database) StaleTemplatePaths(currentVersion int) ([]string, error) {
 	if err != nil {
 		return nil, fmt.Errorf("query stale template paths: %w", err)
 	}
-	defer rows.Close()
-
-	var paths []string
-	for rows.Next() {
-		var path string
-		if err := rows.Scan(&path); err != nil {
-			return nil, fmt.Errorf("scan path: %w", err)
-		}
-		paths = append(paths, path)
-	}
-	return paths, rows.Err()
+	return paths, nil
 }
 
 // LoadMessagesForPath loads all IndexedMessage rows from search_items for a given source path,
@@ -508,4 +496,77 @@ func (d *Database) BackfillTemplatesForFile(miner *templates.Miner, sourcePath s
 // content_type='text'|'code' + role='user' only; interrupt on all user.
 func backfillDetectCorrections(msgs []models.Message) map[int][]corrections.Detection {
 	return corrections.RunDetectorsFiltered(msgs)
+}
+
+// RederiveSupersededCorrections re-runs correction detection for paths whose signals
+// were recorded under a superseded detector epoch, and returns how many paths it
+// processed.
+//
+// It exists because neither existing path reaches those rows. SyncFiles only sees
+// files still on disk; BackfillDerived only sees paths absent from indexed_files. A
+// session whose JSONL expired but whose indexed_files row remains falls between the
+// two, and its stale signals would otherwise be permanent — which is the common case,
+// since nothing prunes indexed_files when a file disappears.
+//
+// Discovery is epoch-based only, so it converges in both directions: a path whose
+// signals are re-derived is stamped current and drops out, and a path that re-derives
+// to no signals at all has no stale rows left to match. limit bounds the work per run;
+// remaining paths drain on later runs in deterministic path order.
+func (d *Database) RederiveSupersededCorrections(limit int) (int, error) {
+	paths, err := d.queryPaths(`
+		SELECT DISTINCT source_path FROM correction_signals
+		WHERE extraction_version IS NULL OR extraction_version < ?
+		ORDER BY source_path
+		LIMIT ?
+	`, CurrentExtractionVersion, limit)
+	if err != nil {
+		return 0, fmt.Errorf("query superseded correction paths: %w", err)
+	}
+	if len(paths) == 0 {
+		return 0, nil
+	}
+
+	// One transaction for the bounded batch: the batch either lands whole or not at
+	// all, so a crash mid-run cannot leave a path with its old signals deleted and
+	// its new ones missing.
+	tx, err := d.db.Begin()
+	if err != nil {
+		return 0, fmt.Errorf("begin transaction: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	for _, sourcePath := range paths {
+		msgs, err := d.LoadMessagesForPath(sourcePath)
+		if err != nil {
+			return 0, fmt.Errorf("load messages for %s: %w", sourcePath, err)
+		}
+		if _, err := d.backfillCorrectionsForFile(tx, sourcePath, msgs); err != nil {
+			return 0, fmt.Errorf("re-derive corrections for %s: %w", sourcePath, err)
+		}
+	}
+	if err := tx.Commit(); err != nil {
+		return 0, fmt.Errorf("commit re-derivation: %w", err)
+	}
+	return len(paths), nil
+}
+
+// queryPaths runs a query returning a single source_path column and collects it.
+// Shared by the stale-template and superseded-correction discovery queries, which
+// otherwise repeat the same scan-and-close boilerplate.
+func (d *Database) queryPaths(query string, args ...any) ([]string, error) {
+	rows, err := d.db.Query(query, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = rows.Close() }()
+
+	var paths []string
+	for rows.Next() {
+		var p string
+		if err := rows.Scan(&p); err != nil {
+			return nil, fmt.Errorf("scan path: %w", err)
+		}
+		paths = append(paths, p)
+	}
+	return paths, rows.Err()
 }
