@@ -481,24 +481,31 @@ func (d *Database) LoadMessagesForPath(sourcePath string) ([]IndexedMessage, err
 // Used by incremental template re-mining in sync_helpers.go (Q3).
 // The sourcePath is needed to update database records and should be provided by the caller
 // (obtained from LoadMessagesForPath or StaleTemplatePaths).
-func (d *Database) BackfillTemplatesForFile(miner *templates.Miner, sourcePath string, msgs []IndexedMessage) error {
+// Returns count of deleted stuck templates (those with old normalization_version not reproduced in re-mining).
+func (d *Database) BackfillTemplatesForFile(miner *templates.Miner, sourcePath string, msgs []IndexedMessage) (int, error) {
 	tx, err := d.db.Begin()
 	if err != nil {
-		return fmt.Errorf("begin transaction: %w", err)
+		return 0, fmt.Errorf("begin transaction: %w", err)
 	}
 	defer func() { _ = tx.Rollback() }()
 
 	if len(msgs) == 0 {
-		return tx.Commit()
+		if err := tx.Commit(); err != nil {
+			return 0, err
+		}
+		return 0, nil
 	}
 
 	// Re-mine templates using internal backfillTemplatesForFile
-	_, err = d.backfillTemplatesForFile(tx, sourcePath, msgs, miner)
+	deletedCount, err := d.backfillTemplatesForFile(tx, sourcePath, msgs, miner)
 	if err != nil {
-		return err
+		return 0, err
 	}
 
-	return tx.Commit()
+	if err := tx.Commit(); err != nil {
+		return 0, err
+	}
+	return deletedCount, nil
 }
 
 // backfillDetectCorrections runs detectors with prose-only filter.

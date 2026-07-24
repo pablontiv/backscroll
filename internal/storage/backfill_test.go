@@ -1042,7 +1042,7 @@ func TestBackfillTemplatesForFileUpgradesAndIsIdempotent(t *testing.T) {
 	}
 
 	miner := templates.NewMiner()
-	if err := db.BackfillTemplatesForFile(miner, path, msgs); err != nil {
+	if _, err := db.BackfillTemplatesForFile(miner, path, msgs); err != nil {
 		t.Fatalf("first re-mine: %v", err)
 	}
 
@@ -1058,7 +1058,7 @@ func TestBackfillTemplatesForFileUpgradesAndIsIdempotent(t *testing.T) {
 	if _, err := db.db.Exec(`UPDATE message_templates SET normalization_version = 1`); err != nil {
 		t.Fatalf("age template: %v", err)
 	}
-	if err := db.BackfillTemplatesForFile(templates.NewMiner(), path, msgs); err != nil {
+	if _, err := db.BackfillTemplatesForFile(templates.NewMiner(), path, msgs); err != nil {
 		t.Fatalf("re-mine after aging: %v", err)
 	}
 	var stale int
@@ -1073,7 +1073,7 @@ func TestBackfillTemplatesForFileUpgradesAndIsIdempotent(t *testing.T) {
 	var occBefore, matchBefore int
 	_ = db.db.QueryRow(`SELECT COALESCE(SUM(occurrence_count),0) FROM message_templates`).Scan(&occBefore)
 	_ = db.db.QueryRow(`SELECT COUNT(*) FROM template_matches`).Scan(&matchBefore)
-	if err := db.BackfillTemplatesForFile(templates.NewMiner(), path, msgs); err != nil {
+	if _, err := db.BackfillTemplatesForFile(templates.NewMiner(), path, msgs); err != nil {
 		t.Fatalf("third re-mine: %v", err)
 	}
 	var occAfter, matchAfter int
@@ -1084,7 +1084,7 @@ func TestBackfillTemplatesForFileUpgradesAndIsIdempotent(t *testing.T) {
 	}
 
 	// An empty message set must be a clean no-op, not an error.
-	if err := db.BackfillTemplatesForFile(templates.NewMiner(), "/p/empty.jsonl", nil); err != nil {
+	if _, err := db.BackfillTemplatesForFile(templates.NewMiner(), "/p/empty.jsonl", nil); err != nil {
 		t.Errorf("empty re-mine should be a no-op: %v", err)
 	}
 }
