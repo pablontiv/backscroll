@@ -5,6 +5,8 @@ set -euo pipefail
 # Computes recall@5 with ground-truth matching over the eval-set (docs/eval/queries.toml)
 # Usage: scripts/eval.sh [--verbose] [--limit N]
 # Exit: 0 if recall@5 >= 80%, 1 otherwise (gated, not required CI)
+# Note: point BACKSCROLL_BIN at a dev build (`just build`); a dev build neither
+# fetches nor waits on autoupdate, so the eval loop stays fast.
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
@@ -32,7 +34,7 @@ else
   exit 1
 fi
 
-status_json=$(BACKSCROLL_AUTOUPDATE_DISABLE=1 "$BACKSCROLL_BIN" status --json 2>/dev/null || true)
+status_json=$("$BACKSCROLL_BIN" status --json 2>/dev/null || true)
 indexed_files=$(echo "$status_json" | jq '.index.total_files // 0' 2>/dev/null || echo 0)
 if [ "$indexed_files" -lt 1 ]; then
   echo "❌ Index appears empty (total_files=$indexed_files). Run 'backscroll rebuild' first."
@@ -40,7 +42,7 @@ if [ "$indexed_files" -lt 1 ]; then
 fi
 
 # Preflight: verify --robot format is NOT double-wrapped
-robot_sample=$(BACKSCROLL_AUTOUPDATE_DISABLE=1 "$BACKSCROLL_BIN" search "test" --robot --limit 1 2>&1 | head -3 || true)
+robot_sample=$("$BACKSCROLL_BIN" search "test" --robot --limit 1 2>&1 | head -3 || true)
 if echo "$robot_sample" | grep -E "^result_0=result_0_" >/dev/null; then
   echo "❌ BLOCKER: --robot output is double-wrapped (bug in backscroll CLI)"
   echo "   Expected format: result_0_source=value"
@@ -148,7 +150,7 @@ for ((i = 0; i < query_count; i++)); do
   fi
 
   # Execute search with robot format
-  robot_output=$(BACKSCROLL_AUTOUPDATE_DISABLE=1 "$BACKSCROLL_BIN" search "$text" $flags_str --robot --fields minimal --max-tokens 2000 2>&1 || true)
+  robot_output=$("$BACKSCROLL_BIN" search "$text" $flags_str --robot --fields minimal --max-tokens 2000 2>&1 || true)
 
   # Check ranks 0-4 for ground-truth match
   match_found=0
