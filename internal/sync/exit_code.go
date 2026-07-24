@@ -7,9 +7,9 @@ import (
 
 var (
 	// exitCodePattern matches common exit-code output formats from Bash-like tools.
-	// Patterns: "exit code N", "Exit code: N", "returned N" (bare "exit: N" is NOT matched)
+	// Patterns: "exit code N", "exit: N", "exit=N", "exit N", "returned N", "exited N" (and variants).
 	// Captures only the first match; only Bash tool results are mined.
-	exitCodePattern = regexp.MustCompile(`(?i)(?:exit\s+code|returned)\s*[:=]?\s*(\d+)`)
+	exitCodePattern = regexp.MustCompile(`(?i)(?:exit(?:\s+code)?|returned|exited)\s*[:=]?\s*(\d+)`)
 )
 
 // ExtractExitCode parses exit-code patterns from tool-result text.

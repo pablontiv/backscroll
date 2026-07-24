@@ -47,6 +47,48 @@ func TestExtractExitCode(t *testing.T) {
 			toolName: "Bash",
 			want:     nil,
 		},
+		{
+			name:     "exit code with equals",
+			text:     "error\nexit code=42",
+			toolName: "Bash",
+			want:     ptrInt(42),
+		},
+		{
+			name:     "exit colon variant",
+			text:     "failed\nexit: 5",
+			toolName: "Bash",
+			want:     ptrInt(5),
+		},
+		{
+			name:     "exit equals variant",
+			text:     "error\nexit=127",
+			toolName: "Bash",
+			want:     ptrInt(127),
+		},
+		{
+			name:     "returned colon variant",
+			text:     "aborted\nreturned: 1",
+			toolName: "Bash",
+			want:     ptrInt(1),
+		},
+		{
+			name:     "returned equals variant",
+			text:     "bad\nreturned=2",
+			toolName: "Bash",
+			want:     ptrInt(2),
+		},
+		{
+			name:     "exited variant",
+			text:     "done\nexited 99",
+			toolName: "Bash",
+			want:     ptrInt(99),
+		},
+		{
+			name:     "case insensitive EXIT",
+			text:     "error\nEXIT CODE 3",
+			toolName: "Bash",
+			want:     ptrInt(3),
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
