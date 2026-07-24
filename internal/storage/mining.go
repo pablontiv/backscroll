@@ -7,6 +7,15 @@ import (
 	"github.com/pablontiv/backscroll/internal/templates"
 )
 
+// isInputSerialization checks if text is a tool input serialization (not an error output).
+// Returns true if the text should be excluded from template mining.
+// Used by both sync-time (mineTemplatesForFile) and backfill (backfillTemplatesForFile)
+// to ensure identical line-selection predicates.
+func isInputSerialization(text string) bool {
+	toolName, _ := ParseToolFromSerialized(text)
+	return toolName != ""
+}
+
 // mineTemplatesForFile discovers templates from messages with is_error=true
 // and writes message_templates + template_matches rows inside the tx.
 // Deterministic: same input → same templates + signatures.
