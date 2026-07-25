@@ -134,6 +134,15 @@ func TestIsInputSerializationKeepsErrorsWithKeyValues(t *testing.T) {
 		"Bash command=go test ./...",
 		"Edit file_path=/a old_string=b",
 		"TaskOutput block=false timeout=5000",
+		// MCP and plugin tools are snake_case and may carry '-' inside a segment.
+		// They are real tool names in this corpus, so their inputs must be excluded
+		// too — a TitleCase-only rule lets 14 of them back into the census.
+		"mem_save title=x type=decision",
+		"mcp__plugin_engram_engram__mem_save title=x type=decision",
+		"mcp__claude-in-chrome__computer action=screenshot tabId=224206664",
+		// Zero-argument tools serialize to the bare name, with no key=value to find.
+		"mcp__plugin_engram_engram__mem_doctor",
+		"mcp__claude-in-chrome__tabs_context_mcp",
 	}
 	for _, text := range drop {
 		if !isInputSerialization(text) {

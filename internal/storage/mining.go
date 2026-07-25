@@ -34,37 +34,65 @@ import (
 //	error: connection refused host=1.2.3.4 "error:" is not an identifier
 func isInputSerialization(text string) bool {
 	fields := strings.Fields(strings.TrimSpace(text))
-	if len(fields) < 2 {
+	if len(fields) == 0 || !isToolNameToken(fields[0]) {
 		return false
 	}
-	if !isToolNameToken(fields[0]) || !strings.Contains(fields[1], "=") {
+	// A zero-argument tool serializes to the bare name — mcp__..._mem_doctor,
+	// mcp__..._tabs_context_mcp — with no key=value to look for. Nothing useful can be
+	// templated from a lone identifier, so treat it as the input it is.
+	if len(fields) == 1 {
+		return true
+	}
+	if !strings.Contains(fields[1], "=") {
 		return false
 	}
 	toolName, _ := ParseToolFromSerialized(text)
 	return toolName != ""
 }
 
-// isToolNameToken reports whether s has the shape of a toolfmt tool name: letters and
-// digits only, TitleCase (Bash, Edit, TaskOutput). Screaming case (FAIL) and lowercase
-// (panic, npm) belong to error output, not to a serialized tool call.
+// isToolNameToken reports whether s has the shape of a toolfmt tool name.
+//
+// Two shapes occur in this corpus and both must be recognised, or their inputs get
+// mined as templates and the noise this filter removes comes straight back:
+//
+//   - Built-ins are TitleCase alphanumerics: Bash, Edit, Read, TaskOutput.
+//   - MCP and plugin tools are snake_case, and may carry '-' inside an MCP segment:
+//     mem_save, mcp__plugin_engram_engram__mem_save, mcp__claude-in-chrome__computer.
+//
+// Screaming case (FAIL), prose (panic, npm), and anything with other punctuation
+// (error:, ---, make:) belong to error output, not to a serialized tool call.
 func isToolNameToken(s string) bool {
 	if s == "" {
 		return false
 	}
 	runes := []rune(s)
-	if !unicode.IsUpper(runes[0]) {
+	if !unicode.IsLetter(runes[0]) {
 		return false
 	}
-	hasLower := false
+	hasLower, hasUnderscore := false, false
 	for _, r := range runes {
-		if !unicode.IsLetter(r) && !unicode.IsDigit(r) {
+		switch {
+		case unicode.IsLower(r):
+			hasLower = true
+		case r == '_':
+			hasUnderscore = true
+		case unicode.IsUpper(r), unicode.IsDigit(r), r == '-':
+		default:
 			return false
 		}
-		if unicode.IsLower(r) {
-			hasLower = true
-		}
 	}
-	return hasLower
+	if !hasLower {
+		// Screaming case: FAIL, ERROR, WARN. Output markers, never tool names.
+		return false
+	}
+	if unicode.IsUpper(runes[0]) {
+		// TitleCase built-in: Bash, Edit, TaskOutput.
+		return true
+	}
+	// Lowercase start needs an underscore to qualify. That is what separates the
+	// snake_case tool names (mem_save, mcp__server__tool) from ordinary prose words
+	// that open an error line (panic, npm, warning).
+	return hasUnderscore
 }
 
 // shouldMineToolLine is the single line-selection predicate for template mining, used
