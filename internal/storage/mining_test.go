@@ -105,3 +105,39 @@ func TestMineTemplatesForFileSyncsSkipsInputSerializations(t *testing.T) {
 		t.Errorf("sync-time mining should have mined templates from error messages; got 0")
 	}
 }
+
+// TestIsInputSerializationKeepsErrorsWithKeyValues pins the discriminators that keep
+// genuine error output out of the exclusion filter. ParseToolFromSerialized's heuristic
+// is "first token has no '=', a later token does", which was written to recover a tool
+// name from stored text, not to separate errors from inputs — so any error line
+// carrying a key=value matched it and was discarded, throwing away exactly the
+// recurring errors the census exists to surface.
+func TestIsInputSerializationKeepsErrorsWithKeyValues(t *testing.T) {
+	keep := []string{
+		"error: cannot find package /tmp/a/b.go",
+		"error: connection refused host=127.0.0.1 port=8080",
+		"error: exit status 1: FOO=bar make failed",
+		"--- FAIL: TestParse got=1 want=2",
+		"error: Exit code 1",
+		"FAIL github.com/x/y coverage=0%",
+		"panic goroutine=1 [running]",
+		"npm ERR! code=ELIFECYCLE",
+		"Error connection refused addr=1.2.3.4",
+	}
+	for _, text := range keep {
+		if isInputSerialization(text) {
+			t.Errorf("genuine error output discarded as an input serialization: %q", text)
+		}
+	}
+
+	drop := []string{
+		"Bash command=go test ./...",
+		"Edit file_path=/a old_string=b",
+		"TaskOutput block=false timeout=5000",
+	}
+	for _, text := range drop {
+		if !isInputSerialization(text) {
+			t.Errorf("tool input serialization was not excluded: %q", text)
+		}
+	}
+}

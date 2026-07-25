@@ -3,15 +3,68 @@ package storage
 import (
 	"database/sql"
 	"fmt"
+	"strings"
+	"unicode"
 
 	"github.com/pablontiv/backscroll/internal/templates"
 )
 
 // isInputSerialization reports whether text is a tool INPUT serialization rather than
 // tool output. Inputs are never error lines, so both mining paths exclude them.
+//
+// ParseToolFromSerialized alone is too broad to use as this filter. Its heuristic is
+// "first token has no '=', some later token does", which was written to recover a tool
+// name from stored text — not to tell errors apart from inputs. Real error output
+// carrying a key=value anywhere matches it and would be thrown away, which is the
+// opposite of what template mining is for. Observed false positives:
+//
+//	error: connection refused host=127.0.0.1 port=8080
+//	error: exit status 1: FOO=bar make failed
+//	--- FAIL: TestParse got=1 want=2
+//
+// The fix is to match toolfmt's ACTUAL shape instead of a loose "contains a key=value"
+// test: `SerializeToolInput` emits "<ToolName> <key>=<val> <key>=<val> ...", so a real
+// input has a TitleCase tool name AND a key=value immediately after it. Requiring both
+// keeps every observed error line, including ones that carry key=value further along:
+//
+//	FAIL github.com/x/y coverage=0%      second token is not key=value
+//	panic goroutine=1 [running]          "panic" is not TitleCase
+//	npm ERR! code=ELIFECYCLE             "npm" is not TitleCase
+//	Error connection refused addr=1.2.3.4 second token is not key=value
+//	error: connection refused host=1.2.3.4 "error:" is not an identifier
 func isInputSerialization(text string) bool {
+	fields := strings.Fields(strings.TrimSpace(text))
+	if len(fields) < 2 {
+		return false
+	}
+	if !isToolNameToken(fields[0]) || !strings.Contains(fields[1], "=") {
+		return false
+	}
 	toolName, _ := ParseToolFromSerialized(text)
 	return toolName != ""
+}
+
+// isToolNameToken reports whether s has the shape of a toolfmt tool name: letters and
+// digits only, TitleCase (Bash, Edit, TaskOutput). Screaming case (FAIL) and lowercase
+// (panic, npm) belong to error output, not to a serialized tool call.
+func isToolNameToken(s string) bool {
+	if s == "" {
+		return false
+	}
+	runes := []rune(s)
+	if !unicode.IsUpper(runes[0]) {
+		return false
+	}
+	hasLower := false
+	for _, r := range runes {
+		if !unicode.IsLetter(r) && !unicode.IsDigit(r) {
+			return false
+		}
+		if unicode.IsLower(r) {
+			hasLower = true
+		}
+	}
+	return hasLower
 }
 
 // shouldMineToolLine is the single line-selection predicate for template mining, used
