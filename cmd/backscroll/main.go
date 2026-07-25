@@ -59,9 +59,14 @@ func run(stdout, stderr io.Writer, args []string) error {
 func buildRootCmd(stdout, stderr io.Writer) *cobra.Command {
 	root := &cobra.Command{
 		Use:   "backscroll",
-		Short: "Index and search Claude Code sessions",
-		Long: `Backscroll is a CLI tool that indexes Claude Code sessions into SQLite
-for hybrid full-text search (BM25 + vector embeddings) with RRF fusion.`,
+		Short: "A permanent, searchable record of your coding-agent sessions",
+		Long: `Backscroll turns your coding-agent sessions into a permanent, searchable
+record of what happened. It indexes Claude Code, Pi and OpenCode sessions into
+SQLite and keeps them after the session files expire.
+
+Prose and tool activity are indexed separately — a Porter-stemmed FTS5 index for
+conversation, a trigram index for commands, paths and errors — and an unfiltered
+query merges both by rank position (RRF).`,
 		Version: version,
 	}
 	root.SetOut(stdout)

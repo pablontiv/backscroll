@@ -4,20 +4,23 @@
 [![Go](https://img.shields.io/badge/Go-1.22+-00ADD8?logo=go&logoColor=white)](https://go.dev)
 [![License: Apache 2.0](https://img.shields.io/badge/License-Apache%202.0-blue.svg)](LICENSE)
 
-A **full-text search engine** for your AI session history — one unified search layer over every coding-agent session, whatever assistant produced it.
+**Backscroll turns your coding-agent sessions into a permanent, searchable record of what happened.**
 
-Backscroll is the retrieval abstraction over your local agent sessions: it normalizes each assistant's session format behind a single index, strips machine-generated noise, and provides instant full-text search with relevance ranking — so you query *what happened*, not *which tool wrote it where*.
+Every command, error and decision — searchable across every assistant, and still there after the session files expire.
+
+Your agents write down everything they do, then throw it away. Claude Code prunes its session files after about a month; each assistant stores them in its own format, in its own directory, with no way to search across them. The work is recorded and unreachable at the same time.
+
+Backscroll indexes those sessions into SQLite and keeps them. Ask what a command returned six weeks ago, which errors keep recurring, or where a decision was made — and get an answer whose source file no longer exists.
 
 ---
 
 ## Table of Contents
 
 - [Installation](#installation)
-- [Quick Start](#quick-start)
-- [Core Idea](#core-idea)
-- [The Session Index](#the-session-index)
-- [CLI](#cli)
-- [AI-Native](#ai-native)
+- [Proof](#proof)
+- [Core Concepts](#core-concepts)
+- [What You Can Do](#what-you-can-do)
+- [Optional: Agent Integration](#optional-agent-integration)
 - [Configuration](#configuration)
 - [Documentation](#documentation)
 - [Development](#development)
@@ -88,144 +91,104 @@ go install github.com/pablontiv/backscroll/cmd/backscroll@latest
 
 ---
 
-## Quick Start
+## Proof
 
 ```bash
-# 1. Confirm global input manifests are installed and valid
-backscroll validate
-backscroll config
-
-# 2. Search — find past conversations by keyword (auto-syncs)
-backscroll search "migration plan"
-
-# 3. Search by project — limit results to a specific project
-backscroll search "error handling" --project "backscroll"
-
-# 4. List recent sessions — newest first
-backscroll list --order timestamp:desc --limit 10
-
-# 4b. Search tool activity — what command ran, or what failed
-backscroll search "go test ./..." --content-type tool
-
-# 5. Read one session — get semantic snippets from a session file
-backscroll read --path ~/.claude/projects/backscroll/abc123.jsonl --tail 45 --semantic
-
-# 6. Status — check index health
+# Index everything (runs automatically before any query)
 backscroll status
+
+# What did we decide about the migration?
+backscroll search --text "migration plan" --all-projects
+
+# What did that command actually return?
+backscroll search --text "go test ./..." --all-projects --content-type tool
+
+# Which errors keep coming back?
+backscroll patterns --kind templates --min-support 5 --all-projects
+```
+
+That last one answers a question `search` cannot. Search finds what you can already name; the census counts what recurs across every session you have:
+
+```
+Found 20 templates (min_support=5):
+
+1. [36b55122]
+   Text: error: Exit code <*>
+   Occurrences: 344
+   Projects: [backscroll rootline picokit crossbeam dotfiles ...]
 ```
 
 ---
 
-## Core Idea
+## Core Concepts
 
-Your coding agents produce valuable reasoning logs, but each stores them in its own format, scattered across session files with no built-in way to search across them. Backscroll is the abstraction that unifies them — making every session **searchable**, **persistent**, and **fast**, regardless of which assistant produced it.
+**The database is the record, not a cache.** Session files expire; indexed sessions do not. Rows are append-only and keyed by message identity, so a session survives the deletion of the file it came from. `purge --before` is the only thing that removes them.
 
-- One index across all your agents — you search content, not per-tool file formats
-- Tool activity is searchable — the commands that ran, the files touched, the outputs and errors they returned
-- Sessions are indexed incrementally — only changed files are re-processed
-- Noise is stripped automatically — system-reminders, task-notifications, command wrappers
-- Search uses BM25 ranking with highlighted snippets
-- Output adapts to the consumer — human-readable, JSON, or compact LLM format
+**Every assistant, one index.** Claude Code, Pi and OpenCode each store sessions differently. A reader per format normalizes them behind one schema, so you search content, not file layouts. New formats arrive as input manifests, not as code changes at the call site.
 
-Backscroll does not modify your logs. It **indexes** them.
+**Conversation and tool activity are indexed separately, on purpose.** Prose goes to an FTS5 index with a Porter stemmer, so "migrating" finds "migration". Tool text — commands, paths, errors — goes to a trigram index, where an exact substring like `internal/storage/sync.go` matches. An unfiltered query merges both by rank position, which is why a search never has to pick one.
+
+**Retrieval and discovery are different questions.** `search` retrieves what you can name. `patterns` computes a census: it counts commands, failures, recurring error templates, correction candidates and repeated tool sequences across the whole corpus. No individual document contains a pattern, so ranking cannot surface one.
 
 ---
 
-## The Session Index
+## What You Can Do
 
-Each agent stores conversations in its own format. Backscroll normalizes them behind one index via input manifests — shipped presets cover the common agent formats (JSONL and SQLite), and any source with a compatible manifest is supported.
-
-Backscroll extracts both the **conversation** (user and assistant messages) and the **tool activity** (the serialized tool inputs — commands, file paths, args — and their outputs and errors), indexing the latter as `content_type='tool'` so you can search what an agent actually did. Genuine noise — system-reminders, task-notifications, command wrappers — is stripped.
-
-### Incremental sync
-
-Backscroll computes a SHA-256 hash for each session file. On subsequent syncs, only files whose content has changed are re-processed — syncing thousands of sessions takes seconds after the initial run.
+### Recover what happened
 
 ```bash
-backscroll validate
-backscroll list
+backscroll search --text "QUERY" --project <name>     # this project
+backscroll search --text "QUERY" --all-projects       # everywhere
+backscroll search --text "QUERY" --content-type tool  # commands, paths, errors
+backscroll list --order timestamp:desc --limit 10     # recent sessions
+backscroll read --path <FILE> --tail 45 --semantic    # one session, condensed
 ```
 
-Subagent handling is controlled by the active input manifest. The shipped Claude preset excludes `subagents` paths with a discovery glob, and you can edit your installed preset if you intentionally want a different corpus.
+Filters worth knowing: `--after` / `--before` for a date window, `--tag` for auto-detected session categories (debugging, refactoring, testing…), `--source-path` to pin one file, `--role` to keep only what you said.
 
-See [Sync & Indexing docs](docs/sync.md) for input manifests, noise filtering, and project metadata behavior. See [Downstream audit integration contract](docs/audit-integration.md) for deterministic indexed-only status/list/search queries.
+### Discover what recurs
+
+```bash
+backscroll patterns --kind commands     # what runs most
+backscroll patterns --kind failures     # what breaks, with exit codes
+backscroll patterns --kind templates    # recurring error shapes
+backscroll patterns --kind sequences    # workflows that repeat
+backscroll patterns --kind corrections  # where you corrected course
+```
+
+`--trend` buckets commands and failures by week. `--min-support N` sets how many occurrences make a pattern. Sequences also take `--min-length` / `--max-length`.
+
+Correction candidates are detected deterministically, never by a model, and are meant to be labelled:
+
+```bash
+backscroll patterns --kind corrections --pending --batch 50 --robot
+backscroll annotate --uuid <UUID> --kind correction --label "<your label>"
+```
+
+Labelled candidates drop out of `--pending`, so the loop resumes wherever it stopped.
+
+### Keep the index healthy
+
+```bash
+backscroll status            # size, counts, last sync
+backscroll validate          # integrity check
+backscroll rebuild           # re-derive search indexes from the database
+backscroll purge --before <DATE>   # the only deletion path
+```
+
+`rebuild` never re-reads your session files and never deletes a row: it rebuilds the search indexes from what is already stored, then syncs anything new. Sessions that vanished from disk survive it.
+
+### Output for whoever is reading
+
+Every command emits tab-separated text by default, `--json` for structured output, and `--robot` for `field=value` lines. `--fields minimal|full` controls density and `--max-tokens N` caps output for a context window. Only `read` takes `--pretty`.
 
 ---
 
-## CLI
+## Optional: Agent Integration
 
-```bash
-# Query commands — the core v2 surface
-backscroll search <QUERY> [--project P] [--source TYPE] [--content-type text|code|tool] [--json] [--max-tokens N]  # Full-text search
-backscroll list [--project P] [--order FIELD:DIR] [--limit N] [--json]  # List indexed items
-backscroll read --path <PATH> [--tail N] [--semantic]                          # Read one session file
+Backscroll is a CLI. Nothing requires an agent, and there is no MCP server — a CLI call costs a fraction of the tokens an MCP tool schema does.
 
-# Maintenance
-backscroll status [--json]                      # Check index health and metrics
-backscroll validate                             # Validate index integrity
-backscroll rebuild                              # Rebuild index from source files
-backscroll purge --before <DATE>                # Remove indexed items older than date
-backscroll config                               # Show installed inputs and configuration
-```
-
-### Output Formats
-
-All v2 commands produce agent-readable output by default:
-
-```bash
-# Default — tab-separated, machine-parseable
-backscroll search "query terms"
-
-# JSON — structured output for programmatic consumption
-backscroll search "query terms" --json
-
-# Pretty — human-readable formatting with highlights
-backscroll search "query terms" --pretty
-```
-
-The `--fields` flag controls field density (`minimal` or `full`), and `--max-tokens` caps output by approximate token count. See [Search docs](docs/search.md) for output shapes and flag reference.
-
-### Common workflows
-
-**Latest session with semantic snippets:**
-
-```bash
-PATH=$(backscroll list --project <path> --order timestamp:desc --limit 1 --json | jq -r '.sessions[0].path')
-backscroll read --path "$PATH" --tail 45 --semantic
-```
-
-**Find what a tool did, or an error from a command:**
-
-```bash
-# Tool inputs and outputs are indexed — no need to grep raw session files
-backscroll search "exit code 1" --all-projects --content-type tool
-backscroll search "internal/storage/sync.go" --all-projects --content-type tool
-```
-
-### Status
-
-`backscroll status` shows index health: files indexed, message count, projects discovered, database size, and last sync time. Auto-syncs before reporting. Use `backscroll status --json` for a versioned machine-readable status document; add `--indexed-only` to avoid auto-syncing while inspecting the current SQLite snapshot.
-
----
-
-## AI-Native
-
-Backscroll is designed as a **retrieval layer for AI assistants**. Default output is agent-readable and compact; use `--json` for structured output and `--pretty` for human formatting.
-
-Use `--max-tokens` to fit results within a context window:
-
-```bash
-# Feed search results into an LLM pipeline (default agent-readable format)
-backscroll search "architecture decisions" --max-tokens 4000
-
-# Structured output for programmatic consumption
-backscroll search "migration plan" --json --fields full | jq '.snippet'
-
-# Project-scoped retrieval
-backscroll search "error handling" --project "backscroll"
-```
-
-All output is deterministic and machine-parseable. The default format uses tab-separated values with no ANSI escape codes. Use `--pretty` for terminal formatting with highlights.
+Agents use the same commands with `--robot --fields minimal --max-tokens N`. A `/backscroll` skill for Claude Code ships in `.claude/skills/backscroll/`, and the pre-push hook installs it to `~/.claude/skills/`.
 
 ---
 
@@ -233,17 +196,13 @@ All output is deterministic and machine-parseable. The default format uses tab-s
 
 Backscroll separates application configuration from input configuration.
 
-- **Application config** (`backscroll.toml`) controls database and embedding settings. By default, Backscroll creates an index at `~/.backscroll.db`.
+- **Application config** (`backscroll.toml`) controls where the database lives. By default, Backscroll creates an index at `~/.backscroll.db`.
 - **Input config** (`*.inputs.toml`) controls what files are ingested via `backscroll search` and `backscroll list`. The canonical runtime location is `<config_dir>/backscroll/inputs/*.inputs.toml`, where `<config_dir>` is the OS config directory or `BACKSCROLL_CONFIG_DIR` when set.
 
 Override app settings by creating `~/.config/backscroll/config.toml` or `backscroll.toml` in the current directory:
 
 ```toml
 database_path = "/home/user/.backscroll.db"
-
-[embedding]
-model_name = "all-MiniLM-L6-v2"
-similarity_threshold = 0.3
 ```
 
 Environment variables are also supported:
@@ -283,6 +242,7 @@ See [Configuration docs](docs/configuration.md) for the full resolution order an
 |-------|-------------|
 | [Sync & Indexing](docs/sync.md) | Incremental sync, noise filtering, project detection |
 | [Search Engine](docs/search.md) | BM25 ranking, output formats, token limiting |
+| [Pattern Discovery](docs/patterns.md) | The five censuses, the classification loop, calibration |
 | [Indexed Path Lookup](docs/read.md) | DB-backed lookup using `search_items.source_path` |
 | [Configuration](docs/configuration.md) | Config resolution, TOML format, environment variables |
 | [Generic Input Contract](docs/input-contract.md) | Global `*.inputs.toml` contract for provider-neutral ingestion |
