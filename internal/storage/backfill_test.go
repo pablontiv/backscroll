@@ -546,7 +546,7 @@ func TestBackfillDerivedReminesToUpsertSemantics(t *testing.T) {
 
 	// First, sync one message to naturally generate a v2 template
 	msgs := []IndexedMessage{
-		{Ordinal: 0, UUID: "u1", ToolName: "Bash", IsError: boolPtr(true), Text: "error: database locked", ExtractionVersion: 1},
+		{Ordinal: 0, UUID: "u1", ContentType: "tool", ToolName: "Bash", IsError: boolPtr(true), Text: "error: database locked", ExtractionVersion: 1},
 	}
 	files := []IndexedFile{
 		{SourcePath: "/s.jsonl", Source: "session", Hash: "h1", Project: "proj", Messages: msgs},

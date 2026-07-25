@@ -15,9 +15,9 @@ func TestAggregateTemplatesMinSupport(t *testing.T) {
 
 	// Sync messages that will mine into templates.
 	msgs := []IndexedMessage{
-		{Ordinal: 0, UUID: "u1", ToolName: "Bash", IsError: boolPtr(true), Text: "error: database locked 1", ExtractionVersion: 1},
+		{Ordinal: 0, UUID: "u1", ContentType: "tool", ToolName: "Bash", IsError: boolPtr(true), Text: "error: database locked 1", ExtractionVersion: 1},
 		{Ordinal: 1, UUID: "u2", ToolName: "Bash", IsError: boolPtr(true), Text: "error: database locked 2", ExtractionVersion: 1},
-		{Ordinal: 2, UUID: "u3", ToolName: "Bash", IsError: boolPtr(true), Text: "error: timeout", ExtractionVersion: 1},
+		{Ordinal: 2, UUID: "u3", ContentType: "tool", ToolName: "Bash", IsError: boolPtr(true), Text: "error: timeout", ExtractionVersion: 1},
 	}
 	files := []IndexedFile{{SourcePath: "/p/s.jsonl", Source: "session", Hash: "h1", Project: "proj", Messages: msgs}}
 	if err := db.SyncFiles(files); err != nil {
@@ -52,7 +52,7 @@ func TestAggregateTemplatesQuery(t *testing.T) {
 	defer func() { _ = db.Close() }()
 
 	msgs := []IndexedMessage{
-		{Ordinal: 0, UUID: "u1", ToolName: "Bash", IsError: boolPtr(true),
+		{Ordinal: 0, UUID: "u1", ContentType: "tool", ToolName: "Bash", IsError: boolPtr(true),
 			Text: "error: timeout", ExtractionVersion: 1},
 	}
 	files := []IndexedFile{
@@ -79,7 +79,7 @@ func TestAggregateTemplatesProjectFilter(t *testing.T) {
 	defer func() { _ = db.Close() }()
 
 	msgs := []IndexedMessage{
-		{Ordinal: 0, UUID: "u1", ToolName: "Bash", IsError: boolPtr(true), Text: "error: thing failed", ExtractionVersion: 1},
+		{Ordinal: 0, UUID: "u1", ContentType: "tool", ToolName: "Bash", IsError: boolPtr(true), Text: "error: thing failed", ExtractionVersion: 1},
 	}
 	files := []IndexedFile{
 		{SourcePath: "/p/s1.jsonl", Source: "session", Hash: "h1", Project: "proj_a", Messages: msgs},
@@ -112,9 +112,9 @@ func TestAggregateTemplatesDerivedCount(t *testing.T) {
 	defer func() { _ = db.Close() }()
 
 	msgs := []IndexedMessage{
-		{Ordinal: 0, UUID: "u1", ToolName: "Bash", IsError: boolPtr(true), Text: "error: broken", ExtractionVersion: 1},
-		{Ordinal: 1, UUID: "u2", ToolName: "Bash", IsError: boolPtr(true), Text: "error: broken", ExtractionVersion: 1},
-		{Ordinal: 2, UUID: "u3", ToolName: "Bash", IsError: boolPtr(true), Text: "error: broken", ExtractionVersion: 1},
+		{Ordinal: 0, UUID: "u1", ContentType: "tool", ToolName: "Bash", IsError: boolPtr(true), Text: "error: broken", ExtractionVersion: 1},
+		{Ordinal: 1, UUID: "u2", ContentType: "tool", ToolName: "Bash", IsError: boolPtr(true), Text: "error: broken", ExtractionVersion: 1},
+		{Ordinal: 2, UUID: "u3", ContentType: "tool", ToolName: "Bash", IsError: boolPtr(true), Text: "error: broken", ExtractionVersion: 1},
 	}
 	files := []IndexedFile{
 		{SourcePath: "/p/s.jsonl", Source: "session", Hash: "h1", Project: "proj", Messages: msgs},
@@ -144,7 +144,7 @@ func TestPurgeDeletesOrphanedTemplates(t *testing.T) {
 	defer func() { _ = db.Close() }()
 
 	msgs := []IndexedMessage{
-		{Ordinal: 0, UUID: "u1", ToolName: "Bash", IsError: boolPtr(true),
+		{Ordinal: 0, UUID: "u1", ContentType: "tool", ToolName: "Bash", IsError: boolPtr(true),
 			Text: "error: failed", Timestamp: "2026-01-01T00:00:00Z", ExtractionVersion: 1},
 	}
 	files := []IndexedFile{
@@ -202,7 +202,7 @@ func TestAggregateTemplatesTagFilter(t *testing.T) {
 
 	// Sync two sessions with same template, one tagged, one not
 	msgs := []IndexedMessage{
-		{Ordinal: 0, UUID: "u1", ToolName: "Bash", IsError: boolPtr(true), Text: "error: connection failed", ExtractionVersion: 1},
+		{Ordinal: 0, UUID: "u1", ContentType: "tool", ToolName: "Bash", IsError: boolPtr(true), Text: "error: connection failed", ExtractionVersion: 1},
 	}
 	files := []IndexedFile{
 		{SourcePath: "/p/s1.jsonl", Source: "session", Hash: "h1", Project: "proj", Messages: msgs, Tags: []string{"debugging"}},
@@ -321,7 +321,7 @@ func TestAggregateTemplatesNormalizationVersion(t *testing.T) {
 	defer func() { _ = db.Close() }()
 
 	msgs := []IndexedMessage{
-		{Ordinal: 0, UUID: "u1", ToolName: "Bash", IsError: boolPtr(true), Text: "error: failed", ExtractionVersion: 1},
+		{Ordinal: 0, UUID: "u1", ContentType: "tool", ToolName: "Bash", IsError: boolPtr(true), Text: "error: failed", ExtractionVersion: 1},
 	}
 	files := []IndexedFile{
 		{SourcePath: "/p/s.jsonl", Source: "session", Hash: "h1", Project: "proj", Messages: msgs},

@@ -1877,9 +1877,9 @@ func TestPatternsTemplatesJSON(t *testing.T) {
 	}
 
 	msgs := []storage.IndexedMessage{
-		{Ordinal: 0, UUID: "u1", ToolName: "Bash", IsError: boolPtr(true),
+		{Ordinal: 0, UUID: "u1", ContentType: "tool", ToolName: "Bash", IsError: boolPtr(true),
 			Text: "error: connection refused 127.0.0.1:8080", ExtractionVersion: 1},
-		{Ordinal: 1, UUID: "u2", ToolName: "Bash", IsError: boolPtr(true),
+		{Ordinal: 1, UUID: "u2", ContentType: "tool", ToolName: "Bash", IsError: boolPtr(true),
 			Text: "error: connection refused 127.0.0.1:9000", ExtractionVersion: 1},
 	}
 	files := []storage.IndexedFile{{SourcePath: "/p/s.jsonl", Source: "session", Hash: "h1", Project: "proj", Messages: msgs}}
@@ -1999,7 +1999,7 @@ func TestPatternsTemplatesWithTag(t *testing.T) {
 	}
 
 	msgs := []storage.IndexedMessage{
-		{Ordinal: 0, UUID: "u1", ToolName: "Bash", IsError: boolPtr(true),
+		{Ordinal: 0, UUID: "u1", ContentType: "tool", ToolName: "Bash", IsError: boolPtr(true),
 			Text: "error: fail", ExtractionVersion: 1},
 	}
 	files := []storage.IndexedFile{{SourcePath: "/p/s.jsonl", Source: "session", Hash: "h1", Project: "proj",

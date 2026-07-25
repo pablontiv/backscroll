@@ -223,21 +223,15 @@ func (d *Database) backfillTemplatesForFile(tx *sql.Tx, sourcePath string, messa
 
 	// Collect tool message text: only rows that are error-bearing.
 	for _, msg := range messages {
-		if msg.ContentType != "tool" {
-			continue
-		}
-
-		// Determine if this row is error-bearing: has error prefix OR error signal.
+		// Backfill reads stored text, so it recovers the error signal from an
+		// "error: " prefix or a tool_events row rather than from a struct field.
+		// That determination is all that differs from sync; the selection itself
+		// goes through the shared predicate so the two paths cannot drift again.
 		trimmed := strings.TrimSpace(msg.Text)
 		hasErrorPrefix := strings.HasPrefix(strings.ToLower(trimmed), "error: ")
 		hasErrorSignal := errorEventOrdinals[msg.Ordinal]
 
-		// Determine if this row is an input serialization (should always be excluded).
-		toolName, _ := ParseToolFromSerialized(msg.Text)
-		isInputSerialization := toolName != ""
-
-		// Include only if (error prefix OR error signal) AND NOT input serialization.
-		if (!hasErrorPrefix && !hasErrorSignal) || isInputSerialization {
+		if !shouldMineToolLine(msg.ContentType, msg.Text, hasErrorPrefix || hasErrorSignal) {
 			continue
 		}
 

@@ -623,17 +623,55 @@ func TestPatternsCommandsJSONOutput(t *testing.T) {
 	}
 }
 
+// seedErrorOutput adds a tool RESULT carrying an error line — the shape template
+// mining actually consumes. Tool inputs are excluded by design, so a fixture built
+// only from input serializations produces no templates at all.
+func seedErrorOutput(t *testing.T) {
+	t.Helper()
+	db, err := storage.Open(os.Getenv("BACKSCROLL_DATABASE_PATH"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = db.Close() }()
+	msgs := []storage.IndexedMessage{
+		{Ordinal: 0, UUID: "err1", Role: "user", Text: "error: cannot find package /tmp/a/b.go",
+			ContentType: "tool", IsError: boolPtr(true),
+			Timestamp: "2026-01-05T00:00:02Z", ExtractionVersion: 1},
+		{Ordinal: 1, UUID: "err2", Role: "user", Text: "error: cannot find package /tmp/c/d.go",
+			ContentType: "tool", IsError: boolPtr(true),
+			Timestamp: "2026-01-05T00:00:03Z", ExtractionVersion: 1},
+	}
+	files := []storage.IndexedFile{{SourcePath: "/p/errs.jsonl", Source: "session", Hash: "he", Project: "proj", Messages: msgs}}
+	if err := db.SyncFiles(files); err != nil {
+		t.Fatal(err)
+	}
+}
+
 // Test robot output for all kinds
 func TestPatternsTemplatesRobotOutput(t *testing.T) {
 	_, cleanup := testEnv(t)
 	defer cleanup()
 	seedToolEvents(t)
+	// seedToolEvents only carries tool INPUT serializations ("Bash command=go test"),
+	// which template mining excludes by design — they are not error output. Seed a real
+	// error result so there is something to template, otherwise this test asserts on an
+	// empty census and would pass or fail for the wrong reason.
+	seedErrorOutput(t)
 	stdout, _, err := runCmd("patterns", "--kind", "templates", "--robot", "--min-support", "1", "--all-projects", "--indexed-only")
 	if err != nil {
 		t.Fatalf("run: %v", err)
 	}
 	if !strings.Contains(stdout, "***") {
 		t.Errorf("robot output should contain *** markers; got:\n%s", stdout)
+	}
+	// The census must be built from error OUTPUT, not from tool inputs. Asserting only
+	// on the "***" markers cannot tell the two apart: mining inputs also emits markers,
+	// so that check alone stays green even with the selection reverted.
+	if !strings.Contains(stdout, "cannot find package") {
+		t.Errorf("templates census is missing the error-line template; got:\n%s", stdout)
+	}
+	if strings.Contains(stdout, "command=go test") {
+		t.Errorf("templates census contains a tool input serialization, which is not an error line; got:\n%s", stdout)
 	}
 }
 

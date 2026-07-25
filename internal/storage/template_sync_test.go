@@ -127,7 +127,7 @@ func TestSyncFilesWipeReloadOrphans(t *testing.T) {
 	}
 	defer func() { _ = db.Close() }()
 
-	msg := IndexedMessage{Ordinal: 0, UUID: "", ToolName: "Bash", IsError: boolPtr(true),
+	msg := IndexedMessage{Ordinal: 0, UUID: "", ContentType: "tool", ToolName: "Bash", IsError: boolPtr(true),
 		Text: "error: failed", ExtractionVersion: 1}
 
 	files := []IndexedFile{{SourcePath: "/p/s.jsonl", Source: "session", Hash: "h1", Project: "proj",
@@ -161,7 +161,7 @@ func TestSyncFilesTemplateUpdatePath(t *testing.T) {
 	}
 	defer func() { _ = db.Close() }()
 
-	msg := IndexedMessage{Ordinal: 0, UUID: "u1", ToolName: "Bash", IsError: boolPtr(true),
+	msg := IndexedMessage{Ordinal: 0, UUID: "u1", ContentType: "tool", ToolName: "Bash", IsError: boolPtr(true),
 		Text: "error: database locked", ExtractionVersion: 1}
 
 	// First file
@@ -197,7 +197,7 @@ func TestSyncFilesUNIQUEConflict(t *testing.T) {
 	}
 	defer func() { _ = db.Close() }()
 
-	msg := IndexedMessage{Ordinal: 0, UUID: "u1", ToolName: "Bash", IsError: boolPtr(true),
+	msg := IndexedMessage{Ordinal: 0, UUID: "u1", ContentType: "tool", ToolName: "Bash", IsError: boolPtr(true),
 		Text: "error: locked", ExtractionVersion: 1}
 
 	files := []IndexedFile{{SourcePath: "/p/s.jsonl", Source: "session", Hash: "h1", Project: "proj",

@@ -185,7 +185,7 @@ func TestLoadToolSequencesMiningIntegration(t *testing.T) {
 			Project:    "proj",
 			Messages: []IndexedMessage{
 				{Ordinal: 0, Role: "assistant", UUID: "u0", Timestamp: "2026-01-01T00:00:00Z", ContentType: "tool", ToolName: "Read", ExtractionVersion: 1},
-				{Ordinal: 1, Role: "assistant", UUID: "u1", Timestamp: "2026-01-01T00:00:01Z", ContentType: "tool", ToolName: "Write", ExtractionVersion: 1},
+				{Ordinal: 1, Role: "assistant", UUID: "u1", Timestamp: "2026-01-01T00:00:01Z", ToolName: "Write", ExtractionVersion: 1},
 			},
 		},
 		{
@@ -195,7 +195,7 @@ func TestLoadToolSequencesMiningIntegration(t *testing.T) {
 			Project:    "proj",
 			Messages: []IndexedMessage{
 				{Ordinal: 0, Role: "assistant", UUID: "u2", Timestamp: "2026-01-01T00:00:02Z", ContentType: "tool", ToolName: "Read", ExtractionVersion: 1},
-				{Ordinal: 1, Role: "assistant", UUID: "u3", Timestamp: "2026-01-01T00:00:03Z", ContentType: "tool", ToolName: "Write", ExtractionVersion: 1},
+				{Ordinal: 1, Role: "assistant", UUID: "u3", Timestamp: "2026-01-01T00:00:03Z", ToolName: "Write", ExtractionVersion: 1},
 			},
 		},
 	}

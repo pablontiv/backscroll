@@ -7,13 +7,29 @@ import (
 	"github.com/pablontiv/backscroll/internal/templates"
 )
 
-// isInputSerialization checks if text is a tool input serialization (not an error output).
-// Returns true if the text should be excluded from template mining.
-// Used by both sync-time (mineTemplatesForFile) and backfill (backfillTemplatesForFile)
-// to ensure identical line-selection predicates.
+// isInputSerialization reports whether text is a tool INPUT serialization rather than
+// tool output. Inputs are never error lines, so both mining paths exclude them.
 func isInputSerialization(text string) bool {
 	toolName, _ := ParseToolFromSerialized(text)
 	return toolName != ""
+}
+
+// shouldMineToolLine is the single line-selection predicate for template mining, used
+// by both sync-time (mineTemplatesForFile) and backfill (backfillTemplatesForFile).
+//
+// It exists because the two paths drifted, and that drift is the defect this predicate
+// closes: sync used to select on `ToolName != ""`, which picks the tool_USE message —
+// whose text is the input serialization — while the error text lives on the tool_RESULT
+// message, which carries no ToolName. Sync therefore mined inputs and never errors, and
+// simply excluding inputs on top of that selection left it mining nothing at all.
+//
+// isError is the caller's error signal: sync reads it off the message, backfill derives
+// it from an "error: " prefix or a tool_events row. Everything else is shared.
+func shouldMineToolLine(contentType, text string, isError bool) bool {
+	if contentType != "tool" || !isError {
+		return false
+	}
+	return !isInputSerialization(text)
 }
 
 // mineTemplatesForFile discovers templates from messages with is_error=true
@@ -30,19 +46,21 @@ func (d *Database) mineTemplatesForFile(tx *sql.Tx, file IndexedFile, miner *tem
 	var errorLines []errorLine
 
 	for _, msg := range file.Messages {
-		// Only mine tool messages with is_error=true.
-		if msg.ToolName == "" || msg.IsError == nil || !*msg.IsError {
+		if !shouldMineToolLine(msg.ContentType, msg.Text, msg.IsError != nil && *msg.IsError) {
 			continue
 		}
-		// Skip input serializations (not error output).
-		if isInputSerialization(msg.Text) {
-			continue
+		// The rows that survive are tool RESULTS, which carry no ToolName — the name
+		// lives on the tool_use message in another record. Backfill has the same gap
+		// and mines as "Unknown"; matching it keeps the two paths producing identical
+		// templates for identical text. Per-tool line calibration is a follow-up.
+		toolName := msg.ToolName
+		if toolName == "" {
+			toolName = "Unknown"
 		}
-		// Extract error lines from the message text.
-		relevantLines := templates.ExtractErrorLines(msg.ToolName, msg.Text)
+		relevantLines := templates.ExtractErrorLines(toolName, msg.Text)
 		for _, line := range relevantLines {
 			errorLines = append(errorLines, errorLine{
-				toolName: msg.ToolName,
+				toolName: toolName,
 				text:     line,
 				ordinal:  msg.Ordinal,
 				uuid:     msg.UUID,
