@@ -30,7 +30,7 @@ Backscroll indexes those sessions into SQLite and keeps them. Ask what a command
 
 ## Installation
 
-Backscroll ships as a **single self-contained binary**: pure Go, no CGO, and nothing to install alongside it. (It links your platform's system libraries like any Go binary — it is self-contained, not statically linked.) Runtime input manifests are separate user configuration files loaded from `<config_dir>/backscroll/inputs/*.inputs.toml`.
+Backscroll ships as a **single self-contained binary**: pure Go, built with CGO disabled, so there is nothing to install alongside it. (Whether that binary ends up statically linked depends on the platform, so this makes no promise about linkage.) Runtime input manifests are separate user configuration files loaded from `<config_dir>/backscroll/inputs/*.inputs.toml`.
 
 ### Install Script (Recommended)
 
