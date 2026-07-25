@@ -122,7 +122,9 @@ Found 20 templates (min_support=5):
 
 ## Core Concepts
 
-**The database is the record, not a cache.** Session files expire; indexed sessions do not. Rows are append-only and keyed by message identity, so a session survives the deletion of the file it came from. `purge --before` is the only thing that removes them.
+**The database is the record, not a cache.** Session files expire; indexed sessions do not. Once a file is gone from disk, sync never walks it again, so everything indexed from it stays — that is what makes the record outlive its source.
+
+How a file is re-synced depends on whether its messages carry identity. Sessions whose messages have a uuid — Claude Code, from schema v8 onward — sync append-only: existing rows are never touched and row ids stay stable. Sessions without one, which today is most of the corpus, are wiped and reloaded on every re-sync, so their row ids are not stable and edits to a live file replace its rows wholesale. Either way the deletion only ever happens while the file still exists; `purge --before` is the only command that removes anything on your behalf.
 
 **Every assistant, one index.** Claude Code, Pi and OpenCode each store sessions differently. A reader per format normalizes them behind one schema, so you search content, not file layouts. New formats arrive as input manifests, not as code changes at the call site.
 
@@ -176,11 +178,15 @@ backscroll rebuild           # re-derive search indexes from the database
 backscroll purge --before <DATE>   # the only deletion path
 ```
 
-`rebuild` never re-reads your session files and never deletes a row: it rebuilds the search indexes from what is already stored, then syncs anything new. Sessions that vanished from disk survive it.
+`rebuild` does not re-read your session files as the source of truth: it rebuilds the search indexes from what is already stored, re-derives templates and correction signals, then runs an ordinary incremental sync. Sessions that vanished from disk survive it untouched.
 
 ### Output for whoever is reading
 
-Every command emits tab-separated text by default, `--json` for structured output, and `--robot` for `field=value` lines. `--fields minimal|full` controls density and `--max-tokens N` caps output for a context window. Only `read` takes `--pretty`.
+Output is tab-separated text with no ANSI escapes by default, so it pipes cleanly.
+
+`--json` is available on `search`, `list`, `patterns`, `status` and `config`. `--robot`, which emits `field=value` lines, is available on `search`, `list` and `patterns` — the three that return result sets. `read` takes `--pretty` instead, and `validate`, `rebuild`, `purge` and `annotate` report in plain text only.
+
+On `search`, `--fields minimal|full` controls density and `--max-tokens N` caps output for a context window.
 
 ---
 
