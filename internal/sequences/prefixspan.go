@@ -58,7 +58,7 @@ func Mine(sequences []Sequence, minSupport, minLen, maxLen int) []Pattern {
 	// Recursively extend each 1-pattern (stop if maxLen reached)
 	for _, base := range onePatterns {
 		if len(base.Items) < maxLen {
-			extended := mineExtensions(sequences, base, minSupport, minLen, maxLen)
+			extended := mineExtensions(projectAll(sequences, base.Items), base, minSupport, minLen, maxLen)
 			patterns = append(patterns, extended...)
 		}
 	}
@@ -76,15 +76,14 @@ func Mine(sequences []Sequence, minSupport, minLen, maxLen int) []Pattern {
 
 // mineExtensions finds longer patterns by extending a base pattern.
 // Stops recursing when len(extended) >= maxLen to prevent combinatorial explosion.
-func mineExtensions(sequences []Sequence, base Pattern, minSupport, minLen, maxLen int) []Pattern {
-	// Compute projected database: sessions containing base, positioned after base's last item
-	var projected []Sequence
-	for _, seq := range sequences {
-		if proj := project(seq, base.Items); len(proj) > 0 {
-			projected = append(projected, Sequence{SessionID: seq.SessionID, Items: proj})
-		}
-	}
-
+//
+// projected MUST already be the database positioned after base — that is the whole
+// point of PrefixSpan. Recursing on the full database instead re-scans and re-projects
+// every session at every depth, which is why `--all-projects` used to hang: 305
+// sessions and 36,956 events were re-projected once per node of the search tree.
+// Incremental projection is equivalent because project() completes a pattern greedily
+// left-to-right, so projecting by [a,b] equals projecting by [a] and then by [b].
+func mineExtensions(projected []Sequence, base Pattern, minSupport, minLen, maxLen int) []Pattern {
 	if len(projected) == 0 {
 		return nil
 	}
@@ -116,9 +115,11 @@ func mineExtensions(sequences []Sequence, base Pattern, minSupport, minLen, maxL
 				})
 			}
 
-			// Recursively extend further (stop if maxLen reached)
+			// Recursively extend further (stop if maxLen reached), projecting the
+			// CURRENT database by the single new item rather than re-deriving the
+			// whole prefix from the original sequences.
 			if len(extended) < maxLen {
-				subExtended := mineExtensions(sequences, Pattern{Items: extended}, minSupport, minLen, maxLen)
+				subExtended := mineExtensions(projectAll(projected, []string{item}), Pattern{Items: extended}, minSupport, minLen, maxLen)
 				patterns = append(patterns, subExtended...)
 			}
 		}
@@ -166,4 +167,16 @@ func lexicographic(items []string) string {
 		buf = append(buf, []byte(item)...)
 	}
 	return string(buf)
+}
+
+// projectAll projects every sequence in db by pattern, dropping the ones where the
+// pattern does not complete or leaves no suffix.
+func projectAll(db []Sequence, pattern []string) []Sequence {
+	var out []Sequence
+	for _, seq := range db {
+		if proj := project(seq, pattern); len(proj) > 0 {
+			out = append(out, Sequence{SessionID: seq.SessionID, Items: proj})
+		}
+	}
+	return out
 }
