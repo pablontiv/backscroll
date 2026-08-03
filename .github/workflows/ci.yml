@@ -21,7 +21,7 @@ jobs:
     uses: pablontiv/crossbeam/.github/workflows/gitleaks.yml@v1
 
   release:
-    uses: pablontiv/crossbeam/.github/workflows/go-release.yml@v1
+    uses: pablontiv/crossbeam/.github/workflows/go-release.yml@v1.5.6
     needs: [ci, gitleaks]
     if: github.event_name == 'push'
     with:
