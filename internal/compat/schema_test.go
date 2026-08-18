@@ -6,6 +6,8 @@ import (
 	"io/fs"
 	"strings"
 	"testing"
+
+	_ "modernc.org/sqlite"
 )
 
 func TestInspectIndexUsesObservedShapeNotVersionAlone(t *testing.T) {
@@ -30,6 +32,22 @@ func TestInspectIndexUsesObservedShapeNotVersionAlone(t *testing.T) {
 				t.Fatalf("steps=%+v", plan.Steps)
 			}
 		})
+	}
+}
+
+func TestInspectIndexRecognizesPartialV6LineageAndPlansV7(t *testing.T) {
+	db := openFixtureCopy(t, "v6.sql")
+	defer db.Close()
+
+	plan, diag, err := InspectIndex(context.Background(), db)
+	if err != nil || diag != nil {
+		t.Fatalf("plan error=%v diagnostic=%+v", err, diag)
+	}
+	if plan.From.AppliedVersion != 6 {
+		t.Fatalf("applied version = %d, want 6", plan.From.AppliedVersion)
+	}
+	if len(plan.Steps) == 0 || plan.Steps[0].Name != "V7 reasoning triggers" {
+		t.Fatalf("steps=%+v, want V7+", plan.Steps)
 	}
 }
 

@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io/fs"
+	"strings"
 )
 
 //go:embed testdata/release-schemas/*
@@ -14,16 +15,31 @@ var embeddedReleaseSchemaFS embed.FS
 var releaseSchemaFS fs.FS = embeddedReleaseSchemaFS
 
 type Catalog struct {
-	FirstGoRelease  string
-	LatestGoRelease string
-	Releases        []struct {
-		Tag              string
-		Fixture          string
-		ProvenanceSHA256 string
-	}
+	FirstGoRelease       string
+	LatestGoRelease      string
+	Releases             []catalogRelease
+	UnmanifestedFixtures []catalogFixture
 
 	lineages         map[string]Lineage
 	currentSignature string
+}
+
+type catalogRelease struct {
+	Tag               string
+	Fixture           string
+	ProvenanceSHA256  string
+	Signature         string
+	AppliedVersion    int
+	HasSourceMetadata bool
+}
+
+type catalogFixture struct {
+	Fixture           string
+	ProvenanceSHA256  string
+	Signature         string
+	AppliedVersion    int
+	HasSourceMetadata bool
+	Provenance        string
 }
 
 type Lineage struct {
@@ -51,7 +67,7 @@ func LoadCatalog() (Catalog, error) {
 	if err != nil {
 		return Catalog{}, err
 	}
-	if err := catalog.attachLineages(releaseSchemaFS); err != nil {
+	if err := catalog.attachLineages(); err != nil {
 		return Catalog{}, err
 	}
 	return catalog, nil
@@ -76,21 +92,23 @@ func loadCatalogFromFS(fsys fs.FS) (Catalog, error) {
 
 	seen := make(map[string]bool, len(catalog.Releases))
 	for _, release := range catalog.Releases {
-		if release.Tag == "" || release.Fixture == "" || release.ProvenanceSHA256 == "" {
-			return Catalog{}, fmt.Errorf("release schema catalog has incomplete release mapping: %+v", release)
+		if release.Tag == "" {
+			return Catalog{}, fmt.Errorf("release schema catalog has release without tag: %+v", release)
 		}
 		if seen[release.Tag] {
 			return Catalog{}, fmt.Errorf("release schema catalog has duplicate release tag %q", release.Tag)
 		}
 		seen[release.Tag] = true
-		fixturePath := "testdata/release-schemas/" + release.Fixture
-		fixtureBytes, err := fs.ReadFile(fsys, fixturePath)
-		if err != nil {
-			return Catalog{}, fmt.Errorf("release schema fixture %q: %w", release.Fixture, err)
+		if err := validateCatalogFixture(fsys, fixtureFromRelease(release)); err != nil {
+			return Catalog{}, err
 		}
-		actualSHA256 := fmt.Sprintf("%x", sha256.Sum256(fixtureBytes))
-		if actualSHA256 != release.ProvenanceSHA256 {
-			return Catalog{}, fmt.Errorf("release schema fixture %q SHA-256 = %s, want %s", release.Fixture, actualSHA256, release.ProvenanceSHA256)
+	}
+	for _, fixture := range catalog.UnmanifestedFixtures {
+		if fixture.Provenance == "" {
+			return Catalog{}, fmt.Errorf("unmanifested release schema fixture %q lacks provenance note", fixture.Fixture)
+		}
+		if err := validateCatalogFixture(fsys, fixture); err != nil {
+			return Catalog{}, err
 		}
 	}
 	if !seen[catalog.FirstGoRelease] || !seen[catalog.LatestGoRelease] {
@@ -98,6 +116,78 @@ func loadCatalogFromFS(fsys fs.FS) (Catalog, error) {
 	}
 
 	return catalog, nil
+}
+
+func fixtureFromRelease(release catalogRelease) catalogFixture {
+	return catalogFixture{
+		Fixture:           release.Fixture,
+		ProvenanceSHA256:  release.ProvenanceSHA256,
+		Signature:         release.Signature,
+		AppliedVersion:    release.AppliedVersion,
+		HasSourceMetadata: release.HasSourceMetadata,
+	}
+}
+
+func validateCatalogFixture(fsys fs.FS, fixture catalogFixture) error {
+	if fixture.Fixture == "" || fixture.ProvenanceSHA256 == "" || fixture.Signature == "" || fixture.AppliedVersion == 0 {
+		return fmt.Errorf("release schema catalog has incomplete fixture mapping: %+v", fixture)
+	}
+	if !strings.HasPrefix(fixture.Signature, "sha256:") {
+		return fmt.Errorf("release schema fixture %q signature = %q, want sha256", fixture.Fixture, fixture.Signature)
+	}
+	fixturePath := "testdata/release-schemas/" + fixture.Fixture
+	fixtureBytes, err := fs.ReadFile(fsys, fixturePath)
+	if err != nil {
+		return fmt.Errorf("release schema fixture %q: %w", fixture.Fixture, err)
+	}
+	actualSHA256 := fmt.Sprintf("%x", sha256.Sum256(fixtureBytes))
+	if actualSHA256 != fixture.ProvenanceSHA256 {
+		return fmt.Errorf("release schema fixture %q SHA-256 = %s, want %s", fixture.Fixture, actualSHA256, fixture.ProvenanceSHA256)
+	}
+	return nil
+}
+
+func (c Catalog) schemaFixtures() []catalogFixture {
+	seen := map[string]bool{}
+	fixtures := make([]catalogFixture, 0, len(c.Releases)+len(c.UnmanifestedFixtures))
+	for _, release := range c.Releases {
+		fixture := fixtureFromRelease(release)
+		if seen[fixture.Fixture] {
+			continue
+		}
+		seen[fixture.Fixture] = true
+		fixtures = append(fixtures, fixture)
+	}
+	for _, fixture := range c.UnmanifestedFixtures {
+		if seen[fixture.Fixture] {
+			continue
+		}
+		seen[fixture.Fixture] = true
+		fixtures = append(fixtures, fixture)
+	}
+	return fixtures
+}
+
+func (c *Catalog) attachLineages() error {
+	lineages := map[string]Lineage{}
+	for _, fixture := range c.schemaFixtures() {
+		shape := SchemaShape{AppliedVersion: fixture.AppliedVersion, Signature: fixture.Signature}
+		lineages[fixture.Signature] = Lineage{
+			shape:          shape,
+			remainingSteps: remainingStepsFor(fixture.AppliedVersion, fixture.HasSourceMetadata),
+		}
+	}
+	for _, release := range c.Releases {
+		if release.Tag == c.LatestGoRelease {
+			c.currentSignature = release.Signature
+			break
+		}
+	}
+	if c.currentSignature == "" {
+		return fmt.Errorf("release schema catalog latest release %q has no signature", c.LatestGoRelease)
+	}
+	c.lineages = lineages
+	return nil
 }
 
 func compareSemver(left, right string) int {

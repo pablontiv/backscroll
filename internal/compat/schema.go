@@ -5,12 +5,8 @@ import (
 	"crypto/sha256"
 	"database/sql"
 	"fmt"
-	"io/fs"
-	"path/filepath"
 	"sort"
 	"strings"
-
-	_ "modernc.org/sqlite"
 )
 
 var (
@@ -298,50 +294,10 @@ func loadIndexColumns(ctx context.Context, q Queryer, index string) ([]string, e
 	return columns, nil
 }
 
-func (c *Catalog) attachLineages(fsys fs.FS) error {
-	fixturePaths, err := fs.Glob(fsys, "testdata/release-schemas/*.sql")
-	if err != nil {
-		return fmt.Errorf("glob release schema fixtures: %w", err)
-	}
-	lineages := map[string]Lineage{}
-	for _, fixturePath := range fixturePaths {
-		data, err := fs.ReadFile(fsys, fixturePath)
-		if err != nil {
-			return fmt.Errorf("read release schema fixture %q: %w", fixturePath, err)
-		}
-		db, err := sql.Open("sqlite", ":memory:")
-		if err != nil {
-			return fmt.Errorf("open fixture database %q: %w", fixturePath, err)
-		}
-		if _, err := db.Exec(string(data)); err != nil {
-			db.Close()
-			return fmt.Errorf("load release schema fixture %q: %w", fixturePath, err)
-		}
-		shape, err := inspectShape(context.Background(), db)
-		closeErr := db.Close()
-		if err != nil {
-			return fmt.Errorf("inspect release schema fixture %q: %w", fixturePath, err)
-		}
-		if closeErr != nil {
-			return fmt.Errorf("close release schema fixture %q: %w", fixturePath, closeErr)
-		}
-		lineages[shape.Signature] = Lineage{
-			shape:          shape.SchemaShape,
-			remainingSteps: remainingSteps(shape),
-		}
-		if filepath.Base(fixturePath) == "v13.sql" {
-			c.currentSignature = shape.Signature
-		}
-	}
-	c.lineages = lineages
-	return nil
-}
-
-func remainingSteps(shape inspectedShape) []MigrationStep {
-	hasSourceMetadata := shape.columnsByTable["search_items"]["source_metadata"]
+func remainingStepsFor(appliedVersion int, hasSourceMetadata bool) []MigrationStep {
 	var steps []MigrationStep
 	for _, step := range allMigrationSteps {
-		if step.Version <= shape.AppliedVersion {
+		if step.Version <= appliedVersion {
 			continue
 		}
 		if step.Version == 6 && !hasSourceMetadata {

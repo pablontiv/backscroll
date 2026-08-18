@@ -5,347 +5,588 @@
     {
       "Tag": "v0.3.7",
       "Fixture": "v1.sql",
-      "ProvenanceSHA256": "7b09c4c93e90b0cbd45cc0b851dcacefc0590145582886636c2e420145ccb409"
+      "ProvenanceSHA256": "7b09c4c93e90b0cbd45cc0b851dcacefc0590145582886636c2e420145ccb409",
+      "Signature": "sha256:714ba087035ad2b5237e13c606ff53b9f650dbfaf0b76ec2c6f6a2cbefd44f15",
+      "AppliedVersion": 1,
+      "HasSourceMetadata": true
     },
     {
       "Tag": "v0.3.9",
       "Fixture": "v1.sql",
-      "ProvenanceSHA256": "7b09c4c93e90b0cbd45cc0b851dcacefc0590145582886636c2e420145ccb409"
+      "ProvenanceSHA256": "7b09c4c93e90b0cbd45cc0b851dcacefc0590145582886636c2e420145ccb409",
+      "Signature": "sha256:714ba087035ad2b5237e13c606ff53b9f650dbfaf0b76ec2c6f6a2cbefd44f15",
+      "AppliedVersion": 1,
+      "HasSourceMetadata": true
     },
     {
       "Tag": "v0.3.10",
       "Fixture": "v1.sql",
-      "ProvenanceSHA256": "7b09c4c93e90b0cbd45cc0b851dcacefc0590145582886636c2e420145ccb409"
+      "ProvenanceSHA256": "7b09c4c93e90b0cbd45cc0b851dcacefc0590145582886636c2e420145ccb409",
+      "Signature": "sha256:714ba087035ad2b5237e13c606ff53b9f650dbfaf0b76ec2c6f6a2cbefd44f15",
+      "AppliedVersion": 1,
+      "HasSourceMetadata": true
     },
     {
       "Tag": "v0.3.11",
       "Fixture": "v3.sql",
-      "ProvenanceSHA256": "1882e91edfc1eaf865b27b1796b8d20c92d05a2a55920f37f428df8b4e348e5d"
+      "ProvenanceSHA256": "1882e91edfc1eaf865b27b1796b8d20c92d05a2a55920f37f428df8b4e348e5d",
+      "Signature": "sha256:d20b08ec2c4a24d830e332cc55ba098c81d1812a9ff46da1bd7f671d95f3acd2",
+      "AppliedVersion": 3,
+      "HasSourceMetadata": true
     },
     {
       "Tag": "v0.3.12",
       "Fixture": "v3.sql",
-      "ProvenanceSHA256": "1882e91edfc1eaf865b27b1796b8d20c92d05a2a55920f37f428df8b4e348e5d"
+      "ProvenanceSHA256": "1882e91edfc1eaf865b27b1796b8d20c92d05a2a55920f37f428df8b4e348e5d",
+      "Signature": "sha256:d20b08ec2c4a24d830e332cc55ba098c81d1812a9ff46da1bd7f671d95f3acd2",
+      "AppliedVersion": 3,
+      "HasSourceMetadata": true
     },
     {
       "Tag": "v0.3.13",
       "Fixture": "v3.sql",
-      "ProvenanceSHA256": "1882e91edfc1eaf865b27b1796b8d20c92d05a2a55920f37f428df8b4e348e5d"
+      "ProvenanceSHA256": "1882e91edfc1eaf865b27b1796b8d20c92d05a2a55920f37f428df8b4e348e5d",
+      "Signature": "sha256:d20b08ec2c4a24d830e332cc55ba098c81d1812a9ff46da1bd7f671d95f3acd2",
+      "AppliedVersion": 3,
+      "HasSourceMetadata": true
     },
     {
       "Tag": "v0.3.14",
       "Fixture": "v3.sql",
-      "ProvenanceSHA256": "1882e91edfc1eaf865b27b1796b8d20c92d05a2a55920f37f428df8b4e348e5d"
+      "ProvenanceSHA256": "1882e91edfc1eaf865b27b1796b8d20c92d05a2a55920f37f428df8b4e348e5d",
+      "Signature": "sha256:d20b08ec2c4a24d830e332cc55ba098c81d1812a9ff46da1bd7f671d95f3acd2",
+      "AppliedVersion": 3,
+      "HasSourceMetadata": true
     },
     {
       "Tag": "v0.3.15",
       "Fixture": "v3.sql",
-      "ProvenanceSHA256": "1882e91edfc1eaf865b27b1796b8d20c92d05a2a55920f37f428df8b4e348e5d"
+      "ProvenanceSHA256": "1882e91edfc1eaf865b27b1796b8d20c92d05a2a55920f37f428df8b4e348e5d",
+      "Signature": "sha256:d20b08ec2c4a24d830e332cc55ba098c81d1812a9ff46da1bd7f671d95f3acd2",
+      "AppliedVersion": 3,
+      "HasSourceMetadata": true
     },
     {
       "Tag": "v0.3.17",
       "Fixture": "v3.sql",
-      "ProvenanceSHA256": "1882e91edfc1eaf865b27b1796b8d20c92d05a2a55920f37f428df8b4e348e5d"
+      "ProvenanceSHA256": "1882e91edfc1eaf865b27b1796b8d20c92d05a2a55920f37f428df8b4e348e5d",
+      "Signature": "sha256:d20b08ec2c4a24d830e332cc55ba098c81d1812a9ff46da1bd7f671d95f3acd2",
+      "AppliedVersion": 3,
+      "HasSourceMetadata": true
     },
     {
       "Tag": "v0.3.18",
       "Fixture": "v3.sql",
-      "ProvenanceSHA256": "1882e91edfc1eaf865b27b1796b8d20c92d05a2a55920f37f428df8b4e348e5d"
+      "ProvenanceSHA256": "1882e91edfc1eaf865b27b1796b8d20c92d05a2a55920f37f428df8b4e348e5d",
+      "Signature": "sha256:d20b08ec2c4a24d830e332cc55ba098c81d1812a9ff46da1bd7f671d95f3acd2",
+      "AppliedVersion": 3,
+      "HasSourceMetadata": true
     },
     {
       "Tag": "v0.3.19",
       "Fixture": "v3.sql",
-      "ProvenanceSHA256": "1882e91edfc1eaf865b27b1796b8d20c92d05a2a55920f37f428df8b4e348e5d"
+      "ProvenanceSHA256": "1882e91edfc1eaf865b27b1796b8d20c92d05a2a55920f37f428df8b4e348e5d",
+      "Signature": "sha256:d20b08ec2c4a24d830e332cc55ba098c81d1812a9ff46da1bd7f671d95f3acd2",
+      "AppliedVersion": 3,
+      "HasSourceMetadata": true
     },
     {
       "Tag": "v0.4.0",
       "Fixture": "v3.sql",
-      "ProvenanceSHA256": "1882e91edfc1eaf865b27b1796b8d20c92d05a2a55920f37f428df8b4e348e5d"
+      "ProvenanceSHA256": "1882e91edfc1eaf865b27b1796b8d20c92d05a2a55920f37f428df8b4e348e5d",
+      "Signature": "sha256:d20b08ec2c4a24d830e332cc55ba098c81d1812a9ff46da1bd7f671d95f3acd2",
+      "AppliedVersion": 3,
+      "HasSourceMetadata": true
     },
     {
       "Tag": "v0.4.1",
       "Fixture": "v3.sql",
-      "ProvenanceSHA256": "1882e91edfc1eaf865b27b1796b8d20c92d05a2a55920f37f428df8b4e348e5d"
+      "ProvenanceSHA256": "1882e91edfc1eaf865b27b1796b8d20c92d05a2a55920f37f428df8b4e348e5d",
+      "Signature": "sha256:d20b08ec2c4a24d830e332cc55ba098c81d1812a9ff46da1bd7f671d95f3acd2",
+      "AppliedVersion": 3,
+      "HasSourceMetadata": true
     },
     {
       "Tag": "v0.4.3",
       "Fixture": "v3.sql",
-      "ProvenanceSHA256": "1882e91edfc1eaf865b27b1796b8d20c92d05a2a55920f37f428df8b4e348e5d"
+      "ProvenanceSHA256": "1882e91edfc1eaf865b27b1796b8d20c92d05a2a55920f37f428df8b4e348e5d",
+      "Signature": "sha256:d20b08ec2c4a24d830e332cc55ba098c81d1812a9ff46da1bd7f671d95f3acd2",
+      "AppliedVersion": 3,
+      "HasSourceMetadata": true
     },
     {
       "Tag": "v1.0.0",
       "Fixture": "v3.sql",
-      "ProvenanceSHA256": "1882e91edfc1eaf865b27b1796b8d20c92d05a2a55920f37f428df8b4e348e5d"
+      "ProvenanceSHA256": "1882e91edfc1eaf865b27b1796b8d20c92d05a2a55920f37f428df8b4e348e5d",
+      "Signature": "sha256:d20b08ec2c4a24d830e332cc55ba098c81d1812a9ff46da1bd7f671d95f3acd2",
+      "AppliedVersion": 3,
+      "HasSourceMetadata": true
     },
     {
       "Tag": "v1.0.1",
       "Fixture": "v3.sql",
-      "ProvenanceSHA256": "1882e91edfc1eaf865b27b1796b8d20c92d05a2a55920f37f428df8b4e348e5d"
+      "ProvenanceSHA256": "1882e91edfc1eaf865b27b1796b8d20c92d05a2a55920f37f428df8b4e348e5d",
+      "Signature": "sha256:d20b08ec2c4a24d830e332cc55ba098c81d1812a9ff46da1bd7f671d95f3acd2",
+      "AppliedVersion": 3,
+      "HasSourceMetadata": true
     },
     {
       "Tag": "v1.0.2",
       "Fixture": "v3.sql",
-      "ProvenanceSHA256": "1882e91edfc1eaf865b27b1796b8d20c92d05a2a55920f37f428df8b4e348e5d"
+      "ProvenanceSHA256": "1882e91edfc1eaf865b27b1796b8d20c92d05a2a55920f37f428df8b4e348e5d",
+      "Signature": "sha256:d20b08ec2c4a24d830e332cc55ba098c81d1812a9ff46da1bd7f671d95f3acd2",
+      "AppliedVersion": 3,
+      "HasSourceMetadata": true
     },
     {
       "Tag": "v1.0.3",
       "Fixture": "v3.sql",
-      "ProvenanceSHA256": "1882e91edfc1eaf865b27b1796b8d20c92d05a2a55920f37f428df8b4e348e5d"
+      "ProvenanceSHA256": "1882e91edfc1eaf865b27b1796b8d20c92d05a2a55920f37f428df8b4e348e5d",
+      "Signature": "sha256:d20b08ec2c4a24d830e332cc55ba098c81d1812a9ff46da1bd7f671d95f3acd2",
+      "AppliedVersion": 3,
+      "HasSourceMetadata": true
     },
     {
       "Tag": "v1.0.4",
       "Fixture": "v3.sql",
-      "ProvenanceSHA256": "1882e91edfc1eaf865b27b1796b8d20c92d05a2a55920f37f428df8b4e348e5d"
+      "ProvenanceSHA256": "1882e91edfc1eaf865b27b1796b8d20c92d05a2a55920f37f428df8b4e348e5d",
+      "Signature": "sha256:d20b08ec2c4a24d830e332cc55ba098c81d1812a9ff46da1bd7f671d95f3acd2",
+      "AppliedVersion": 3,
+      "HasSourceMetadata": true
     },
     {
       "Tag": "v1.1.0",
       "Fixture": "v3.sql",
-      "ProvenanceSHA256": "1882e91edfc1eaf865b27b1796b8d20c92d05a2a55920f37f428df8b4e348e5d"
+      "ProvenanceSHA256": "1882e91edfc1eaf865b27b1796b8d20c92d05a2a55920f37f428df8b4e348e5d",
+      "Signature": "sha256:d20b08ec2c4a24d830e332cc55ba098c81d1812a9ff46da1bd7f671d95f3acd2",
+      "AppliedVersion": 3,
+      "HasSourceMetadata": true
     },
     {
       "Tag": "v1.1.1",
       "Fixture": "v3.sql",
-      "ProvenanceSHA256": "1882e91edfc1eaf865b27b1796b8d20c92d05a2a55920f37f428df8b4e348e5d"
+      "ProvenanceSHA256": "1882e91edfc1eaf865b27b1796b8d20c92d05a2a55920f37f428df8b4e348e5d",
+      "Signature": "sha256:d20b08ec2c4a24d830e332cc55ba098c81d1812a9ff46da1bd7f671d95f3acd2",
+      "AppliedVersion": 3,
+      "HasSourceMetadata": true
     },
     {
       "Tag": "v1.2.0",
       "Fixture": "v3.sql",
-      "ProvenanceSHA256": "1882e91edfc1eaf865b27b1796b8d20c92d05a2a55920f37f428df8b4e348e5d"
+      "ProvenanceSHA256": "1882e91edfc1eaf865b27b1796b8d20c92d05a2a55920f37f428df8b4e348e5d",
+      "Signature": "sha256:d20b08ec2c4a24d830e332cc55ba098c81d1812a9ff46da1bd7f671d95f3acd2",
+      "AppliedVersion": 3,
+      "HasSourceMetadata": true
     },
     {
       "Tag": "v1.2.1",
       "Fixture": "v3.sql",
-      "ProvenanceSHA256": "1882e91edfc1eaf865b27b1796b8d20c92d05a2a55920f37f428df8b4e348e5d"
+      "ProvenanceSHA256": "1882e91edfc1eaf865b27b1796b8d20c92d05a2a55920f37f428df8b4e348e5d",
+      "Signature": "sha256:d20b08ec2c4a24d830e332cc55ba098c81d1812a9ff46da1bd7f671d95f3acd2",
+      "AppliedVersion": 3,
+      "HasSourceMetadata": true
     },
     {
       "Tag": "v1.3.0",
       "Fixture": "v3.sql",
-      "ProvenanceSHA256": "1882e91edfc1eaf865b27b1796b8d20c92d05a2a55920f37f428df8b4e348e5d"
+      "ProvenanceSHA256": "1882e91edfc1eaf865b27b1796b8d20c92d05a2a55920f37f428df8b4e348e5d",
+      "Signature": "sha256:d20b08ec2c4a24d830e332cc55ba098c81d1812a9ff46da1bd7f671d95f3acd2",
+      "AppliedVersion": 3,
+      "HasSourceMetadata": true
     },
     {
       "Tag": "v1.3.1",
       "Fixture": "v3.sql",
-      "ProvenanceSHA256": "1882e91edfc1eaf865b27b1796b8d20c92d05a2a55920f37f428df8b4e348e5d"
+      "ProvenanceSHA256": "1882e91edfc1eaf865b27b1796b8d20c92d05a2a55920f37f428df8b4e348e5d",
+      "Signature": "sha256:d20b08ec2c4a24d830e332cc55ba098c81d1812a9ff46da1bd7f671d95f3acd2",
+      "AppliedVersion": 3,
+      "HasSourceMetadata": true
     },
     {
       "Tag": "v1.3.2",
       "Fixture": "v3.sql",
-      "ProvenanceSHA256": "1882e91edfc1eaf865b27b1796b8d20c92d05a2a55920f37f428df8b4e348e5d"
+      "ProvenanceSHA256": "1882e91edfc1eaf865b27b1796b8d20c92d05a2a55920f37f428df8b4e348e5d",
+      "Signature": "sha256:d20b08ec2c4a24d830e332cc55ba098c81d1812a9ff46da1bd7f671d95f3acd2",
+      "AppliedVersion": 3,
+      "HasSourceMetadata": true
     },
     {
       "Tag": "v1.3.3",
       "Fixture": "v3.sql",
-      "ProvenanceSHA256": "1882e91edfc1eaf865b27b1796b8d20c92d05a2a55920f37f428df8b4e348e5d"
+      "ProvenanceSHA256": "1882e91edfc1eaf865b27b1796b8d20c92d05a2a55920f37f428df8b4e348e5d",
+      "Signature": "sha256:d20b08ec2c4a24d830e332cc55ba098c81d1812a9ff46da1bd7f671d95f3acd2",
+      "AppliedVersion": 3,
+      "HasSourceMetadata": true
     },
     {
       "Tag": "v1.3.5",
       "Fixture": "v3.sql",
-      "ProvenanceSHA256": "1882e91edfc1eaf865b27b1796b8d20c92d05a2a55920f37f428df8b4e348e5d"
+      "ProvenanceSHA256": "1882e91edfc1eaf865b27b1796b8d20c92d05a2a55920f37f428df8b4e348e5d",
+      "Signature": "sha256:d20b08ec2c4a24d830e332cc55ba098c81d1812a9ff46da1bd7f671d95f3acd2",
+      "AppliedVersion": 3,
+      "HasSourceMetadata": true
     },
     {
       "Tag": "v1.4.0",
       "Fixture": "v4.sql",
-      "ProvenanceSHA256": "e8f28b3a1b37acd4f6bd721615c150d53c9d511c05c53e625d4de22230b3667c"
+      "ProvenanceSHA256": "e8f28b3a1b37acd4f6bd721615c150d53c9d511c05c53e625d4de22230b3667c",
+      "Signature": "sha256:34fc78ad6c61de5a73241a8b718b01bc09bdd16ed84a448e85f9000bfdcf9535",
+      "AppliedVersion": 4,
+      "HasSourceMetadata": true
     },
     {
       "Tag": "v1.4.1",
       "Fixture": "v4.sql",
-      "ProvenanceSHA256": "e8f28b3a1b37acd4f6bd721615c150d53c9d511c05c53e625d4de22230b3667c"
+      "ProvenanceSHA256": "e8f28b3a1b37acd4f6bd721615c150d53c9d511c05c53e625d4de22230b3667c",
+      "Signature": "sha256:34fc78ad6c61de5a73241a8b718b01bc09bdd16ed84a448e85f9000bfdcf9535",
+      "AppliedVersion": 4,
+      "HasSourceMetadata": true
     },
     {
       "Tag": "v1.4.2",
       "Fixture": "v4.sql",
-      "ProvenanceSHA256": "e8f28b3a1b37acd4f6bd721615c150d53c9d511c05c53e625d4de22230b3667c"
+      "ProvenanceSHA256": "e8f28b3a1b37acd4f6bd721615c150d53c9d511c05c53e625d4de22230b3667c",
+      "Signature": "sha256:34fc78ad6c61de5a73241a8b718b01bc09bdd16ed84a448e85f9000bfdcf9535",
+      "AppliedVersion": 4,
+      "HasSourceMetadata": true
     },
     {
       "Tag": "v1.4.3",
       "Fixture": "v4.sql",
-      "ProvenanceSHA256": "e8f28b3a1b37acd4f6bd721615c150d53c9d511c05c53e625d4de22230b3667c"
+      "ProvenanceSHA256": "e8f28b3a1b37acd4f6bd721615c150d53c9d511c05c53e625d4de22230b3667c",
+      "Signature": "sha256:34fc78ad6c61de5a73241a8b718b01bc09bdd16ed84a448e85f9000bfdcf9535",
+      "AppliedVersion": 4,
+      "HasSourceMetadata": true
     },
     {
       "Tag": "v1.4.4",
       "Fixture": "v4.sql",
-      "ProvenanceSHA256": "e8f28b3a1b37acd4f6bd721615c150d53c9d511c05c53e625d4de22230b3667c"
+      "ProvenanceSHA256": "e8f28b3a1b37acd4f6bd721615c150d53c9d511c05c53e625d4de22230b3667c",
+      "Signature": "sha256:34fc78ad6c61de5a73241a8b718b01bc09bdd16ed84a448e85f9000bfdcf9535",
+      "AppliedVersion": 4,
+      "HasSourceMetadata": true
     },
     {
       "Tag": "v2.0.0",
       "Fixture": "v5-with-source-metadata.sql",
-      "ProvenanceSHA256": "1efece456c94cf46a7f5dba8f84e0a76fb444dbd4cae016b595a7fd68427c062"
+      "ProvenanceSHA256": "1efece456c94cf46a7f5dba8f84e0a76fb444dbd4cae016b595a7fd68427c062",
+      "Signature": "sha256:48e9c9d639297f6eb76c55e56385d4a1ccd554702d5e9979826aca6dd75e1067",
+      "AppliedVersion": 5,
+      "HasSourceMetadata": true
     },
     {
       "Tag": "v2.0.1",
       "Fixture": "v5-with-source-metadata.sql",
-      "ProvenanceSHA256": "1efece456c94cf46a7f5dba8f84e0a76fb444dbd4cae016b595a7fd68427c062"
+      "ProvenanceSHA256": "1efece456c94cf46a7f5dba8f84e0a76fb444dbd4cae016b595a7fd68427c062",
+      "Signature": "sha256:48e9c9d639297f6eb76c55e56385d4a1ccd554702d5e9979826aca6dd75e1067",
+      "AppliedVersion": 5,
+      "HasSourceMetadata": true
     },
     {
       "Tag": "v2.1.0",
       "Fixture": "v5-with-source-metadata.sql",
-      "ProvenanceSHA256": "1efece456c94cf46a7f5dba8f84e0a76fb444dbd4cae016b595a7fd68427c062"
+      "ProvenanceSHA256": "1efece456c94cf46a7f5dba8f84e0a76fb444dbd4cae016b595a7fd68427c062",
+      "Signature": "sha256:48e9c9d639297f6eb76c55e56385d4a1ccd554702d5e9979826aca6dd75e1067",
+      "AppliedVersion": 5,
+      "HasSourceMetadata": true
     },
     {
       "Tag": "v2.2.0",
       "Fixture": "v7.sql",
-      "ProvenanceSHA256": "324a876835ad39ebe9749bf1a381018c267f4c21df053589d2046d2eb9cca24e"
+      "ProvenanceSHA256": "324a876835ad39ebe9749bf1a381018c267f4c21df053589d2046d2eb9cca24e",
+      "Signature": "sha256:0686bb5113193835003a78a2092366a707c2ccc744ef7920b1459d251653b2a6",
+      "AppliedVersion": 7,
+      "HasSourceMetadata": false
     },
     {
       "Tag": "v2.2.1",
       "Fixture": "v7.sql",
-      "ProvenanceSHA256": "324a876835ad39ebe9749bf1a381018c267f4c21df053589d2046d2eb9cca24e"
+      "ProvenanceSHA256": "324a876835ad39ebe9749bf1a381018c267f4c21df053589d2046d2eb9cca24e",
+      "Signature": "sha256:0686bb5113193835003a78a2092366a707c2ccc744ef7920b1459d251653b2a6",
+      "AppliedVersion": 7,
+      "HasSourceMetadata": false
     },
     {
       "Tag": "v2.2.2",
       "Fixture": "v7.sql",
-      "ProvenanceSHA256": "324a876835ad39ebe9749bf1a381018c267f4c21df053589d2046d2eb9cca24e"
+      "ProvenanceSHA256": "324a876835ad39ebe9749bf1a381018c267f4c21df053589d2046d2eb9cca24e",
+      "Signature": "sha256:0686bb5113193835003a78a2092366a707c2ccc744ef7920b1459d251653b2a6",
+      "AppliedVersion": 7,
+      "HasSourceMetadata": false
     },
     {
       "Tag": "v2.2.3",
       "Fixture": "v7.sql",
-      "ProvenanceSHA256": "324a876835ad39ebe9749bf1a381018c267f4c21df053589d2046d2eb9cca24e"
+      "ProvenanceSHA256": "324a876835ad39ebe9749bf1a381018c267f4c21df053589d2046d2eb9cca24e",
+      "Signature": "sha256:0686bb5113193835003a78a2092366a707c2ccc744ef7920b1459d251653b2a6",
+      "AppliedVersion": 7,
+      "HasSourceMetadata": false
     },
     {
       "Tag": "v2.3.0",
       "Fixture": "v8.sql",
-      "ProvenanceSHA256": "c66577744d5feacde305382d5159b67390450c18169d3da6fda5e81051b49cf6"
+      "ProvenanceSHA256": "c66577744d5feacde305382d5159b67390450c18169d3da6fda5e81051b49cf6",
+      "Signature": "sha256:24b248c3333202a6a5f11898426a14f29c9119420ac8ded2ec9b2b47a95fe0dd",
+      "AppliedVersion": 8,
+      "HasSourceMetadata": false
     },
     {
       "Tag": "v2.4.0",
       "Fixture": "v9.sql",
-      "ProvenanceSHA256": "50469b7ae10e1c824b59d094290c2b59bbc31f3924175d2888bb23f76450b2a1"
+      "ProvenanceSHA256": "50469b7ae10e1c824b59d094290c2b59bbc31f3924175d2888bb23f76450b2a1",
+      "Signature": "sha256:c32a21477fdaed12495e17f37a78a6d7244f673bedd8c87c1e3fe37e01859751",
+      "AppliedVersion": 9,
+      "HasSourceMetadata": false
     },
     {
       "Tag": "v2.5.0",
       "Fixture": "v9.sql",
-      "ProvenanceSHA256": "50469b7ae10e1c824b59d094290c2b59bbc31f3924175d2888bb23f76450b2a1"
+      "ProvenanceSHA256": "50469b7ae10e1c824b59d094290c2b59bbc31f3924175d2888bb23f76450b2a1",
+      "Signature": "sha256:c32a21477fdaed12495e17f37a78a6d7244f673bedd8c87c1e3fe37e01859751",
+      "AppliedVersion": 9,
+      "HasSourceMetadata": false
     },
     {
       "Tag": "v2.6.0",
       "Fixture": "v10.sql",
-      "ProvenanceSHA256": "0b6fa1dbe8981705aa68e0a376c874ae7a98588380d2301d108ddcf5f4410abc"
+      "ProvenanceSHA256": "0b6fa1dbe8981705aa68e0a376c874ae7a98588380d2301d108ddcf5f4410abc",
+      "Signature": "sha256:23025b543cf26992e93476a74dafa3627d8f6e0b7ec6f8e0528c4990f0ce1187",
+      "AppliedVersion": 10,
+      "HasSourceMetadata": false
     },
     {
       "Tag": "v2.7.0",
       "Fixture": "v11.sql",
-      "ProvenanceSHA256": "78927a394a0d1cb62651288e7626de4e2983530a3a03b9147440e56b457e26ba"
+      "ProvenanceSHA256": "78927a394a0d1cb62651288e7626de4e2983530a3a03b9147440e56b457e26ba",
+      "Signature": "sha256:a13d8005bb8b2939e4b100fd04e455735ff0ae98c66085a4cd9641a3ac18d41b",
+      "AppliedVersion": 11,
+      "HasSourceMetadata": false
     },
     {
       "Tag": "v2.8.0",
       "Fixture": "v12.sql",
-      "ProvenanceSHA256": "84710f15fcff04567bfe8abe64f337129722080816b7cfbce35740668aacfe41"
+      "ProvenanceSHA256": "84710f15fcff04567bfe8abe64f337129722080816b7cfbce35740668aacfe41",
+      "Signature": "sha256:e53018efff173667e41eab96b2bd514741f47a6ea786e9a49edec626f6893fdb",
+      "AppliedVersion": 12,
+      "HasSourceMetadata": false
     },
     {
       "Tag": "v2.9.0",
       "Fixture": "v12.sql",
-      "ProvenanceSHA256": "84710f15fcff04567bfe8abe64f337129722080816b7cfbce35740668aacfe41"
+      "ProvenanceSHA256": "84710f15fcff04567bfe8abe64f337129722080816b7cfbce35740668aacfe41",
+      "Signature": "sha256:e53018efff173667e41eab96b2bd514741f47a6ea786e9a49edec626f6893fdb",
+      "AppliedVersion": 12,
+      "HasSourceMetadata": false
     },
     {
       "Tag": "v2.10.0",
       "Fixture": "v12.sql",
-      "ProvenanceSHA256": "84710f15fcff04567bfe8abe64f337129722080816b7cfbce35740668aacfe41"
+      "ProvenanceSHA256": "84710f15fcff04567bfe8abe64f337129722080816b7cfbce35740668aacfe41",
+      "Signature": "sha256:e53018efff173667e41eab96b2bd514741f47a6ea786e9a49edec626f6893fdb",
+      "AppliedVersion": 12,
+      "HasSourceMetadata": false
     },
     {
       "Tag": "v2.11.0",
       "Fixture": "v12.sql",
-      "ProvenanceSHA256": "84710f15fcff04567bfe8abe64f337129722080816b7cfbce35740668aacfe41"
+      "ProvenanceSHA256": "84710f15fcff04567bfe8abe64f337129722080816b7cfbce35740668aacfe41",
+      "Signature": "sha256:e53018efff173667e41eab96b2bd514741f47a6ea786e9a49edec626f6893fdb",
+      "AppliedVersion": 12,
+      "HasSourceMetadata": false
     },
     {
       "Tag": "v2.12.0",
       "Fixture": "v13.sql",
-      "ProvenanceSHA256": "9d9e23de5a05318f1f3625b0d375b64b10e42672ddd213f84a08c4375c0afdcc"
+      "ProvenanceSHA256": "9d9e23de5a05318f1f3625b0d375b64b10e42672ddd213f84a08c4375c0afdcc",
+      "Signature": "sha256:9f783fc06ddd6da72937cc81a5838fada51e222d4957b3ebba8ae4e35478ddf4",
+      "AppliedVersion": 13,
+      "HasSourceMetadata": false
     },
     {
       "Tag": "v2.13.0",
       "Fixture": "v13.sql",
-      "ProvenanceSHA256": "9d9e23de5a05318f1f3625b0d375b64b10e42672ddd213f84a08c4375c0afdcc"
+      "ProvenanceSHA256": "9d9e23de5a05318f1f3625b0d375b64b10e42672ddd213f84a08c4375c0afdcc",
+      "Signature": "sha256:9f783fc06ddd6da72937cc81a5838fada51e222d4957b3ebba8ae4e35478ddf4",
+      "AppliedVersion": 13,
+      "HasSourceMetadata": false
     },
     {
       "Tag": "v2.14.0",
       "Fixture": "v13.sql",
-      "ProvenanceSHA256": "9d9e23de5a05318f1f3625b0d375b64b10e42672ddd213f84a08c4375c0afdcc"
+      "ProvenanceSHA256": "9d9e23de5a05318f1f3625b0d375b64b10e42672ddd213f84a08c4375c0afdcc",
+      "Signature": "sha256:9f783fc06ddd6da72937cc81a5838fada51e222d4957b3ebba8ae4e35478ddf4",
+      "AppliedVersion": 13,
+      "HasSourceMetadata": false
     },
     {
       "Tag": "v2.14.1",
       "Fixture": "v13.sql",
-      "ProvenanceSHA256": "9d9e23de5a05318f1f3625b0d375b64b10e42672ddd213f84a08c4375c0afdcc"
+      "ProvenanceSHA256": "9d9e23de5a05318f1f3625b0d375b64b10e42672ddd213f84a08c4375c0afdcc",
+      "Signature": "sha256:9f783fc06ddd6da72937cc81a5838fada51e222d4957b3ebba8ae4e35478ddf4",
+      "AppliedVersion": 13,
+      "HasSourceMetadata": false
     },
     {
       "Tag": "v2.14.2",
       "Fixture": "v13.sql",
-      "ProvenanceSHA256": "9d9e23de5a05318f1f3625b0d375b64b10e42672ddd213f84a08c4375c0afdcc"
+      "ProvenanceSHA256": "9d9e23de5a05318f1f3625b0d375b64b10e42672ddd213f84a08c4375c0afdcc",
+      "Signature": "sha256:9f783fc06ddd6da72937cc81a5838fada51e222d4957b3ebba8ae4e35478ddf4",
+      "AppliedVersion": 13,
+      "HasSourceMetadata": false
     },
     {
       "Tag": "v2.14.3",
       "Fixture": "v13.sql",
-      "ProvenanceSHA256": "9d9e23de5a05318f1f3625b0d375b64b10e42672ddd213f84a08c4375c0afdcc"
+      "ProvenanceSHA256": "9d9e23de5a05318f1f3625b0d375b64b10e42672ddd213f84a08c4375c0afdcc",
+      "Signature": "sha256:9f783fc06ddd6da72937cc81a5838fada51e222d4957b3ebba8ae4e35478ddf4",
+      "AppliedVersion": 13,
+      "HasSourceMetadata": false
     },
     {
       "Tag": "v2.15.0",
       "Fixture": "v13.sql",
-      "ProvenanceSHA256": "9d9e23de5a05318f1f3625b0d375b64b10e42672ddd213f84a08c4375c0afdcc"
+      "ProvenanceSHA256": "9d9e23de5a05318f1f3625b0d375b64b10e42672ddd213f84a08c4375c0afdcc",
+      "Signature": "sha256:9f783fc06ddd6da72937cc81a5838fada51e222d4957b3ebba8ae4e35478ddf4",
+      "AppliedVersion": 13,
+      "HasSourceMetadata": false
     },
     {
       "Tag": "v2.15.1",
       "Fixture": "v13.sql",
-      "ProvenanceSHA256": "9d9e23de5a05318f1f3625b0d375b64b10e42672ddd213f84a08c4375c0afdcc"
+      "ProvenanceSHA256": "9d9e23de5a05318f1f3625b0d375b64b10e42672ddd213f84a08c4375c0afdcc",
+      "Signature": "sha256:9f783fc06ddd6da72937cc81a5838fada51e222d4957b3ebba8ae4e35478ddf4",
+      "AppliedVersion": 13,
+      "HasSourceMetadata": false
     },
     {
       "Tag": "v2.16.0",
       "Fixture": "v13.sql",
-      "ProvenanceSHA256": "9d9e23de5a05318f1f3625b0d375b64b10e42672ddd213f84a08c4375c0afdcc"
+      "ProvenanceSHA256": "9d9e23de5a05318f1f3625b0d375b64b10e42672ddd213f84a08c4375c0afdcc",
+      "Signature": "sha256:9f783fc06ddd6da72937cc81a5838fada51e222d4957b3ebba8ae4e35478ddf4",
+      "AppliedVersion": 13,
+      "HasSourceMetadata": false
     },
     {
       "Tag": "v2.16.1",
       "Fixture": "v13.sql",
-      "ProvenanceSHA256": "9d9e23de5a05318f1f3625b0d375b64b10e42672ddd213f84a08c4375c0afdcc"
+      "ProvenanceSHA256": "9d9e23de5a05318f1f3625b0d375b64b10e42672ddd213f84a08c4375c0afdcc",
+      "Signature": "sha256:9f783fc06ddd6da72937cc81a5838fada51e222d4957b3ebba8ae4e35478ddf4",
+      "AppliedVersion": 13,
+      "HasSourceMetadata": false
     },
     {
       "Tag": "v3.0.0",
       "Fixture": "v13.sql",
-      "ProvenanceSHA256": "9d9e23de5a05318f1f3625b0d375b64b10e42672ddd213f84a08c4375c0afdcc"
+      "ProvenanceSHA256": "9d9e23de5a05318f1f3625b0d375b64b10e42672ddd213f84a08c4375c0afdcc",
+      "Signature": "sha256:9f783fc06ddd6da72937cc81a5838fada51e222d4957b3ebba8ae4e35478ddf4",
+      "AppliedVersion": 13,
+      "HasSourceMetadata": false
     },
     {
       "Tag": "v3.0.1",
       "Fixture": "v13.sql",
-      "ProvenanceSHA256": "9d9e23de5a05318f1f3625b0d375b64b10e42672ddd213f84a08c4375c0afdcc"
+      "ProvenanceSHA256": "9d9e23de5a05318f1f3625b0d375b64b10e42672ddd213f84a08c4375c0afdcc",
+      "Signature": "sha256:9f783fc06ddd6da72937cc81a5838fada51e222d4957b3ebba8ae4e35478ddf4",
+      "AppliedVersion": 13,
+      "HasSourceMetadata": false
     },
     {
       "Tag": "v3.0.2",
       "Fixture": "v13.sql",
-      "ProvenanceSHA256": "9d9e23de5a05318f1f3625b0d375b64b10e42672ddd213f84a08c4375c0afdcc"
+      "ProvenanceSHA256": "9d9e23de5a05318f1f3625b0d375b64b10e42672ddd213f84a08c4375c0afdcc",
+      "Signature": "sha256:9f783fc06ddd6da72937cc81a5838fada51e222d4957b3ebba8ae4e35478ddf4",
+      "AppliedVersion": 13,
+      "HasSourceMetadata": false
     },
     {
       "Tag": "v3.1.0",
       "Fixture": "v13.sql",
-      "ProvenanceSHA256": "9d9e23de5a05318f1f3625b0d375b64b10e42672ddd213f84a08c4375c0afdcc"
+      "ProvenanceSHA256": "9d9e23de5a05318f1f3625b0d375b64b10e42672ddd213f84a08c4375c0afdcc",
+      "Signature": "sha256:9f783fc06ddd6da72937cc81a5838fada51e222d4957b3ebba8ae4e35478ddf4",
+      "AppliedVersion": 13,
+      "HasSourceMetadata": false
     },
     {
       "Tag": "v3.2.0",
       "Fixture": "v13.sql",
-      "ProvenanceSHA256": "9d9e23de5a05318f1f3625b0d375b64b10e42672ddd213f84a08c4375c0afdcc"
+      "ProvenanceSHA256": "9d9e23de5a05318f1f3625b0d375b64b10e42672ddd213f84a08c4375c0afdcc",
+      "Signature": "sha256:9f783fc06ddd6da72937cc81a5838fada51e222d4957b3ebba8ae4e35478ddf4",
+      "AppliedVersion": 13,
+      "HasSourceMetadata": false
     },
     {
       "Tag": "v3.2.1",
       "Fixture": "v13.sql",
-      "ProvenanceSHA256": "9d9e23de5a05318f1f3625b0d375b64b10e42672ddd213f84a08c4375c0afdcc"
+      "ProvenanceSHA256": "9d9e23de5a05318f1f3625b0d375b64b10e42672ddd213f84a08c4375c0afdcc",
+      "Signature": "sha256:9f783fc06ddd6da72937cc81a5838fada51e222d4957b3ebba8ae4e35478ddf4",
+      "AppliedVersion": 13,
+      "HasSourceMetadata": false
     },
     {
       "Tag": "v3.2.2",
       "Fixture": "v13.sql",
-      "ProvenanceSHA256": "9d9e23de5a05318f1f3625b0d375b64b10e42672ddd213f84a08c4375c0afdcc"
+      "ProvenanceSHA256": "9d9e23de5a05318f1f3625b0d375b64b10e42672ddd213f84a08c4375c0afdcc",
+      "Signature": "sha256:9f783fc06ddd6da72937cc81a5838fada51e222d4957b3ebba8ae4e35478ddf4",
+      "AppliedVersion": 13,
+      "HasSourceMetadata": false
     },
     {
       "Tag": "v3.2.3",
       "Fixture": "v13.sql",
-      "ProvenanceSHA256": "9d9e23de5a05318f1f3625b0d375b64b10e42672ddd213f84a08c4375c0afdcc"
+      "ProvenanceSHA256": "9d9e23de5a05318f1f3625b0d375b64b10e42672ddd213f84a08c4375c0afdcc",
+      "Signature": "sha256:9f783fc06ddd6da72937cc81a5838fada51e222d4957b3ebba8ae4e35478ddf4",
+      "AppliedVersion": 13,
+      "HasSourceMetadata": false
     },
     {
       "Tag": "v3.2.4",
       "Fixture": "v13.sql",
-      "ProvenanceSHA256": "9d9e23de5a05318f1f3625b0d375b64b10e42672ddd213f84a08c4375c0afdcc"
+      "ProvenanceSHA256": "9d9e23de5a05318f1f3625b0d375b64b10e42672ddd213f84a08c4375c0afdcc",
+      "Signature": "sha256:9f783fc06ddd6da72937cc81a5838fada51e222d4957b3ebba8ae4e35478ddf4",
+      "AppliedVersion": 13,
+      "HasSourceMetadata": false
     },
     {
       "Tag": "v3.2.5",
       "Fixture": "v13.sql",
-      "ProvenanceSHA256": "9d9e23de5a05318f1f3625b0d375b64b10e42672ddd213f84a08c4375c0afdcc"
+      "ProvenanceSHA256": "9d9e23de5a05318f1f3625b0d375b64b10e42672ddd213f84a08c4375c0afdcc",
+      "Signature": "sha256:9f783fc06ddd6da72937cc81a5838fada51e222d4957b3ebba8ae4e35478ddf4",
+      "AppliedVersion": 13,
+      "HasSourceMetadata": false
+    }
+  ],
+  "UnmanifestedFixtures": [
+    {
+      "Fixture": "v2.sql",
+      "ProvenanceSHA256": "9e5857f14e30fe1391445064bf924b0efb12fa81d0e5011de72ce5f880cd7f6a",
+      "Signature": "sha256:148ea10e5b96c0e05cb0dcd76a3e963e7ec4b08fb54d770a6a9cee9808224c3d",
+      "AppliedVersion": 2,
+      "HasSourceMetadata": true,
+      "Provenance": "No manifest release tag maps to this V2-only compatibility triangulation fixture."
+    },
+    {
+      "Fixture": "v3-no-source-metadata.sql",
+      "ProvenanceSHA256": "42013f814ed39dbbcf8bc8e6465777d628a8d38694713f59caaeb30e89f28f68",
+      "Signature": "sha256:4d1a195b21cef78d61d09157dbb9fa648bf004780d851a592bd9ac1a647e4bea",
+      "AppliedVersion": 3,
+      "HasSourceMetadata": false,
+      "Provenance": "No manifest release tag maps to this partially migrated V3 compatibility triangulation fixture."
+    },
+    {
+      "Fixture": "v5-without-source-metadata.sql",
+      "ProvenanceSHA256": "fb705645b2f77017f1e9f512ba32246cefb9981cde76f78cd929f2659fdfee84",
+      "Signature": "sha256:8d945e573fbabc542f635bb43990bcdf86d153ee0bb9504cef1f4e204c018a59",
+      "AppliedVersion": 5,
+      "HasSourceMetadata": false,
+      "Provenance": "No manifest release tag maps to this partially migrated V5 compatibility triangulation fixture."
+    },
+    {
+      "Fixture": "v6.sql",
+      "ProvenanceSHA256": "a42b23b541cc83d34ebd5571f0d7ef7771a540fe3d7e71b1a3e537a5e5932af0",
+      "Signature": "sha256:fb42ffc0f8c8cbcfea4ba4ad693521c82ff375890237c0ad1a4d0c5214263086",
+      "AppliedVersion": 6,
+      "HasSourceMetadata": false,
+      "Provenance": "No manifest release tag maps to this partial legacy per-step V6-before-V7 lineage fixture; no release shipped V6 alone."
     }
   ]
 }
