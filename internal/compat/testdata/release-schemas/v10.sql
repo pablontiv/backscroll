@@ -155,14 +155,14 @@ CREATE TABLE IF NOT EXISTS template_matches (
 CREATE INDEX IF NOT EXISTS idx_matches_template ON template_matches(template_id);
 CREATE INDEX IF NOT EXISTS idx_matches_uuid ON template_matches(item_uuid);
 
-INSERT INTO schema_migrations (version, name, applied_on, checksum) VALUES (1, 'V1 core schema', '1970-01-01 00:00:00', '382f1c806871c1cbcd1e7e01c9a54ee19018af6664ed66b406fcc003927d2550');
-INSERT INTO schema_migrations (version, name, applied_on, checksum) VALUES (2, 'V2 embedding tables', '1970-01-01 00:00:00', '7989ada72a0079e1d36317f09b4ec9b220f0d6bc649e69e7a6a728871569fd19');
-INSERT INTO schema_migrations (version, name, applied_on, checksum) VALUES (3, 'V3 embedding blob column', '1970-01-01 00:00:00', '0ce6d04de0ba20c9fd15d937c5177ba0fafa50f50eb6e9ac9a10525779665bb6');
-INSERT INTO schema_migrations (version, name, applied_on, checksum) VALUES (4, 'V4 tool_fts trigram index', '1970-01-01 00:00:00', '65cced471db2b3fdd67128dcf88ebd99525cd9520e2ee5704496cb3e7caa41db');
-INSERT INTO schema_migrations (version, name, applied_on, checksum) VALUES (5, 'V5 drop phantom session_events', '1970-01-01 00:00:00', '71ae84adf2092151071c6165ff9468b1d1e58066ffbd0e20294ef410dc0513cc');
-INSERT INTO schema_migrations (version, name, applied_on, checksum) VALUES (6, 'V6 drop phantom source_metadata column', '1970-01-01 00:00:00', 'b3da57e183c69f8d4c541dfb80fa833e2fe967ee078c7cfb07e6acf42bb2f20f');
-INSERT INTO schema_migrations (version, name, applied_on, checksum) VALUES (7, 'V7 reasoning content_type routes to messages_fts', '1970-01-01 00:00:00', '06ee045e314c2d601320d4a1ce868429ccd1c0932baa6c2a7542a3c27d3cdc14');
-INSERT INTO schema_migrations (version, name, applied_on, checksum) VALUES (8, 'V8 perennity: extraction_version, was_interrupted, tool_events', '1970-01-01 00:00:00', 'f9eccead57814b32832ef0d2f8848daba767fdf52d1db3a29fe37c74b1ce9a57');
-INSERT INTO schema_migrations (version, name, applied_on, checksum) VALUES (9, 'V9 tool_events uuid uniqueness index', '1970-01-01 00:00:00', '43fadd75e58c970e62ab61cae34d24f1de7016b0f8dbfa4710a9d480ae62c12a');
-INSERT INTO schema_migrations (version, name, applied_on, checksum) VALUES (10, 'V10 template mining: message_templates, template_matches', '1970-01-01 00:00:00', '2e9d3252cbff753d04de9028793344c3e0f500b3cfa0305e9738a0b5052ab865');
+INSERT INTO schema_migrations (version, name, applied_on, checksum) VALUES (1, 'V1 core schema', '1970-01-01 00:00:00', '4e07949ccd3912fb3c0e149be9a2e05fdd51f8cedb8df1f28b3bb5ac5afe532a');
+INSERT INTO schema_migrations (version, name, applied_on, checksum) VALUES (2, 'V2 embedding tables', '1970-01-01 00:00:00', '37dc9627f01f0e2d0fbea6bba5cd9f609d5da05089eeb9541a057dd2290cf8af');
+INSERT INTO schema_migrations (version, name, applied_on, checksum) VALUES (3, 'V3 embedding blob column', '1970-01-01 00:00:00', '36cd183f10ff84ab4753be027078cdd710b46efdc830053d4a641af725006ea5');
+INSERT INTO schema_migrations (version, name, applied_on, checksum) VALUES (4, 'V4 tool_fts trigram index', '1970-01-01 00:00:00', '77e59cf515f33c466282e0f3e921377f584794d0b7cade1704f566374a569a55');
+INSERT INTO schema_migrations (version, name, applied_on, checksum) VALUES (5, 'V5 drop phantom session_events', '1970-01-01 00:00:00', 'aedaab81efb6bc34d3f664468b71c1a716f5b55d5132156cb43bd7462d549c7b');
+INSERT INTO schema_migrations (version, name, applied_on, checksum) VALUES (6, 'V6 drop phantom source_metadata column', '1970-01-01 00:00:00', 'a327b9b6e7b8f5fe369c9fc08093ac80a87640daa515890af94b269d430e9378');
+INSERT INTO schema_migrations (version, name, applied_on, checksum) VALUES (7, 'V7 reasoning content_type routes to messages_fts', '1970-01-01 00:00:00', 'a80704442c2a0084f98e4bc53978364b14d1c6bd3bd99ba6119a2a9ecbd685e7');
+INSERT INTO schema_migrations (version, name, applied_on, checksum) VALUES (8, 'V8 perennity: extraction_version, was_interrupted, tool_events', '1970-01-01 00:00:00', '6853d72ded3bdc775b52507321c31df44bf35e8277719432ca8aa126ee16cec1');
+INSERT INTO schema_migrations (version, name, applied_on, checksum) VALUES (9, 'V9 tool_events uuid uniqueness index', '1970-01-01 00:00:00', 'b16094805a4e08f6e0dd56bce5266c7c5fd71934389da9d13c4132076e546ca2');
+INSERT INTO schema_migrations (version, name, applied_on, checksum) VALUES (10, 'V10 template mining: message_templates, template_matches', '1970-01-01 00:00:00', '0e548d0cb6c47147726f943bfc860500ca9a9bc821df0601998876ea5e9652c2');
 COMMIT;

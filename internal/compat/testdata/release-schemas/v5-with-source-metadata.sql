@@ -114,9 +114,9 @@ CREATE TABLE IF NOT EXISTS embedding_metadata (
     created_at INTEGER NOT NULL
 );
 
-INSERT INTO schema_migrations (version, name, applied_on, checksum) VALUES (1, 'V1 core schema', '1970-01-01 00:00:00', '382f1c806871c1cbcd1e7e01c9a54ee19018af6664ed66b406fcc003927d2550');
-INSERT INTO schema_migrations (version, name, applied_on, checksum) VALUES (2, 'V2 embedding tables', '1970-01-01 00:00:00', '7989ada72a0079e1d36317f09b4ec9b220f0d6bc649e69e7a6a728871569fd19');
-INSERT INTO schema_migrations (version, name, applied_on, checksum) VALUES (3, 'V3 embedding blob column', '1970-01-01 00:00:00', '0ce6d04de0ba20c9fd15d937c5177ba0fafa50f50eb6e9ac9a10525779665bb6');
-INSERT INTO schema_migrations (version, name, applied_on, checksum) VALUES (4, 'V4 tool_fts trigram index', '1970-01-01 00:00:00', '65cced471db2b3fdd67128dcf88ebd99525cd9520e2ee5704496cb3e7caa41db');
-INSERT INTO schema_migrations (version, name, applied_on, checksum) VALUES (5, 'V5 drop phantom session_events', '1970-01-01 00:00:00', '71ae84adf2092151071c6165ff9468b1d1e58066ffbd0e20294ef410dc0513cc');
+INSERT INTO schema_migrations (version, name, applied_on, checksum) VALUES (1, 'V1 core schema', '1970-01-01 00:00:00', '4e07949ccd3912fb3c0e149be9a2e05fdd51f8cedb8df1f28b3bb5ac5afe532a');
+INSERT INTO schema_migrations (version, name, applied_on, checksum) VALUES (2, 'V2 embedding tables', '1970-01-01 00:00:00', '37dc9627f01f0e2d0fbea6bba5cd9f609d5da05089eeb9541a057dd2290cf8af');
+INSERT INTO schema_migrations (version, name, applied_on, checksum) VALUES (3, 'V3 embedding blob column', '1970-01-01 00:00:00', '36cd183f10ff84ab4753be027078cdd710b46efdc830053d4a641af725006ea5');
+INSERT INTO schema_migrations (version, name, applied_on, checksum) VALUES (4, 'V4 tool_fts trigram index', '1970-01-01 00:00:00', '77e59cf515f33c466282e0f3e921377f584794d0b7cade1704f566374a569a55');
+INSERT INTO schema_migrations (version, name, applied_on, checksum) VALUES (5, 'V5 drop phantom session_events', '1970-01-01 00:00:00', 'aedaab81efb6bc34d3f664468b71c1a716f5b55d5132156cb43bd7462d549c7b');
 COMMIT;

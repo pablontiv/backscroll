@@ -1,6 +1,7 @@
 package compat
 
 import (
+	"crypto/sha256"
 	"embed"
 	"encoding/json"
 	"fmt"
@@ -52,8 +53,14 @@ func loadCatalogFromFS(fsys fs.FS) (Catalog, error) {
 			return Catalog{}, fmt.Errorf("release schema catalog has duplicate release tag %q", release.Tag)
 		}
 		seen[release.Tag] = true
-		if _, err := fs.Stat(fsys, "testdata/release-schemas/"+release.Fixture); err != nil {
+		fixturePath := "testdata/release-schemas/" + release.Fixture
+		fixtureBytes, err := fs.ReadFile(fsys, fixturePath)
+		if err != nil {
 			return Catalog{}, fmt.Errorf("release schema fixture %q: %w", release.Fixture, err)
+		}
+		actualSHA256 := fmt.Sprintf("%x", sha256.Sum256(fixtureBytes))
+		if actualSHA256 != release.ProvenanceSHA256 {
+			return Catalog{}, fmt.Errorf("release schema fixture %q SHA-256 = %s, want %s", release.Fixture, actualSHA256, release.ProvenanceSHA256)
 		}
 	}
 	if !seen[catalog.FirstGoRelease] || !seen[catalog.LatestGoRelease] {

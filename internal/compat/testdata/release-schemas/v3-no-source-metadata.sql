@@ -1,5 +1,9 @@
 -- Backscroll release schema fixture: v3-no-source-metadata.sql
 -- Hermetic schema-only fixture captured for compatibility tests.
+-- No manifest release tag maps to this fixture.
+-- It preserves a partially migrated V3 shape for compatibility triangulation
+-- only: source_metadata is absent from search_items even though no published
+-- release in the manifest shipped this exact schema_migrations lineage.
 
 BEGIN TRANSACTION;
 CREATE TABLE IF NOT EXISTS schema_migrations (
@@ -108,7 +112,7 @@ CREATE TABLE IF NOT EXISTS embedding_metadata (
     created_at INTEGER NOT NULL
 );
 
-INSERT INTO schema_migrations (version, name, applied_on, checksum) VALUES (1, 'V1 core schema', '1970-01-01 00:00:00', '382f1c806871c1cbcd1e7e01c9a54ee19018af6664ed66b406fcc003927d2550');
-INSERT INTO schema_migrations (version, name, applied_on, checksum) VALUES (2, 'V2 embedding tables', '1970-01-01 00:00:00', '7989ada72a0079e1d36317f09b4ec9b220f0d6bc649e69e7a6a728871569fd19');
-INSERT INTO schema_migrations (version, name, applied_on, checksum) VALUES (3, 'V3 embedding blob column', '1970-01-01 00:00:00', '0ce6d04de0ba20c9fd15d937c5177ba0fafa50f50eb6e9ac9a10525779665bb6');
+INSERT INTO schema_migrations (version, name, applied_on, checksum) VALUES (1, 'V1 core schema', '1970-01-01 00:00:00', '4e07949ccd3912fb3c0e149be9a2e05fdd51f8cedb8df1f28b3bb5ac5afe532a');
+INSERT INTO schema_migrations (version, name, applied_on, checksum) VALUES (2, 'V2 embedding tables', '1970-01-01 00:00:00', '37dc9627f01f0e2d0fbea6bba5cd9f609d5da05089eeb9541a057dd2290cf8af');
+INSERT INTO schema_migrations (version, name, applied_on, checksum) VALUES (3, 'V3 embedding blob column', '1970-01-01 00:00:00', '36cd183f10ff84ab4753be027078cdd710b46efdc830053d4a641af725006ea5');
 COMMIT;
