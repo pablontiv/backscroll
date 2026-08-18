@@ -21,10 +21,40 @@ type Catalog struct {
 		Fixture          string
 		ProvenanceSHA256 string
 	}
+
+	lineages         map[string]Lineage
+	currentSignature string
+}
+
+type Lineage struct {
+	shape          SchemaShape
+	remainingSteps []MigrationStep
+}
+
+func (c Catalog) BySignature(signature string) (Lineage, bool) {
+	lineage, ok := c.lineages[signature]
+	return lineage, ok
+}
+
+func (c Catalog) CurrentSignature() string {
+	return c.currentSignature
+}
+
+func (l Lineage) RemainingSteps() []MigrationStep {
+	steps := make([]MigrationStep, len(l.remainingSteps))
+	copy(steps, l.remainingSteps)
+	return steps
 }
 
 func LoadCatalog() (Catalog, error) {
-	return loadCatalogFromFS(releaseSchemaFS)
+	catalog, err := loadCatalogFromFS(releaseSchemaFS)
+	if err != nil {
+		return Catalog{}, err
+	}
+	if err := catalog.attachLineages(releaseSchemaFS); err != nil {
+		return Catalog{}, err
+	}
+	return catalog, nil
 }
 
 func loadCatalogFromFS(fsys fs.FS) (Catalog, error) {
