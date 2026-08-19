@@ -316,13 +316,7 @@ func TestRecoveryDestinationStartsFreshAtCurrentSchema(t *testing.T) {
 	if recoveryDestinationColumnExists(t, db, "search_items", "source_metadata") {
 		t.Fatal("destination has legacy source_metadata column; want fresh current schema")
 	}
-	var indexedFiles int
-	if err := db.DB().QueryRow(`SELECT COUNT(*) FROM indexed_files`).Scan(&indexedFiles); err != nil {
-		t.Fatalf("count indexed_files: %v", err)
-	}
-	if indexedFiles != 0 {
-		t.Fatalf("indexed_files rows = %d, want 0 in fresh recovery destination", indexedFiles)
-	}
+	assertRecoveryDestinationAccounting(t, db.DB(), plan)
 }
 
 func TestRecoveryDestinationIndependentVerificationRejectsTamper(t *testing.T) {
@@ -348,6 +342,49 @@ func TestRecoveryDestinationIndependentVerificationRejectsTamper(t *testing.T) {
 	`)
 	if err := VerifyRecoveryDestination(ctx, destPath, plan); err == nil {
 		t.Fatal("VerifyRecoveryDestination accepted a tampered destination with invented source accounting")
+	}
+}
+
+func TestRecoveryDestinationVerificationRejectsInvalidRecoveredAccounting(t *testing.T) {
+	cases := []struct {
+		name   string
+		mutate string
+	}{
+		{
+			name:   "missing path",
+			mutate: `DELETE FROM indexed_files WHERE path = '/sessions/source.jsonl';`,
+		},
+		{
+			name:   "real-looking but unverified hash",
+			mutate: `UPDATE indexed_files SET hash = 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa' WHERE path = '/sessions/source.jsonl';`,
+		},
+		{
+			name:   "non-null last indexed",
+			mutate: `UPDATE indexed_files SET last_indexed = '2026-08-19T00:00:00Z' WHERE path = '/sessions/source.jsonl';`,
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			ctx := context.Background()
+			dir := t.TempDir()
+			sourcePath := filepath.Join(dir, "source.db")
+			createRecoveryDestinationSourceDB(t, sourcePath, []IndexedFile{
+				recoveryDestinationIndexedFile("/sessions/source.jsonl", "source-hash", []IndexedMessage{{
+					Ordinal: 0, Role: "assistant", Text: "accounting tamper sentinel", UUID: "11111111-1111-4111-8111-111111111111",
+					Timestamp: "2026-08-18T00:00:00Z", ContentType: "text", ExtractionVersion: CurrentExtractionVersion,
+				}}),
+			})
+			plan := recoveryDestinationPlanFromDBs(t, ctx, sourcePath)
+			destPath, err := CreateRecoveryDestination(ctx, dir, plan)
+			if err != nil {
+				t.Fatalf("CreateRecoveryDestination: %v", err)
+			}
+
+			mutateRecoveryDatabase(t, destPath, tc.mutate)
+			if err := VerifyRecoveryDestination(ctx, destPath, plan); err == nil {
+				t.Fatalf("VerifyRecoveryDestination accepted %s recovered source accounting tampering", tc.name)
+			}
+		})
 	}
 }
 
@@ -662,12 +699,48 @@ func assertRecoveryDestinationRecords(t *testing.T, path string, plan compat.Rec
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("destination records mismatch\ngot:  %#v\nwant: %#v", got, want)
 	}
-	var indexedFiles int
-	if err := db.DB().QueryRow(`SELECT COUNT(*) FROM indexed_files`).Scan(&indexedFiles); err != nil {
-		t.Fatalf("count indexed_files: %v", err)
+	assertRecoveryDestinationAccounting(t, db.DB(), plan)
+}
+
+func assertRecoveryDestinationAccounting(t *testing.T, db *sql.DB, plan compat.RecoveryPlan) {
+	t.Helper()
+	rows, err := db.Query(`
+		SELECT path, hash, last_indexed
+		FROM indexed_files
+		ORDER BY path
+	`)
+	if err != nil {
+		t.Fatalf("query recovered source accounting: %v", err)
 	}
-	if indexedFiles != 0 {
-		t.Fatalf("indexed_files rows = %d, want 0; recovery must not invent source hashes", indexedFiles)
+	defer func() { _ = rows.Close() }()
+
+	var gotPaths []string
+	for rows.Next() {
+		var path, hash string
+		var lastIndexed sql.NullString
+		if err := rows.Scan(&path, &hash, &lastIndexed); err != nil {
+			t.Fatalf("scan recovered source accounting: %v", err)
+		}
+		if hash != recoveredSourceHash || lastIndexed.Valid {
+			t.Fatalf("accounting for %s = hash %q last_indexed %+v", path, hash, lastIndexed)
+		}
+		gotPaths = append(gotPaths, path)
+	}
+	if err := rows.Err(); err != nil {
+		t.Fatalf("read recovered source accounting: %v", err)
+	}
+
+	seen := make(map[string]struct{}, len(plan.Records))
+	for _, planned := range plan.Records {
+		seen[planned.Record.SourcePath] = struct{}{}
+	}
+	wantPaths := make([]string, 0, len(seen))
+	for path := range seen {
+		wantPaths = append(wantPaths, path)
+	}
+	sort.Strings(wantPaths)
+	if !reflect.DeepEqual(gotPaths, wantPaths) {
+		t.Fatalf("recovered source accounting paths = %#v, want %#v", gotPaths, wantPaths)
 	}
 }
 
