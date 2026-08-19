@@ -53,7 +53,7 @@ func prepareIndex(ctx context.Context, cfg *config.Config, class indexCommandCla
 		case indexMutation:
 			return storage.OpenCompatible(ctx, cfg.DatabasePath)
 		case indexDiagnostic, indexRemediation:
-			return openReadOnlyCurrentIndex(ctx, cfg.DatabasePath)
+			return openImmutableCurrentIndex(ctx, cfg.DatabasePath)
 		default:
 			return nil, nil, fmt.Errorf("unknown index command class %d", class)
 		}
@@ -65,6 +65,13 @@ func prepareIndex(ctx context.Context, cfg *config.Config, class indexCommandCla
 		return nil, &d, nil
 	}
 	if err != nil {
+		if errors.Is(err, storage.ErrImmutableReadOnlyWALUnsafe) {
+			d := compat.Diagnostic{
+				Code:    compat.CodeIndexStale,
+				Summary: fmt.Sprintf("current index snapshot cannot be inspected without side effects while its WAL has uncheckpointed frames; close the writer or checkpoint the database, then retry: %v", err),
+			}
+			return nil, &d, err
+		}
 		d := continuationFor(compat.Diagnostic{Code: compat.CodeMigrationFailed, Summary: fmt.Sprintf("prepare index failed: %v", err)}, activePath)
 		return nil, &d, err
 	}
@@ -84,6 +91,13 @@ func prepareIndex(ctx context.Context, cfg *config.Config, class indexCommandCla
 			return nil, &d, nil
 		}
 		if err != nil {
+			if errors.Is(err, storage.ErrImmutableReadOnlyWALUnsafe) {
+				d := compat.Diagnostic{
+					Code:    compat.CodeIndexStale,
+					Summary: fmt.Sprintf("current index snapshot cannot be inspected without side effects while its WAL has uncheckpointed frames; close the writer or checkpoint the database, then retry: %v", err),
+				}
+				return nil, &d, err
+			}
 			d := continuationFor(compat.Diagnostic{Code: compat.CodeMigrationFailed, Summary: fmt.Sprintf("prepare index after sync failed: %v", err)}, activePath)
 			return nil, &d, err
 		}
@@ -93,7 +107,15 @@ func prepareIndex(ctx context.Context, cfg *config.Config, class indexCommandCla
 }
 
 func openReadOnlyCurrentIndex(ctx context.Context, path string) (*storage.Database, *compat.Diagnostic, error) {
-	db, err := storage.OpenReadOnly(path)
+	return openCurrentIndexWith(ctx, path, storage.OpenReadOnly)
+}
+
+func openImmutableCurrentIndex(ctx context.Context, path string) (*storage.Database, *compat.Diagnostic, error) {
+	return openCurrentIndexWith(ctx, path, storage.OpenImmutableReadOnly)
+}
+
+func openCurrentIndexWith(ctx context.Context, path string, open func(string) (*storage.Database, error)) (*storage.Database, *compat.Diagnostic, error) {
+	db, err := open(path)
 	if err != nil {
 		return nil, nil, err
 	}
