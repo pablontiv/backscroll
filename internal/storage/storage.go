@@ -1,12 +1,16 @@
 package storage
 
 import (
+	"context"
 	"database/sql"
+	"errors"
 	"fmt"
+	"io/fs"
 	"os"
 
 	_ "modernc.org/sqlite"
 
+	"github.com/pablontiv/backscroll/internal/compat"
 	"github.com/pablontiv/backscroll/internal/embedding"
 )
 
@@ -18,6 +22,18 @@ type Database struct {
 
 // Open opens or creates a new SQLite database at the given path with FTS5 and WAL mode enabled.
 func Open(path string) (*Database, error) {
+	d, err := openWithoutSetup(path)
+	if err != nil {
+		return nil, err
+	}
+	if err := d.SetupSchema(); err != nil {
+		_ = d.Close()
+		return nil, err
+	}
+	return d, nil
+}
+
+func openWithoutSetup(path string) (*Database, error) {
 	// modernc.org/sqlite honors the `_pragma=name(value)` DSN syntax; the mattn-style
 	// `_name=value` form is silently ignored (leaving rollback journal mode + no busy timeout).
 	db, err := sql.Open("sqlite", path+"?_pragma=journal_mode(WAL)&_pragma=synchronous(NORMAL)&_pragma=busy_timeout(5000)")
@@ -37,13 +53,28 @@ func Open(path string) (*Database, error) {
 		return nil, fmt.Errorf("enable foreign keys: %w", err)
 	}
 
-	d := &Database{db: db}
-	if err := d.SetupSchema(); err != nil {
-		_ = db.Close()
-		return nil, err
-	}
+	return &Database{db: db}, nil
+}
 
-	return d, nil
+func OpenCompatible(ctx context.Context, path string) (*Database, *compat.Diagnostic, error) {
+	inspect, err := OpenReadOnly(path)
+	if errors.Is(err, fs.ErrNotExist) {
+		db, openErr := Open(path)
+		return db, nil, openErr
+	}
+	if err != nil {
+		return nil, nil, err
+	}
+	plan, diag, err := compat.InspectIndex(ctx, inspect.DB())
+	_ = inspect.Close()
+	if err != nil || diag != nil {
+		return nil, diag, err
+	}
+	db, err := openWithoutSetup(path)
+	if err == nil && len(plan.Steps) > 0 {
+		err = db.ApplyMigrationPlan(ctx, path, plan)
+	}
+	return db, nil, err
 }
 
 // OpenReadOnly opens an existing SQLite database in read-only mode.
@@ -51,7 +82,7 @@ func Open(path string) (*Database, error) {
 func OpenReadOnly(path string) (*Database, error) {
 	// Fail fast if DB file doesn't exist
 	if _, err := os.Stat(path); os.IsNotExist(err) {
-		return nil, fmt.Errorf("backscroll database not found: %s", path)
+		return nil, fmt.Errorf("backscroll database not found: %s: %w", path, fs.ErrNotExist)
 	}
 
 	// Journal mode is persisted in the DB file (set by the write connection); a read-only

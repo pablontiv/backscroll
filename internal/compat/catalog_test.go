@@ -12,8 +12,6 @@ import (
 	"strings"
 	"testing"
 	"testing/fstest"
-
-	"github.com/pablontiv/backscroll/internal/storage"
 )
 
 func TestCheckedInReleaseSchemaManifestIsComplete(t *testing.T) {
@@ -260,32 +258,15 @@ func withReleaseSchemaFS(t *testing.T, fsys fs.FS) {
 func loadAuthoritativeMigrationRows(t *testing.T) map[int]migrationRow {
 	t.Helper()
 
-	db, err := storage.Open(filepath.Join(t.TempDir(), "backscroll.db"))
+	fixtureSQL, err := fs.ReadFile(releaseSchemaFS, "testdata/release-schemas/v13.sql")
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer func() {
-		if err := db.Close(); err != nil {
-			t.Fatalf("close authoritative database: %v", err)
-		}
-	}()
-
-	rows, err := db.DB().Query("SELECT version, name, checksum FROM schema_migrations ORDER BY version")
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer rows.Close()
+	rows := loadFixtureMigrationRows(t, fixtureSQL)
 
 	result := map[int]migrationRow{}
-	for rows.Next() {
-		var row migrationRow
-		if err := rows.Scan(&row.version, &row.name, &row.checksum); err != nil {
-			t.Fatal(err)
-		}
+	for _, row := range rows {
 		result[row.version] = row
-	}
-	if err := rows.Err(); err != nil {
-		t.Fatal(err)
 	}
 	return result
 }
