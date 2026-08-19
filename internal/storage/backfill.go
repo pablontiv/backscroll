@@ -46,8 +46,9 @@ func (d *Database) BackfillDerived(opts BackfillDerivedOpts) error {
 		pathsToProcess[p] = "session"
 	}
 
-	// Find files in search_items that are EXPIRED: absent from indexed_files.
-	// Within expired files, process only those missing at least one of the three derivations:
+	// Find files in search_items that are EXPIRED (absent from indexed_files)
+	// or provisionally recovered. Within those files, process only those missing
+	// at least one of the three derivations:
 	// - template_matches (templates mined), OR
 	// - correction_signals (corrections detected), OR
 	// - tool_events with extraction_version = 0 (lossy tool metadata extracted)
@@ -56,12 +57,12 @@ func (d *Database) BackfillDerived(opts BackfillDerivedOpts) error {
 		FROM search_items si
 		LEFT JOIN indexed_files ifx ON si.source_path = ifx.path
 		WHERE
-			ifx.path IS NULL AND
+			(ifx.path IS NULL OR ifx.hash = ?) AND
 			(NOT EXISTS (SELECT 1 FROM template_matches WHERE source_path = si.source_path) OR
 			 NOT EXISTS (SELECT 1 FROM correction_signals WHERE source_path = si.source_path) OR
 			 NOT EXISTS (SELECT 1 FROM tool_events WHERE source_path = si.source_path AND extraction_version = 0))
 		ORDER BY si.source_path
-	`)
+	`, recoveredSourceHash)
 	if err != nil {
 		return fmt.Errorf("query expired files: %w", err)
 	}

@@ -318,7 +318,11 @@ func (d *Database) refreshStopwords() error {
 
 // GetFileHashes returns a map of file paths to their stored hashes.
 func (d *Database) GetFileHashes() (map[string]string, error) {
-	rows, err := d.db.Query("SELECT path, hash FROM indexed_files")
+	rows, err := d.db.Query(`
+		SELECT path, hash
+		FROM indexed_files
+		WHERE hash <> ?
+	`, recoveredSourceHash)
 	if err != nil {
 		return nil, fmt.Errorf("query file hashes: %w", err)
 	}

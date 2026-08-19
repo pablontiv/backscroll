@@ -49,6 +49,40 @@ func TestBackfillDerivedMinesTemplatesFromExpiredFile(t *testing.T) {
 	}
 }
 
+func TestBackfillDerivedMinesRecoveredMarkedPath(t *testing.T) {
+	db, err := Open(filepath.Join(t.TempDir(), "test.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = db.Close() }()
+
+	if _, err := db.db.Exec(`
+		INSERT INTO search_items
+		(source, source_path, ordinal, role, text, timestamp, uuid, project, content_type, extraction_version)
+		VALUES ('session', '/recovered/s.jsonl', 0, 'assistant', 'error: recovered failure 42',
+				'2026-01-01T00:00:00Z', 'recovered#t0', 'proj', 'tool', 1)
+	`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.db.Exec(`
+		INSERT INTO indexed_files (path, hash, last_indexed)
+		VALUES ('/recovered/s.jsonl', ?, NULL)
+	`, recoveredSourceHash); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := db.BackfillDerived(BackfillDerivedOpts{}); err != nil {
+		t.Fatal(err)
+	}
+	var count int
+	if err := db.db.QueryRow(`SELECT COUNT(*) FROM message_templates`).Scan(&count); err != nil {
+		t.Fatal(err)
+	}
+	if count == 0 {
+		t.Fatal("marked recovered path was excluded from backfill")
+	}
+}
+
 func TestBackfillDerivedIsIdempotent(t *testing.T) {
 	db, err := Open(filepath.Join(t.TempDir(), "test.db"))
 	if err != nil {
