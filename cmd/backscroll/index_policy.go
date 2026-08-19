@@ -1,0 +1,253 @@
+package main
+
+import (
+	"context"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"io"
+	"io/fs"
+	"os"
+	"path/filepath"
+	"strings"
+
+	"github.com/pablontiv/backscroll/internal/compat"
+	"github.com/pablontiv/backscroll/internal/config"
+	"github.com/pablontiv/backscroll/internal/storage"
+)
+
+type indexCommandClass uint8
+
+const (
+	indexDataRead indexCommandClass = iota
+	indexMutation
+	indexDiagnostic
+	indexRemediation
+)
+
+func prepareIndex(ctx context.Context, cfg *config.Config, class indexCommandClass, autoSync bool) (*storage.Database, *compat.Diagnostic, error) {
+	if cfg == nil {
+		return nil, &compat.Diagnostic{Code: compat.CodeIndexStale, Summary: "index configuration is unavailable"}, fmt.Errorf("index configuration is unavailable")
+	}
+	activePath, err := resolveActiveIndexPath(cfg.DatabasePath)
+	if err != nil {
+		d := continuationFor(compat.Diagnostic{Code: compat.CodeIndexStale, Summary: fmt.Sprintf("resolve active index path: %v", err)}, activePath)
+		return nil, &d, err
+	}
+
+	if class == indexDataRead && !autoSync {
+		if _, statErr := os.Stat(cfg.DatabasePath); os.IsNotExist(statErr) {
+			return nil, nil, fmt.Errorf("backscroll database not found: %s: %w", cfg.DatabasePath, statErr)
+		} else if statErr != nil {
+			return nil, nil, fmt.Errorf("stat database: %w", statErr)
+		}
+	}
+
+	openPrepared := func() (*storage.Database, *compat.Diagnostic, error) {
+		switch class {
+		case indexDataRead:
+			if !autoSync {
+				return openReadOnlyCurrentIndex(ctx, cfg.DatabasePath)
+			}
+			return storage.OpenCompatible(ctx, cfg.DatabasePath)
+		case indexMutation:
+			return storage.OpenCompatible(ctx, cfg.DatabasePath)
+		case indexDiagnostic, indexRemediation:
+			return openImmutableCurrentIndex(ctx, cfg.DatabasePath)
+		default:
+			return nil, nil, fmt.Errorf("unknown index command class %d", class)
+		}
+	}
+
+	db, diag, err := openPrepared()
+	if diag != nil {
+		d := continuationFor(*diag, activePath)
+		return nil, &d, nil
+	}
+	if err != nil {
+		if errors.Is(err, storage.ErrImmutableReadOnlyWALUnsafe) {
+			d := compat.Diagnostic{
+				Code:    compat.CodeIndexStale,
+				Summary: fmt.Sprintf("current index snapshot cannot be inspected without side effects while its WAL has uncheckpointed frames; close the writer or checkpoint the database, then retry: %v", err),
+			}
+			return nil, &d, err
+		}
+		d := continuationFor(compat.Diagnostic{Code: compat.CodeMigrationFailed, Summary: fmt.Sprintf("prepare index failed: %v", err)}, activePath)
+		return nil, &d, err
+	}
+
+	if autoSync {
+		if closeErr := db.Close(); closeErr != nil {
+			d := continuationFor(compat.Diagnostic{Code: compat.CodeIndexStale, Summary: fmt.Sprintf("close prepared index before sync: %v", closeErr)}, activePath)
+			return nil, &d, closeErr
+		}
+		if err := maybeAutoSync(cfg); err != nil {
+			d := continuationFor(compat.Diagnostic{Code: compat.CodeIndexStale, Summary: fmt.Sprintf("index sync failed: %v", err)}, activePath)
+			return nil, &d, err
+		}
+		db, diag, err = openPrepared()
+		if diag != nil {
+			d := continuationFor(*diag, activePath)
+			return nil, &d, nil
+		}
+		if err != nil {
+			if errors.Is(err, storage.ErrImmutableReadOnlyWALUnsafe) {
+				d := compat.Diagnostic{
+					Code:    compat.CodeIndexStale,
+					Summary: fmt.Sprintf("current index snapshot cannot be inspected without side effects while its WAL has uncheckpointed frames; close the writer or checkpoint the database, then retry: %v", err),
+				}
+				return nil, &d, err
+			}
+			d := continuationFor(compat.Diagnostic{Code: compat.CodeMigrationFailed, Summary: fmt.Sprintf("prepare index after sync failed: %v", err)}, activePath)
+			return nil, &d, err
+		}
+	}
+
+	return db, nil, nil
+}
+
+func openReadOnlyCurrentIndex(ctx context.Context, path string) (*storage.Database, *compat.Diagnostic, error) {
+	return openCurrentIndexWith(ctx, path, storage.OpenReadOnly)
+}
+
+func openImmutableCurrentIndex(ctx context.Context, path string) (*storage.Database, *compat.Diagnostic, error) {
+	return openCurrentIndexWith(ctx, path, storage.OpenImmutableReadOnly)
+}
+
+func openCurrentIndexWith(ctx context.Context, path string, open func(string) (*storage.Database, error)) (*storage.Database, *compat.Diagnostic, error) {
+	db, err := open(path)
+	if err != nil {
+		return nil, nil, err
+	}
+	plan, diag, inspectErr := compat.InspectIndex(ctx, db.DB())
+	if inspectErr != nil || diag != nil {
+		closeErr := closeIndexDB(db, inspectErr)
+		if diag != nil && closeErr != nil {
+			diag.Summary = strings.TrimSpace(diag.Summary) + "; " + closeErr.Error()
+		}
+		return nil, diag, closeErr
+	}
+	if len(plan.Steps) > 0 {
+		diag := &compat.Diagnostic{
+			Code:    compat.CodeIndexStale,
+			Summary: fmt.Sprintf("index schema %s has %d pending migration step(s)", plan.From.Signature, len(plan.Steps)),
+		}
+		if closeErr := closeIndexDB(db, nil); closeErr != nil {
+			diag.Summary += "; " + closeErr.Error()
+			return nil, diag, closeErr
+		}
+		return nil, diag, nil
+	}
+	return db, nil, nil
+}
+
+func closeIndexDB(db *storage.Database, err error) error {
+	if db == nil {
+		return err
+	}
+	if closeErr := db.Close(); closeErr != nil {
+		return errors.Join(err, fmt.Errorf("close index database: %w", closeErr))
+	}
+	return err
+}
+
+func continuationFor(d compat.Diagnostic, activePath string) compat.Diagnostic {
+	if strings.TrimSpace(activePath) == "" {
+		d.Continuation = nil
+		if !strings.Contains(d.Summary, "recovery continuation unavailable") {
+			d.Summary = strings.TrimSpace(d.Summary) + " (recovery continuation unavailable: active path is empty)"
+		}
+		return d
+	}
+	d.Continuation = []string{"recover", "--from", activePath, "--dry-run"}
+	return d
+}
+
+func writeDiagnostic(stdout, stderr io.Writer, d compat.Diagnostic, jsonMode bool) error {
+	if jsonMode {
+		payload := struct {
+			Code         string   `json:"code"`
+			Summary      string   `json:"summary"`
+			Continuation []string `json:"continuation_argv,omitempty"`
+		}{
+			Code:         string(d.Code),
+			Summary:      d.Summary,
+			Continuation: d.Continuation,
+		}
+		return json.NewEncoder(stdout).Encode(payload)
+	}
+	_, err := fmt.Fprintf(stderr, "diagnostic: %s: %s\n", d.Code, strings.TrimSpace(d.Summary))
+	if err != nil {
+		return err
+	}
+	if len(d.Continuation) > 0 {
+		_, err = fmt.Fprintf(stderr, "continuation: %s\n", strings.Join(d.Continuation, " "))
+	}
+	return err
+}
+
+func writeRobotDiagnostic(stdout io.Writer, d compat.Diagnostic) error {
+	if _, err := fmt.Fprintf(stdout, "diagnostic_code=%s\n", d.Code); err != nil {
+		return err
+	}
+	if _, err := fmt.Fprintf(stdout, "diagnostic_summary=%s\n", strings.TrimSpace(d.Summary)); err != nil {
+		return err
+	}
+	if len(d.Continuation) > 0 {
+		if _, err := fmt.Fprintf(stdout, "diagnostic_continuation_argv=%s\n", strings.Join(d.Continuation, " ")); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func refuseIndex(stdout, stderr io.Writer, d compat.Diagnostic, jsonMode, robotMode bool) error {
+	var err error
+	if robotMode {
+		err = writeRobotDiagnostic(stdout, d)
+	} else {
+		err = writeDiagnostic(stdout, stderr, d, jsonMode)
+	}
+	if err != nil {
+		return err
+	}
+	return indexDiagnosticError{diagnostic: d}
+}
+
+type indexDiagnosticError struct {
+	diagnostic compat.Diagnostic
+}
+
+func (e indexDiagnosticError) Error() string {
+	return fmt.Sprintf("%s: %s", e.diagnostic.Code, strings.TrimSpace(e.diagnostic.Summary))
+}
+
+func indexPolicyMachineArgs(args []string) bool {
+	for _, arg := range args {
+		if arg == "--json" || arg == "--robot" || strings.HasPrefix(arg, "--json=") || strings.HasPrefix(arg, "--robot=") {
+			return true
+		}
+	}
+	return false
+}
+
+func resolveActiveIndexPath(path string) (string, error) {
+	if strings.TrimSpace(path) == "" {
+		return "", fmt.Errorf("database path is empty")
+	}
+	abs, err := filepath.Abs(path)
+	if err != nil {
+		return "", err
+	}
+	if _, err := os.Lstat(abs); err != nil {
+		if errors.Is(err, fs.ErrNotExist) {
+			return abs, nil
+		}
+		return "", err
+	}
+	resolved, err := filepath.EvalSymlinks(abs)
+	if err != nil {
+		return "", err
+	}
+	return resolved, nil
+}

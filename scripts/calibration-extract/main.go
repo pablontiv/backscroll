@@ -1,7 +1,9 @@
 package main
 
 import (
+	"context"
 	"encoding/csv"
+	"errors"
 	"flag"
 	"fmt"
 	"log"
@@ -10,6 +12,7 @@ import (
 	"path/filepath"
 	"sort"
 
+	"github.com/pablontiv/backscroll/internal/compat"
 	"github.com/pablontiv/backscroll/internal/storage"
 )
 
@@ -41,11 +44,10 @@ func main() {
 		log.Fatalf("get current user: %v", err)
 	}
 	dbPath := filepath.Join(currentUser.HomeDir, ".backscroll.db")
-	db, err := storage.OpenReadOnly(dbPath)
+	db, err := openInspectedCalibrationDatabase(context.Background(), dbPath)
 	if err != nil {
 		log.Fatalf("open database: %v", err)
 	}
-	defer func() { _ = db.Close() }()
 
 	// Query corrections with min_confidence=0.4
 	opts := storage.CorrectionAggOpts{
@@ -60,12 +62,44 @@ func main() {
 	// Stratified sampling with window context population
 	samples := stratifyWithDB(db, candidates, *total, *perDetector, *perSession)
 
+	if err := db.Close(); err != nil {
+		log.Fatalf("close database: %v", err)
+	}
+
 	// Output CSV
 	if err := writeCSV(*output, samples); err != nil {
 		log.Fatalf("write csv: %v", err)
 	}
 
 	fmt.Printf("Extracted %d samples to %s\n", len(samples), *output)
+}
+
+func openInspectedCalibrationDatabase(ctx context.Context, dbPath string) (*storage.Database, error) {
+	db, err := storage.OpenReadOnly(dbPath)
+	if err != nil {
+		return nil, err
+	}
+	plan, diag, err := compat.InspectIndex(ctx, db.DB())
+	if err != nil {
+		return nil, closeCalibrationDB(db, fmt.Errorf("inspect index: %w", err))
+	}
+	if diag != nil {
+		return nil, closeCalibrationDB(db, fmt.Errorf("%s: %s", diag.Code, diag.Summary))
+	}
+	if len(plan.Steps) > 0 {
+		return nil, closeCalibrationDB(db, fmt.Errorf("%s: index schema %s has %d pending migration step(s)", compat.CodeIndexStale, plan.From.Signature, len(plan.Steps)))
+	}
+	return db, nil
+}
+
+func closeCalibrationDB(db *storage.Database, err error) error {
+	if db == nil {
+		return err
+	}
+	if closeErr := db.Close(); closeErr != nil {
+		return errors.Join(err, fmt.Errorf("close database: %w", closeErr))
+	}
+	return err
 }
 
 // Sample represents one row in the output CSV.

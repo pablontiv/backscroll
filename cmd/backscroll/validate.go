@@ -1,17 +1,21 @@
 package main
 
 import (
+	"context"
+	"encoding/json"
 	"fmt"
 	"io"
+	"os"
 
 	"github.com/spf13/cobra"
 
+	"github.com/pablontiv/backscroll/internal/compat"
 	"github.com/pablontiv/backscroll/internal/config"
-	"github.com/pablontiv/backscroll/internal/storage"
 )
 
 func newValidateCmd(stdout, stderr io.Writer) *cobra.Command {
 	var indexedOnly bool
+	var jsonFormat bool
 
 	cmd := &cobra.Command{
 		Use:   "validate",
@@ -23,43 +27,69 @@ func newValidateCmd(stdout, stderr io.Writer) *cobra.Command {
 
 Returns an error if validation fails.
 
-Use --indexed-only to skip auto-sync (validate existing index only).`,
+Validate is read-only and never auto-syncs.`,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			return runValidate(stdout, stderr, indexedOnly)
+			return runValidate(stdout, stderr, indexedOnly, jsonFormat)
 		},
 	}
 
-	cmd.Flags().BoolVar(&indexedOnly, "indexed-only", false, "Read existing index without auto-sync")
+	cmd.Flags().BoolVar(&indexedOnly, "indexed-only", false, "Deprecated: validate is always read-only")
+	cmd.Flags().BoolVar(&jsonFormat, "json", false, "Output as JSON")
 
 	return cmd
 }
 
-func runValidate(stdout, stderr io.Writer, indexedOnly bool) error {
+func runValidate(stdout, stderr io.Writer, indexedOnly bool, jsonFormat bool) error {
+	_ = indexedOnly
 	cfg, err := config.Load()
 	if err != nil {
 		return fmt.Errorf("load config: %w", err)
 	}
 
-	// Auto-sync before validate unless --indexed-only is set
-	if !indexedOnly {
-		if err := maybeAutoSync(cfg); err != nil {
-			_, _ = fmt.Fprintf(stderr, "warning: auto-sync failed: %v; validating cached index\n", err)
+	if _, err := os.Stat(cfg.DatabasePath); os.IsNotExist(err) {
+		if jsonFormat {
+			return json.NewEncoder(stdout).Encode(map[string]any{"valid": true, "database_exists": false})
 		}
+		_, _ = fmt.Fprintf(stdout, "✓ Index validation skipped: database not found\n")
+		return nil
+	} else if err != nil {
+		return fmt.Errorf("stat database: %w", err)
 	}
 
-	// Open database
-	db, err := storage.Open(cfg.DatabasePath)
+	db, diag, err := prepareIndex(context.Background(), cfg, indexDiagnostic, false)
+	if diag != nil {
+		return refuseDiagnostics(stdout, stderr, []compat.Diagnostic{*diag}, jsonFormat)
+	}
 	if err != nil {
-		return fmt.Errorf("open database: %w", err)
+		return fmt.Errorf("open database read-only: %w", err)
 	}
 	defer func() { _ = db.Close() }()
 
-	// Validate
 	if err := db.Validate(); err != nil {
+		activePath, resolveErr := resolveActiveIndexPath(cfg.DatabasePath)
+		if resolveErr != nil {
+			return fmt.Errorf("resolve active index path: %w", resolveErr)
+		}
+		diagnostics, inspectErr := recoveryDiagnosticsForIndex(db, activePath)
+		if inspectErr != nil {
+			return fmt.Errorf("inspect recovery diagnostics: %w", inspectErr)
+		}
+		if len(diagnostics) > 0 {
+			return refuseDiagnostics(stdout, stderr, diagnostics, jsonFormat)
+		}
+		if jsonFormat {
+			if encodeErr := json.NewEncoder(stdout).Encode(map[string]any{"valid": false, "error": err.Error()}); encodeErr != nil {
+				return encodeErr
+			}
+			return err
+		}
 		_, _ = fmt.Fprintf(stdout, "❌ Validation failed: %v\n", err)
 		return err
 	}
 
+	if jsonFormat {
+		return json.NewEncoder(stdout).Encode(map[string]any{"valid": true, "database_exists": true})
+	}
 	_, _ = fmt.Fprintf(stdout, "✓ Index validation passed\n")
 	_, _ = fmt.Fprintf(stdout, "✓ All required tables exist\n")
 	_, _ = fmt.Fprintf(stdout, "✓ FTS5 virtual table is set up correctly\n")

@@ -1,21 +1,22 @@
 package main
 
 import (
+	"context"
 	"fmt"
 	"io"
 
 	"github.com/spf13/cobra"
 
 	"github.com/pablontiv/backscroll/internal/config"
-	"github.com/pablontiv/backscroll/internal/storage"
 )
 
 func newPurgeCmd(stdout, stderr io.Writer) *cobra.Command {
 	var before string
 
 	cmd := &cobra.Command{
-		Use:   "purge",
-		Short: "Remove old indexed records",
+		Use:          "purge",
+		Short:        "Remove old indexed records",
+		SilenceUsage: true,
 		Long: `Purge removes all indexed records with timestamps before the specified date.
 
 The date should be in YYYY-MM-DD format (e.g., 2024-01-15).
@@ -32,7 +33,7 @@ Example: backscroll purge --before 2024-01-01`,
 	return cmd
 }
 
-func runPurge(stdout, stderr io.Writer, before string) error {
+func runPurge(stdout, stderr io.Writer, before string) (retErr error) {
 	if before == "" {
 		return fmt.Errorf("--before date is required")
 	}
@@ -42,12 +43,14 @@ func runPurge(stdout, stderr io.Writer, before string) error {
 		return fmt.Errorf("load config: %w", err)
 	}
 
-	// Open database
-	db, err := storage.Open(cfg.DatabasePath)
-	if err != nil {
-		return fmt.Errorf("open database: %w", err)
+	db, diag, err := prepareIndex(context.Background(), cfg, indexMutation, false)
+	if diag != nil {
+		return refuseIndex(stdout, stderr, *diag, false, false)
 	}
-	defer func() { _ = db.Close() }()
+	if err != nil {
+		return fmt.Errorf("prepare index: %w", err)
+	}
+	defer func() { retErr = closeIndexDB(db, retErr) }()
 
 	// Purge records
 	deleted, err := db.Purge(before)

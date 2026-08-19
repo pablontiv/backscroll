@@ -631,6 +631,101 @@ func TestQueryIndexedRecords(t *testing.T) {
 	}
 }
 
+func TestQueryIndexedRecordsReturnsCanonicalModel(t *testing.T) {
+	db, cleanup := newTestDB(t)
+	defer cleanup()
+
+	project := "canonical-project"
+	uuid := getTestUUID()
+	timestamp := "2026-08-18T12:34:56Z"
+	if err := db.SyncFiles([]IndexedFile{
+		{
+			SourcePath: "/sentinel/canonical.md",
+			Source:     "decision",
+			Hash:       "canonical-hash",
+			Project:    project,
+			Messages: []IndexedMessage{
+				{
+					Ordinal:     7,
+					Role:        "assistant",
+					Text:        "canonical model text sentinel",
+					UUID:        uuid,
+					Timestamp:   timestamp,
+					ContentType: "text/markdown",
+				},
+			},
+		},
+	}); err != nil {
+		t.Fatalf("SyncFiles: %v", err)
+	}
+
+	path := "/sentinel/canonical.md"
+	records, err := db.QueryIndexedRecords(IndexedRecordQuery{SourcePath: &path})
+	if err != nil {
+		t.Fatalf("QueryIndexedRecords: %v", err)
+	}
+	var got []models.IndexedRecord = records
+	if len(got) != 1 {
+		t.Fatalf("expected 1 canonical record, got %d", len(got))
+	}
+	record := got[0]
+	if record.Source != "decision" {
+		t.Errorf("Source = %q, want %q", record.Source, "decision")
+	}
+	if record.SourcePath != path {
+		t.Errorf("SourcePath = %q, want %q", record.SourcePath, path)
+	}
+	if record.Ordinal != 7 {
+		t.Errorf("Ordinal = %d, want 7", record.Ordinal)
+	}
+	if record.Role != "assistant" {
+		t.Errorf("Role = %q, want %q", record.Role, "assistant")
+	}
+	if record.Text != "canonical model text sentinel" {
+		t.Errorf("Text = %q, want sentinel text", record.Text)
+	}
+	if record.Project == nil || *record.Project != project {
+		t.Errorf("Project = %v, want %q", record.Project, project)
+	}
+	if record.UUID == nil || *record.UUID != uuid {
+		t.Errorf("UUID = %v, want %q", record.UUID, uuid)
+	}
+	if record.Timestamp == nil || *record.Timestamp != timestamp {
+		t.Errorf("Timestamp = %v, want %q", record.Timestamp, timestamp)
+	}
+	if record.ContentType != "text/markdown" {
+		t.Errorf("ContentType = %q, want %q", record.ContentType, "text/markdown")
+	}
+
+	if _, err := db.DB().Exec(`
+		INSERT INTO search_items (source, source_path, ordinal, role, text)
+		VALUES (?, ?, ?, ?, ?)
+	`, "session", "/sentinel/nulls.jsonl", 8, "user", "null pointer sentinel"); err != nil {
+		t.Fatalf("insert null sentinel row: %v", err)
+	}
+	nullPath := "/sentinel/nulls.jsonl"
+	nullRecords, err := db.QueryIndexedRecords(IndexedRecordQuery{SourcePath: &nullPath})
+	if err != nil {
+		t.Fatalf("QueryIndexedRecords null sentinel: %v", err)
+	}
+	var nullGot []models.IndexedRecord = nullRecords
+	if len(nullGot) != 1 {
+		t.Fatalf("expected 1 null sentinel record, got %d", len(nullGot))
+	}
+	if nullGot[0].Project != nil {
+		t.Errorf("Project = %v, want nil", nullGot[0].Project)
+	}
+	if nullGot[0].UUID != nil {
+		t.Errorf("UUID = %v, want nil", nullGot[0].UUID)
+	}
+	if nullGot[0].Timestamp != nil {
+		t.Errorf("Timestamp = %v, want nil", nullGot[0].Timestamp)
+	}
+	if nullGot[0].ContentType != "text" {
+		t.Errorf("ContentType = %q, want default text", nullGot[0].ContentType)
+	}
+}
+
 func TestPurgeWithISODateFormat(t *testing.T) {
 	db, cleanup := newTestDB(t)
 	defer cleanup()

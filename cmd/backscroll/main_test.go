@@ -24,50 +24,53 @@ func boolPtr(b bool) *bool { return &b }
 func testEnv(t *testing.T) (dbPath string, cleanup func()) {
 	t.Helper()
 	dir := t.TempDir()
-	dbPath = filepath.Join(dir, "test.db")
-	origDB := os.Getenv("BACKSCROLL_DATABASE_PATH")
-	origCfg := os.Getenv("BACKSCROLL_CONFIG_DIR")
-	_ = os.Setenv("BACKSCROLL_DATABASE_PATH", dbPath)
-	_ = os.Setenv("BACKSCROLL_CONFIG_DIR", dir)
-	return dbPath, func() {
-		if origDB == "" {
-			_ = os.Unsetenv("BACKSCROLL_DATABASE_PATH")
-		} else {
-			_ = os.Setenv("BACKSCROLL_DATABASE_PATH", origDB)
-		}
-		if origCfg == "" {
-			_ = os.Unsetenv("BACKSCROLL_CONFIG_DIR")
-		} else {
-			_ = os.Setenv("BACKSCROLL_CONFIG_DIR", origCfg)
+	homeDir := filepath.Join(dir, "home")
+	configDir := filepath.Join(dir, "config")
+	for _, path := range []string{homeDir, configDir} {
+		if err := os.MkdirAll(path, 0o755); err != nil {
+			t.Fatalf("mkdir isolated test env path %s: %v", path, err)
 		}
 	}
+	dbPath = filepath.Join(dir, "test.db")
+	t.Setenv("HOME", homeDir)
+	t.Setenv("BACKSCROLL_CONFIG_DIR", configDir)
+	t.Setenv("BACKSCROLL_DATABASE_PATH", dbPath)
+	db, err := storage.Open(dbPath)
+	if err != nil {
+		t.Fatalf("create isolated test database: %v", err)
+	}
+	if _, err := db.DB().Exec(`PRAGMA wal_checkpoint(TRUNCATE)`); err != nil {
+		_ = db.Close()
+		t.Fatalf("checkpoint isolated test database: %v", err)
+	}
+	if err := db.Close(); err != nil {
+		t.Fatalf("close isolated test database: %v", err)
+	}
+	return dbPath, func() {}
 }
 
 // setupSessionDir sets BACKSCROLL_SESSION_DIRS to a path for auto-sync testing.
 // Returns the original value for restoration.
 func setupSessionDir(t *testing.T, path string) func() {
 	t.Helper()
-	origDirs := os.Getenv("BACKSCROLL_SESSION_DIRS")
-	_ = os.Setenv("BACKSCROLL_SESSION_DIRS", path)
-	return func() {
-		if origDirs == "" {
-			_ = os.Unsetenv("BACKSCROLL_SESSION_DIRS")
-		} else {
-			_ = os.Setenv("BACKSCROLL_SESSION_DIRS", origDirs)
-		}
-	}
+	t.Setenv("BACKSCROLL_SESSION_DIRS", path)
+	return func() {}
 }
 
-// syncForTest is a v1->v2 migration helper. In v2, sync is not a root command
-// but auto-sync happens before queries. This helper just sets up session dirs
-// and returns a fake "success" to maintain test patterns.
+// syncForTest is a v1->v2 migration helper. In v2, sync is not a root command.
+// This helper performs the explicit test sync setup so read-only diagnostic
+// commands do not need to auto-sync.
 func syncForTest(t *testing.T, args ...string) (string, string, error) {
 	t.Helper()
 	// Extract --path value if present
 	for i, arg := range args {
 		if arg == "--path" && i+1 < len(args) {
 			_ = setupSessionDir(t, args[i+1])
-			return "", "", nil
+			cfg, err := config.Load()
+			if err != nil {
+				return "", "", err
+			}
+			return "", "", maybeAutoSync(cfg)
 		}
 	}
 	return "", "", nil
@@ -136,7 +139,7 @@ func TestSyncAndSearch(t *testing.T) {
 
 	// v2: search auto-syncs before querying. No explicit sync needed.
 
-	// Status should show indexed content (auto-syncs first)
+	// Status is read-only; it should still render the existing index summary.
 	out, _, err := runCmd("status")
 	if err != nil {
 		t.Fatalf("status error: %v", err)
@@ -1181,7 +1184,7 @@ func TestStatusJSONIndexUsable(t *testing.T) {
 	// After syncing a session, usable must flip to true
 	piDir := filepath.Dir(filepath.Join(fixturesDir(), "claude-tool-events.jsonl"))
 	_, _, _ = syncForTest(t, "sync", "--path", piDir)
-	// v2: status without --indexed-only triggers auto-sync
+	// Status is read-only; the explicit sync above populated the index.
 	out, _, err = runCmd("status", "--json")
 	if err != nil {
 		t.Fatalf("status after sync error: %v", err)
@@ -1561,7 +1564,7 @@ roots = ["/home/shared/myproject"]
 	t.Setenv("BACKSCROLL_CONFIG_DIR", cfgDir)
 	t.Setenv("HOME", home)
 
-	// Run status to trigger auto-sync
+	// Status is read-only; search below is responsible for auto-syncing content.
 	out, stderr, err := runCmd("status")
 	if err != nil {
 		t.Fatalf("status failed: %v; stderr: %s", err, stderr)

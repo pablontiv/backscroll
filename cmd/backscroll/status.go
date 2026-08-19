@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -8,6 +9,7 @@ import (
 
 	"github.com/spf13/cobra"
 
+	"github.com/pablontiv/backscroll/internal/compat"
 	"github.com/pablontiv/backscroll/internal/config"
 	"github.com/pablontiv/backscroll/internal/input_config"
 	"github.com/pablontiv/backscroll/internal/storage"
@@ -29,41 +31,41 @@ func newStatusCmd(stdout, stderr io.Writer) *cobra.Command {
 - Configuration
 
 Use --json to output as JSON.
-Use --indexed-only to skip auto-sync (read existing index only).`,
+Status is read-only and never auto-syncs.`,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			return runStatus(stdout, stderr, jsonFormat, indexedOnly)
 		},
 	}
 
 	cmd.Flags().BoolVar(&jsonFormat, "json", false, "Output as JSON")
-	cmd.Flags().BoolVar(&indexedOnly, "indexed-only", false, "Read existing index without auto-sync")
+	cmd.Flags().BoolVar(&indexedOnly, "indexed-only", false, "Deprecated: status is always read-only")
 
 	return cmd
 }
 
 func runStatus(stdout, stderr io.Writer, jsonFormat, indexedOnly bool) error {
+	_ = indexedOnly
 	cfg, err := config.Load()
 	if err != nil {
 		return fmt.Errorf("load config: %w", err)
 	}
 
-	// Auto-sync before status unless --indexed-only is set
-	if !indexedOnly {
-		if err := maybeAutoSync(cfg); err != nil {
-			_, _ = fmt.Fprintf(stderr, "warning: auto-sync failed: %v; using cached index\n", err)
-		}
-	}
-
-	// Check if database exists
+	// Check if database exists without creating it. Status is diagnostic/read-only
+	// and must not auto-sync or open the index through a writer.
 	_, err = os.Stat(cfg.DatabasePath)
 	dbExists := err == nil
+	if err != nil && !os.IsNotExist(err) {
+		return fmt.Errorf("stat database: %w", err)
+	}
 
 	var stats storage.Stats
 	if dbExists {
-		// Open database
-		db, err := storage.OpenReadOnly(cfg.DatabasePath)
+		db, diag, err := prepareIndex(context.Background(), cfg, indexDiagnostic, false)
+		if diag != nil {
+			return refuseDiagnostics(stdout, stderr, []compat.Diagnostic{*diag}, jsonFormat)
+		}
 		if err != nil {
-			return fmt.Errorf("open database: %w", err)
+			return fmt.Errorf("open database read-only: %w", err)
 		}
 		defer func() { _ = db.Close() }()
 
@@ -137,6 +139,8 @@ func runStatus(stdout, stderr io.Writer, jsonFormat, indexedOnly bool) error {
 			}
 		} else {
 			_, _ = fmt.Fprintf(stdout, "\nIndex: Not yet created\n")
+			_, _ = fmt.Fprintf(stdout, "  Files indexed:    0\n")
+			_, _ = fmt.Fprintf(stdout, "  Messages indexed: 0\n")
 		}
 
 		_, _ = fmt.Fprintf(stdout, "\nConfiguration:\n")
@@ -170,4 +174,41 @@ func resolveInputsForStatus(sessionDirs []string) ([]string, bool) {
 		}
 	}
 	return names, true
+}
+
+func recoveryDiagnosticsForIndex(db *storage.Database, activePath string) ([]compat.Diagnostic, error) {
+	input, diag, err := storage.ReadRecoveryInput(context.Background(), db)
+	if diag != nil {
+		d := continuationFor(*diag, activePath)
+		return []compat.Diagnostic{d}, err
+	}
+	if err != nil {
+		return nil, err
+	}
+	_, diagnostics, err := compat.PlanRecovery([]compat.RecoveryInput{input})
+	if err != nil {
+		return nil, err
+	}
+	for i := range diagnostics {
+		diagnostics[i] = continuationFor(diagnostics[i], activePath)
+	}
+	return diagnostics, nil
+}
+
+func refuseDiagnostics(stdout, stderr io.Writer, diagnostics []compat.Diagnostic, jsonMode bool) error {
+	if len(diagnostics) == 0 {
+		return nil
+	}
+	if jsonMode || len(diagnostics) == 1 {
+		if err := writeDiagnostic(stdout, stderr, diagnostics[0], jsonMode); err != nil {
+			return err
+		}
+		return indexDiagnosticError{diagnostic: diagnostics[0]}
+	}
+	for _, diagnostic := range diagnostics {
+		if err := writeDiagnostic(stdout, stderr, diagnostic, false); err != nil {
+			return err
+		}
+	}
+	return indexDiagnosticError{diagnostic: diagnostics[0]}
 }

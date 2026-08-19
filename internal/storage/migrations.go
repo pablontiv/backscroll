@@ -1,9 +1,6 @@
 package storage
 
-import (
-	"crypto/sha256"
-	"fmt"
-)
+import "fmt"
 
 // SetupSchema creates the database schema if it doesn't already exist.
 // It idempotently applies all migrations using the schema_migrations table.
@@ -183,143 +180,25 @@ func (d *Database) SetupSchema() error {
 
 // applyV1Migration applies version 1 of the schema (all core tables).
 func (d *Database) applyV1Migration() error {
-	tx, err := d.db.Begin()
-	if err != nil {
-		return fmt.Errorf("begin transaction: %w", err)
-	}
-	defer func() { _ = tx.Rollback() }()
-
-	// Define the core DDL for this migration (for checksum)
-	coreDDL := sqlV1CoreDDL
-
-	// Execute all CREATE TABLE statements (idempotent with IF NOT EXISTS)
-	if _, err := tx.Exec(sqlV1Core); err != nil {
-		return fmt.Errorf("create core tables: %w", err)
-	}
-
-	// Create FTS5 virtual table and vocab view (idempotent)
-	if _, err := tx.Exec(sqlV1FTS5); err != nil {
-		return fmt.Errorf("create FTS5 virtual table: %w", err)
-	}
-
-	// Create triggers (idempotent with IF NOT EXISTS)
-	if _, err := tx.Exec(sqlV1Triggers); err != nil {
-		return fmt.Errorf("create triggers: %w", err)
-	}
-
-	// Compute checksum of the core DDL
-	checksum := sha256.Sum256([]byte(coreDDL))
-	checksumHex := fmt.Sprintf("%x", checksum)
-
-	// Record migration as applied
-	_, err = tx.Exec(`
-		INSERT INTO schema_migrations (version, name, applied_on, checksum)
-		VALUES (1, 'V1 core schema', CURRENT_TIMESTAMP, ?)
-	`, checksumHex)
-	if err != nil {
-		return fmt.Errorf("record migration: %w", err)
-	}
-
-	if err := tx.Commit(); err != nil {
-		return fmt.Errorf("commit migration: %w", err)
-	}
-
-	return nil
+	return d.applySingleMigration(applyV1)
 }
 
 // applyV2Migration adds tables for the embedding system: chunks and embedding_metadata.
 func (d *Database) applyV2Migration() error {
-	tx, err := d.db.Begin()
-	if err != nil {
-		return fmt.Errorf("begin transaction: %w", err)
-	}
-	defer func() { _ = tx.Rollback() }()
-
-	if _, err := tx.Exec(sqlV2); err != nil {
-		return fmt.Errorf("create embedding tables: %w", err)
-	}
-
-	checksum := sha256.Sum256([]byte(sqlV2))
-	checksumHex := fmt.Sprintf("%x", checksum)
-
-	_, err = tx.Exec(`
-		INSERT INTO schema_migrations (version, name, applied_on, checksum)
-		VALUES (2, 'V2 embedding tables', CURRENT_TIMESTAMP, ?)
-	`, checksumHex)
-	if err != nil {
-		return fmt.Errorf("record migration v2: %w", err)
-	}
-
-	if err := tx.Commit(); err != nil {
-		return fmt.Errorf("commit migration v2: %w", err)
-	}
-
-	return nil
+	return d.applySingleMigration(applyV2)
 }
 
 // applyV3Migration adds an embedding BLOB column to chunks for pure-Go vector search.
 // Decision (T039): sqlite-vec requires CGO; we store embedding bytes directly in chunks
 // and perform cosine similarity in Go (linear scan).
 func (d *Database) applyV3Migration() error {
-	tx, err := d.db.Begin()
-	if err != nil {
-		return fmt.Errorf("begin transaction: %w", err)
-	}
-	defer func() { _ = tx.Rollback() }()
-
-	if _, err := tx.Exec(sqlV3); err != nil {
-		return fmt.Errorf("add embedding column: %w", err)
-	}
-
-	checksum := sha256.Sum256([]byte(sqlV3))
-	checksumHex := fmt.Sprintf("%x", checksum)
-
-	_, err = tx.Exec(`
-		INSERT INTO schema_migrations (version, name, applied_on, checksum)
-		VALUES (3, 'V3 embedding blob column', CURRENT_TIMESTAMP, ?)
-	`, checksumHex)
-	if err != nil {
-		return fmt.Errorf("record migration v3: %w", err)
-	}
-
-	if err := tx.Commit(); err != nil {
-		return fmt.Errorf("commit migration v3: %w", err)
-	}
-
-	return nil
+	return d.applySingleMigration(applyV3)
 }
 
 // applyV4Migration adds the tool_fts index (trigram tokenizer), branches the
 // sync triggers by content_type, and repopulates both indexes from search_items.
 func (d *Database) applyV4Migration() error {
-	tx, err := d.db.Begin()
-	if err != nil {
-		return fmt.Errorf("begin transaction: %w", err)
-	}
-	defer func() { _ = tx.Rollback() }()
-
-	if _, err := tx.Exec(sqlV4ToolFTS); err != nil {
-		return fmt.Errorf("create tool_fts: %w", err)
-	}
-	if _, err := tx.Exec(sqlV4Triggers); err != nil {
-		return fmt.Errorf("rebuild triggers: %w", err)
-	}
-	if _, err := tx.Exec(sqlV4Repopulate); err != nil {
-		return fmt.Errorf("repopulate indexes: %w", err)
-	}
-
-	checksum := sha256.Sum256([]byte(sqlV4ToolFTS + sqlV4Triggers))
-	checksumHex := fmt.Sprintf("%x", checksum)
-
-	_, err = tx.Exec(`
-		INSERT INTO schema_migrations (version, name, applied_on, checksum)
-		VALUES (4, 'V4 tool_fts trigram index', CURRENT_TIMESTAMP, ?)
-	`, checksumHex)
-	if err != nil {
-		return fmt.Errorf("record migration v4: %w", err)
-	}
-
-	return tx.Commit()
+	return d.applySingleMigration(applyV4)
 }
 
 // applyV5Migration drops the phantom session_events table. Nothing reads or
@@ -328,32 +207,7 @@ func (d *Database) applyV4Migration() error {
 // Per the schema rule this is a new migration; V1 still creates the table on
 // the way up, and V5 drops it.
 func (d *Database) applyV5Migration() error {
-	tx, err := d.db.Begin()
-	if err != nil {
-		return fmt.Errorf("begin transaction: %w", err)
-	}
-	defer func() { _ = tx.Rollback() }()
-
-	const sqlV5Drop = `
-DROP INDEX IF EXISTS idx_session_events_order;
-DROP INDEX IF EXISTS idx_session_events_project;
-DROP TABLE IF EXISTS session_events;
-`
-	if _, err := tx.Exec(sqlV5Drop); err != nil {
-		return fmt.Errorf("drop session_events: %w", err)
-	}
-
-	checksum := sha256.Sum256([]byte(sqlV5Drop))
-	checksumHex := fmt.Sprintf("%x", checksum)
-
-	if _, err := tx.Exec(`
-		INSERT INTO schema_migrations (version, name, applied_on, checksum)
-		VALUES (5, 'V5 drop phantom session_events', CURRENT_TIMESTAMP, ?)
-	`, checksumHex); err != nil {
-		return fmt.Errorf("record migration v5: %w", err)
-	}
-
-	return tx.Commit()
+	return d.applySingleMigration(applyV5)
 }
 
 // applyV6Migration drops the phantom source_metadata column. Nothing reads or
@@ -361,29 +215,7 @@ DROP TABLE IF EXISTS session_events;
 // Per the schema rule this is a new migration; V1 still creates the column on
 // the way up, and V6 drops it.
 func (d *Database) applyV6Migration() error {
-	tx, err := d.db.Begin()
-	if err != nil {
-		return fmt.Errorf("begin transaction: %w", err)
-	}
-	defer func() { _ = tx.Rollback() }()
-
-	const sqlV6Drop = `ALTER TABLE search_items DROP COLUMN source_metadata;`
-
-	if _, err := tx.Exec(sqlV6Drop); err != nil {
-		return fmt.Errorf("drop source_metadata column: %w", err)
-	}
-
-	checksum := sha256.Sum256([]byte(sqlV6Drop))
-	checksumHex := fmt.Sprintf("%x", checksum)
-
-	if _, err := tx.Exec(`
-		INSERT INTO schema_migrations (version, name, applied_on, checksum)
-		VALUES (6, 'V6 drop phantom source_metadata column', CURRENT_TIMESTAMP, ?)
-	`, checksumHex); err != nil {
-		return fmt.Errorf("record migration v6: %w", err)
-	}
-
-	return tx.Commit()
+	return d.applySingleMigration(applyV6)
 }
 
 // applyV7Migration updates the content_type-branched triggers to support reasoning
@@ -392,28 +224,7 @@ func (d *Database) applyV6Migration() error {
 // tool_fts is for structured tool metadata (names, paths, commands); messages_fts
 // is for prose (text, code, reasoning).
 func (d *Database) applyV7Migration() error {
-	tx, err := d.db.Begin()
-	if err != nil {
-		return fmt.Errorf("begin transaction: %w", err)
-	}
-	defer func() { _ = tx.Rollback() }()
-
-	if _, err := tx.Exec(sqlV7Triggers); err != nil {
-		return fmt.Errorf("rebuild triggers for reasoning: %w", err)
-	}
-
-	checksum := sha256.Sum256([]byte(sqlV7Triggers))
-	checksumHex := fmt.Sprintf("%x", checksum)
-
-	_, err = tx.Exec(`
-		INSERT INTO schema_migrations (version, name, applied_on, checksum)
-		VALUES (7, 'V7 reasoning content_type routes to messages_fts', CURRENT_TIMESTAMP, ?)
-	`, checksumHex)
-	if err != nil {
-		return fmt.Errorf("record migration v7: %w", err)
-	}
-
-	return tx.Commit()
+	return d.applySingleMigration(applyV7)
 }
 
 // SQL schema strings
@@ -707,79 +518,11 @@ CREATE TABLE IF NOT EXISTS dynamic_stopwords (term TEXT PRIMARY KEY);
 // NOT re-derivable once source files expire — no CASCADE lifecycle; only
 // purge deletes from it, explicitly.
 func (d *Database) applyV8Migration() error {
-	tx, err := d.db.Begin()
-	if err != nil {
-		return fmt.Errorf("begin transaction: %w", err)
-	}
-	defer func() { _ = tx.Rollback() }()
-
-	const sqlV8 = `
-ALTER TABLE search_items ADD COLUMN extraction_version INTEGER;
-ALTER TABLE search_items ADD COLUMN was_interrupted INTEGER;
-CREATE TABLE IF NOT EXISTS tool_events (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    message_uuid TEXT,
-    source_path TEXT NOT NULL,
-    ordinal INTEGER NOT NULL,
-    tool_name TEXT NOT NULL,
-    command_head TEXT,
-    is_error INTEGER,
-    exit_code INTEGER,
-    extraction_version INTEGER NOT NULL,
-    UNIQUE(source_path, ordinal)
-);
-CREATE INDEX IF NOT EXISTS idx_tool_events_tool ON tool_events(tool_name);
-CREATE INDEX IF NOT EXISTS idx_tool_events_uuid ON tool_events(message_uuid);
-`
-	if _, err := tx.Exec(sqlV8); err != nil {
-		return fmt.Errorf("apply v8 perennity schema: %w", err)
-	}
-
-	checksum := sha256.Sum256([]byte(sqlV8))
-	checksumHex := fmt.Sprintf("%x", checksum)
-
-	if _, err := tx.Exec(`
-		INSERT INTO schema_migrations (version, name, applied_on, checksum)
-		VALUES (8, 'V8 perennity: extraction_version, was_interrupted, tool_events', CURRENT_TIMESTAMP, ?)
-	`, checksumHex); err != nil {
-		return fmt.Errorf("record migration v8: %w", err)
-	}
-
-	return tx.Commit()
+	return d.applySingleMigration(applyV8)
 }
 
 func (d *Database) applyV9Migration() error {
-	tx, err := d.db.Begin()
-	if err != nil {
-		return fmt.Errorf("begin transaction: %w", err)
-	}
-	defer func() { _ = tx.Rollback() }()
-
-	// Dedupe before indexing: v8 code could accumulate the same message_uuid
-	// at different ordinals (ordinal drift) or across files; creating the
-	// unique index on such data would fail on every startup. Keep the oldest
-	// row per uuid.
-	const sqlV9 = `
-DELETE FROM tool_events WHERE message_uuid IS NOT NULL AND id NOT IN (
-    SELECT MIN(id) FROM tool_events WHERE message_uuid IS NOT NULL GROUP BY message_uuid
-);
-CREATE UNIQUE INDEX IF NOT EXISTS idx_tool_events_uuid_unique ON tool_events(message_uuid) WHERE message_uuid IS NOT NULL;
-`
-	if _, err := tx.Exec(sqlV9); err != nil {
-		return fmt.Errorf("apply v9 tool_events uuid uniqueness: %w", err)
-	}
-
-	checksum := sha256.Sum256([]byte(sqlV9))
-	checksumHex := fmt.Sprintf("%x", checksum)
-
-	if _, err := tx.Exec(`
-		INSERT INTO schema_migrations (version, name, applied_on, checksum)
-		VALUES (9, 'V9 tool_events uuid uniqueness index', CURRENT_TIMESTAMP, ?)
-	`, checksumHex); err != nil {
-		return fmt.Errorf("record migration v9: %w", err)
-	}
-
-	return tx.Commit()
+	return d.applySingleMigration(applyV9)
 }
 
 // applyV10Migration adds F2 template mining surface: message_templates
@@ -788,52 +531,7 @@ CREATE UNIQUE INDEX IF NOT EXISTS idx_tool_events_uuid_unique ON tool_events(mes
 // idempotent under re-sync). Only templates with occurrence_count >= 3
 // (configurable) are reported; mining runs inside SyncFiles tx.
 func (d *Database) applyV10Migration() error {
-	tx, err := d.db.Begin()
-	if err != nil {
-		return fmt.Errorf("begin transaction: %w", err)
-	}
-	defer func() { _ = tx.Rollback() }()
-
-	const sqlV10 = `
-CREATE TABLE IF NOT EXISTS message_templates (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    signature TEXT UNIQUE NOT NULL,
-    normalization_version INTEGER NOT NULL,
-    template_text TEXT NOT NULL,
-    occurrence_count INTEGER NOT NULL DEFAULT 1,
-    first_seen TEXT,
-    last_seen TEXT
-);
-CREATE INDEX IF NOT EXISTS idx_templates_sig ON message_templates(signature);
-CREATE INDEX IF NOT EXISTS idx_templates_version ON message_templates(normalization_version);
-
-CREATE TABLE IF NOT EXISTS template_matches (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    template_id INTEGER NOT NULL,
-    item_uuid TEXT,
-    source_path TEXT NOT NULL,
-    ordinal INTEGER NOT NULL,
-    UNIQUE(source_path, ordinal, template_id),
-    FOREIGN KEY(template_id) REFERENCES message_templates(id)
-);
-CREATE INDEX IF NOT EXISTS idx_matches_template ON template_matches(template_id);
-CREATE INDEX IF NOT EXISTS idx_matches_uuid ON template_matches(item_uuid);
-`
-	if _, err := tx.Exec(sqlV10); err != nil {
-		return fmt.Errorf("apply v10 template-mining schema: %w", err)
-	}
-
-	checksum := sha256.Sum256([]byte(sqlV10))
-	checksumHex := fmt.Sprintf("%x", checksum)
-
-	if _, err := tx.Exec(`
-		INSERT INTO schema_migrations (version, name, applied_on, checksum)
-		VALUES (10, 'V10 template mining: message_templates, template_matches', CURRENT_TIMESTAMP, ?)
-	`, checksumHex); err != nil {
-		return fmt.Errorf("record migration v10: %w", err)
-	}
-
-	return tx.Commit()
+	return d.applySingleMigration(applyV10)
 }
 
 // applyV11Migration adds the F3 correction-detection surface: the perennial
@@ -841,112 +539,19 @@ CREATE INDEX IF NOT EXISTS idx_matches_uuid ON template_matches(item_uuid);
 // by message identity). One row per (source_path, ordinal, detector) tuple.
 // extraction_version tracks detector evolution (like message extraction_version).
 func (d *Database) applyV11Migration() error {
-	tx, err := d.db.Begin()
-	if err != nil {
-		return fmt.Errorf("begin transaction: %w", err)
-	}
-	defer func() { _ = tx.Rollback() }()
-
-	const sqlV11 = `
-CREATE TABLE IF NOT EXISTS correction_signals (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    item_uuid TEXT,
-    source_path TEXT NOT NULL,
-    ordinal INTEGER NOT NULL,
-    detector TEXT NOT NULL,
-    confidence REAL NOT NULL,
-    extraction_version INTEGER NOT NULL,
-    UNIQUE(source_path, ordinal, detector)
-);
-CREATE INDEX IF NOT EXISTS idx_correction_signals_detector ON correction_signals(detector);
-CREATE INDEX IF NOT EXISTS idx_correction_signals_confidence ON correction_signals(confidence DESC);
-`
-	if _, err := tx.Exec(sqlV11); err != nil {
-		return fmt.Errorf("apply v11 correction_signals schema: %w", err)
-	}
-
-	checksum := sha256.Sum256([]byte(sqlV11))
-	checksumHex := fmt.Sprintf("%x", checksum)
-
-	if _, err := tx.Exec(`
-		INSERT INTO schema_migrations (version, name, applied_on, checksum)
-		VALUES (11, 'V11 correction detection: correction_signals', CURRENT_TIMESTAMP, ?)
-	`, checksumHex); err != nil {
-		return fmt.Errorf("record migration v11: %w", err)
-	}
-
-	return tx.Commit()
+	return d.applySingleMigration(applyV11)
 }
 
 // applyV12Migration adds the F3b agent-classification surface: the perennial
 // annotations table (one row per message per kind; re-annotating replaces).
 // Labels are free-form in v1; label_enum freezing is a future slice (post-calibration).
 func (d *Database) applyV12Migration() error {
-	tx, err := d.db.Begin()
-	if err != nil {
-		return fmt.Errorf("begin transaction: %w", err)
-	}
-	defer func() { _ = tx.Rollback() }()
-
-	const sqlV12 = `
-CREATE TABLE IF NOT EXISTS annotations (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    item_uuid TEXT,
-    source_path TEXT NOT NULL,
-    ordinal INTEGER NOT NULL,
-    kind TEXT NOT NULL,
-    label TEXT NOT NULL,
-    source TEXT NOT NULL DEFAULT 'agent',
-    created_at TEXT NOT NULL,
-    UNIQUE(source_path, ordinal, kind)
-);
-CREATE INDEX IF NOT EXISTS idx_annotations_uuid ON annotations(item_uuid);
-CREATE INDEX IF NOT EXISTS idx_annotations_kind ON annotations(kind);
-`
-	if _, err := tx.Exec(sqlV12); err != nil {
-		return fmt.Errorf("apply v12 annotations schema: %w", err)
-	}
-
-	checksum := sha256.Sum256([]byte(sqlV12))
-	checksumHex := fmt.Sprintf("%x", checksum)
-
-	if _, err := tx.Exec(`
-		INSERT INTO schema_migrations (version, name, applied_on, checksum)
-		VALUES (12, 'V12 agent classification: annotations (free-form labels; enum freeze deferred)', CURRENT_TIMESTAMP, ?)
-	`, checksumHex); err != nil {
-		return fmt.Errorf("record migration v12: %w", err)
-	}
-
-	return tx.Commit()
+	return d.applySingleMigration(applyV12)
 }
 
 // applyV13Migration adds indexes on template_matches and correction_signals
 // for efficient backfill discovery queries. The queries use NOT EXISTS subqueries
 // on source_path; indexes reduce from O(N·M) table scans to O(N·log M) index lookups.
 func (d *Database) applyV13Migration() error {
-	tx, err := d.db.Begin()
-	if err != nil {
-		return fmt.Errorf("begin transaction: %w", err)
-	}
-	defer func() { _ = tx.Rollback() }()
-
-	const sqlV13 = `
-CREATE INDEX IF NOT EXISTS idx_template_matches_source ON template_matches(source_path);
-CREATE INDEX IF NOT EXISTS idx_correction_signals_source ON correction_signals(source_path);
-`
-	if _, err := tx.Exec(sqlV13); err != nil {
-		return fmt.Errorf("apply v13 indexes: %w", err)
-	}
-
-	checksum := sha256.Sum256([]byte(sqlV13))
-	checksumHex := fmt.Sprintf("%x", checksum)
-
-	if _, err := tx.Exec(`
-		INSERT INTO schema_migrations (version, name, applied_on, checksum)
-		VALUES (13, 'V13 backfill discovery indexes', CURRENT_TIMESTAMP, ?)
-	`, checksumHex); err != nil {
-		return fmt.Errorf("record migration v13: %w", err)
-	}
-
-	return tx.Commit()
+	return d.applySingleMigration(applyV13)
 }

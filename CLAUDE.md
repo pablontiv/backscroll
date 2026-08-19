@@ -8,7 +8,7 @@ Backscroll is a Go CLI tool that indexes Claude Code, Pi, and OpenCode sessions,
 
 **Status**: Go port complete — `main` branch is the active Go implementation. The Rust implementation is frozen in the `v0` branch.
 
-Implemented: `internal/config`, `internal/input_config`, `internal/models`, `internal/readers`, `internal/sync`, `internal/tagging`, `internal/plans`, `internal/sources`, `internal/storage`, `internal/projects`, `internal/reader`, `internal/templates`, `internal/corrections`, `internal/categories`, `internal/sequences`. CLI commands in `cmd/backscroll/` (10 v2 commands via cobra).
+Implemented: `internal/config`, `internal/input_config`, `internal/models`, `internal/readers`, `internal/sync`, `internal/tagging`, `internal/plans`, `internal/sources`, `internal/storage`, `internal/projects`, `internal/reader`, `internal/templates`, `internal/corrections`, `internal/categories`, `internal/sequences`, `internal/compat`, `internal/recovery`. CLI commands in `cmd/backscroll/` (11 v2 commands via cobra).
 
 Stack: cobra, go-toml/v2, goldmark, modernc.org/sqlite (pure Go, no CGO), stdlib testing.
 
@@ -46,6 +46,7 @@ cmd/backscroll/
 ├── read.go            — read command (v2: --path, --tail, --semantic, --pretty)
 ├── patterns.go        — patterns command (v2: --kind commands|failures|templates|sequences|corrections [--pending] [--batch N] [--trend], --project, --tag, --min-support, --min-confidence, --min-length, --max-length, --json, --robot)
 ├── annotate.go        — annotate command (F3b: --uuid --kind --label; validates message existence; upsert semantics)
+├── recover.go         — recover command (--from, --dry-run; lossless active+stranded database union)
 ├── status.go          — status command
 ├── validate.go        — validate command (--indexed-only)
 ├── rebuild.go         — rebuild command (replaces reindex)
@@ -54,6 +55,7 @@ cmd/backscroll/
 └── sync_helpers.go    — shared auto-sync helpers (maybeAutoSync, runSync)
 internal/
 ├── config/            — config resolution: backscroll.toml → ~/.config → env → defaults
+├── compat/            — stateless schema-shape inspection, release lineage catalog, migration plans, and canonical recovery planning
 ├── input_config/      — input manifest loading, discovery, and legacy session-dirs compatibility
 ├── models/            — domain types: SessionRecord, MessageContent, ParsedFile, SearchResult, Stats
 ├── sync/              — WalkDir, SHA-256 dedup, JSONL parsing, noise filtering, content-type classification
@@ -63,6 +65,7 @@ internal/
 ├── projects/          — project identity registry: LoadGlobalRegistry(), Identify(), LoadLocalHint()
 ├── reader/            — direct reading and filtering of individual session files
 ├── readers/           — SessionReader interface, Registry, ClaudeReader (text+tool_use+tool_result), PiReader (text+toolCall+custom results), OpenCodeReader (text+tool state.input+state.output); toolfmt serializer
+├── recovery/          — stranded database recovery orchestration, verified active+stranded union, durable backup, and atomic replacement
 ├── templates/         — F2 Drain-inspired miner: Miner, ProcessLine, ExtractErrorLines, deterministic signature via SHA256
 ├── corrections/       — F3 correction detection: bilingual lexicon, interrupt flags, denial heuristics, rephrase-similarity; detector registry + implementations
 ├── categories/        — F4 category map loader (rule engine, versioning, tool→category mapping) with embedded default preset
@@ -70,7 +73,7 @@ internal/
 └── storage/           — SQLite adapter (dual FTS5 indexes: tool_fts + messages_fts, BM25, WAL mode, migrations v1–v13, search_items, session_tags, tool_events, message_templates, template_matches, correction_signals, annotations, AggregateCommands, AggregateFailures, AggregateTemplates, AggregateCorrections, UpsertAnnotation, LoadToolSequences)
 ```
 
-Ten v2 CLI commands: `list [--project] [--all-projects] [--order timestamp:desc|asc] [--limit] [--offset] [--json]`, `search [--text <query>] [--project] [--all-projects] [--after] [--before] [--limit] [--offset] [--indexed-only] [--json]`, `read --path <path> [--tail <n>] [--semantic] [--pretty]`, `patterns --kind commands|failures|templates|sequences|corrections [--pending] [--batch N] [--project] [--all-projects] [--tag] [--trend] [--min-support N] [--min-confidence F] [--min-length N] [--max-length N] [--limit] [--offset] [--indexed-only] [--json] [--robot]`, `annotate --uuid <u> --kind <k> --label <l> [--path <p> --ordinal <n>]`, `status`, `validate [--indexed-only]`, `rebuild`, `purge --before <date>`, `config [--json]`.
+Eleven v2 CLI commands: `list [--project] [--all-projects] [--order timestamp:desc|asc] [--limit] [--offset] [--json]`, `search [--text <query>] [--project] [--all-projects] [--after] [--before] [--limit] [--offset] [--indexed-only] [--json]`, `read --path <path> [--tail <n>] [--semantic] [--pretty]`, `patterns --kind commands|failures|templates|sequences|corrections [--pending] [--batch N] [--project] [--all-projects] [--tag] [--trend] [--min-support N] [--min-confidence F] [--min-length N] [--max-length N] [--limit] [--offset] [--indexed-only] [--json] [--robot]`, `annotate --uuid <u> --kind <k> --label <l> [--path <p> --ordinal <n>]`, `recover --from <path> [--dry-run]`, `status`, `validate [--indexed-only]`, `rebuild`, `purge --before <date>`, `config [--json]`.
 
 The `SearchEngine` interface is the port; `internal/storage` is the adapter. Database opened lazily. `OpenReadOnly()` provides read-only access for external consumers.
 
@@ -204,6 +207,7 @@ Workflows delegate to [pablontiv/crossbeam](https://github.com/pablontiv/crossbe
 ```
 github.com/pablontiv/backscroll/cmd/backscroll         — CLI entrypoint
 github.com/pablontiv/backscroll/internal/config        — Config structs and resolution
+github.com/pablontiv/backscroll/internal/compat        — Stateless schema inspection, release lineage catalog, migration planning, and canonical recovery planning
 github.com/pablontiv/backscroll/internal/input_config  — Input manifest loading, discovery, and legacy session-dirs compatibility
 github.com/pablontiv/backscroll/internal/models        — Domain types and SearchEngine interface
 github.com/pablontiv/backscroll/internal/sync          — Session parsing and noise filtering
@@ -218,4 +222,5 @@ github.com/pablontiv/backscroll/internal/storage       — Database schema, migr
 github.com/pablontiv/backscroll/internal/projects      — Project identity registry
 github.com/pablontiv/backscroll/internal/reader        — Direct session file reader
 github.com/pablontiv/backscroll/internal/readers       — SessionReader interface, Registry, ClaudeReader (text+tool_use+tool_result), PiReader (text+toolCall+custom results), OpenCodeReader (text+tool state.input+state.output); toolfmt serializer
+github.com/pablontiv/backscroll/internal/recovery      — Stranded database recovery orchestration, durable backup, and atomic replacement
 ```

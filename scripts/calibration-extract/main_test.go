@@ -1,10 +1,13 @@
 package main
 
 import (
+	"context"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
+	"github.com/pablontiv/backscroll/internal/compat"
 	"github.com/pablontiv/backscroll/internal/storage"
 )
 
@@ -76,6 +79,40 @@ func createTestCorrectionSignals(t *testing.T, db *storage.Database, signals []s
 	// Sync files to DB
 	if err := db.SyncFiles(files); err != nil {
 		t.Fatalf("sync files: %v", err)
+	}
+}
+
+func TestCalibrationExtractRejectsUnsupportedIndex(t *testing.T) {
+	dbPath := filepath.Join(t.TempDir(), "unsupported.db")
+	db, err := storage.Open(dbPath)
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	if _, err := db.DB().Exec(`CREATE TABLE unexpected_shape_marker (id INTEGER PRIMARY KEY)`); err != nil {
+		_ = db.Close()
+		t.Fatalf("make unsupported: %v", err)
+	}
+	if _, err := db.DB().Exec(`PRAGMA wal_checkpoint(TRUNCATE)`); err != nil {
+		_ = db.Close()
+		t.Fatalf("checkpoint: %v", err)
+	}
+	if err := db.Close(); err != nil {
+		t.Fatalf("close db: %v", err)
+	}
+
+	got, err := openInspectedCalibrationDatabase(context.Background(), dbPath)
+	if err == nil {
+		if got != nil {
+			_ = got.Close()
+		}
+		t.Fatal("openInspectedCalibrationDatabase succeeded for unsupported index")
+	}
+	if got != nil {
+		_ = got.Close()
+		t.Fatal("openInspectedCalibrationDatabase returned a db with an error")
+	}
+	if !strings.Contains(err.Error(), string(compat.CodeUnsupportedLineage)) {
+		t.Fatalf("error %q does not include diagnostic code %q", err, compat.CodeUnsupportedLineage)
 	}
 }
 

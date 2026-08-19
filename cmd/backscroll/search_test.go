@@ -236,6 +236,11 @@ func TestSearchWithJSONAndMaxTokens(t *testing.T) {
 }
 
 func TestSearchValidatesContentType(t *testing.T) {
+	_, cleanup := testEnv(t)
+	defer cleanup()
+	t.Setenv("HOME", t.TempDir())
+	t.Setenv("BACKSCROLL_SESSION_DIRS", t.TempDir())
+
 	tests := []struct {
 		flag    string
 		wantErr bool
