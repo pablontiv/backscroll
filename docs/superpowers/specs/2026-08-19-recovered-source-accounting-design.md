@@ -1,6 +1,6 @@
 # Recovered Source Accounting Design
 
-**Date:** 2026-08-19  
+**Date:** 2026-08-19
 **Issue:** [#35 — recovered index immediately fails validate as orphaned](https://github.com/pablontiv/backscroll/issues/35)
 
 ## Summary
