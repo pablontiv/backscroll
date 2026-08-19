@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-Backscroll is a Go CLI tool that indexes Claude Code, Pi, and OpenCode sessions, plans, and external knowledge sources into SQLite for full-text search (BM25 via FTS5). It treats sessions as an event store with incremental sync via SHA-256 deduplication.
+Backscroll is a Go CLI tool that indexes Claude Code, Pi, OpenCode, and declarative Markdown inputs (`markdown_document`, `markdown_sections`) plus plans into SQLite for full-text search (BM25 via FTS5). It treats sessions as an event store with incremental sync via SHA-256 deduplication.
 
 **Status**: Go port complete — `main` branch is the active Go implementation. The Rust implementation is frozen in the `v0` branch.
 
@@ -64,7 +64,7 @@ internal/
 ├── sources/           — external source parsers (ke, decision, memory, rule, spec, backlog) + SourceRegistry
 ├── projects/          — project identity registry: LoadGlobalRegistry(), Identify(), LoadLocalHint()
 ├── reader/            — direct reading and filtering of individual session files
-├── readers/           — SessionReader interface, Registry, ClaudeReader (text+tool_use+tool_result), PiReader (text+toolCall+custom results), OpenCodeReader (text+tool state.input+state.output); toolfmt serializer
+├── readers/           — SessionReader interface, Registry, ClaudeReader (text+tool_use+tool_result), PiReader (text+toolCall+custom results), OpenCodeReader (text+tool state.input+state.output), MarkdownDocumentReader (`markdown_document`), MarkdownSectionsReader (`markdown_sections`); toolfmt serializer
 ├── recovery/          — stranded database recovery orchestration, verified active+stranded union, durable backup, and atomic replacement
 ├── templates/         — F2 Drain-inspired miner: Miner, ProcessLine, ExtractErrorLines, deterministic signature via SHA256
 ├── corrections/       — F3 correction detection: bilingual lexicon, interrupt flags, denial heuristics, rephrase-similarity; detector registry + implementations
@@ -82,16 +82,16 @@ The `SearchEngine` interface is the port; `internal/storage` is the adapter. Dat
 ```
 JSONL files → fs.WalkDir → SHA-256 dedup → ParseSessions() ─┐
 Markdown plans → DiscoverPlanFiles() → ParsePlan() ──────────┤
-External sources → SourceRegistry.ParseAll() ─────────────────┤
+Declarative Markdown inputs → markdown readers ──────────────┤
                                                               ▼
                                               SyncFiles() → SQLite FTS5
                                                             │
 CLI query → Search() → BM25 → format_results()
 ```
 
-### External Source Types
+### Declarative Markdown Source Types
 
-Configurable in `[sources]` section of `backscroll.toml`. Source types: `ke`, `decision`, `memory`, `rule`, `spec`, `backlog`. Each has per-type parsers (whole-document or sectioned by ## headers). All filterable via `--source` flag.
+External knowledge sources are configured with active `*.inputs.toml` manifests under `<config_dir>/backscroll/inputs/`, not with legacy `[sources]` tables. Supported Markdown decode formats are `markdown_document` (whole file as one record) and `markdown_sections` (one record per `## ` section, falling back to one whole-document record when no sections exist). Source values such as `ke`, `decision`, `memory`, `rule`, `spec`, and `backlog` are preserved from the manifest and are filterable via `--source`.
 
 ### Key Design Decisions
 
@@ -100,9 +100,11 @@ Configurable in `[sources]` section of `backscroll.toml`. Source types: `ke`, `d
 - **External FTS5**: Uses `search_items` as content table with SQLite triggers, `snippet()` extraction, and Porter stemmer tokenizer for morphological matching.
 - **Incremental sync**: SHA-256 hash per file stored in `indexed_files` table; unchanged files are skipped.
 - **Plan indexing**: Markdown plans from `~/.claude/plans/` split by `##` headers, each section indexed as a separate search item with `source='plan'`.
-- **Source filtering**: `search_items.source` column distinguishes sessions from plans; `--source` flag filters at query time.
+- **Declarative Markdown inputs**: `markdown_document` and `markdown_sections` readers reuse `internal/sources` parsers, flow through the normal input manifest registry/autosync path, and store the manifest `source` value on indexed rows. They do not parse YAML frontmatter into structured metadata.
+- **Source filtering**: `search_items.source` column distinguishes sessions, plans, and declarative source types; `--source` flag filters at query time.
 - **Date filtering**: `--after`/`--before` flags filter by `search_items.timestamp` with NULL-safe guards; `--before` uses exclusive `<` comparison.
 - **Multi-path config**: `SessionDirs []string` with backward-compatible `session_dir` alias and auto-discovery of `~/.claude/projects/`.
+- **Legacy `[sources]` migration boundary**: Any `[sources]` table in the global `config.toml` or local `./backscroll.toml` is a hard preflight error before executable commands perform database or file side effects. Help and version remain available. Migrate each key to an active `*.inputs.toml` manifest under `<config_dir>/backscroll/inputs/`: `ke` → `source = "ke"`, `decode.format = "markdown_document"`; `memories` → `source = "memory"`, `markdown_document`; `decisions` → `source = "decision"`, `markdown_sections`; `rules` → `source = "rule"`, `markdown_sections`; `specs` → `source = "spec"`, `markdown_sections`; `backlog` → `source = "backlog"`, `markdown_sections`.
 - **Auto-tagging**: Regex heuristics in `internal/tagging` detect session categories (debugging, refactoring, feature, testing, docs, config) during sync; stored in `session_tags` table.
 - **Content-type classification**: Messages classified as `text`/`code`/`tool`/`reasoning` based on message content types during sync. Tool content is indexed in separate `search_items` rows with `content_type='tool'`. Pi agent reasoning blocks are captured when `index_reasoning=true` (default off) in the input manifest and indexed with `content_type='reasoning'`. Sync writes only to `search_items`; the `session_events` table was dropped in migration v5.
 - **Split FTS by retrieval semantics**: tool content (`content_type='tool'`) lives in a separate FTS5 index `tool_fts` (tokenizer `trigram`, substring/exact match for paths/commands/errors); prose content (text, code, reasoning) lives in `messages_fts` (`porter unicode61`). Migration v4 branched the triggers by content type. Migration v7 updated the triggers to route 'reasoning' alongside 'text'/'code' to `messages_fts`. `--content-type tool` queries `tool_fts`; prose queries `messages_fts`; an unfiltered query merges both via Reciprocal Rank Fusion (RRF, k=60), which fuses by rank position, not score magnitude, and is immune to incomparable cross-tokenizer BM25 scales. The trigram tokenizer matches substrings of ≥3 characters, so tool queries shorter than 3 characters will match zero results.
@@ -221,6 +223,6 @@ github.com/pablontiv/backscroll/internal/sequences     — F4 PrefixSpan mining 
 github.com/pablontiv/backscroll/internal/storage       — Database schema, migrations v1–v13, FTS5 indexes
 github.com/pablontiv/backscroll/internal/projects      — Project identity registry
 github.com/pablontiv/backscroll/internal/reader        — Direct session file reader
-github.com/pablontiv/backscroll/internal/readers       — SessionReader interface, Registry, ClaudeReader (text+tool_use+tool_result), PiReader (text+toolCall+custom results), OpenCodeReader (text+tool state.input+state.output); toolfmt serializer
+github.com/pablontiv/backscroll/internal/readers       — SessionReader interface, Registry, ClaudeReader (text+tool_use+tool_result), PiReader (text+toolCall+custom results), OpenCodeReader (text+tool state.input+state.output), MarkdownDocumentReader (`markdown_document`), MarkdownSectionsReader (`markdown_sections`); toolfmt serializer
 github.com/pablontiv/backscroll/internal/recovery      — Stranded database recovery orchestration, durable backup, and atomic replacement
 ```
