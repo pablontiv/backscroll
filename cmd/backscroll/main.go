@@ -9,6 +9,9 @@ import (
 
 	"github.com/pablontiv/picokit/autoupdate"
 	"github.com/spf13/cobra"
+
+	"github.com/pablontiv/backscroll/internal/config"
+	"github.com/pablontiv/backscroll/internal/input_config"
 )
 
 var version = "dev"
@@ -76,6 +79,13 @@ Prose and tool activity are indexed separately — a Porter-stemmed FTS5 index f
 conversation, a trigram index for commands, paths and errors — and an unfiltered
 query merges both by rank position (RRF).`,
 		Version: version,
+		PersistentPreRunE: func(cmd *cobra.Command, args []string) error {
+			inputsDir, err := input_config.InputsDir()
+			if err != nil {
+				return fmt.Errorf("resolve inputs directory: %w", err)
+			}
+			return config.ValidateNoLegacySources(inputsDir)
+		},
 	}
 	root.SetOut(stdout)
 	root.SetErr(stderr)
