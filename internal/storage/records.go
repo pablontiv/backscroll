@@ -4,20 +4,9 @@ import (
 	"database/sql"
 	"fmt"
 	"strings"
-)
 
-// IndexedRecord represents a single record from search_items.
-type IndexedRecord struct {
-	Source      string
-	SourcePath  string
-	Ordinal     int64
-	Role        string
-	Text        string
-	Project     *string
-	UUID        *string
-	Timestamp   *string
-	ContentType string
-}
+	"github.com/pablontiv/backscroll/internal/models"
+)
 
 // IndexedRecordQuery defines filter parameters for QueryIndexedRecords.
 type IndexedRecordQuery struct {
@@ -32,7 +21,7 @@ type IndexedRecordQuery struct {
 
 // QueryIndexedRecords returns records from search_items matching the query,
 // ordered by source_path and ordinal.
-func (d *Database) QueryIndexedRecords(q IndexedRecordQuery) ([]IndexedRecord, error) {
+func (d *Database) QueryIndexedRecords(q IndexedRecordQuery) ([]models.IndexedRecord, error) {
 	baseQuery := `
 		SELECT source, source_path, ordinal, role, text, project, uuid, timestamp, content_type
 		FROM search_items`
@@ -80,9 +69,9 @@ func (d *Database) QueryIndexedRecords(q IndexedRecordQuery) ([]IndexedRecord, e
 	}
 	defer func() { _ = rows.Close() }()
 
-	var records []IndexedRecord
+	var records []models.IndexedRecord
 	for rows.Next() {
-		var r IndexedRecord
+		var r models.IndexedRecord
 		var project, uuid, timestamp sql.NullString
 		if err := rows.Scan(
 			&r.Source, &r.SourcePath, &r.Ordinal, &r.Role, &r.Text,

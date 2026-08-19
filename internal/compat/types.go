@@ -3,6 +3,8 @@ package compat
 import (
 	"context"
 	"database/sql"
+
+	"github.com/pablontiv/backscroll/internal/models"
 )
 
 type Code string
@@ -11,6 +13,8 @@ const (
 	CodeUnsupportedLineage Code = "unsupported_lineage"
 	CodeMigrationFailed    Code = "migration_failed"
 	CodeIndexStale         Code = "index_stale"
+	CodeRecoveryConflict   Code = "recovery_conflict"
+	CodeUninterpretableRow Code = "uninterpretable_row"
 )
 
 type Diagnostic struct {
@@ -32,6 +36,23 @@ type MigrationStep struct {
 type MigrationPlan struct {
 	From  SchemaShape
 	Steps []MigrationStep
+}
+
+type RecoveryInput struct {
+	Shape    SchemaShape
+	Records  []models.IndexedRecord
+	RowCount int
+}
+
+type CanonicalRecord struct {
+	Record      models.IndexedRecord
+	PayloadHash string
+}
+
+type RecoveryPlan struct {
+	InputShapes     []SchemaShape
+	Records         []CanonicalRecord
+	ExactDuplicates int
 }
 
 type Queryer interface {
