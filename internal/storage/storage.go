@@ -20,6 +20,10 @@ type Database struct {
 	embeddingProvider embedding.EmbeddingProvider
 }
 
+var openCompatibleApplyMigrationPlan = func(db *Database, ctx context.Context, path string, plan compat.MigrationPlan) error {
+	return db.ApplyMigrationPlan(ctx, path, plan)
+}
+
 // Open opens or creates a new SQLite database at the given path with FTS5 and WAL mode enabled.
 func Open(path string) (*Database, error) {
 	d, err := openWithoutSetup(path)
@@ -71,10 +75,16 @@ func OpenCompatible(ctx context.Context, path string) (*Database, *compat.Diagno
 		return nil, diag, err
 	}
 	db, err := openWithoutSetup(path)
-	if err == nil && len(plan.Steps) > 0 {
-		err = db.ApplyMigrationPlan(ctx, path, plan)
+	if err != nil {
+		return nil, nil, err
 	}
-	return db, nil, err
+	if len(plan.Steps) > 0 {
+		if err := openCompatibleApplyMigrationPlan(db, ctx, path, plan); err != nil {
+			_ = db.Close()
+			return nil, nil, err
+		}
+	}
+	return db, nil, nil
 }
 
 // OpenReadOnly opens an existing SQLite database in read-only mode.

@@ -167,8 +167,8 @@ func TestReleaseSchemaManifestRejectsFixtureHashDrift(t *testing.T) {
 	}
 }
 
-func TestFixtureMigrationRowsMatchStorageMigrationRunner(t *testing.T) {
-	authoritative := loadAuthoritativeMigrationRows(t)
+func TestFixtureMigrationRowsMatchPublishedCurrentLedger(t *testing.T) {
+	authoritative := loadPublishedCurrentMigrationRows(t)
 
 	fixturePaths, err := fs.Glob(releaseSchemaFS, "testdata/release-schemas/*.sql")
 	if err != nil {
@@ -255,7 +255,7 @@ func withReleaseSchemaFS(t *testing.T, fsys fs.FS) {
 	t.Cleanup(func() { releaseSchemaFS = original })
 }
 
-func loadAuthoritativeMigrationRows(t *testing.T) map[int]migrationRow {
+func loadPublishedCurrentMigrationRows(t *testing.T) map[int]migrationRow {
 	t.Helper()
 
 	fixtureSQL, err := fs.ReadFile(releaseSchemaFS, "testdata/release-schemas/v13.sql")

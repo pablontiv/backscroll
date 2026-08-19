@@ -87,6 +87,20 @@ func inspectShape(ctx context.Context, q Queryer) (inspectedShape, error) {
 		if isVolatileSQLiteObject(object.name) || isFTSShadowObject(object.name, virtualTables) {
 			continue
 		}
+		if object.typ == "table" && !virtualTables[object.name] {
+			tableRecords, columns, err := loadRegularTableSemanticRecords(ctx, q, object)
+			if err != nil {
+				return inspectedShape{}, err
+			}
+			records = append(records, tableRecords...)
+			for _, column := range columns {
+				if columnsByTable[object.name] == nil {
+					columnsByTable[object.name] = map[string]bool{}
+				}
+				columnsByTable[object.name][column.name] = true
+			}
+			continue
+		}
 		records = append(records, schemaRecord(object.typ, object.table, object.name, "", normalizeSQL(object.sql)))
 		if object.typ != "table" {
 			continue
@@ -150,6 +164,32 @@ func loadSQLiteObjects(ctx context.Context, q Queryer) ([]sqliteObject, error) {
 		return nil, fmt.Errorf("read sqlite_master: %w", err)
 	}
 	return objects, nil
+}
+
+func loadRegularTableSemanticRecords(ctx context.Context, q Queryer, object sqliteObject) ([]string, []tableColumn, error) {
+	columns, err := loadTableColumns(ctx, q, object.name)
+	if err != nil {
+		return nil, nil, err
+	}
+
+	records := []string{schemaRecord("table", object.table, object.name, regularTableOptions(object.sql), "")}
+	for _, column := range columns {
+		records = append(records, schemaRecord("column", object.name, column.name, column.signature(), ""))
+	}
+	foreignKeyRecords, err := loadForeignKeyRecords(ctx, q, object.name)
+	if err != nil {
+		return nil, nil, err
+	}
+	records = append(records, foreignKeyRecords...)
+	for _, check := range regularTableCheckConstraints(object.sql) {
+		records = append(records, schemaRecord("check", object.name, check, "", ""))
+	}
+	indexRecords, err := loadIndexRecords(ctx, q, object.name)
+	if err != nil {
+		return nil, nil, err
+	}
+	records = append(records, indexRecords...)
+	return records, columns, nil
 }
 
 func loadSchemaMigrationRecords(ctx context.Context, q Queryer) ([]string, int, error) {
@@ -241,6 +281,50 @@ func loadIndexRecords(ctx context.Context, q Queryer, table string) ([]string, e
 		}
 		metadata := fmt.Sprintf("unique=%d origin=%s partial=%d columns=%s", index.unique, index.origin, index.partial, strings.Join(columns, ","))
 		records = append(records, schemaRecord("index", table, index.name, metadata, ""))
+	}
+	return records, nil
+}
+
+type foreignKeyRecord struct {
+	id       int
+	seq      int
+	table    string
+	from     string
+	to       string
+	onUpdate string
+	onDelete string
+	match    string
+}
+
+func loadForeignKeyRecords(ctx context.Context, q Queryer, table string) ([]string, error) {
+	rows, err := q.QueryContext(ctx, "PRAGMA foreign_key_list("+quoteIdent(table)+")")
+	if err != nil {
+		return nil, fmt.Errorf("query foreign_key_list %s: %w", table, err)
+	}
+	defer rows.Close()
+
+	var keys []foreignKeyRecord
+	for rows.Next() {
+		var key foreignKeyRecord
+		if err := rows.Scan(&key.id, &key.seq, &key.table, &key.from, &key.to, &key.onUpdate, &key.onDelete, &key.match); err != nil {
+			return nil, fmt.Errorf("scan foreign_key_list %s: %w", table, err)
+		}
+		keys = append(keys, key)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("read foreign_key_list %s: %w", table, err)
+	}
+	sort.Slice(keys, func(i, j int) bool {
+		if keys[i].id != keys[j].id {
+			return keys[i].id < keys[j].id
+		}
+		return keys[i].seq < keys[j].seq
+	})
+
+	records := make([]string, 0, len(keys))
+	for _, key := range keys {
+		columns := fmt.Sprintf("%013d:%013d:%s:%s:%s:%s:%s:%s", key.id, key.seq, key.table, key.from, key.to, key.onUpdate, key.onDelete, key.match)
+		records = append(records, schemaRecord("foreign-key", table, fmt.Sprintf("%013d:%013d", key.id, key.seq), columns, ""))
 	}
 	return records, nil
 }
@@ -353,6 +437,103 @@ func isFTSShadowObject(name string, virtualTables map[string]bool) bool {
 		}
 	}
 	return false
+}
+
+func regularTableOptions(sqlText string) string {
+	_, suffix, ok := regularTableDefinitionBody(sqlText)
+	if !ok {
+		return normalizeSQL(sqlText)
+	}
+	return normalizeSQL(suffix)
+}
+
+func regularTableCheckConstraints(sqlText string) []string {
+	body, _, ok := regularTableDefinitionBody(sqlText)
+	if !ok {
+		return nil
+	}
+	var checks []string
+	for _, definition := range splitTopLevelComma(body) {
+		definition = normalizeSQL(definition)
+		upper := strings.ToUpper(definition)
+		if strings.HasPrefix(upper, "CHECK ") || strings.Contains(upper, " CHECK ") {
+			checks = append(checks, definition)
+		}
+	}
+	sort.Strings(checks)
+	return checks
+}
+
+func regularTableDefinitionBody(sqlText string) (string, string, bool) {
+	open := strings.Index(sqlText, "(")
+	if open < 0 {
+		return "", "", false
+	}
+	depth := 0
+	quote := rune(0)
+	for pos, r := range sqlText[open:] {
+		absolute := open + pos
+		if quote != 0 {
+			if r == quote {
+				if r == '\'' && absolute+1 < len(sqlText) && sqlText[absolute+1] == '\'' {
+					continue
+				}
+				quote = 0
+			}
+			continue
+		}
+		switch r {
+		case '\'', '"', '`':
+			quote = r
+		case '[':
+			quote = ']'
+		case '(':
+			depth++
+		case ')':
+			depth--
+			if depth == 0 {
+				return sqlText[open+1 : absolute], sqlText[absolute+1:], true
+			}
+		}
+	}
+	return "", "", false
+}
+
+func splitTopLevelComma(value string) []string {
+	var result []string
+	start := 0
+	depth := 0
+	quote := rune(0)
+	for pos, r := range value {
+		if quote != 0 {
+			if r == quote {
+				if r == '\'' && pos+1 < len(value) && value[pos+1] == '\'' {
+					continue
+				}
+				quote = 0
+			}
+			continue
+		}
+		switch r {
+		case '\'', '"', '`':
+			quote = r
+		case '[':
+			quote = ']'
+		case '(':
+			depth++
+		case ')':
+			if depth > 0 {
+				depth--
+			}
+		case ',':
+			if depth == 0 {
+				result = append(result, value[start:pos])
+				start = pos + 1
+			}
+		}
+	}
+	result = append(result, value[start:])
+	return result
 }
 
 func normalizeSQL(sqlText string) string {

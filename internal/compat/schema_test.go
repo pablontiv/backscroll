@@ -122,6 +122,126 @@ func TestInspectIndexMalformedMigrationMetadataReturnsError(t *testing.T) {
 	}
 }
 
+func TestRegularTableSignatureUsesSemanticShape(t *testing.T) {
+	canonical := openSchema(t, `
+		CREATE TABLE items (
+			id INTEGER PRIMARY KEY,
+			body TEXT NOT NULL,
+			status TEXT NOT NULL DEFAULT 'new',
+			CHECK (length(body) > 0)
+		);
+		CREATE INDEX idx_items_status ON items(status);
+		CREATE TRIGGER items_ai AFTER INSERT ON items BEGIN
+			UPDATE items SET body = new.body WHERE id = new.id;
+		END;
+	`)
+	defer canonical.Close()
+
+	alter := openSchema(t, `
+		CREATE TABLE items (
+			id INTEGER PRIMARY KEY,
+			body TEXT NOT NULL,
+			CHECK (length(body) > 0)
+		);
+		ALTER TABLE items ADD COLUMN status TEXT DEFAULT 'new' NOT NULL;
+		CREATE INDEX idx_items_status ON items(status);
+		CREATE TRIGGER items_ai AFTER INSERT ON items BEGIN
+			UPDATE items SET body = new.body WHERE id = new.id;
+		END;
+	`)
+	defer alter.Close()
+
+	canonicalShape, err := inspectShape(context.Background(), canonical)
+	if err != nil {
+		t.Fatal(err)
+	}
+	alterShape, err := inspectShape(context.Background(), alter)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if canonicalShape.Signature != alterShape.Signature {
+		t.Fatalf("semantically equivalent regular table signatures differ: %s != %s", canonicalShape.Signature, alterShape.Signature)
+	}
+
+	for _, tt := range []struct {
+		name string
+		sql  string
+	}{
+		{
+			name: "column",
+			sql: `
+				CREATE TABLE items (
+					id INTEGER PRIMARY KEY,
+					body TEXT NOT NULL,
+					status INTEGER DEFAULT 'new' NOT NULL,
+					CHECK (length(body) > 0)
+				);
+				CREATE INDEX idx_items_status ON items(status);
+				CREATE TRIGGER items_ai AFTER INSERT ON items BEGIN
+					UPDATE items SET body = new.body WHERE id = new.id;
+				END;
+			`,
+		},
+		{
+			name: "index",
+			sql: `
+				CREATE TABLE items (
+					id INTEGER PRIMARY KEY,
+					body TEXT NOT NULL,
+					status TEXT DEFAULT 'new' NOT NULL,
+					CHECK (length(body) > 0)
+				);
+				CREATE INDEX idx_items_body ON items(body);
+				CREATE TRIGGER items_ai AFTER INSERT ON items BEGIN
+					UPDATE items SET body = new.body WHERE id = new.id;
+				END;
+			`,
+		},
+		{
+			name: "trigger",
+			sql: `
+				CREATE TABLE items (
+					id INTEGER PRIMARY KEY,
+					body TEXT NOT NULL,
+					status TEXT DEFAULT 'new' NOT NULL,
+					CHECK (length(body) > 0)
+				);
+				CREATE INDEX idx_items_status ON items(status);
+				CREATE TRIGGER items_ai AFTER INSERT ON items BEGIN
+					UPDATE items SET status = 'seen' WHERE id = new.id;
+				END;
+			`,
+		},
+		{
+			name: "constraint",
+			sql: `
+				CREATE TABLE items (
+					id INTEGER PRIMARY KEY,
+					body TEXT NOT NULL,
+					status TEXT DEFAULT 'new' NOT NULL,
+					CHECK (length(body) >= 0)
+				);
+				CREATE INDEX idx_items_status ON items(status);
+				CREATE TRIGGER items_ai AFTER INSERT ON items BEGIN
+					UPDATE items SET body = new.body WHERE id = new.id;
+				END;
+			`,
+		},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			different := openSchema(t, tt.sql)
+			defer different.Close()
+			differentShape, err := inspectShape(context.Background(), different)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if canonicalShape.Signature == differentShape.Signature {
+				t.Fatalf("%s difference did not change signature %s", tt.name, canonicalShape.Signature)
+			}
+		})
+	}
+}
+
 func TestInspectShapeSignatureIsStableAcrossMetadataOrder(t *testing.T) {
 	left := openSchema(t, `
 		CREATE TABLE schema_migrations (version INTEGER PRIMARY KEY, name TEXT NOT NULL, applied_on TEXT NOT NULL, checksum TEXT NOT NULL);

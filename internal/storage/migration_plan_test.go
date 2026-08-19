@@ -3,6 +3,7 @@ package storage
 import (
 	"context"
 	"database/sql"
+	"fmt"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -79,6 +80,34 @@ func TestMigrationSnapshotAndRollbackOnDestructiveFailure(t *testing.T) {
 	defer func() { _ = snapshot.Close() }()
 	assertSearchItems(t, snapshot.DB(), wantRows)
 	assertTableExists(t, snapshot.DB(), "session_events", true)
+}
+
+func TestOpenCompatibleClosesAndClearsDatabaseOnMigrationError(t *testing.T) {
+	dbPath := createFixtureDatabase(t, "v3.sql")
+	migrationErr := fmt.Errorf("injected migration failure")
+	originalApply := openCompatibleApplyMigrationPlan
+	openCompatibleApplyMigrationPlan = func(_ *Database, _ context.Context, _ string, _ compat.MigrationPlan) error {
+		return migrationErr
+	}
+	t.Cleanup(func() { openCompatibleApplyMigrationPlan = originalApply })
+
+	db, diag, err := OpenCompatible(context.Background(), dbPath)
+	if err == nil {
+		t.Fatal("expected migration error")
+	}
+	if err != migrationErr {
+		t.Fatalf("error = %v, want injected migration error", err)
+	}
+	if diag != nil {
+		t.Fatalf("diagnostic = %+v, want nil", diag)
+	}
+	if db != nil {
+		if pingErr := db.DB().Ping(); pingErr == nil {
+			_ = db.Close()
+			t.Fatal("OpenCompatible returned an open database after migration error")
+		}
+		t.Fatalf("db = %+v, want nil after migration error", db)
+	}
 }
 
 func TestOpenCompatibleCreatesMissingDatabase(t *testing.T) {
@@ -173,6 +202,21 @@ func TestApplyMigrationPlanFromEmptySchemaCreatesCurrentShape(t *testing.T) {
 	assertCurrentShape(t, db.DB())
 }
 
+func TestSetupSchemaMigrationLedgerMatchesAuthoritativeDefinitions(t *testing.T) {
+	dbPath := filepath.Join(t.TempDir(), "backscroll.db")
+	db, err := Open(dbPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = db.Close() }()
+
+	got := loadStorageMigrationRows(t, db.DB())
+	want := authoritativeCurrentMigrationRows()
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("schema_migrations rows differ\ngot:  %+v\nwant: %+v", got, want)
+	}
+}
+
 func TestMigrationFinalShapeFailureRollsBack(t *testing.T) {
 	ctx := context.Background()
 	dbPath := createFixtureDatabase(t, "v3.sql")
@@ -205,6 +249,12 @@ func TestMigrationFinalShapeFailureRollsBack(t *testing.T) {
 	assertSearchItems(t, db.DB(), wantRows)
 	assertMigrationVersionCount(t, db.DB(), 4, 0)
 	assertTableExists(t, db.DB(), "tool_fts", false)
+}
+
+type storageMigrationRow struct {
+	Version  int
+	Name     string
+	Checksum string
 }
 
 type sentinelSearchItem struct {
@@ -324,6 +374,47 @@ func assertFTSQueryable(t *testing.T, db *sql.DB, term string, want int) {
 	}
 	if got != want {
 		t.Fatalf("FTS count = %d, want %d", got, want)
+	}
+}
+
+func loadStorageMigrationRows(t *testing.T, db *sql.DB) []storageMigrationRow {
+	t.Helper()
+
+	rows, err := db.Query(`SELECT version, name, checksum FROM schema_migrations ORDER BY version`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer rows.Close()
+
+	var result []storageMigrationRow
+	for rows.Next() {
+		var row storageMigrationRow
+		if err := rows.Scan(&row.Version, &row.Name, &row.Checksum); err != nil {
+			t.Fatal(err)
+		}
+		result = append(result, row)
+	}
+	if err := rows.Err(); err != nil {
+		t.Fatal(err)
+	}
+	return result
+}
+
+func authoritativeCurrentMigrationRows() []storageMigrationRow {
+	return []storageMigrationRow{
+		{Version: 1, Name: "V1 core schema", Checksum: "4e07949ccd3912fb3c0e149be9a2e05fdd51f8cedb8df1f28b3bb5ac5afe532a"},
+		{Version: 2, Name: "V2 embedding tables", Checksum: "37dc9627f01f0e2d0fbea6bba5cd9f609d5da05089eeb9541a057dd2290cf8af"},
+		{Version: 3, Name: "V3 embedding blob column", Checksum: "36cd183f10ff84ab4753be027078cdd710b46efdc830053d4a641af725006ea5"},
+		{Version: 4, Name: "V4 tool_fts trigram index", Checksum: "77e59cf515f33c466282e0f3e921377f584794d0b7cade1704f566374a569a55"},
+		{Version: 5, Name: "V5 drop phantom session_events", Checksum: "aedaab81efb6bc34d3f664468b71c1a716f5b55d5132156cb43bd7462d549c7b"},
+		{Version: 6, Name: "V6 drop phantom source_metadata column", Checksum: "a327b9b6e7b8f5fe369c9fc08093ac80a87640daa515890af94b269d430e9378"},
+		{Version: 7, Name: "V7 reasoning content_type routes to messages_fts", Checksum: "a80704442c2a0084f98e4bc53978364b14d1c6bd3bd99ba6119a2a9ecbd685e7"},
+		{Version: 8, Name: "V8 perennity: extraction_version, was_interrupted, tool_events", Checksum: "6853d72ded3bdc775b52507321c31df44bf35e8277719432ca8aa126ee16cec1"},
+		{Version: 9, Name: "V9 tool_events uuid uniqueness index", Checksum: "b16094805a4e08f6e0dd56bce5266c7c5fd71934389da9d13c4132076e546ca2"},
+		{Version: 10, Name: "V10 template mining: message_templates, template_matches", Checksum: "0e548d0cb6c47147726f943bfc860500ca9a9bc821df0601998876ea5e9652c2"},
+		{Version: 11, Name: "V11 correction detection: correction_signals", Checksum: "5a7180f901c5feacb67cd104a61e7b7ba9cec69aaeab1d2b5d723459dc590456"},
+		{Version: 12, Name: "V12 agent classification: annotations (free-form labels; enum freeze deferred)", Checksum: "b3fb66fd2924a9f07a3e4ec0ba253fc1d6965664615a795be6b22d01ab292108"},
+		{Version: 13, Name: "V13 backfill discovery indexes", Checksum: "2172ce531c670806933ffe3005fdc0a2ebb8eb3f84d2bd0d8fa608dddb5d136e"},
 	}
 }
 
