@@ -122,121 +122,138 @@ func TestInspectIndexMalformedMigrationMetadataReturnsError(t *testing.T) {
 	}
 }
 
-func TestRegularTableSignatureUsesSemanticShape(t *testing.T) {
-	canonical := openSchema(t, `
-		CREATE TABLE items (
-			id INTEGER PRIMARY KEY,
-			body TEXT NOT NULL,
-			status TEXT NOT NULL DEFAULT 'new',
-			CHECK (length(body) > 0)
-		);
-		CREATE INDEX idx_items_status ON items(status);
-		CREATE TRIGGER items_ai AFTER INSERT ON items BEGIN
-			UPDATE items SET body = new.body WHERE id = new.id;
-		END;
-	`)
-	defer canonical.Close()
-
-	alter := openSchema(t, `
-		CREATE TABLE items (
-			id INTEGER PRIMARY KEY,
-			body TEXT NOT NULL,
-			CHECK (length(body) > 0)
-		);
-		ALTER TABLE items ADD COLUMN status TEXT DEFAULT 'new' NOT NULL;
-		CREATE INDEX idx_items_status ON items(status);
-		CREATE TRIGGER items_ai AFTER INSERT ON items BEGIN
-			UPDATE items SET body = new.body WHERE id = new.id;
-		END;
-	`)
-	defer alter.Close()
-
-	canonicalShape, err := inspectShape(context.Background(), canonical)
-	if err != nil {
-		t.Fatal(err)
-	}
-	alterShape, err := inspectShape(context.Background(), alter)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if canonicalShape.Signature != alterShape.Signature {
-		t.Fatalf("semantically equivalent regular table signatures differ: %s != %s", canonicalShape.Signature, alterShape.Signature)
-	}
-
+func TestRegularTableSignatureIsConservativeForUnsupportedDDL(t *testing.T) {
 	for _, tt := range []struct {
-		name string
-		sql  string
+		name  string
+		left  string
+		right string
 	}{
 		{
-			name: "column",
-			sql: `
-				CREATE TABLE items (
-					id INTEGER PRIMARY KEY,
-					body TEXT NOT NULL,
-					status INTEGER DEFAULT 'new' NOT NULL,
-					CHECK (length(body) > 0)
-				);
-				CREATE INDEX idx_items_status ON items(status);
-				CREATE TRIGGER items_ai AFTER INSERT ON items BEGIN
-					UPDATE items SET body = new.body WHERE id = new.id;
-				END;
-			`,
+			name:  "generated column",
+			left:  `CREATE TABLE items (id INTEGER PRIMARY KEY, body TEXT NOT NULL);`,
+			right: `CREATE TABLE items (id INTEGER PRIMARY KEY, body TEXT NOT NULL, body_len INTEGER GENERATED ALWAYS AS (length(body)) VIRTUAL);`,
 		},
 		{
-			name: "index",
-			sql: `
-				CREATE TABLE items (
-					id INTEGER PRIMARY KEY,
-					body TEXT NOT NULL,
-					status TEXT DEFAULT 'new' NOT NULL,
-					CHECK (length(body) > 0)
-				);
-				CREATE INDEX idx_items_body ON items(body);
-				CREATE TRIGGER items_ai AFTER INSERT ON items BEGIN
-					UPDATE items SET body = new.body WHERE id = new.id;
-				END;
-			`,
+			name:  "autoincrement",
+			left:  `CREATE TABLE items (id INTEGER PRIMARY KEY, body TEXT NOT NULL);`,
+			right: `CREATE TABLE items (id INTEGER PRIMARY KEY AUTOINCREMENT, body TEXT NOT NULL);`,
 		},
 		{
-			name: "trigger",
-			sql: `
-				CREATE TABLE items (
-					id INTEGER PRIMARY KEY,
-					body TEXT NOT NULL,
-					status TEXT DEFAULT 'new' NOT NULL,
-					CHECK (length(body) > 0)
-				);
-				CREATE INDEX idx_items_status ON items(status);
-				CREATE TRIGGER items_ai AFTER INSERT ON items BEGIN
-					UPDATE items SET status = 'seen' WHERE id = new.id;
-				END;
-			`,
+			name:  "collation",
+			left:  `CREATE TABLE items (id INTEGER PRIMARY KEY, body TEXT NOT NULL);`,
+			right: `CREATE TABLE items (id INTEGER PRIMARY KEY, body TEXT COLLATE NOCASE NOT NULL);`,
 		},
 		{
-			name: "constraint",
-			sql: `
-				CREATE TABLE items (
-					id INTEGER PRIMARY KEY,
-					body TEXT NOT NULL,
-					status TEXT DEFAULT 'new' NOT NULL,
-					CHECK (length(body) >= 0)
-				);
-				CREATE INDEX idx_items_status ON items(status);
-				CREATE TRIGGER items_ai AFTER INSERT ON items BEGIN
-					UPDATE items SET body = new.body WHERE id = new.id;
-				END;
+			name:  "on conflict",
+			left:  `CREATE TABLE items (id INTEGER PRIMARY KEY, body TEXT UNIQUE NOT NULL);`,
+			right: `CREATE TABLE items (id INTEGER PRIMARY KEY, body TEXT UNIQUE ON CONFLICT REPLACE NOT NULL);`,
+		},
+		{
+			name: "deferrable foreign key",
+			left: `
+				CREATE TABLE parents (id INTEGER PRIMARY KEY);
+				CREATE TABLE items (id INTEGER PRIMARY KEY, parent_id INTEGER NOT NULL REFERENCES parents(id));
+			`,
+			right: `
+				CREATE TABLE parents (id INTEGER PRIMARY KEY);
+				CREATE TABLE items (id INTEGER PRIMARY KEY, parent_id INTEGER NOT NULL REFERENCES parents(id) DEFERRABLE INITIALLY DEFERRED);
 			`,
 		},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
-			different := openSchema(t, tt.sql)
-			defer different.Close()
-			differentShape, err := inspectShape(context.Background(), different)
+			left := openSchema(t, tt.left)
+			defer left.Close()
+			right := openSchema(t, tt.right)
+			defer right.Close()
+
+			leftShape, err := inspectShape(context.Background(), left)
 			if err != nil {
 				t.Fatal(err)
 			}
-			if canonicalShape.Signature == differentShape.Signature {
-				t.Fatalf("%s difference did not change signature %s", tt.name, canonicalShape.Signature)
+			rightShape, err := inspectShape(context.Background(), right)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if leftShape.Signature == rightShape.Signature {
+				t.Fatalf("%s DDL difference collided at signature %s", tt.name, leftShape.Signature)
+			}
+		})
+	}
+}
+
+func TestConservativeSignaturePreservesWhitespaceInsideQuotedSQL(t *testing.T) {
+	for _, tt := range []struct {
+		name  string
+		left  string
+		right string
+	}{
+		{
+			name:  "default quoted literal",
+			left:  `CREATE TABLE items (id INTEGER PRIMARY KEY, body TEXT DEFAULT 'alpha  beta');`,
+			right: `CREATE TABLE items (id INTEGER PRIMARY KEY, body TEXT DEFAULT 'alpha beta');`,
+		},
+		{
+			name:  "check quoted literal",
+			left:  `CREATE TABLE items (id INTEGER PRIMARY KEY, body TEXT CHECK (body <> 'alpha  beta'));`,
+			right: `CREATE TABLE items (id INTEGER PRIMARY KEY, body TEXT CHECK (body <> 'alpha beta'));`,
+		},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			left := openSchema(t, tt.left)
+			defer left.Close()
+			right := openSchema(t, tt.right)
+			defer right.Close()
+
+			leftShape, err := inspectShape(context.Background(), left)
+			if err != nil {
+				t.Fatal(err)
+			}
+			rightShape, err := inspectShape(context.Background(), right)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if leftShape.Signature == rightShape.Signature {
+				t.Fatalf("quoted whitespace difference collided at signature %s", leftShape.Signature)
+			}
+		})
+	}
+}
+
+func TestConservativeSignatureStableForExactSameSQL(t *testing.T) {
+	schemaSQL := `CREATE TABLE items (id INTEGER PRIMARY KEY, body TEXT DEFAULT 'alpha  beta' CHECK (body <> 'gamma  delta'));`
+	left := openSchema(t, schemaSQL)
+	defer left.Close()
+	right := openSchema(t, schemaSQL)
+	defer right.Close()
+
+	leftShape, err := inspectShape(context.Background(), left)
+	if err != nil {
+		t.Fatal(err)
+	}
+	rightShape, err := inspectShape(context.Background(), right)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if leftShape.Signature != rightShape.Signature {
+		t.Fatalf("exact same SQL signature differs: %s != %s", leftShape.Signature, rightShape.Signature)
+	}
+}
+
+func TestInspectIndexRecognizesCanonicalAndExplicitLegacyV13Shapes(t *testing.T) {
+	for _, fixture := range []string{"v13.sql", "v13-legacy-alter-built.sql", "v13-legacy-existing-schema-migrations.sql"} {
+		t.Run(fixture, func(t *testing.T) {
+			db := openFixtureCopy(t, fixture)
+			defer db.Close()
+
+			plan, diag, err := InspectIndex(context.Background(), db)
+			if err != nil || diag != nil {
+				t.Fatalf("inspect error=%v diagnostic=%+v", err, diag)
+			}
+			if plan.From.AppliedVersion != 13 {
+				t.Fatalf("applied version = %d, want 13", plan.From.AppliedVersion)
+			}
+			if len(plan.Steps) != 0 {
+				t.Fatalf("V13-compatible shape has pending steps: %+v", plan.Steps)
 			}
 		})
 	}

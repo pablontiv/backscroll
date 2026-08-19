@@ -12,6 +12,13 @@ import (
 	"github.com/pablontiv/backscroll/internal/compat"
 )
 
+var (
+	snapshotDatabase = SnapshotDatabase
+	beginMigrationTx = func(ctx context.Context, db *sql.DB) (*sql.Tx, error) {
+		return db.BeginTx(ctx, nil)
+	}
+)
+
 // SnapshotDatabase creates a read-only reopenable sibling snapshot of srcPath.
 func SnapshotDatabase(ctx context.Context, srcPath string) (string, error) {
 	targetPath, err := nextSnapshotPath(srcPath)
@@ -39,18 +46,48 @@ func SnapshotDatabase(ctx context.Context, srcPath string) (string, error) {
 }
 
 // ApplyMigrationPlan applies a checked compatibility migration plan atomically.
-func (d *Database) ApplyMigrationPlan(ctx context.Context, path string, plan compat.MigrationPlan) error {
+func (d *Database) ApplyMigrationPlan(ctx context.Context, plan compat.MigrationPlan) error {
 	if len(plan.Steps) == 0 {
 		return nil
 	}
+	if d.path == "" {
+		return fmt.Errorf("database path is not bound to receiver")
+	}
 
-	snapshotCreated := false
+	if planIncludesVersion(plan, 9) {
+		if err := prepareV9ToolEventDuplicates(ctx, d.db); err != nil {
+			return err
+		}
+	}
+
+	if planHasDestructiveMigration(plan) {
+		if _, err := snapshotDatabase(ctx, d.path); err != nil {
+			return err
+		}
+	}
+
 	v6Recorded := plan.From.AppliedVersion >= 6 || planIncludesVersion(plan, 6)
-	tx, err := d.db.BeginTx(ctx, nil)
+	tx, err := beginMigrationTx(ctx, d.db)
 	if err != nil {
 		return fmt.Errorf("begin migration plan transaction: %w", err)
 	}
 	defer func() { _ = tx.Rollback() }()
+
+	livePlan, diag, err := compat.InspectIndex(ctx, tx)
+	if err != nil {
+		return fmt.Errorf("re-inspect schema in migration transaction: %w", err)
+	}
+	if livePlan.From.Signature != plan.From.Signature {
+		return fmt.Errorf("index schema changed since inspection: got %s want %s", livePlan.From.Signature, plan.From.Signature)
+	}
+	if diag != nil && !planStartsFromEmptySchema(plan) {
+		return fmt.Errorf("re-inspect schema in migration transaction: %s: %s", diag.Code, diag.Summary)
+	}
+	if planIncludesVersion(plan, 9) {
+		if err := prepareV9ToolEventDuplicates(ctx, tx); err != nil {
+			return err
+		}
+	}
 
 	for _, step := range plan.Steps {
 		if step.Version > 6 && !v6Recorded {
@@ -58,13 +95,6 @@ func (d *Database) ApplyMigrationPlan(ctx context.Context, path string, plan com
 				return err
 			}
 			v6Recorded = true
-		}
-
-		if isDestructiveMigration(step) && !snapshotCreated {
-			if _, err := SnapshotDatabase(ctx, path); err != nil {
-				return err
-			}
-			snapshotCreated = true
 		}
 
 		apply, ok := migrationPlanDispatch[step]
@@ -83,7 +113,7 @@ func (d *Database) ApplyMigrationPlan(ctx context.Context, path string, plan com
 		return fmt.Errorf("commit migration plan: %w", err)
 	}
 
-	verify, err := OpenReadOnly(path)
+	verify, err := OpenReadOnly(d.path)
 	if err != nil {
 		return fmt.Errorf("reopen migrated database read-only: %w", err)
 	}
@@ -128,7 +158,20 @@ var migrationPlanDispatch = map[compat.MigrationStep]migrationApplier{
 }
 
 func isDestructiveMigration(step compat.MigrationStep) bool {
-	return step.Version == 5 || step.Version == 6
+	return step.Version == 5 || step.Version == 6 || step.Version == 8 || step.Version == 9
+}
+
+func planHasDestructiveMigration(plan compat.MigrationPlan) bool {
+	for _, step := range plan.Steps {
+		if isDestructiveMigration(step) {
+			return true
+		}
+	}
+	return false
+}
+
+func planStartsFromEmptySchema(plan compat.MigrationPlan) bool {
+	return plan.From.AppliedVersion == 0 && len(plan.Steps) > 0 && plan.Steps[0].Version == 1
 }
 
 func planIncludesVersion(plan compat.MigrationPlan, version int) bool {
@@ -263,6 +306,87 @@ func applyV9(ctx context.Context, tx *sql.Tx, from compat.SchemaShape) error {
 		return fmt.Errorf("apply v9 tool_events uuid uniqueness: %w", err)
 	}
 	return recordMigration(ctx, tx, 9, "V9 tool_events uuid uniqueness index", sqlV9, "record migration v9")
+}
+
+type queryContexter interface {
+	QueryContext(context.Context, string, ...any) (*sql.Rows, error)
+}
+
+func prepareV9ToolEventDuplicates(ctx context.Context, q queryContexter) error {
+	existsRows, err := q.QueryContext(ctx, `SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'tool_events' LIMIT 1`)
+	if err != nil {
+		return fmt.Errorf("inspect V9 tool_events table: %w", err)
+	}
+	toolEventsExists := existsRows.Next()
+	if err := existsRows.Err(); err != nil {
+		_ = existsRows.Close()
+		return fmt.Errorf("read V9 tool_events table: %w", err)
+	}
+	if err := existsRows.Close(); err != nil {
+		return fmt.Errorf("close V9 tool_events table probe: %w", err)
+	}
+	if !toolEventsExists {
+		return nil
+	}
+
+	rows, err := q.QueryContext(ctx, `
+		SELECT
+			message_uuid,
+			source_path,
+			ordinal,
+			tool_name,
+			command_head,
+			is_error,
+			exit_code,
+			extraction_version
+		FROM tool_events
+		WHERE message_uuid IS NOT NULL
+		ORDER BY message_uuid, id
+	`)
+	if err != nil {
+		return fmt.Errorf("inspect V9 tool_events duplicates: %w", err)
+	}
+	defer rows.Close()
+
+	seen := map[string]v9ToolEventRow{}
+	for rows.Next() {
+		var payload v9ToolEventRow
+		if err := rows.Scan(
+			&payload.MessageUUID,
+			&payload.SourcePath,
+			&payload.Ordinal,
+			&payload.ToolName,
+			&payload.CommandHead,
+			&payload.IsError,
+			&payload.ExitCode,
+			&payload.ExtractionVersion,
+		); err != nil {
+			return fmt.Errorf("scan V9 tool_events duplicates: %w", err)
+		}
+		prior, ok := seen[payload.MessageUUID]
+		if !ok {
+			seen[payload.MessageUUID] = payload
+			continue
+		}
+		if prior != payload {
+			return fmt.Errorf("conflicting tool_events for message_uuid %q before V9 uniqueness migration", payload.MessageUUID)
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return fmt.Errorf("read V9 tool_events duplicates: %w", err)
+	}
+	return nil
+}
+
+type v9ToolEventRow struct {
+	MessageUUID       string
+	SourcePath        string
+	Ordinal           int64
+	ToolName          string
+	CommandHead       sql.NullString
+	IsError           sql.NullInt64
+	ExitCode          sql.NullInt64
+	ExtractionVersion int64
 }
 
 func applyV10(ctx context.Context, tx *sql.Tx, from compat.SchemaShape) error {
