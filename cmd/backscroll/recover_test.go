@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"context"
+	"database/sql"
 	"errors"
 	"fmt"
 	"os"
@@ -211,6 +212,78 @@ func TestRecoverApplyReportsActualBackupAndCounts(t *testing.T) {
 	}
 }
 
+func TestRecoverInstalledDestinationPassesIndexedValidation(t *testing.T) {
+	dir := t.TempDir()
+	home := filepath.Join(dir, "home")
+	if err := os.MkdirAll(home, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	activePath := filepath.Join(dir, "active.db")
+	strandedPath := filepath.Join(dir, "stranded.db")
+	createRecoverFixtureDB(t, activePath, "active-v13.sql", map[string]string{
+		"uuid-active-v13": "11111111-1111-4111-8111-111111111111",
+	})
+	createRecoverFixtureDB(t, strandedPath, "stranded-v7.sql", map[string]string{
+		"uuid-stranded-v7": "22222222-2222-4222-8222-222222222222",
+	})
+	activeBefore, err := os.ReadFile(activePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	t.Setenv("HOME", home)
+	t.Setenv("BACKSCROLL_CONFIG_DIR", filepath.Join(dir, "config"))
+	t.Setenv("BACKSCROLL_DATABASE_PATH", activePath)
+	t.Chdir(dir)
+
+	var recoverOut, recoverErr bytes.Buffer
+	recoverCmd := buildRootCmd(&recoverOut, &recoverErr)
+	recoverCmd.SetArgs([]string{"recover", "--from", strandedPath})
+	if err := recoverCmd.Execute(); err != nil {
+		t.Fatalf("recover: %v\nstderr=%s", err, recoverErr.String())
+	}
+	if recoverErr.String() != "" {
+		t.Fatalf("recover stderr = %q, want empty", recoverErr.String())
+	}
+	backupPath := recoverOutputValue(t, recoverOut.String(), "backup path: ")
+	backupBytes, err := os.ReadFile(backupPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(backupBytes, activeBefore) {
+		t.Fatal("active backup differs from pre-recovery database")
+	}
+
+	var validateOut, validateErr bytes.Buffer
+	validateCmd := buildRootCmd(&validateOut, &validateErr)
+	validateCmd.SetArgs([]string{"validate", "--indexed-only"})
+	if err := validateCmd.Execute(); err != nil {
+		t.Fatalf("validate recovered destination: %v\nstdout=%s\nstderr=%s", err, validateOut.String(), validateErr.String())
+	}
+	if validateErr.String() != "" {
+		t.Fatalf("validate stderr = %q, want empty", validateErr.String())
+	}
+
+	db, err := storage.OpenReadOnly(activePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = db.Close() }()
+	var records, accountedPaths, ftsHits int
+	if err := db.DB().QueryRow(`SELECT COUNT(*) FROM search_items`).Scan(&records); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.DB().QueryRow(`SELECT COUNT(*) FROM indexed_files`).Scan(&accountedPaths); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.DB().QueryRow(`SELECT COUNT(*) FROM messages_fts WHERE messages_fts MATCH 'default'`).Scan(&ftsHits); err != nil {
+		t.Fatal(err)
+	}
+	if records != 4 || accountedPaths != 4 || ftsHits != 2 {
+		t.Fatalf("recovered database counts records=%d paths=%d fts=%d, want 4/4/2", records, accountedPaths, ftsHits)
+	}
+}
+
 func TestRecoverCommandReturnsStructuredApplyFailure(t *testing.T) {
 	dir := t.TempDir()
 	home := filepath.Join(dir, "home")
@@ -376,6 +449,30 @@ func TestRecoverHasNoGeneralMergeFlags(t *testing.T) {
 				t.Fatalf("stdout = %q, want empty", stdout.String())
 			}
 		})
+	}
+}
+
+func createRecoverFixtureDB(t *testing.T, path, fixture string, replacements map[string]string) {
+	t.Helper()
+	fixturePath := filepath.Join("..", "..", "tests", "fixtures", "recovery", fixture)
+	body, err := os.ReadFile(fixturePath)
+	if err != nil {
+		t.Fatalf("read recovery fixture %s: %v", fixturePath, err)
+	}
+	sqlText := string(body)
+	for from, to := range replacements {
+		sqlText = strings.ReplaceAll(sqlText, from, to)
+	}
+	db, err := sql.Open("sqlite", path)
+	if err != nil {
+		t.Fatalf("open recovery fixture %s: %v", path, err)
+	}
+	if _, err := db.Exec(sqlText); err != nil {
+		_ = db.Close()
+		t.Fatalf("execute recovery fixture %s: %v", fixture, err)
+	}
+	if err := db.Close(); err != nil {
+		t.Fatalf("close recovery fixture %s: %v", path, err)
 	}
 }
 
