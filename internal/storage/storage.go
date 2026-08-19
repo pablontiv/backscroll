@@ -26,6 +26,8 @@ var openCompatibleApplyMigrationPlan = func(db *Database, ctx context.Context, p
 	return db.ApplyMigrationPlan(ctx, plan)
 }
 
+var ErrImmutableReadOnlyWALUnsafe = errors.New("non-empty WAL makes immutable read-only content unsafe")
+
 // Open opens or creates a new SQLite database at the given path with FTS5 and WAL mode enabled.
 func Open(path string) (*Database, error) {
 	d, err := openWithoutSetup(path)
@@ -144,6 +146,38 @@ func OpenReadOnly(path string) (*Database, error) {
 		return nil, fmt.Errorf("ping readonly database %s: %w", canonicalPath, err)
 	}
 
+	return &Database{db: db, path: canonicalPath}, nil
+}
+
+// OpenImmutableReadOnly opens an existing SQLite database without creating or
+// touching SQLite sidecar files. It refuses non-empty WAL files because an
+// immutable view can miss committed frames that are not checkpointed into the
+// main database file.
+func OpenImmutableReadOnly(path string) (*Database, error) {
+	if _, err := os.Stat(path); os.IsNotExist(err) {
+		return nil, fmt.Errorf("backscroll database not found: %s: %w", path, fs.ErrNotExist)
+	}
+	canonicalPath, err := canonicalizeExistingDBPath(path)
+	if err != nil {
+		return nil, err
+	}
+	walPath := canonicalPath + "-wal"
+	if wal, err := os.Stat(walPath); err == nil {
+		if wal.Size() > 0 {
+			return nil, fmt.Errorf("%w: %s", ErrImmutableReadOnlyWALUnsafe, canonicalPath)
+		}
+	} else if !os.IsNotExist(err) {
+		return nil, fmt.Errorf("stat WAL sidecar %s: %w", walPath, err)
+	}
+
+	db, err := sql.Open("sqlite", "file:"+canonicalPath+"?mode=ro&immutable=1&_pragma=busy_timeout(5000)")
+	if err != nil {
+		return nil, fmt.Errorf("opening immutable readonly database %s: %w", canonicalPath, err)
+	}
+	if err := db.Ping(); err != nil {
+		_ = db.Close()
+		return nil, fmt.Errorf("ping immutable readonly database %s: %w", canonicalPath, err)
+	}
 	return &Database{db: db, path: canonicalPath}, nil
 }
 

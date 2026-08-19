@@ -1,9 +1,11 @@
 package storage
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
+	"reflect"
 	"testing"
 	"time"
 
@@ -158,11 +160,161 @@ func TestOpenReadOnlyHasBusyTimeout(t *testing.T) {
 	}
 }
 
+func TestOpenReadOnlyLiveWALSeesCommittedRows(t *testing.T) {
+	dbPath := filepath.Join(t.TempDir(), "live_wal.db")
+	writer := openTestDBWithLiveWAL(t, dbPath)
+	defer func() { _ = writer.Close() }()
+
+	readonly, err := OpenReadOnly(dbPath)
+	if err != nil {
+		t.Fatalf("OpenReadOnly with live WAL: %v", err)
+	}
+	defer func() { _ = readonly.Close() }()
+
+	var count int
+	if err := readonly.db.QueryRow("SELECT COUNT(*) FROM search_items WHERE text = 'live WAL committed row'").Scan(&count); err != nil {
+		t.Fatalf("query live WAL row through OpenReadOnly: %v", err)
+	}
+	if count != 1 {
+		t.Fatalf("live WAL row count = %d, want 1", count)
+	}
+}
+
+func TestOpenImmutableReadOnlyRefusesLiveWALWithoutSidecarMutation(t *testing.T) {
+	dbPath := filepath.Join(t.TempDir(), "immutable_live_wal.db")
+	writer := openTestDBWithLiveWAL(t, dbPath)
+	defer func() { _ = writer.Close() }()
+	before := snapshotDBSidecars(t, dbPath)
+
+	immutable, err := OpenImmutableReadOnly(dbPath)
+	if err == nil {
+		_ = immutable.Close()
+		t.Fatal("OpenImmutableReadOnly with live WAL succeeded; want unsafe WAL error")
+	}
+	if !errors.Is(err, ErrImmutableReadOnlyWALUnsafe) {
+		t.Fatalf("OpenImmutableReadOnly error = %v, want ErrImmutableReadOnlyWALUnsafe", err)
+	}
+
+	after := snapshotDBSidecars(t, dbPath)
+	if !reflect.DeepEqual(after, before) {
+		t.Fatalf("OpenImmutableReadOnly mutated sidecars\nbefore=%s\nafter= %s", describeStorageSidecars(before), describeStorageSidecars(after))
+	}
+}
+
+func TestOpenImmutableReadOnlyDoesNotCreateSidecars(t *testing.T) {
+	dbPath := filepath.Join(t.TempDir(), "immutable_clean.db")
+	writer := openTestDBWithLiveWAL(t, dbPath)
+	if _, err := writer.db.Exec("PRAGMA wal_checkpoint(FULL)"); err != nil {
+		t.Fatalf("checkpoint clean immutable fixture: %v", err)
+	}
+	if err := writer.Close(); err != nil {
+		t.Fatalf("close clean immutable fixture: %v", err)
+	}
+	_ = os.Remove(dbPath + "-wal")
+	_ = os.Remove(dbPath + "-shm")
+
+	immutable, err := OpenImmutableReadOnly(dbPath)
+	if err != nil {
+		t.Fatalf("OpenImmutableReadOnly clean database: %v", err)
+	}
+	defer func() { _ = immutable.Close() }()
+	var count int
+	if err := immutable.db.QueryRow("SELECT COUNT(*) FROM search_items WHERE text = 'live WAL committed row'").Scan(&count); err != nil {
+		t.Fatalf("query immutable clean database: %v", err)
+	}
+	if count != 1 {
+		t.Fatalf("immutable row count = %d, want 1", count)
+	}
+	assertStorageSidecarMissing(t, dbPath+"-wal")
+	assertStorageSidecarMissing(t, dbPath+"-shm")
+}
+
 // TestOpenReadOnlyNonExistent verifies that opening a non-existent database fails.
 func TestOpenReadOnlyNonExistent(t *testing.T) {
 	_, err := OpenReadOnly("/nonexistent/path/db.sqlite")
 	if err == nil {
 		t.Fatalf("expected error opening non-existent database")
+	}
+}
+
+func openTestDBWithLiveWAL(t *testing.T, dbPath string) *Database {
+	t.Helper()
+	db, err := Open(dbPath)
+	if err != nil {
+		t.Fatalf("Open live WAL fixture: %v", err)
+	}
+	if err := db.SyncFiles([]IndexedFile{{
+		SourcePath: "/sessions/live-wal.jsonl",
+		Source:     "session",
+		Hash:       "live-wal-hash",
+		Project:    "project",
+		Messages: []IndexedMessage{{
+			Ordinal:     0,
+			Role:        "user",
+			Text:        "live WAL committed row",
+			UUID:        "33333333-3333-4333-8333-333333333333",
+			Timestamp:   "2026-08-18T00:00:00Z",
+			ContentType: "text",
+		}},
+	}}); err != nil {
+		_ = db.Close()
+		t.Fatalf("seed live WAL fixture: %v", err)
+	}
+	wal, err := os.Stat(dbPath + "-wal")
+	if err != nil {
+		_ = db.Close()
+		t.Fatalf("stat live WAL sidecar: %v", err)
+	}
+	if wal.Size() == 0 {
+		_ = db.Close()
+		t.Fatal("live WAL sidecar is empty; test fixture did not create committed WAL frames")
+	}
+	return db
+}
+
+type storageSidecarSnapshot struct {
+	Data  []byte
+	Mode  os.FileMode
+	MTime time.Time
+}
+
+func snapshotDBSidecars(t *testing.T, dbPath string) map[string]storageSidecarSnapshot {
+	t.Helper()
+	result := map[string]storageSidecarSnapshot{}
+	for _, suffix := range []string{"-wal", "-shm"} {
+		path := dbPath + suffix
+		info, err := os.Stat(path)
+		if os.IsNotExist(err) {
+			continue
+		}
+		if err != nil {
+			t.Fatalf("stat sidecar %s: %v", path, err)
+		}
+		data, err := os.ReadFile(path)
+		if err != nil {
+			t.Fatalf("read sidecar %s: %v", path, err)
+		}
+		result[suffix] = storageSidecarSnapshot{Data: data, Mode: info.Mode(), MTime: info.ModTime()}
+	}
+	return result
+}
+
+func describeStorageSidecars(snapshot map[string]storageSidecarSnapshot) string {
+	parts := make([]string, 0, len(snapshot))
+	for _, suffix := range []string{"-wal", "-shm"} {
+		entry, ok := snapshot[suffix]
+		if !ok {
+			continue
+		}
+		parts = append(parts, fmt.Sprintf("%s bytes=%d mode=%s mtime=%s", suffix, len(entry.Data), entry.Mode, entry.MTime.Format(time.RFC3339Nano)))
+	}
+	return fmt.Sprintf("%v", parts)
+}
+
+func assertStorageSidecarMissing(t *testing.T, path string) {
+	t.Helper()
+	if _, err := os.Stat(path); !os.IsNotExist(err) {
+		t.Fatalf("sidecar %s exists after immutable read-only open (err=%v)", path, err)
 	}
 }
 

@@ -83,6 +83,7 @@ query merges both by rank position (RRF).`,
 		newStatusCmd(stdout, stderr),
 		newConfigCmd(stdout, stderr),
 		newAnnotateCmd(stdout, stderr),
+		newRecoverCmd(stdout, stderr),
 	)
 
 	return root
