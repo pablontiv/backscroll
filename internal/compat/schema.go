@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"database/sql"
+	"errors"
 	"fmt"
 	"sort"
 	"strings"
@@ -141,7 +142,20 @@ type sqliteObject struct {
 	sql   string
 }
 
-func loadSQLiteObjects(ctx context.Context, q Queryer) ([]sqliteObject, error) {
+type schemaRowsCloser interface {
+	Close() error
+}
+
+func joinRowsCloseError(rows schemaRowsCloser, err *error) {
+	if rows == nil || err == nil {
+		return
+	}
+	if closeErr := rows.Close(); closeErr != nil {
+		*err = errors.Join(*err, closeErr)
+	}
+}
+
+func loadSQLiteObjects(ctx context.Context, q Queryer) (objects []sqliteObject, err error) {
 	rows, err := q.QueryContext(ctx, `
 		SELECT type, name, tbl_name, COALESCE(sql, '')
 		FROM sqlite_master
@@ -150,18 +164,19 @@ func loadSQLiteObjects(ctx context.Context, q Queryer) ([]sqliteObject, error) {
 	if err != nil {
 		return nil, fmt.Errorf("query sqlite_master: %w", err)
 	}
-	defer rows.Close()
+	defer joinRowsCloseError(rows, &err)
 
-	var objects []sqliteObject
 	for rows.Next() {
 		var object sqliteObject
-		if err := rows.Scan(&object.typ, &object.name, &object.table, &object.sql); err != nil {
-			return nil, fmt.Errorf("scan sqlite_master: %w", err)
+		if scanErr := rows.Scan(&object.typ, &object.name, &object.table, &object.sql); scanErr != nil {
+			err = fmt.Errorf("scan sqlite_master: %w", scanErr)
+			return nil, err
 		}
 		objects = append(objects, object)
 	}
-	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("read sqlite_master: %w", err)
+	if rowsErr := rows.Err(); rowsErr != nil {
+		err = fmt.Errorf("read sqlite_master: %w", rowsErr)
+		return nil, err
 	}
 	return objects, nil
 }
@@ -189,7 +204,7 @@ func loadRegularTableRecords(ctx context.Context, q Queryer, object sqliteObject
 	return records, columns, nil
 }
 
-func loadSchemaMigrationRecords(ctx context.Context, q Queryer) ([]string, int, error) {
+func loadSchemaMigrationRecords(ctx context.Context, q Queryer) (records []string, maxVersion int, err error) {
 	rows, err := q.QueryContext(ctx, `
 		SELECT version, name, checksum
 		FROM schema_migrations
@@ -198,23 +213,23 @@ func loadSchemaMigrationRecords(ctx context.Context, q Queryer) ([]string, int, 
 	if err != nil {
 		return nil, 0, fmt.Errorf("query schema_migrations: %w", err)
 	}
-	defer rows.Close()
+	defer joinRowsCloseError(rows, &err)
 
-	var records []string
-	maxVersion := 0
 	for rows.Next() {
 		var version int
 		var name, checksum string
-		if err := rows.Scan(&version, &name, &checksum); err != nil {
-			return nil, 0, fmt.Errorf("scan schema_migrations: %w", err)
+		if scanErr := rows.Scan(&version, &name, &checksum); scanErr != nil {
+			err = fmt.Errorf("scan schema_migrations: %w", scanErr)
+			return nil, 0, err
 		}
 		if version > maxVersion {
 			maxVersion = version
 		}
 		records = append(records, schemaRecord("migration", "schema_migrations", fmt.Sprintf("%013d", version), name+"|"+checksum, ""))
 	}
-	if err := rows.Err(); err != nil {
-		return nil, 0, fmt.Errorf("read schema_migrations: %w", err)
+	if rowsErr := rows.Err(); rowsErr != nil {
+		err = fmt.Errorf("read schema_migrations: %w", rowsErr)
+		return nil, 0, err
 	}
 	return records, maxVersion, nil
 }
@@ -237,23 +252,24 @@ func (c tableColumn) signature() string {
 	return fmt.Sprintf("%013d:%s:%d:%s:%d:%d", c.cid, c.typ, c.notNull, defaultValue, c.pk, c.hidden)
 }
 
-func loadTableColumns(ctx context.Context, q Queryer, table string) ([]tableColumn, error) {
+func loadTableColumns(ctx context.Context, q Queryer, table string) (columns []tableColumn, err error) {
 	rows, err := q.QueryContext(ctx, "PRAGMA table_xinfo("+quoteIdent(table)+")")
 	if err != nil {
 		return nil, fmt.Errorf("query table_info %s: %w", table, err)
 	}
-	defer rows.Close()
+	defer joinRowsCloseError(rows, &err)
 
-	var columns []tableColumn
 	for rows.Next() {
 		var column tableColumn
-		if err := rows.Scan(&column.cid, &column.name, &column.typ, &column.notNull, &column.defaultTo, &column.pk, &column.hidden); err != nil {
-			return nil, fmt.Errorf("scan table_info %s: %w", table, err)
+		if scanErr := rows.Scan(&column.cid, &column.name, &column.typ, &column.notNull, &column.defaultTo, &column.pk, &column.hidden); scanErr != nil {
+			err = fmt.Errorf("scan table_info %s: %w", table, scanErr)
+			return nil, err
 		}
 		columns = append(columns, column)
 	}
-	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("read table_info %s: %w", table, err)
+	if rowsErr := rows.Err(); rowsErr != nil {
+		err = fmt.Errorf("read table_info %s: %w", table, rowsErr)
+		return nil, err
 	}
 	return columns, nil
 }
@@ -283,41 +299,42 @@ func loadIndexRecords(ctx context.Context, q Queryer, table string) ([]string, e
 	return records, nil
 }
 
-func loadIndexes(ctx context.Context, q Queryer, table string) ([]sqliteIndex, error) {
+func loadIndexes(ctx context.Context, q Queryer, table string) (indexes []sqliteIndex, err error) {
 	rows, err := q.QueryContext(ctx, "PRAGMA index_list("+quoteIdent(table)+")")
 	if err != nil {
 		return nil, fmt.Errorf("query index_list %s: %w", table, err)
 	}
-	defer rows.Close()
+	defer joinRowsCloseError(rows, &err)
 
-	var indexes []sqliteIndex
 	for rows.Next() {
 		var index sqliteIndex
-		if err := rows.Scan(&index.seq, &index.name, &index.unique, &index.origin, &index.partial); err != nil {
-			return nil, fmt.Errorf("scan index_list %s: %w", table, err)
+		if scanErr := rows.Scan(&index.seq, &index.name, &index.unique, &index.origin, &index.partial); scanErr != nil {
+			err = fmt.Errorf("scan index_list %s: %w", table, scanErr)
+			return nil, err
 		}
 		indexes = append(indexes, index)
 	}
-	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("read index_list %s: %w", table, err)
+	if rowsErr := rows.Err(); rowsErr != nil {
+		err = fmt.Errorf("read index_list %s: %w", table, rowsErr)
+		return nil, err
 	}
 	sort.Slice(indexes, func(i, j int) bool { return indexes[i].name < indexes[j].name })
 	return indexes, nil
 }
 
-func loadIndexColumns(ctx context.Context, q Queryer, index string) ([]string, error) {
+func loadIndexColumns(ctx context.Context, q Queryer, index string) (columns []string, err error) {
 	rows, err := q.QueryContext(ctx, "PRAGMA index_info("+quoteIdent(index)+")")
 	if err != nil {
 		return nil, fmt.Errorf("query index_info %s: %w", index, err)
 	}
-	defer rows.Close()
+	defer joinRowsCloseError(rows, &err)
 
-	var columns []string
 	for rows.Next() {
 		var seqno, cid int
 		var name sql.NullString
-		if err := rows.Scan(&seqno, &cid, &name); err != nil {
-			return nil, fmt.Errorf("scan index_info %s: %w", index, err)
+		if scanErr := rows.Scan(&seqno, &cid, &name); scanErr != nil {
+			err = fmt.Errorf("scan index_info %s: %w", index, scanErr)
+			return nil, err
 		}
 		columnName := "<expr>"
 		if name.Valid {
@@ -325,8 +342,9 @@ func loadIndexColumns(ctx context.Context, q Queryer, index string) ([]string, e
 		}
 		columns = append(columns, fmt.Sprintf("%013d:%013d:%s", seqno, cid, columnName))
 	}
-	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("read index_info %s: %w", index, err)
+	if rowsErr := rows.Err(); rowsErr != nil {
+		err = fmt.Errorf("read index_info %s: %w", index, rowsErr)
+		return nil, err
 	}
 	sort.Strings(columns)
 	return columns, nil

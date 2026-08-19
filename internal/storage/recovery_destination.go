@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"regexp"
@@ -17,6 +18,40 @@ import (
 )
 
 var recoveryFTSTokenRE = regexp.MustCompile(`[A-Za-z0-9_]{3,}`)
+
+// RecoveryDestinationError describes a failed destination construction attempt.
+// Path is populated when a temporary destination path may have leaked; CleanupErr
+// is populated when cleanup of that exact path failed.
+type RecoveryDestinationError struct {
+	Path       string
+	Cause      error
+	CleanupErr error
+}
+
+func (e *RecoveryDestinationError) Error() string {
+	if e.Path != "" {
+		return fmt.Sprintf("recovery destination %s failed: %v", e.Path, e.Cause)
+	}
+	return fmt.Sprintf("recovery destination failed: %v", e.Cause)
+}
+
+func (e *RecoveryDestinationError) Unwrap() []error {
+	var errs []error
+	if e.Cause != nil {
+		errs = append(errs, e.Cause)
+	}
+	if e.CleanupErr != nil {
+		errs = append(errs, e.CleanupErr)
+	}
+	return errs
+}
+
+func recoveryDestinationError(path string, cause, cleanupErr error) error {
+	if cause == nil {
+		cause = cleanupErr
+	}
+	return &RecoveryDestinationError{Path: path, Cause: cause, CleanupErr: cleanupErr}
+}
 
 // CreateRecoveryDestination creates a fresh current-schema recovery database in
 // dir, imports the applicable canonical plan in one transaction, verifies the
@@ -34,20 +69,32 @@ func CreateRecoveryDestination(ctx context.Context, dir string, plan compat.Reco
 	}
 	path = temp.Name()
 	if closeErr := temp.Close(); closeErr != nil {
-		_ = recoveryDestinationRemoveFiles(path)
-		return "", fmt.Errorf("close recovery destination temp: %w", closeErr)
+		cause := fmt.Errorf("close recovery destination temp: %w", closeErr)
+		cleanupErr := recoveryDestinationRemoveFiles(path)
+		if cleanupErr != nil {
+			return path, recoveryDestinationError(path, cause, fmt.Errorf("cleanup leaked recovery destination temp %s: %w", path, cleanupErr))
+		}
+		return "", cause
 	}
 	if err := os.Chmod(path, 0o600); err != nil {
-		_ = recoveryDestinationRemoveFiles(path)
-		return "", fmt.Errorf("set recovery destination permissions: %w", err)
+		cause := fmt.Errorf("set recovery destination permissions: %w", err)
+		cleanupErr := recoveryDestinationRemoveFiles(path)
+		if cleanupErr != nil {
+			return path, recoveryDestinationError(path, cause, fmt.Errorf("cleanup leaked recovery destination temp %s: %w", path, cleanupErr))
+		}
+		return "", cause
 	}
 
 	tempPath := path
 	cleanup := true
 	defer func() {
 		if cleanup {
-			_ = recoveryDestinationRemoveFiles(tempPath)
-			path = ""
+			if cleanupErr := recoveryDestinationRemoveFiles(tempPath); cleanupErr != nil {
+				path = tempPath
+				err = recoveryDestinationError(tempPath, err, fmt.Errorf("cleanup leaked recovery destination temp %s: %w", tempPath, cleanupErr))
+			} else {
+				path = ""
+			}
 		}
 	}()
 
@@ -58,8 +105,8 @@ func CreateRecoveryDestination(ctx context.Context, dir string, plan compat.Reco
 	closeDB := true
 	defer func() {
 		if closeDB {
-			if closeErr := db.Close(); err == nil && closeErr != nil {
-				err = closeErr
+			if closeErr := db.Close(); closeErr != nil {
+				err = errors.Join(err, fmt.Errorf("close recovery destination database: %w", closeErr))
 			}
 		}
 	}()
@@ -71,7 +118,9 @@ func CreateRecoveryDestination(ctx context.Context, dir string, plan compat.Reco
 	committed := false
 	defer func() {
 		if !committed {
-			_ = tx.Rollback()
+			if rollbackErr := tx.Rollback(); rollbackErr != nil && !errors.Is(rollbackErr, sql.ErrTxDone) {
+				err = errors.Join(err, fmt.Errorf("rollback recovery import transaction: %w", rollbackErr))
+			}
 		}
 	}()
 
@@ -87,12 +136,18 @@ func CreateRecoveryDestination(ctx context.Context, dir string, plan compat.Reco
 		return "", fmt.Errorf("commit recovery import transaction: %w", err)
 	}
 	committed = true
+	if _, err := db.DB().ExecContext(ctx, `PRAGMA wal_checkpoint(TRUNCATE)`); err != nil {
+		return "", fmt.Errorf("checkpoint recovery destination into main database: %w", err)
+	}
 
 	if err := db.Close(); err != nil {
 		closeDB = false
 		return "", fmt.Errorf("close recovery destination before independent verification: %w", err)
 	}
 	closeDB = false
+	if err := removeEmptyRecoveryDestinationSidecars(path); err != nil {
+		return "", err
+	}
 
 	if err := VerifyRecoveryDestination(ctx, path, plan); err != nil {
 		return "", fmt.Errorf("verify committed recovery destination: %w", err)
@@ -103,15 +158,42 @@ func CreateRecoveryDestination(ctx context.Context, dir string, plan compat.Reco
 
 // VerifyRecoveryDestination independently opens path read-only and verifies that
 // its committed bytes exactly match the current-schema canonical recovery plan.
-func VerifyRecoveryDestination(ctx context.Context, path string, plan compat.RecoveryPlan) error {
+func removeEmptyRecoveryDestinationSidecars(path string) error {
+	var errs []error
+	for _, suffix := range []string{"-wal", "-shm", "-journal"} {
+		sidecar := path + suffix
+		info, err := os.Lstat(sidecar)
+		if os.IsNotExist(err) {
+			continue
+		}
+		if err != nil {
+			errs = append(errs, fmt.Errorf("lstat recovery destination sidecar %s: %w", sidecar, err))
+			continue
+		}
+		if !info.Mode().IsRegular() || info.Size() != 0 {
+			errs = append(errs, fmt.Errorf("recovery destination has unexpected SQLite sidecar %s", sidecar))
+			continue
+		}
+		if err := os.Remove(sidecar); err != nil && !os.IsNotExist(err) {
+			errs = append(errs, fmt.Errorf("remove empty recovery destination sidecar %s: %w", sidecar, err))
+		}
+	}
+	return errors.Join(errs...)
+}
+
+func VerifyRecoveryDestination(ctx context.Context, path string, plan compat.RecoveryPlan) (err error) {
 	if plan.Records == nil {
 		return fmt.Errorf("recovery plan is inapplicable or contains diagnostics")
 	}
-	db, err := OpenReadOnly(path)
+	db, err := OpenImmutableReadOnly(path)
 	if err != nil {
-		return fmt.Errorf("open recovery destination read-only: %w", err)
+		return fmt.Errorf("open recovery destination immutable read-only: %w", err)
 	}
-	defer func() { _ = db.Close() }()
+	defer func() {
+		if closeErr := db.Close(); closeErr != nil {
+			err = errors.Join(err, fmt.Errorf("close recovery destination immutable read-only %s: %w", path, closeErr))
+		}
+	}()
 	return verifyRecoveryDestinationQueryer(ctx, db.DB(), plan)
 }
 
@@ -223,12 +305,16 @@ func verifyRecoveryDestinationRows(ctx context.Context, q compat.Queryer, plan c
 	return nil
 }
 
-func verifyRecoveryDestinationForeignKeys(ctx context.Context, q compat.Queryer) error {
+func verifyRecoveryDestinationForeignKeys(ctx context.Context, q compat.Queryer) (err error) {
 	rows, err := q.QueryContext(ctx, `PRAGMA foreign_key_check`)
 	if err != nil {
 		return fmt.Errorf("foreign_key_check: %w", err)
 	}
-	defer rows.Close()
+	defer func() {
+		if closeErr := rows.Close(); closeErr != nil {
+			err = errors.Join(err, fmt.Errorf("close foreign_key_check rows: %w", closeErr))
+		}
+	}()
 	if rows.Next() {
 		return fmt.Errorf("foreign_key_check reported violations")
 	}
@@ -424,10 +510,12 @@ func recoveryDestinationRemoveFiles(path string) error {
 	if path == "" {
 		return nil
 	}
-	for _, suffix := range []string{"", "-wal", "-shm"} {
-		if err := os.Remove(path + suffix); err != nil && !os.IsNotExist(err) {
-			return err
+	var errs []error
+	for _, suffix := range []string{"", "-wal", "-shm", "-journal"} {
+		candidate := path + suffix
+		if err := os.Remove(candidate); err != nil && !os.IsNotExist(err) {
+			errs = append(errs, fmt.Errorf("remove recovery destination temp %s: %w", candidate, err))
 		}
 	}
-	return nil
+	return errors.Join(errs...)
 }

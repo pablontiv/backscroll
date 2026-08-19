@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -139,6 +140,39 @@ func TestReadRecoveryInputRejectsMissingCanonicalPayload(t *testing.T) {
 	assertQueryOnly(t, handle.db, true)
 	assertRecoveryFixtureUnchanged(t, handle)
 }
+
+func TestReadCanonicalSearchItemsPropagatesRowsCloseError(t *testing.T) {
+	closeErr := errors.New("injected recovery rows close failure")
+	_, diag, err := readCanonicalSearchItemsFromRows(&fakeRecoveryRows{closeErr: closeErr})
+	if diag != nil {
+		t.Fatalf("diagnostic = %+v, want nil", diag)
+	}
+	if err == nil || !errors.Is(err, closeErr) {
+		t.Fatalf("readCanonicalSearchItemsFromRows error = %v, want close error", err)
+	}
+}
+
+func TestReadCanonicalSearchItemsJoinsRowsReadAndCloseErrors(t *testing.T) {
+	readErr := errors.New("injected recovery rows read failure")
+	closeErr := errors.New("injected recovery rows close failure")
+	_, diag, err := readCanonicalSearchItemsFromRows(&fakeRecoveryRows{err: readErr, closeErr: closeErr})
+	if diag != nil {
+		t.Fatalf("diagnostic = %+v, want nil", diag)
+	}
+	if err == nil || !errors.Is(err, readErr) || !errors.Is(err, closeErr) {
+		t.Fatalf("readCanonicalSearchItemsFromRows error = %v, want read and close errors", err)
+	}
+}
+
+type fakeRecoveryRows struct {
+	err      error
+	closeErr error
+}
+
+func (r *fakeRecoveryRows) Next() bool             { return false }
+func (r *fakeRecoveryRows) Scan(dest ...any) error { return nil }
+func (r *fakeRecoveryRows) Err() error             { return r.err }
+func (r *fakeRecoveryRows) Close() error           { return r.closeErr }
 
 func TestReadRecoveryInputPerformsNoWrites(t *testing.T) {
 	for _, fixture := range []string{"active-v13.sql", "stranded-v3-no-source-metadata.sql", "stranded-v7.sql"} {

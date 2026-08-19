@@ -3,6 +3,7 @@ package compat
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"io/fs"
 	"strings"
 	"testing"
@@ -103,6 +104,39 @@ func TestVerifyCurrentShapeRejectsPendingMigrations(t *testing.T) {
 		t.Fatal("verify current shape succeeded for a shape with pending migrations")
 	}
 }
+
+func TestJoinRowsCloseErrorJoinsPrimaryAndCloseErrors(t *testing.T) {
+	primaryErr := errors.New("primary schema rows failure")
+	closeErr := errors.New("close schema rows failure")
+	err := primaryErr
+
+	joinRowsCloseError(fakeSchemaRowsCloser{err: closeErr}, &err)
+
+	if err == nil || !errors.Is(err, primaryErr) || !errors.Is(err, closeErr) {
+		t.Fatalf("joined error = %v, want primary and close", err)
+	}
+}
+
+func TestJoinRowsCloseErrorLeavesSuccessfulScansUnchanged(t *testing.T) {
+	var err error
+	joinRowsCloseError(fakeSchemaRowsCloser{}, &err)
+	if err != nil {
+		t.Fatalf("successful rows close error = %v, want nil", err)
+	}
+
+	primaryErr := errors.New("primary schema rows failure")
+	err = primaryErr
+	joinRowsCloseError(fakeSchemaRowsCloser{}, &err)
+	if err != primaryErr {
+		t.Fatalf("primary error changed to %v", err)
+	}
+}
+
+type fakeSchemaRowsCloser struct {
+	err error
+}
+
+func (r fakeSchemaRowsCloser) Close() error { return r.err }
 
 func TestInspectIndexMalformedMigrationMetadataReturnsError(t *testing.T) {
 	db := openSchema(t, `

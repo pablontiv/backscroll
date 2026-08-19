@@ -3,6 +3,7 @@ package storage
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
 
 	"github.com/pablontiv/backscroll/internal/compat"
@@ -12,12 +13,20 @@ import (
 // ReadRecoveryInput reads every recoverable search_items row from a supported
 // historical index lineage without applying migrations or mutating the database.
 func ReadRecoveryInput(ctx context.Context, db *Database) (compat.RecoveryInput, *compat.Diagnostic, error) {
-	plan, diag, err := compat.InspectIndex(ctx, db.DB())
+	return ReadRecoveryInputFromQueryer(ctx, db.DB())
+}
+
+// ReadRecoveryInputFromQueryer reads recoverable rows through q without opening
+// another connection. Recovery apply uses this while holding a SQLite write
+// reservation, so the final active input and replacement plan are derived from
+// the same reserved snapshot.
+func ReadRecoveryInputFromQueryer(ctx context.Context, q compat.Queryer) (compat.RecoveryInput, *compat.Diagnostic, error) {
+	plan, diag, err := compat.InspectIndex(ctx, q)
 	if err != nil || diag != nil {
 		return compat.RecoveryInput{}, diag, err
 	}
 
-	records, diag, err := readRecordsForSignature(ctx, db.DB(), plan.From.Signature)
+	records, diag, err := readRecordsForSignature(ctx, q, plan.From.Signature)
 	if err != nil || diag != nil {
 		return compat.RecoveryInput{}, diag, err
 	}
@@ -62,13 +71,27 @@ func readCanonicalSearchItems(ctx context.Context, q compat.Queryer) ([]models.I
 	if err != nil {
 		return nil, nil, fmt.Errorf("query recovery records: %w", err)
 	}
-	defer func() { _ = rows.Close() }()
+	return readCanonicalSearchItemsFromRows(rows)
+}
 
-	var records []models.IndexedRecord
+type recoveryRows interface {
+	Next() bool
+	Scan(dest ...any) error
+	Err() error
+	Close() error
+}
+
+func readCanonicalSearchItemsFromRows(rows recoveryRows) (records []models.IndexedRecord, diag *compat.Diagnostic, err error) {
+	defer func() {
+		if closeErr := rows.Close(); closeErr != nil {
+			err = errors.Join(err, fmt.Errorf("close recovery records: %w", closeErr))
+		}
+	}()
+
 	for rows.Next() {
-		record, diag := scanRecoveryRecord(rows)
-		if diag != nil {
-			return nil, diag, nil
+		record, rowDiag := scanRecoveryRecord(rows)
+		if rowDiag != nil {
+			return nil, rowDiag, nil
 		}
 		records = append(records, record)
 	}

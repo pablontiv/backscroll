@@ -18,7 +18,7 @@ func newRecoverCmd(stdout, stderr io.Writer) *cobra.Command {
 
 	cmd := &cobra.Command{
 		Use:          "recover",
-		Short:        "Plan stranded database recovery",
+		Short:        "Recover stranded database rows into the configured database",
 		SilenceUsage: true,
 		Args:         cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
@@ -32,6 +32,9 @@ func newRecoverCmd(stdout, stderr io.Writer) *cobra.Command {
 				DryRun:     dryRun,
 			})
 			if err != nil {
+				if backupPath, ok := recovery.RestorableBackupPath(err); ok {
+					_, _ = fmt.Fprintf(stderr, "manual recovery backup path: %s\n", backupPath)
+				}
 				return err
 			}
 			printRecoveryReport(stdout, report, dryRun)
@@ -73,7 +76,7 @@ func printRecoveryReport(w io.Writer, report recovery.Report, dryRun bool) {
 	if dryRun {
 		_, _ = fmt.Fprintln(w, "recovery dry run")
 	} else {
-		_, _ = fmt.Fprintln(w, "recovery plan")
+		_, _ = fmt.Fprintln(w, "recovery complete")
 	}
 	_, _ = fmt.Fprintf(w, "active path: %s\n", report.ActivePath)
 	_, _ = fmt.Fprintf(w, "replacement target: %s\n", report.ActivePath)
