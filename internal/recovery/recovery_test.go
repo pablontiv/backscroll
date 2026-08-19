@@ -893,6 +893,101 @@ func TestRecoverDryRunMissingPathsRemainValidationErrors(t *testing.T) {
 	}
 }
 
+func TestRecoverDryRunInputValidationErrorsStayPlain(t *testing.T) {
+	ctx := context.Background()
+	dir := t.TempDir()
+	activePath := filepath.Join(dir, "active.db")
+	fromPath := filepath.Join(dir, "from.db")
+	createRecoveryDB(t, activePath, []storage.IndexedMessage{{Ordinal: 0, Role: "user", Text: "active dry-run validation", UUID: "11111111-1111-4111-8111-111111111111", ContentType: "text"}})
+	createRecoveryDB(t, fromPath, []storage.IndexedMessage{{Ordinal: 0, Role: "assistant", Text: "from dry-run validation", UUID: "22222222-2222-4222-8222-222222222222", ContentType: "text"}})
+	brokenLink := filepath.Join(dir, "broken-link.db")
+	if err := os.Symlink(filepath.Join(dir, "missing-target.db"), brokenLink); err != nil {
+		t.Skipf("symlink unsupported: %v", err)
+	}
+
+	cases := []struct {
+		name string
+		opts Options
+	}{
+		{name: "missing_from", opts: Options{ActivePath: activePath, FromPath: "", DryRun: true}},
+		{name: "broken_active", opts: Options{ActivePath: brokenLink, FromPath: fromPath, DryRun: true}},
+		{name: "broken_from", opts: Options{ActivePath: activePath, FromPath: brokenLink, DryRun: true}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			_, err := Execute(ctx, tc.opts)
+			if err == nil {
+				t.Fatalf("Execute(%+v) succeeded; want dry-run validation error", tc.opts)
+			}
+			var failure *ApplyFailure
+			if errors.As(err, &failure) {
+				t.Fatalf("dry-run error %v was ApplyFailure %+v; want plain validation error", err, failure)
+			}
+		})
+	}
+}
+
+func TestRecoverDryRunConflictReportsDiagnosticsWithoutApplyFailure(t *testing.T) {
+	ctx := context.Background()
+	dir := t.TempDir()
+	activePath := filepath.Join(dir, "active.db")
+	fromPath := filepath.Join(dir, "from.db")
+	sharedUUID := "33333333-3333-4333-8333-333333333333"
+	createRecoveryDB(t, activePath, []storage.IndexedMessage{{Ordinal: 0, Role: "user", Text: "active conflicting dry run", UUID: sharedUUID, ContentType: "text"}})
+	createRecoveryDB(t, fromPath, []storage.IndexedMessage{{Ordinal: 0, Role: "assistant", Text: "from conflicting dry run", UUID: sharedUUID, ContentType: "text"}})
+
+	report, err := Execute(ctx, Options{ActivePath: activePath, FromPath: fromPath, DryRun: true})
+	if err == nil {
+		t.Fatal("dry-run conflict succeeded; want diagnostic error")
+	}
+	var failure *ApplyFailure
+	if errors.As(err, &failure) {
+		t.Fatalf("dry-run conflict returned ApplyFailure %+v; want plain diagnostic error", failure)
+	}
+	if len(report.Conflicts) == 0 || report.Conflicts[0].Code != compat.CodeRecoveryConflict {
+		t.Fatalf("dry-run conflict report diagnostics = %+v, want recovery conflict", report.Conflicts)
+	}
+	if report.FinalCount != 0 {
+		t.Fatalf("dry-run conflict final count = %d, want no applicable final count", report.FinalCount)
+	}
+}
+
+func TestApplyFailurePublicErrorDetailsExposeRestorableBackup(t *testing.T) {
+	cause := errors.New("primary failure")
+	restoreErr := errors.New("restore failed")
+	cleanupErr := errors.New("cleanup failed")
+	closeErr := errors.New("close failed")
+	failure := &ApplyFailure{
+		ActivePath:           "active.db",
+		FromPath:             "from.db",
+		BackupPath:           "active.db.backup",
+		TempPath:             "temp.db",
+		RestorableBackup:     true,
+		RestorableBackupPath: "active.db.backup",
+		ActiveRestored:       true,
+		Cause:                cause,
+		RestoreErr:           restoreErr,
+		CleanupErr:           cleanupErr,
+		CloseErr:             closeErr,
+	}
+
+	text := failure.Error()
+	for _, want := range []string{"primary failure", "active=active.db", "from=from.db", "backup=active.db.backup", "temp=temp.db", "restorable backup remains at active.db.backup", "restored active", "restore error: restore failed", "cleanup error: cleanup failed", "close error: close failed"} {
+		if !strings.Contains(text, want) {
+			t.Fatalf("ApplyFailure.Error() missing %q in %q", want, text)
+		}
+	}
+	if got := failure.Unwrap(); len(got) != 4 || got[0] != cause || got[1] != restoreErr || got[2] != cleanupErr || got[3] != closeErr {
+		t.Fatalf("ApplyFailure.Unwrap() = %#v, want cause/restore/cleanup/close", got)
+	}
+	if path, ok := RestorableBackupPath(fmt.Errorf("outer: %w", failure)); !ok || path != "active.db.backup" {
+		t.Fatalf("RestorableBackupPath wrapped failure = %q, %v", path, ok)
+	}
+	if path, ok := RestorableBackupPath(errors.New("unrelated")); ok || path != "" {
+		t.Fatalf("RestorableBackupPath unrelated = %q, %v", path, ok)
+	}
+}
+
 func TestRecoverPathCanonicalizationFailureIsStructured(t *testing.T) {
 	dir := t.TempDir()
 

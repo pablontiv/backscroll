@@ -103,6 +103,377 @@ func TestValidateTextReportsSemanticRecoveryDiagnosticsReadOnly(t *testing.T) {
 	}
 }
 
+func TestValidateTextReportsMultipleSemanticRecoveryDiagnosticsReadOnly(t *testing.T) {
+	dbPath := newMixedRecoveryDiagnosticDB(t)
+	before := snapshotSQLiteFiles(t, dbPath)
+
+	stdout, stderr, err := runCmd("validate")
+	if err == nil {
+		t.Fatalf("plain validate succeeded; want multiple recovery diagnostics; stdout=%q stderr=%q", stdout, stderr)
+	}
+	combined := stdout + stderr
+	for _, wantCode := range []compat.Code{compat.CodeRecoveryConflict, compat.CodeUninterpretableRow} {
+		assertDiagnosticText(t, combined, wantCode, dbPath)
+	}
+	if got := strings.Count(combined, "continuation: recover --from "+dbPath+" --dry-run"); got < 2 {
+		t.Fatalf("plain validate continuation count = %d, want at least 2 in %q", got, combined)
+	}
+	assertSQLiteFilesUnchanged(t, dbPath, before)
+}
+
+func TestStatusHealthyIndexIsReadOnlyInTextAndJSON(t *testing.T) {
+	dbPath := filepath.Join(t.TempDir(), "backscroll.db")
+	db, err := storage.Open(dbPath)
+	if err != nil {
+		t.Fatalf("create current index: %v", err)
+	}
+	if err := db.SyncFiles([]storage.IndexedFile{{
+		SourcePath: "/sessions/status.jsonl",
+		Source:     "session",
+		Hash:       "status-hash",
+		Project:    "project",
+		Messages: []storage.IndexedMessage{{
+			Ordinal: 0, Role: "user", Text: "status visible sentinel", UUID: "11111111-1111-4111-8111-111111111111",
+			Timestamp: "2026-08-18T00:00:00Z", ContentType: "text", ExtractionVersion: storage.CurrentExtractionVersion,
+		}},
+	}}); err != nil {
+		_ = db.Close()
+		t.Fatalf("seed current index: %v", err)
+	}
+	if err := db.Close(); err != nil {
+		t.Fatalf("close current index: %v", err)
+	}
+	setIndexPolicyEnv(t, dbPath, t.TempDir())
+	before := snapshotSQLiteFiles(t, dbPath)
+
+	stdout, stderr, err := runCmd("status")
+	if err != nil {
+		t.Fatalf("status healthy index failed: %v stdout=%q stderr=%q", err, stdout, stderr)
+	}
+	if stderr != "" || !strings.Contains(stdout, "Files indexed:    1") || !strings.Contains(stdout, "Messages indexed: 1") {
+		t.Fatalf("status healthy index text output stdout=%q stderr=%q", stdout, stderr)
+	}
+	assertSQLiteFilesUnchanged(t, dbPath, before)
+
+	stdout, stderr, err = runCmd("status", "--json")
+	if err != nil {
+		t.Fatalf("status --json healthy index failed: %v stdout=%q stderr=%q", err, stdout, stderr)
+	}
+	if stderr != "" {
+		t.Fatalf("status --json healthy index wrote stderr: %q", stderr)
+	}
+	var payload struct {
+		Database struct {
+			Exists bool `json:"exists"`
+			Size   int  `json:"size"`
+		} `json:"database"`
+		Index struct {
+			Usable        bool `json:"usable"`
+			TotalFiles    int  `json:"total_files"`
+			TotalMessages int  `json:"total_messages"`
+		} `json:"index"`
+	}
+	if err := json.Unmarshal([]byte(stdout), &payload); err != nil {
+		t.Fatalf("status --json healthy index emitted invalid JSON %q: %v", stdout, err)
+	}
+	if !payload.Database.Exists || payload.Database.Size == 0 || !payload.Index.Usable || payload.Index.TotalFiles != 1 || payload.Index.TotalMessages != 1 {
+		t.Fatalf("status --json healthy index payload = %+v, want existing usable one-row index", payload)
+	}
+	assertSQLiteFilesUnchanged(t, dbPath, before)
+}
+
+func TestAnnotatePathOrdinalFallbackPersistsThroughCobra(t *testing.T) {
+	dbPath := filepath.Join(t.TempDir(), "backscroll.db")
+	db, err := storage.Open(dbPath)
+	if err != nil {
+		t.Fatalf("create current index: %v", err)
+	}
+	if err := db.SyncFiles([]storage.IndexedFile{{
+		SourcePath: "/sessions/fallback.jsonl",
+		Source:     "session",
+		Hash:       "annotate-hash",
+		Project:    "project",
+		Messages: []storage.IndexedMessage{{
+			Ordinal: 3, Role: "assistant", Text: "annotation fallback sentinel",
+			Timestamp: "2026-08-18T00:00:00Z", ContentType: "text", ExtractionVersion: storage.CurrentExtractionVersion,
+		}},
+	}}); err != nil {
+		_ = db.Close()
+		t.Fatalf("seed current index: %v", err)
+	}
+	if err := db.Close(); err != nil {
+		t.Fatalf("close current index: %v", err)
+	}
+	setIndexPolicyEnv(t, dbPath, t.TempDir())
+
+	stdout, stderr, err := runCmd("annotate", "--path", "/sessions/fallback.jsonl", "--ordinal", "3", "--kind", "correction", "--label", "needs-review")
+	if err != nil {
+		t.Fatalf("annotate path/ordinal fallback failed: %v stdout=%q stderr=%q", err, stdout, stderr)
+	}
+	if stderr != "" || !strings.Contains(stdout, "Annotated /sessions/fallback.jsonl:3 as correction=needs-review") {
+		t.Fatalf("annotate path/ordinal fallback output stdout=%q stderr=%q", stdout, stderr)
+	}
+
+	inspect, err := storage.OpenReadOnly(dbPath)
+	if err != nil {
+		t.Fatalf("open annotated index read-only: %v", err)
+	}
+	defer func() { _ = inspect.Close() }()
+	var label, source string
+	if err := inspect.DB().QueryRow(`SELECT label, source FROM annotations WHERE source_path = ? AND ordinal = ? AND kind = ?`, "/sessions/fallback.jsonl", 3, "correction").Scan(&label, &source); err != nil {
+		t.Fatalf("query persisted annotation: %v", err)
+	}
+	if label != "needs-review" || source != "agent" {
+		t.Fatalf("persisted annotation label/source = %q/%q", label, source)
+	}
+}
+
+func TestValidateHealthyIndexIsReadOnlyInTextAndJSON(t *testing.T) {
+	dbPath := filepath.Join(t.TempDir(), "backscroll.db")
+	db, err := storage.Open(dbPath)
+	if err != nil {
+		t.Fatalf("create current index: %v", err)
+	}
+	if err := db.Close(); err != nil {
+		t.Fatalf("close current index: %v", err)
+	}
+	setIndexPolicyEnv(t, dbPath, t.TempDir())
+	before := snapshotSQLiteFiles(t, dbPath)
+
+	stdout, stderr, err := runCmd("validate")
+	if err != nil {
+		t.Fatalf("validate healthy index failed: %v stdout=%q stderr=%q", err, stdout, stderr)
+	}
+	if stderr != "" || !strings.Contains(stdout, "Index validation passed") {
+		t.Fatalf("validate healthy index text output stdout=%q stderr=%q", stdout, stderr)
+	}
+	assertSQLiteFilesUnchanged(t, dbPath, before)
+
+	stdout, stderr, err = runCmd("validate", "--json")
+	if err != nil {
+		t.Fatalf("validate --json healthy index failed: %v stdout=%q stderr=%q", err, stdout, stderr)
+	}
+	if stderr != "" {
+		t.Fatalf("validate --json healthy index wrote stderr: %q", stderr)
+	}
+	var payload struct {
+		Valid          bool `json:"valid"`
+		DatabaseExists bool `json:"database_exists"`
+	}
+	if err := json.Unmarshal([]byte(stdout), &payload); err != nil {
+		t.Fatalf("validate --json healthy index emitted invalid JSON %q: %v", stdout, err)
+	}
+	if !payload.Valid || !payload.DatabaseExists {
+		t.Fatalf("validate --json healthy index payload = %+v, want valid existing database", payload)
+	}
+	assertSQLiteFilesUnchanged(t, dbPath, before)
+}
+
+func TestConfigAndStatusDeclarativeInputsVisibleWithoutCreatingIndex(t *testing.T) {
+	dir := t.TempDir()
+	dbPath := filepath.Join(dir, "backscroll.db")
+	cfgDir := filepath.Join(dir, "config")
+	presetDir := filepath.Join(fixturesDir(), "claude-preset")
+	setupInputsPreset(t, cfgDir, filepath.Join(presetDir, "projects"))
+	t.Setenv("HOME", filepath.Join(dir, "home"))
+	t.Setenv("BACKSCROLL_CONFIG_DIR", cfgDir)
+	t.Setenv("BACKSCROLL_DATABASE_PATH", dbPath)
+
+	stdout, stderr, err := runCmd("config")
+	if err != nil {
+		t.Fatalf("config text with declarative input failed: %v stdout=%q stderr=%q", err, stdout, stderr)
+	}
+	for _, want := range []string{"Backscroll Configuration", "Inputs (declarative)", "id:      claude", "format:  claude"} {
+		if !strings.Contains(stdout, want) {
+			t.Fatalf("config text missing %q in:\n%s", want, stdout)
+		}
+	}
+	if stderr != "" {
+		t.Fatalf("config text wrote stderr: %q", stderr)
+	}
+
+	stdout, stderr, err = runCmd("config", "--json")
+	if err != nil {
+		t.Fatalf("config --json with declarative input failed: %v stdout=%q stderr=%q", err, stdout, stderr)
+	}
+	if stderr != "" {
+		t.Fatalf("config --json wrote stderr: %q", stderr)
+	}
+	var payload struct {
+		Inputs struct {
+			Mode     string `json:"mode"`
+			Count    int    `json:"count"`
+			Manifest []struct {
+				ID      string   `json:"id"`
+				Format  string   `json:"format"`
+				Include []string `json:"include"`
+			} `json:"manifest"`
+		} `json:"inputs"`
+	}
+	if err := json.Unmarshal([]byte(stdout), &payload); err != nil {
+		t.Fatalf("config --json emitted invalid JSON %q: %v", stdout, err)
+	}
+	if payload.Inputs.Mode != "declarative" || payload.Inputs.Count != 1 || len(payload.Inputs.Manifest) != 1 || payload.Inputs.Manifest[0].ID != "claude" || payload.Inputs.Manifest[0].Format != "claude" {
+		t.Fatalf("config --json declarative payload = %+v", payload.Inputs)
+	}
+
+	stdout, stderr, err = runCmd("status")
+	if err != nil {
+		t.Fatalf("status text with declarative input failed: %v stdout=%q stderr=%q", err, stdout, stderr)
+	}
+	for _, want := range []string{"Index: Not yet created", "Inputs: 1 active (declarative)", "- claude"} {
+		if !strings.Contains(stdout, want) {
+			t.Fatalf("status text missing %q in:\n%s", want, stdout)
+		}
+	}
+	if stderr != "" {
+		t.Fatalf("status text wrote stderr: %q", stderr)
+	}
+	if _, err := os.Stat(dbPath); !os.IsNotExist(err) {
+		t.Fatalf("config/status created database: %v", err)
+	}
+}
+
+func TestStatusAndValidateMissingIndexAreReadOnlyMachineDiagnostics(t *testing.T) {
+	dbPath := filepath.Join(t.TempDir(), "missing", "backscroll.db")
+	setIndexPolicyEnv(t, dbPath, t.TempDir())
+
+	stdout, stderr, err := runCmd("validate")
+	if err != nil {
+		t.Fatalf("validate missing index failed: %v stdout=%q stderr=%q", err, stdout, stderr)
+	}
+	if stderr != "" || !strings.Contains(stdout, "database not found") {
+		t.Fatalf("validate missing index text output stdout=%q stderr=%q", stdout, stderr)
+	}
+	if _, err := os.Stat(dbPath); !os.IsNotExist(err) {
+		t.Fatalf("validate created or touched missing database: %v", err)
+	}
+
+	stdout, stderr, err = runCmd("status")
+	if err != nil {
+		t.Fatalf("status missing index failed: %v stdout=%q stderr=%q", err, stdout, stderr)
+	}
+	if stderr != "" || !strings.Contains(stdout, "Index: Not yet created") || !strings.Contains(stdout, "Messages indexed: 0") {
+		t.Fatalf("status missing index text output stdout=%q stderr=%q", stdout, stderr)
+	}
+	if _, err := os.Stat(dbPath); !os.IsNotExist(err) {
+		t.Fatalf("status created or touched missing database: %v", err)
+	}
+
+	stdout, stderr, err = runCmd("validate", "--json")
+	if err != nil {
+		t.Fatalf("validate --json missing index failed: %v stdout=%q stderr=%q", err, stdout, stderr)
+	}
+	if stderr != "" {
+		t.Fatalf("validate --json missing index wrote stderr: %q", stderr)
+	}
+	var validatePayload struct {
+		Valid          bool `json:"valid"`
+		DatabaseExists bool `json:"database_exists"`
+	}
+	if err := json.Unmarshal([]byte(stdout), &validatePayload); err != nil {
+		t.Fatalf("validate --json missing index emitted invalid JSON %q: %v", stdout, err)
+	}
+	if !validatePayload.Valid || validatePayload.DatabaseExists {
+		t.Fatalf("validate --json missing index payload = %+v, want valid without database", validatePayload)
+	}
+	if _, err := os.Stat(dbPath); !os.IsNotExist(err) {
+		t.Fatalf("validate --json created or touched missing database: %v", err)
+	}
+
+	stdout, stderr, err = runCmd("status", "--json")
+	if err != nil {
+		t.Fatalf("status --json missing index failed: %v stdout=%q stderr=%q", err, stdout, stderr)
+	}
+	if stderr != "" {
+		t.Fatalf("status --json missing index wrote stderr: %q", stderr)
+	}
+	var statusPayload struct {
+		Database struct {
+			Exists bool `json:"exists"`
+			Size   int  `json:"size"`
+		} `json:"database"`
+		Index struct {
+			Usable        bool `json:"usable"`
+			TotalFiles    int  `json:"total_files"`
+			TotalMessages int  `json:"total_messages"`
+		} `json:"index"`
+	}
+	if err := json.Unmarshal([]byte(stdout), &statusPayload); err != nil {
+		t.Fatalf("status --json missing index emitted invalid JSON %q: %v", stdout, err)
+	}
+	if statusPayload.Database.Exists || statusPayload.Database.Size != 0 || statusPayload.Index.Usable || statusPayload.Index.TotalFiles != 0 || statusPayload.Index.TotalMessages != 0 {
+		t.Fatalf("status --json missing index payload = %+v, want no index and zero counts", statusPayload)
+	}
+	if _, err := os.Stat(dbPath); !os.IsNotExist(err) {
+		t.Fatalf("status --json created or touched missing database: %v", err)
+	}
+}
+
+func TestValidateCurrentIndexIntegrityFailureIsGenericAndReadOnly(t *testing.T) {
+	dbPath := newOrphanedCurrentDiagnosticDB(t)
+	before := snapshotSQLiteFiles(t, dbPath)
+
+	stdout, stderr, err := runCmd("validate", "--json")
+	if err == nil {
+		t.Fatalf("validate --json orphaned index succeeded; stdout=%q stderr=%q", stdout, stderr)
+	}
+	if stderr != "" {
+		t.Fatalf("validate --json orphaned index wrote stderr: %q", stderr)
+	}
+	var payload struct {
+		Valid bool   `json:"valid"`
+		Error string `json:"error"`
+	}
+	if err := json.Unmarshal([]byte(stdout), &payload); err != nil {
+		t.Fatalf("validate --json orphaned index emitted invalid JSON %q: %v", stdout, err)
+	}
+	if payload.Valid || !strings.Contains(payload.Error, "orphaned search_items") {
+		t.Fatalf("validate --json orphaned index payload = %+v, want generic validation failure", payload)
+	}
+	assertSQLiteFilesUnchanged(t, dbPath, before)
+
+	stdout, stderr, err = runCmd("validate")
+	if err == nil {
+		t.Fatalf("validate orphaned index succeeded; stdout=%q stderr=%q", stdout, stderr)
+	}
+	combined := strings.ToLower(stdout + stderr)
+	if !strings.Contains(combined, "validation failed") || !strings.Contains(combined, "orphaned search_items") {
+		t.Fatalf("validate orphaned index output = stdout=%q stderr=%q, want generic validation failure", stdout, stderr)
+	}
+	for _, forbidden := range []string{"diagnostic:", "continuation:", "recover --from"} {
+		if strings.Contains(combined, forbidden) {
+			t.Fatalf("validate orphaned index emitted recovery diagnostic %q in stdout=%q stderr=%q", forbidden, stdout, stderr)
+		}
+	}
+	assertSQLiteFilesUnchanged(t, dbPath, before)
+}
+
+func TestSearchRobotDiagnosticIsMachineReadableAndPreservesIndexBytes(t *testing.T) {
+	dbPath := newUnsupportedIndexedConsumerDB(t)
+	before := readDBBytes(t, dbPath)
+
+	stdout, stderr, err := runCmd("search", "sentinel", "--robot", "--indexed-only")
+	if err == nil {
+		t.Fatalf("search --robot unsupported index succeeded; stdout=%q stderr=%q", stdout, stderr)
+	}
+	if stderr != "" {
+		t.Fatalf("search --robot diagnostic wrote stderr: %q", stderr)
+	}
+	for _, want := range []string{
+		"diagnostic_code=" + string(compat.CodeUnsupportedLineage),
+		"diagnostic_summary=",
+		"diagnostic_continuation_argv=recover --from " + dbPath + " --dry-run",
+	} {
+		if !strings.Contains(stdout, want) {
+			t.Fatalf("search --robot diagnostic missing %q in %q", want, stdout)
+		}
+	}
+	if after := readDBBytes(t, dbPath); !bytes.Equal(after, before) {
+		t.Fatal("search --robot diagnostic mutated unsupported database bytes")
+	}
+}
+
 func TestLiveWALDiagnosticDoesNotClaimMigrationFailureOrRecovery(t *testing.T) {
 	dbPath, closeWriter := newLiveWALDiagnosticDB(t)
 	defer closeWriter()
@@ -128,6 +499,25 @@ func TestLiveWALDiagnosticDoesNotClaimMigrationFailureOrRecovery(t *testing.T) {
 			assertSQLiteFilesUnchanged(t, dbPath, before)
 		})
 	}
+
+	t.Run("status text", func(t *testing.T) {
+		stdout, stderr, err := runCmd("status")
+		if err == nil {
+			t.Fatalf("status text succeeded with live WAL; stdout=%q stderr=%q", stdout, stderr)
+		}
+		out := strings.ToLower(stdout + stderr)
+		for _, want := range []string{"diagnostic: " + string(compat.CodeIndexStale), "wal", "uncheckpointed frames"} {
+			if !strings.Contains(out, strings.ToLower(want)) {
+				t.Fatalf("status text live WAL diagnostic missing %q: %q", want, stderr)
+			}
+		}
+		for _, forbidden := range []string{"continuation:", "migration_failed", "recover --from", "--dry-run"} {
+			if strings.Contains(out, forbidden) {
+				t.Fatalf("status text emitted false recovery/migration guidance %q in %q", forbidden, stderr)
+			}
+		}
+		assertSQLiteFilesUnchanged(t, dbPath, before)
+	})
 }
 
 func TestBlockingDiagnosticsHaveExecutableContinuations(t *testing.T) {
@@ -361,6 +751,44 @@ func newUninterpretableRowDiagnosticDB(t *testing.T) string {
 	}
 	if err := closeSeedDB(t, db); err != nil {
 		t.Fatalf("close uninterpretable db: %v", err)
+	}
+	setIndexPolicyEnv(t, dbPath, t.TempDir())
+	return dbPath
+}
+
+func newMixedRecoveryDiagnosticDB(t *testing.T) string {
+	t.Helper()
+	dbPath, db := newEmptyCurrentDiagnosticDB(t)
+	_, err := db.DB().Exec(`
+		INSERT INTO search_items (source, source_path, ordinal, role, text, timestamp, project, content_type)
+		VALUES ('session', '/conflict/session.jsonl', 7, 'user', 'first conflicting payload', '2026-08-18T00:00:00Z', 'project', 'text'),
+		       ('session', '/conflict/session.jsonl', 7, 'assistant', 'second conflicting payload', '2026-08-18T00:00:01Z', 'project', 'text'),
+		       ('session', '', -1, 'user', 'missing identity payload', '2026-08-18T00:00:02Z', 'project', 'text')
+	`)
+	if err != nil {
+		_ = db.Close()
+		t.Fatalf("seed mixed recovery diagnostics: %v", err)
+	}
+	if err := closeSeedDB(t, db); err != nil {
+		t.Fatalf("close mixed diagnostics db: %v", err)
+	}
+	setIndexPolicyEnv(t, dbPath, t.TempDir())
+	return dbPath
+}
+
+func newOrphanedCurrentDiagnosticDB(t *testing.T) string {
+	t.Helper()
+	dbPath, db := newEmptyCurrentDiagnosticDB(t)
+	_, err := db.DB().Exec(`
+		INSERT INTO search_items (source, source_path, ordinal, role, text, timestamp, uuid, project, content_type)
+		VALUES ('session', '/orphaned/session.jsonl', 0, 'user', 'orphaned validation sentinel', '2026-08-18T00:00:00Z', '11111111-1111-4111-8111-111111111111', 'project', 'text')
+	`)
+	if err != nil {
+		_ = db.Close()
+		t.Fatalf("seed orphaned current db: %v", err)
+	}
+	if err := closeSeedDB(t, db); err != nil {
+		t.Fatalf("close orphaned db: %v", err)
 	}
 	setIndexPolicyEnv(t, dbPath, t.TempDir())
 	return dbPath

@@ -334,6 +334,21 @@ func TestRecoverRejectsMissingFrom(t *testing.T) {
 	}
 }
 
+func TestRecoverHelpDocumentsRequiredFromFlagWithoutConfig(t *testing.T) {
+	stdout, stderr, err := runCmd("recover", "--help")
+	if err != nil {
+		t.Fatalf("recover --help failed: %v stderr=%q", err, stderr)
+	}
+	for _, want := range []string{"Recover stranded database rows", "--from string", "--dry-run"} {
+		if !strings.Contains(stdout, want) {
+			t.Fatalf("recover --help missing %q in:\n%s", want, stdout)
+		}
+	}
+	if stderr != "" {
+		t.Fatalf("recover --help wrote stderr: %q", stderr)
+	}
+}
+
 func TestRecoverHasNoGeneralMergeFlags(t *testing.T) {
 	tests := []struct {
 		name string
