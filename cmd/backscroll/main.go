@@ -1,6 +1,7 @@
 package main
 
 import (
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -14,7 +15,10 @@ var version = "dev"
 
 func main() {
 	if err := run(os.Stdout, os.Stderr, os.Args[1:]); err != nil {
-		_, _ = fmt.Fprintln(os.Stderr, err)
+		var indexErr indexDiagnosticError
+		if !errors.As(err, &indexErr) {
+			_, _ = fmt.Fprintln(os.Stderr, err)
+		}
 		os.Exit(1)
 	}
 }
@@ -40,6 +44,10 @@ func run(stdout, stderr io.Writer, args []string) error {
 	}()
 
 	rootCmd := buildRootCmd(stdout, stderr)
+	if indexPolicyMachineArgs(args) {
+		rootCmd.SilenceErrors = true
+		rootCmd.SilenceUsage = true
+	}
 	rootCmd.SetArgs(args)
 	err := rootCmd.Execute()
 

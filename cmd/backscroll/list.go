@@ -1,9 +1,11 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
+	"os"
 
 	"github.com/spf13/cobra"
 
@@ -25,8 +27,9 @@ func newListCmd(stdout, stderr io.Writer) *cobra.Command {
 	)
 
 	cmd := &cobra.Command{
-		Use:   "list",
-		Short: "List all indexed sessions",
+		Use:          "list",
+		Short:        "List all indexed sessions",
+		SilenceUsage: true,
 		Long: `List displays all indexed sessions, optionally filtered by project.
 
 Use --project to filter to a single project.
@@ -61,35 +64,35 @@ Use --json to output as JSON.`,
 
 func runList(stdout, stderr io.Writer,
 	project string, allProjects bool, recent int, jsonFormat, robotFormat, indexedOnly bool,
-	order string, limit, offset int) error {
+	order string, limit, offset int) (retErr error) {
 
 	cfg, err := config.Load()
 	if err != nil {
 		return fmt.Errorf("load config: %w", err)
 	}
 
-	// Auto-sync before query unless --indexed-only is set
-	if !indexedOnly {
-		if err := maybeAutoSync(cfg); err != nil {
-			_, _ = fmt.Fprintf(stderr, "warning: auto-sync failed: %v; using cached index\n", err)
+	if indexedOnly {
+		if _, statErr := os.Stat(cfg.DatabasePath); os.IsNotExist(statErr) {
+			if jsonFormat {
+				_, _ = fmt.Fprintf(stdout, "{\"count\":0,\"sessions\":[]}\n")
+			} else {
+				_, _ = fmt.Fprintf(stdout, "No sessions found\n")
+			}
+			return nil
 		}
 	}
+
+	db, diag, err := prepareIndex(context.Background(), cfg, indexDataRead, !indexedOnly)
+	if diag != nil {
+		return refuseIndex(stdout, stderr, *diag, jsonFormat, robotFormat)
+	}
+	if err != nil {
+		return fmt.Errorf("prepare index: %w", err)
+	}
+	defer func() { retErr = closeIndexDB(db, retErr) }()
 
 	// Derive effective project from cwd if not explicitly set
 	project = effectiveProject(project, allProjects)
-
-	// Open read-only database
-	// If DB doesn't exist yet, return an empty list.
-	db, err := storage.OpenReadOnly(cfg.DatabasePath)
-	if err != nil {
-		if jsonFormat {
-			_, _ = fmt.Fprintf(stdout, "{\"count\":0,\"sessions\":[]}\n")
-		} else {
-			_, _ = fmt.Fprintf(stdout, "No sessions found\n")
-		}
-		return nil
-	}
-	defer func() { _ = db.Close() }()
 
 	// If v2 grammar flags are provided (input, order, limit, offset), use ListItemsV2
 	// Otherwise fall back to legacy ListSessions for backward compat

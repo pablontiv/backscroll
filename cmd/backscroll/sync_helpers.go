@@ -2,7 +2,7 @@ package main
 
 import (
 	"fmt"
-	"os"
+	"io"
 
 	"github.com/pablontiv/backscroll/internal/config"
 	"github.com/pablontiv/backscroll/internal/input_config"
@@ -13,17 +13,34 @@ import (
 	"github.com/pablontiv/backscroll/internal/templates"
 )
 
+var (
+	maybeAutoSyncOpen                         = storage.Open
+	maybeAutoSyncActiveInputs                 = input_config.ActiveInputs
+	maybeAutoSyncLoadGlobalRegistry           = projects.LoadGlobalRegistry
+	maybeAutoSyncNewRegistry                  = newDefaultAutoSyncRegistry
+	maybeAutoSyncSyncFiles                    = func(db *storage.Database, files []storage.IndexedFile) error { return db.SyncFiles(files) }
+	maybeAutoSyncProgress           io.Writer = io.Discard
+)
+
+func newDefaultAutoSyncRegistry() *readers.Registry {
+	reg := readers.NewRegistry()
+	reg.Register(&readers.OpenCodeReader{})
+	reg.Register(&readers.ClaudeReader{})
+	reg.Register(&readers.PiReader{})
+	return reg
+}
+
 // maybeAutoSync performs an incremental sync operation if the database exists.
 // It is intended to be called before query commands to ensure fresh index state.
 // If sync fails, it returns an error (caller decides whether to warn/ignore).
-func maybeAutoSync(cfg *config.Config) error {
+func maybeAutoSync(cfg *config.Config) (retErr error) {
 	// Open database for reading to check if it exists
 	// (this will auto-create if missing)
-	db, err := storage.Open(cfg.DatabasePath)
+	db, err := maybeAutoSyncOpen(cfg.DatabasePath)
 	if err != nil {
 		return fmt.Errorf("open database: %w", err)
 	}
-	defer func() { _ = db.Close() }()
+	defer func() { retErr = closeIndexDB(db, retErr) }()
 
 	// Get existing file hashes
 	existingHashes, err := db.GetFileHashes()
@@ -34,9 +51,7 @@ func maybeAutoSync(cfg *config.Config) error {
 	// Build stale-set once per run (files needing re-parse for rich metadata backfill)
 	stalePaths, err := db.StalePaths(storage.CurrentExtractionVersion)
 	if err != nil {
-		// Warn but continue if stale query fails
-		fmt.Fprintf(os.Stderr, "warning: stale paths query failed: %v\n", err)
-		stalePaths = nil
+		return fmt.Errorf("discover stale paths: %w", err)
 	}
 	staleSet := make(map[string]bool)
 	for _, p := range stalePaths {
@@ -47,19 +62,16 @@ func maybeAutoSync(cfg *config.Config) error {
 	staleParsesDone := 0
 
 	// Build reader registry
-	reg := readers.NewRegistry()
-	reg.Register(&readers.OpenCodeReader{})
-	reg.Register(&readers.ClaudeReader{})
-	reg.Register(&readers.PiReader{})
+	reg := maybeAutoSyncNewRegistry()
 
 	// Resolve active inputs
-	defs, _, err := input_config.ActiveInputs(cfg.SessionDirs)
+	defs, _, err := maybeAutoSyncActiveInputs(cfg.SessionDirs)
 	if err != nil {
 		return fmt.Errorf("resolve inputs: %w", err)
 	}
 
 	// Load project registry
-	registry := projects.LoadGlobalRegistry()
+	registry := maybeAutoSyncLoadGlobalRegistry()
 
 	// Collect indexed files
 	var indexedFiles []storage.IndexedFile
@@ -72,20 +84,18 @@ func maybeAutoSync(cfg *config.Config) error {
 
 		reader, err := reg.ForDef(def)
 		if err != nil {
-			// Warn but continue on reader errors
-			continue
+			return fmt.Errorf("resolve reader for input %q: %w", def.ID, err)
 		}
 
 		refs, err := reader.Discover(def)
 		if err != nil {
-			// Warn but continue on discover errors
-			continue
+			return fmt.Errorf("discover input %q: %w", def.ID, err)
 		}
 
 		for _, ref := range refs {
 			hash, err := reader.Hash(ref)
 			if err != nil {
-				continue
+				return fmt.Errorf("hash %s: %w", ref, err)
 			}
 
 			// Skip unchanged files UNLESS they are in the stale-set and cap allows.
@@ -95,12 +105,12 @@ func maybeAutoSync(cfg *config.Config) error {
 					continue
 				}
 				staleParsesDone++
-				fmt.Fprintf(os.Stderr, "Re-parsing stale file %d/%d: %s\n", staleParsesDone, len(stalePaths), ref)
+				_, _ = fmt.Fprintf(maybeAutoSyncProgress, "Re-parsing stale file %d/%d: %s\n", staleParsesDone, len(stalePaths), ref)
 			}
 
 			pf, err := reader.Parse(ref, def)
 			if err != nil {
-				continue
+				return fmt.Errorf("parse %s: %w", ref, err)
 			}
 
 			// Use session cwd for project identification; fall back to file path if cwd is empty
@@ -145,7 +155,7 @@ func maybeAutoSync(cfg *config.Config) error {
 
 	// Sync all files
 	if len(indexedFiles) > 0 {
-		if err := db.SyncFiles(indexedFiles); err != nil {
+		if err := maybeAutoSyncSyncFiles(db, indexedFiles); err != nil {
 			return fmt.Errorf("sync files: %w", err)
 		}
 	}
@@ -157,7 +167,7 @@ func maybeAutoSync(cfg *config.Config) error {
 	const currentNormalizationVersion = 2
 	staleTemplatePaths, err := db.StaleTemplatePaths(currentNormalizationVersion)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "warning: failed to discover stale templates: %v\n", err)
+		return fmt.Errorf("discover stale templates: %w", err)
 	} else if len(staleTemplatePaths) > 0 {
 		// Cap at staleTemplateCap per run; FIFO processing across runs
 		if len(staleTemplatePaths) > staleTemplateCap {
@@ -167,16 +177,15 @@ func maybeAutoSync(cfg *config.Config) error {
 		for _, sourcePath := range staleTemplatePaths {
 			msgs, err := db.LoadMessagesForPath(sourcePath)
 			if err != nil {
-				fmt.Fprintf(os.Stderr, "warning: failed to load messages for %s: %v\n", sourcePath, err)
-				continue
+				return fmt.Errorf("load messages for stale template path %s: %w", sourcePath, err)
 			}
 
 			deletedCount, err := db.BackfillTemplatesForFile(miner, sourcePath, msgs)
 			if err != nil {
-				fmt.Fprintf(os.Stderr, "warning: failed to re-mine templates for %s: %v\n", sourcePath, err)
+				return fmt.Errorf("re-mine templates for %s: %w", sourcePath, err)
 			}
 			if deletedCount > 0 {
-				fmt.Fprintf(os.Stderr, "Deleted %d stuck templates from %s\n", deletedCount, sourcePath)
+				_, _ = fmt.Fprintf(maybeAutoSyncProgress, "Deleted %d stuck templates from %s\n", deletedCount, sourcePath)
 			}
 		}
 	}
@@ -187,7 +196,7 @@ func maybeAutoSync(cfg *config.Config) error {
 	// absent from indexed_files), so without this a detector fix never reaches it.
 	// Bounded per run and convergent — see RederiveSupersededCorrections.
 	if _, err := db.RederiveSupersededCorrections(staleTemplateCap); err != nil {
-		fmt.Fprintf(os.Stderr, "warning: failed to re-derive superseded correction signals: %v\n", err)
+		return fmt.Errorf("re-derive superseded correction signals: %w", err)
 	}
 
 	return nil

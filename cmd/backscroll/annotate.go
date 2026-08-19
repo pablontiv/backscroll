@@ -1,13 +1,13 @@
 package main
 
 import (
+	"context"
 	"fmt"
 	"io"
 
 	"github.com/spf13/cobra"
 
 	"github.com/pablontiv/backscroll/internal/config"
-	"github.com/pablontiv/backscroll/internal/storage"
 )
 
 func newAnnotateCmd(stdout, stderr io.Writer) *cobra.Command {
@@ -20,8 +20,9 @@ func newAnnotateCmd(stdout, stderr io.Writer) *cobra.Command {
 	)
 
 	cmd := &cobra.Command{
-		Use:   "annotate",
-		Short: "Annotate a message (agent-classification loop write surface)",
+		Use:          "annotate",
+		Short:        "Annotate a message (agent-classification loop write surface)",
+		SilenceUsage: true,
 		Long: `Annotate a message with a classification label. Validates message existence
 before writing. Supports both uuid (preferred) and legacy source_path+ordinal
 fallback. Re-annotating the same (source_path, ordinal, kind) replaces the label.`,
@@ -46,7 +47,7 @@ fallback. Re-annotating the same (source_path, ordinal, kind) replaces the label
 }
 
 func runAnnotate(stdout, stderr io.Writer,
-	uuid, path string, ordinal int, kind, label string) error {
+	uuid, path string, ordinal int, kind, label string) (retErr error) {
 
 	// Early flag validation
 	if uuid == "" && (path == "" || ordinal < 0) {
@@ -62,11 +63,14 @@ func runAnnotate(stdout, stderr io.Writer,
 		return fmt.Errorf("load config: %w", err)
 	}
 
-	db, err := storage.Open(cfg.DatabasePath)
-	if err != nil {
-		return fmt.Errorf("open database: %w", err)
+	db, diag, err := prepareIndex(context.Background(), cfg, indexMutation, false)
+	if diag != nil {
+		return refuseIndex(stdout, stderr, *diag, false, false)
 	}
-	defer func() { _ = db.Close() }()
+	if err != nil {
+		return fmt.Errorf("prepare index: %w", err)
+	}
+	defer func() { retErr = closeIndexDB(db, retErr) }()
 
 	// Upsert annotation
 	if err := db.UpsertAnnotation(uuid, path, ordinal, kind, label); err != nil {

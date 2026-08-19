@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"fmt"
 	"io"
 	"strings"
@@ -12,7 +13,6 @@ import (
 
 	"github.com/pablontiv/backscroll/internal/config"
 	"github.com/pablontiv/backscroll/internal/models"
-	"github.com/pablontiv/backscroll/internal/storage"
 )
 
 func newSearchCmd(stdout, stderr io.Writer) *cobra.Command {
@@ -39,8 +39,9 @@ func newSearchCmd(stdout, stderr io.Writer) *cobra.Command {
 	)
 
 	cmd := &cobra.Command{
-		Use:   "search [<query>]",
-		Short: "Full-text search indexed content",
+		Use:          "search [<query>]",
+		Short:        "Full-text search indexed content",
+		SilenceUsage: true,
 		Long: `Search performs a hybrid search (BM25 + vector embeddings with RRF fusion)
 across all indexed sessions, plans, and external sources.
 
@@ -102,7 +103,7 @@ func runSearch(stdout, stderr io.Writer,
 	source, sourcePath, after, before, role string,
 	limit, offset int, contentType, tag string,
 	fields string, maxTokens int,
-	lexicalOnly bool, similarityThreshold float64, indexedOnly bool) error {
+	lexicalOnly bool, similarityThreshold float64, indexedOnly bool) (retErr error) {
 
 	// Validate flag values before opening the database
 	if fields != "minimal" && fields != "full" {
@@ -120,29 +121,24 @@ func runSearch(stdout, stderr io.Writer,
 		return fmt.Errorf("invalid --content-type %q; must be one of: text, code, tool, reasoning", contentType)
 	}
 
-	warnShortToolQuery(stderr, contentType, query)
-
 	cfg, err := config.Load()
 	if err != nil {
 		return fmt.Errorf("load config: %w", err)
 	}
 
-	// Auto-sync before query unless --indexed-only is set
-	if !indexedOnly {
-		if err := maybeAutoSync(cfg); err != nil {
-			_, _ = fmt.Fprintf(stderr, "warning: auto-sync failed: %v; using cached index\n", err)
-		}
+	db, diag, err := prepareIndex(context.Background(), cfg, indexDataRead, !indexedOnly)
+	if diag != nil {
+		return refuseIndex(stdout, stderr, *diag, jsonFormat, robotFormat)
 	}
+	if err != nil {
+		return fmt.Errorf("prepare index: %w", err)
+	}
+	defer func() { retErr = closeIndexDB(db, retErr) }()
+
+	warnShortToolQuery(stderr, contentType, query)
 
 	// Derive effective project from cwd if not explicitly set
 	project = effectiveProject(project, allProjects)
-
-	// Open read-only database
-	db, err := storage.OpenReadOnly(cfg.DatabasePath)
-	if err != nil {
-		return fmt.Errorf("open database: %w", err)
-	}
-	defer func() { _ = db.Close() }()
 
 	// Parse dates
 	var afterTime, beforeTime *time.Time

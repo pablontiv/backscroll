@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -36,8 +37,9 @@ func newPatternsCmd(stdout, stderr io.Writer) *cobra.Command {
 	)
 
 	cmd := &cobra.Command{
-		Use:   "patterns",
-		Short: "Discover deterministic patterns in tool events, templates, sequences, and corrections",
+		Use:          "patterns",
+		Short:        "Discover deterministic patterns in tool events, templates, sequences, and corrections",
+		SilenceUsage: true,
 		Long: `Patterns computes census aggregations over tool events (commands, failures),
 error message templates, frequent tool-call sequences (PrefixSpan mining),
 and message-level corrections to expose actionable pattern candidates
@@ -87,7 +89,7 @@ Use --indexed-only to skip auto-sync (read existing index only).`,
 func runPatterns(stdout, stderr io.Writer,
 	kind string, project string, allProjects bool, tag string,
 	limit, offset int, jsonFormat, robotFormat, indexedOnly bool, minSupport int, minConfidence float64, pending bool, batch int,
-	minLength, maxLength int, after, before string, trend bool) error {
+	minLength, maxLength int, after, before string, trend bool) (retErr error) {
 
 	// Early flag validation before DB open
 	validKinds := map[string]bool{
@@ -118,23 +120,19 @@ func runPatterns(stdout, stderr io.Writer,
 		return fmt.Errorf("load config: %w", err)
 	}
 
-	// Auto-sync unless --indexed-only
-	if !indexedOnly {
-		if err := maybeAutoSync(cfg); err != nil {
-			_, _ = fmt.Fprintf(stderr, "warning: auto-sync failed: %v; using cached index\n", err)
-		}
+	db, diag, err := prepareIndex(context.Background(), cfg, indexDataRead, !indexedOnly)
+	if diag != nil {
+		return refuseIndex(stdout, stderr, *diag, jsonFormat, robotFormat)
 	}
+	if err != nil {
+		return fmt.Errorf("prepare index: %w", err)
+	}
+	defer func() { retErr = closeIndexDB(db, retErr) }()
 
 	// Derive effective project
 	if project == "" && !allProjects {
 		project = effectiveProject(project, allProjects)
 	}
-
-	db, err := storage.OpenReadOnly(cfg.DatabasePath)
-	if err != nil {
-		return fmt.Errorf("open database: %w", err)
-	}
-	defer func() { _ = db.Close() }()
 
 	opts := storage.AggregateOptions{
 		Project:     project,
