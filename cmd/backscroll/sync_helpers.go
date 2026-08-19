@@ -27,6 +27,8 @@ func newDefaultAutoSyncRegistry() *readers.Registry {
 	reg.Register(&readers.OpenCodeReader{})
 	reg.Register(&readers.ClaudeReader{})
 	reg.Register(&readers.PiReader{})
+	reg.Register(&readers.MarkdownDocumentReader{})
+	reg.Register(&readers.MarkdownSectionsReader{})
 	return reg
 }
 
