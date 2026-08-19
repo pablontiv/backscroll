@@ -730,16 +730,8 @@ func assertRecoveryDestinationAccounting(t *testing.T, db *sql.DB, plan compat.R
 		t.Fatalf("read recovered source accounting: %v", err)
 	}
 
-	seen := make(map[string]struct{}, len(plan.Records))
-	for _, planned := range plan.Records {
-		seen[planned.Record.SourcePath] = struct{}{}
-	}
-	wantPaths := make([]string, 0, len(seen))
-	for path := range seen {
-		wantPaths = append(wantPaths, path)
-	}
-	sort.Strings(wantPaths)
-	if !reflect.DeepEqual(gotPaths, wantPaths) {
+	wantPaths := recoveryDestinationSourcePaths(plan)
+	if !recoveryDestinationStringSlicesEqual(gotPaths, wantPaths) {
 		t.Fatalf("recovered source accounting paths = %#v, want %#v", gotPaths, wantPaths)
 	}
 }
