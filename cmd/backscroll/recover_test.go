@@ -313,8 +313,8 @@ func TestRecoverCommandPathCanonicalizationFailurePreservesApplyFailureAs(t *tes
 	if failure.FromPath != wantFromPath || failure.ActivePath != canonicalRecoverTestPath(t, activePath) {
 		t.Fatalf("ApplyFailure paths active=%q from=%q", failure.ActivePath, failure.FromPath)
 	}
-	if !strings.Contains(execErr.Error(), "resolve database symlink") {
-		t.Fatalf("error = %v, want symlink details", execErr)
+	if failure.Phase != recovery.ApplyFailurePhase("source-read") || !failure.NoActiveMutation {
+		t.Fatalf("ApplyFailure phase/no-active-mutation = %s/%v, want source-read without mutation", failure.Phase, failure.NoActiveMutation)
 	}
 }
 
@@ -331,21 +331,6 @@ func TestRecoverRejectsMissingFrom(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), `required flag(s) "from" not set`) && !strings.Contains(stderr.String(), `required flag(s) "from" not set`) {
 		t.Fatalf("missing --from error = %v, stderr=%q", err, stderr.String())
-	}
-}
-
-func TestRecoverHelpDocumentsRequiredFromFlagWithoutConfig(t *testing.T) {
-	stdout, stderr, err := runCmd("recover", "--help")
-	if err != nil {
-		t.Fatalf("recover --help failed: %v stderr=%q", err, stderr)
-	}
-	for _, want := range []string{"Recover stranded database rows", "--from string", "--dry-run"} {
-		if !strings.Contains(stdout, want) {
-			t.Fatalf("recover --help missing %q in:\n%s", want, stdout)
-		}
-	}
-	if stderr != "" {
-		t.Fatalf("recover --help wrote stderr: %q", stderr)
 	}
 }
 

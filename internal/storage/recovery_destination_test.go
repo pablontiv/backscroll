@@ -11,6 +11,7 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/pablontiv/backscroll/internal/compat"
 	"github.com/pablontiv/backscroll/internal/models"
@@ -71,7 +72,6 @@ func TestPublishedGoLineagesUpgradeLosslessly(t *testing.T) {
 			if err != nil {
 				t.Fatalf("CreateRecoveryDestination from migrated published release: %v", err)
 			}
-			defer func() { _ = removeRecoveryDestinationTestFiles(destPath) }()
 			if err := VerifyRecoveryDestination(ctx, destPath, plan); err != nil {
 				t.Fatalf("VerifyRecoveryDestination from migrated published release: %v", err)
 			}
@@ -177,33 +177,83 @@ func stringPtr(value string) *string {
 	return &value
 }
 
-func removeRecoveryDestinationTestFiles(path string) error {
-	var errs []error
-	for _, suffix := range []string{"", "-wal", "-shm", "-journal"} {
-		if err := os.Remove(path + suffix); err != nil && !os.IsNotExist(err) {
-			errs = append(errs, err)
-		}
-	}
-	return errors.Join(errs...)
-}
-
 func TestRecoveryDestinationErrorPublicBehavior(t *testing.T) {
-	cause := errors.New("primary cause")
-	cleanup := errors.New("cleanup cause")
-	withPath := &RecoveryDestinationError{Path: "candidate.db", Cause: cause, CleanupErr: cleanup}
-	if got := withPath.Error(); !strings.Contains(got, "candidate.db") || !strings.Contains(got, "primary cause") {
-		t.Fatalf("pathful error text = %q", got)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	dir := t.TempDir()
+	defer func() { _ = os.Chmod(dir, 0o755) }()
+
+	probe := filepath.Join(dir, "cleanup-permission-probe")
+	if err := os.WriteFile(probe, []byte("probe"), 0o600); err != nil {
+		t.Fatalf("write cleanup probe: %v", err)
 	}
-	if got := withPath.Unwrap(); len(got) != 2 || got[0] != cause || got[1] != cleanup {
-		t.Fatalf("unwrap pathful = %#v, want cause and cleanup", got)
+	if err := os.Chmod(dir, 0o555); err != nil {
+		t.Fatalf("make cleanup probe directory read-only: %v", err)
+	}
+	probeRemoveErr := os.Remove(probe)
+	if chmodErr := os.Chmod(dir, 0o755); chmodErr != nil {
+		t.Fatalf("restore cleanup probe directory permissions: %v", chmodErr)
+	}
+	if probeRemoveErr == nil {
+		t.Fatal("test filesystem allows removing directory entries without directory write permission; cannot deterministically exercise public cleanup-error path")
+	}
+	if err := os.Remove(probe); err != nil && !os.IsNotExist(err) {
+		t.Fatalf("remove cleanup probe after permission restore: %v", err)
 	}
 
-	withoutPath := &RecoveryDestinationError{Cause: cause}
-	if got := withoutPath.Error(); strings.Contains(got, "candidate.db") || !strings.Contains(got, "primary cause") {
-		t.Fatalf("pathless error text = %q", got)
+	plan := compat.RecoveryPlan{Records: make([]compat.CanonicalRecord, 0, 2048)}
+	for i := 0; i < cap(plan.Records); i++ {
+		uuid := "11111111-1111-4111-8111-" + strconv.FormatInt(int64(100000000000+i), 10)
+		plan.Records = append(plan.Records, compat.CanonicalRecord{Record: models.IndexedRecord{Source: "session", SourcePath: "/sessions/cancelled.jsonl", Ordinal: int64(i), Role: "user", Text: "cancelled destination row", UUID: &uuid, ContentType: "text"}})
 	}
-	if got := withoutPath.Unwrap(); len(got) != 1 || got[0] != cause {
-		t.Fatalf("unwrap pathless = %#v, want only cause", got)
+
+	seenTemp := make(chan string, 1)
+	watchDone := make(chan struct{})
+	go func() {
+		defer close(watchDone)
+		deadline := time.Now().Add(5 * time.Second)
+		for time.Now().Before(deadline) {
+			matches, _ := filepath.Glob(filepath.Join(dir, ".backscroll-recover-*.db"))
+			for _, match := range matches {
+				base := filepath.Base(match)
+				if strings.HasSuffix(base, "-wal") || strings.HasSuffix(base, "-shm") || strings.HasSuffix(base, "-journal") {
+					continue
+				}
+				_ = os.Chmod(dir, 0o555)
+				cancel()
+				seenTemp <- match
+				return
+			}
+			time.Sleep(time.Millisecond)
+		}
+		cancel()
+	}()
+
+	path, err := CreateRecoveryDestination(ctx, dir, plan)
+	<-watchDone
+	if err == nil {
+		t.Fatalf("CreateRecoveryDestination succeeded at %q; want public cleanup error", path)
+	}
+	var destinationErr *RecoveryDestinationError
+	if !errors.As(err, &destinationErr) {
+		t.Fatalf("error %T %[1]v, want *RecoveryDestinationError from public CreateRecoveryDestination", err)
+	}
+	if destinationErr.Path == "" || path != destinationErr.Path {
+		t.Fatalf("returned path=%q typed path=%q, want leaked temp path surfaced", path, destinationErr.Path)
+	}
+	if destinationErr.Cause == nil || destinationErr.CleanupErr == nil {
+		t.Fatalf("RecoveryDestinationError cause/cleanup = %v/%v, want both populated", destinationErr.Cause, destinationErr.CleanupErr)
+	}
+	if unwrapped := destinationErr.Unwrap(); len(unwrapped) != 2 || unwrapped[0] != destinationErr.Cause || unwrapped[1] != destinationErr.CleanupErr {
+		t.Fatalf("unwrap = %#v, want cause then cleanup", unwrapped)
+	}
+	select {
+	case temp := <-seenTemp:
+		if destinationErr.Path != temp {
+			t.Fatalf("typed path = %q, want observed temp %q", destinationErr.Path, temp)
+		}
+	default:
+		t.Fatal("CreateRecoveryDestination returned before temp watcher observed a public temp path")
 	}
 }
 
@@ -268,7 +318,6 @@ func TestRecoverUnionPreservesActiveAndStrandedRecords(t *testing.T) {
 	if err != nil {
 		t.Fatalf("CreateRecoveryDestination: %v", err)
 	}
-	defer func() { _ = removeRecoveryDestinationTestFiles(destPath) }()
 	if destPath == activePath || destPath == strandedPath {
 		t.Fatalf("destination path %s reused an input path", destPath)
 	}
@@ -295,7 +344,6 @@ func TestRecoveryDestinationStartsFreshAtCurrentSchema(t *testing.T) {
 	if err != nil {
 		t.Fatalf("CreateRecoveryDestination: %v", err)
 	}
-	defer func() { _ = removeRecoveryDestinationTestFiles(destPath) }()
 	if filepath.Dir(destPath) != dir || !strings.HasPrefix(filepath.Base(destPath), ".backscroll-recover-") {
 		t.Fatalf("destination path %s is not a sibling recovery temp in %s", destPath, dir)
 	}
@@ -340,7 +388,6 @@ func TestRecoveryDestinationIndependentVerificationRejectsTamper(t *testing.T) {
 	if err != nil {
 		t.Fatalf("CreateRecoveryDestination: %v", err)
 	}
-	defer func() { _ = removeRecoveryDestinationTestFiles(destPath) }()
 
 	mutateRecoveryDatabase(t, destPath, `
 		INSERT INTO indexed_files(path, hash)
@@ -366,7 +413,6 @@ func TestRecoveryDestinationVerificationRejectsOrphanedDerivedRows(t *testing.T)
 	if err != nil {
 		t.Fatalf("CreateRecoveryDestination: %v", err)
 	}
-	defer func() { _ = removeRecoveryDestinationTestFiles(destPath) }()
 
 	mutateRecoveryDatabase(t, destPath, `
 		INSERT INTO template_matches(template_id, source_path, ordinal)
@@ -392,7 +438,6 @@ func TestRecoveryDestinationVerificationRejectsDeletedRows(t *testing.T) {
 	if err != nil {
 		t.Fatalf("CreateRecoveryDestination: %v", err)
 	}
-	defer func() { _ = removeRecoveryDestinationTestFiles(destPath) }()
 
 	mutateRecoveryDatabase(t, destPath, `DELETE FROM search_items;`)
 	if err := VerifyRecoveryDestination(ctx, destPath, plan); err == nil {
@@ -434,7 +479,6 @@ func TestRecoveryDestinationVerificationRejectsEqualCountWrongIdentityAndPayload
 			if err != nil {
 				t.Fatalf("CreateRecoveryDestination: %v", err)
 			}
-			defer func() { _ = removeRecoveryDestinationTestFiles(destPath) }()
 
 			mutateRecoveryDatabase(t, destPath, tc.mutate)
 			if err := VerifyRecoveryDestination(ctx, destPath, plan); err == nil {
@@ -462,7 +506,6 @@ func TestRecoveryDestinationVerificationRejectsEqualCountWrongFTSSurface(t *test
 	if err != nil {
 		t.Fatalf("CreateRecoveryDestination: %v", err)
 	}
-	defer func() { _ = removeRecoveryDestinationTestFiles(destPath) }()
 
 	secondMessageID := recoveryDestinationRowID(t, destPath, "/sessions/prose.jsonl", 1)
 	toolID := recoveryDestinationRowID(t, destPath, "/sessions/tool.jsonl", 0)
@@ -491,7 +534,6 @@ func TestRecoveryDestinationAcceptsPathOrdinalIdentityWithNilAndEmptyUUID(t *tes
 	if err != nil {
 		t.Fatalf("CreateRecoveryDestination with path/ordinal identities: %v", err)
 	}
-	defer func() { _ = removeRecoveryDestinationTestFiles(destPath) }()
 	if err := VerifyRecoveryDestination(ctx, destPath, plan); err != nil {
 		t.Fatalf("VerifyRecoveryDestination with path/ordinal identities: %v", err)
 	}
@@ -509,7 +551,6 @@ func TestRecoveryDestinationAcceptsUntokenizedRecordsPersistently(t *testing.T) 
 	if err != nil {
 		t.Fatalf("CreateRecoveryDestination with untokenized records: %v", err)
 	}
-	defer func() { _ = removeRecoveryDestinationTestFiles(destPath) }()
 	if err := VerifyRecoveryDestination(ctx, destPath, plan); err != nil {
 		t.Fatalf("VerifyRecoveryDestination with untokenized records: %v", err)
 	}

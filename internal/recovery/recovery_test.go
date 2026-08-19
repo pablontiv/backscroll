@@ -148,8 +148,9 @@ func TestRecoverStrandedSourceIsReadOnly(t *testing.T) {
 		if err == nil {
 			t.Fatal("Execute with replacement rename failure succeeded; want explicit failure")
 		}
-		if !strings.Contains(err.Error(), "restored active") {
-			t.Fatalf("Execute error = %v, want restored active diagnostic", err)
+		var failure *ApplyFailure
+		if !errors.As(err, &failure) || !failure.ActiveRestored {
+			t.Fatalf("Execute error = %T %[1]v, want ApplyFailure with ActiveRestored", err)
 		}
 		assertRecoveryDBFileSnapshot(t, "active after replacement failure", activePath, activeBefore)
 		assertRecoveryDBFileSnapshot(t, "stranded after replacement failure", fromPath, strandedBefore)
@@ -199,8 +200,8 @@ func TestRecoverReplacementFailureRestoresActive(t *testing.T) {
 	if failure.FromPath != canonicalRecoveryTestPath(t, fromPath) {
 		t.Fatalf("failure FromPath = %q, want canonical stranded path", failure.FromPath)
 	}
-	if !strings.Contains(err.Error(), "restored active") {
-		t.Fatalf("Execute error = %v, want restored active diagnostic", err)
+	if !failure.ActiveRestored {
+		t.Fatalf("ActiveRestored = false; want restored active after final rename failure")
 	}
 	assertRecoveryDBFileSnapshot(t, "active after final rename failure", activePath, activeBefore)
 }
@@ -953,38 +954,78 @@ func TestRecoverDryRunConflictReportsDiagnosticsWithoutApplyFailure(t *testing.T
 }
 
 func TestApplyFailurePublicErrorDetailsExposeRestorableBackup(t *testing.T) {
-	cause := errors.New("primary failure")
-	restoreErr := errors.New("restore failed")
-	cleanupErr := errors.New("cleanup failed")
-	closeErr := errors.New("close failed")
-	failure := &ApplyFailure{
-		ActivePath:           "active.db",
-		FromPath:             "from.db",
-		BackupPath:           "active.db.backup",
-		TempPath:             "temp.db",
-		RestorableBackup:     true,
-		RestorableBackupPath: "active.db.backup",
-		ActiveRestored:       true,
-		Cause:                cause,
-		RestoreErr:           restoreErr,
-		CleanupErr:           cleanupErr,
-		CloseErr:             closeErr,
-	}
+	dir := t.TempDir()
+	activePath := filepath.Join(dir, "active.db")
+	fromPath := filepath.Join(dir, "stranded.db")
+	createRecoveryDB(t, activePath, []storage.IndexedMessage{{Ordinal: 0, Role: "user", Text: "active before public restorable failure", UUID: "11111111-1111-4111-8111-111111111111", ContentType: "text"}})
+	createRecoveryDB(t, fromPath, []storage.IndexedMessage{{Ordinal: 0, Role: "assistant", Text: "stranded public restorable failure", UUID: "22222222-2222-4222-8222-222222222222", ContentType: "text"}})
+	activeBefore := snapshotRecoveryDBFile(t, activePath)
 
-	text := failure.Error()
-	for _, want := range []string{"primary failure", "active=active.db", "from=from.db", "backup=active.db.backup", "temp=temp.db", "restorable backup remains at active.db.backup", "restored active", "restore error: restore failed", "cleanup error: cleanup failed", "close error: close failed"} {
-		if !strings.Contains(text, want) {
-			t.Fatalf("ApplyFailure.Error() missing %q in %q", want, text)
+	injectedSidecar := activePath + "-wal"
+	sidecarDone := make(chan error, 1)
+	stopSidecar := make(chan struct{})
+	go func() {
+		for {
+			select {
+			case <-stopSidecar:
+				sidecarDone <- fmt.Errorf("active namespace was never opened for replacement")
+				return
+			default:
+			}
+			if _, err := os.Lstat(activePath); os.IsNotExist(err) {
+				sidecarDone <- os.WriteFile(injectedSidecar, []byte("late unsafe wal sidecar"), 0o600)
+				return
+			}
+			time.Sleep(100 * time.Microsecond)
 		}
+	}()
+
+	report, err := Execute(context.Background(), Options{ActivePath: activePath, FromPath: fromPath})
+	close(stopSidecar)
+	if sidecarErr := <-sidecarDone; sidecarErr != nil {
+		t.Fatalf("inject late active sidecar: %v", sidecarErr)
 	}
-	if got := failure.Unwrap(); len(got) != 4 || got[0] != cause || got[1] != restoreErr || got[2] != cleanupErr || got[3] != closeErr {
-		t.Fatalf("ApplyFailure.Unwrap() = %#v, want cause/restore/cleanup/close", got)
+	if err == nil {
+		t.Fatalf("Execute succeeded with late active sidecar; report=%+v", report)
 	}
-	if path, ok := RestorableBackupPath(fmt.Errorf("outer: %w", failure)); !ok || path != "active.db.backup" {
-		t.Fatalf("RestorableBackupPath wrapped failure = %q, %v", path, ok)
+	var failure *ApplyFailure
+	if !errors.As(err, &failure) {
+		t.Fatalf("error %T %[1]v, want *ApplyFailure from exported Execute", err)
 	}
-	if path, ok := RestorableBackupPath(errors.New("unrelated")); ok || path != "" {
-		t.Fatalf("RestorableBackupPath unrelated = %q, %v", path, ok)
+	if !errors.Is(err, storage.ErrImmutableReadOnlyWALUnsafe) {
+		t.Fatalf("error %v does not preserve unsafe WAL sentinel", err)
+	}
+	wantActive := canonicalRecoveryTestPath(t, activePath)
+	wantFrom := canonicalRecoveryTestPath(t, fromPath)
+	if failure.ActivePath != wantActive || failure.FromPath != wantFrom || failure.TempPath == "" {
+		t.Fatalf("failure paths active=%q from=%q temp=%q, want canonical active/from and temp", failure.ActivePath, failure.FromPath, failure.TempPath)
+	}
+	if failure.Phase != phaseInstall || failure.State != replacementStateSplitUnknown {
+		t.Fatalf("failure phase/state = %s/%s, want %s/%s", failure.Phase, failure.State, phaseInstall, replacementStateSplitUnknown)
+	}
+	if !failure.RestorableBackup || failure.RestorableBackupPath == "" || failure.RestorableBackupPath != failure.BackupPath {
+		t.Fatalf("restorable backup fields = restorable=%v path=%q backup=%q", failure.RestorableBackup, failure.RestorableBackupPath, failure.BackupPath)
+	}
+	if !failure.BackupVisible || !failure.BackupIntegrityVerified || failure.ActiveRestored || failure.RestoredActiveVisible {
+		t.Fatalf("replacement state fields = backupVisible=%v backupVerified=%v activeRestored=%v restoredVisible=%v", failure.BackupVisible, failure.BackupIntegrityVerified, failure.ActiveRestored, failure.RestoredActiveVisible)
+	}
+	if failure.Cause == nil || failure.RestoreErr == nil {
+		t.Fatalf("failure cause/restore = %v/%v, want both populated by Execute", failure.Cause, failure.RestoreErr)
+	}
+	if got := failure.Unwrap(); len(got) != 2 || got[0] != failure.Cause || got[1] != failure.RestoreErr {
+		t.Fatalf("ApplyFailure.Unwrap() = %#v, want cause then restore error", got)
+	}
+	if path, ok := RestorableBackupPath(fmt.Errorf("outer: %w", err)); !ok || path != failure.RestorableBackupPath {
+		t.Fatalf("RestorableBackupPath wrapped Execute failure = %q, %v; want %q", path, ok, failure.RestorableBackupPath)
+	}
+	if backup := snapshotRecoveryDBFile(t, failure.RestorableBackupPath); !bytes.Equal(backup.main.data, activeBefore.main.data) {
+		t.Fatalf("restorable backup differs from original active bytes")
+	}
+	if _, statErr := os.Lstat(activePath); !os.IsNotExist(statErr) {
+		t.Fatalf("active path state after split failure stat=%v, want missing main with restorable backup", statErr)
+	}
+	if _, statErr := os.Lstat(injectedSidecar); statErr != nil {
+		t.Fatalf("injected sidecar no longer demonstrates failed active namespace: %v", statErr)
 	}
 }
 
