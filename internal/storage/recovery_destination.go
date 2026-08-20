@@ -129,6 +129,9 @@ func CreateRecoveryDestination(ctx context.Context, dir string, plan compat.Reco
 			return "", fmt.Errorf("insert recovery record %d: %w", i, err)
 		}
 	}
+	if err := insertRecoveryDestinationAccounting(ctx, tx, plan); err != nil {
+		return "", fmt.Errorf("insert recovery source accounting: %w", err)
+	}
 	if err := verifyRecoveryDestinationQueryer(ctx, tx, plan); err != nil {
 		return "", fmt.Errorf("verify recovery destination before commit: %w", err)
 	}
@@ -211,6 +214,31 @@ func insertRecoveryDestinationRecord(ctx context.Context, tx *sql.Tx, r models.I
 	return nil
 }
 
+func recoveryDestinationSourcePaths(plan compat.RecoveryPlan) []string {
+	seen := make(map[string]struct{}, len(plan.Records))
+	for _, planned := range plan.Records {
+		seen[planned.Record.SourcePath] = struct{}{}
+	}
+	paths := make([]string, 0, len(seen))
+	for path := range seen {
+		paths = append(paths, path)
+	}
+	sort.Strings(paths)
+	return paths
+}
+
+func insertRecoveryDestinationAccounting(ctx context.Context, tx *sql.Tx, plan compat.RecoveryPlan) error {
+	for _, path := range recoveryDestinationSourcePaths(plan) {
+		if _, err := tx.ExecContext(ctx, `
+			INSERT INTO indexed_files (path, hash, last_indexed)
+			VALUES (?, ?, NULL)
+		`, path, recoveredSourceHash); err != nil {
+			return fmt.Errorf("insert recovered source accounting for %s: %w", path, err)
+		}
+	}
+	return nil
+}
+
 func verifyRecoveryDestinationQueryer(ctx context.Context, q compat.Queryer, plan compat.RecoveryPlan) error {
 	if err := compat.VerifyCurrentShape(ctx, q); err != nil {
 		return fmt.Errorf("current schema signature: %w", err)
@@ -235,12 +263,43 @@ func verifyRecoveryDestinationRows(ctx context.Context, q compat.Queryer, plan c
 	if rowCount != len(plan.Records) {
 		return fmt.Errorf("search_items count = %d, want %d", rowCount, len(plan.Records))
 	}
-	var indexedFileCount int
-	if err := q.QueryRowContext(ctx, `SELECT COUNT(*) FROM indexed_files`).Scan(&indexedFileCount); err != nil {
-		return fmt.Errorf("count indexed_files: %w", err)
+	rows, err := q.QueryContext(ctx, `
+		SELECT path, hash, last_indexed
+		FROM indexed_files
+		ORDER BY path
+	`)
+	if err != nil {
+		return fmt.Errorf("query recovered source accounting: %w", err)
 	}
-	if indexedFileCount != 0 {
-		return fmt.Errorf("indexed_files count = %d, want 0 for recovery destination source accounting", indexedFileCount)
+
+	var gotPaths []string
+	for rows.Next() {
+		var path, hash string
+		var lastIndexed sql.NullString
+		if err := rows.Scan(&path, &hash, &lastIndexed); err != nil {
+			_ = rows.Close()
+			return fmt.Errorf("scan recovered source accounting: %w", err)
+		}
+		if !isRecoveredSourceHash(hash) {
+			_ = rows.Close()
+			return fmt.Errorf("recovered source accounting for %s has hash %q", path, hash)
+		}
+		if lastIndexed.Valid {
+			_ = rows.Close()
+			return fmt.Errorf("recovered source accounting for %s has last_indexed %q", path, lastIndexed.String)
+		}
+		gotPaths = append(gotPaths, path)
+	}
+	if err := rows.Err(); err != nil {
+		_ = rows.Close()
+		return fmt.Errorf("read recovered source accounting: %w", err)
+	}
+	if err := rows.Close(); err != nil {
+		return fmt.Errorf("close recovered source accounting: %w", err)
+	}
+	wantPaths := recoveryDestinationSourcePaths(plan)
+	if !recoveryDestinationStringSlicesEqual(gotPaths, wantPaths) {
+		return fmt.Errorf("recovered source accounting paths do not match plan")
 	}
 
 	records, diag, err := readCanonicalSearchItems(ctx, q)
@@ -480,6 +539,18 @@ func recoveryDestinationFTSToken(text string) string {
 	}
 	sort.SliceStable(tokens, func(i, j int) bool { return len(tokens[i]) > len(tokens[j]) })
 	return strings.ToLower(tokens[0])
+}
+
+func recoveryDestinationStringSlicesEqual(left, right []string) bool {
+	if len(left) != len(right) {
+		return false
+	}
+	for i, leftValue := range left {
+		if right[i] != leftValue {
+			return false
+		}
+	}
+	return true
 }
 
 func recoveryDestinationStringBoolMapsEqual(left, right map[string]bool) bool {

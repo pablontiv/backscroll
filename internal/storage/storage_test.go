@@ -1,6 +1,7 @@
 package storage
 
 import (
+	"database/sql"
 	"errors"
 	"fmt"
 	"os"
@@ -417,6 +418,85 @@ func TestGetFileHashes(t *testing.T) {
 	if hashes["/path/to/session1.jsonl"] != "hash123" {
 		t.Fatalf("hash mismatch")
 	}
+
+	if _, err := db.db.Exec(`
+		INSERT INTO indexed_files (path, hash, last_indexed)
+		VALUES ('/path/to/recovered.jsonl', ?, NULL)
+	`, recoveredSourceHash); err != nil {
+		t.Fatalf("insert recovered accounting: %v", err)
+	}
+
+	hashes, err = db.GetFileHashes()
+	if err != nil {
+		t.Fatalf("failed to get hashes: %v", err)
+	}
+	if _, ok := hashes["/path/to/recovered.jsonl"]; ok {
+		t.Fatalf("GetFileHashes returned provisional recovered path")
+	}
+}
+
+func TestSyncFilesReplacesRecoveredSourceAccounting(t *testing.T) {
+	db, cleanup := newTestDB(t)
+	defer cleanup()
+
+	const path = "/path/to/recovered.jsonl"
+	if _, err := db.db.Exec(`
+		INSERT INTO indexed_files (path, hash, last_indexed)
+		VALUES (?, ?, NULL)
+	`, path, recoveredSourceHash); err != nil {
+		t.Fatal(err)
+	}
+	err := db.SyncFiles([]IndexedFile{{
+		SourcePath: path,
+		Source:     "session",
+		Hash:       "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+		Project:    "proj",
+		Messages: []IndexedMessage{{
+			Ordinal: 0, Role: "user", Text: "resynced", UUID: getTestUUID(), ContentType: "text",
+		}},
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var hash string
+	var lastIndexed sql.NullString
+	if err := db.db.QueryRow(`SELECT hash, last_indexed FROM indexed_files WHERE path = ?`, path).Scan(&hash, &lastIndexed); err != nil {
+		t.Fatal(err)
+	}
+	if hash == recoveredSourceHash || !lastIndexed.Valid {
+		t.Fatalf("accounting after sync = hash %q last_indexed %+v", hash, lastIndexed)
+	}
+}
+
+func TestPurgeRemovesRecoveredSourceAccounting(t *testing.T) {
+	db, cleanup := newTestDB(t)
+	defer cleanup()
+
+	const path = "/path/to/purged-recovery.jsonl"
+	if _, err := db.db.Exec(`
+		INSERT INTO search_items
+		(source, source_path, ordinal, role, text, timestamp, uuid, project, content_type)
+		VALUES ('session', ?, 0, 'user', 'old recovered row', '2026-01-01T00:00:00Z',
+				'33333333-3333-4333-8333-333333333333', 'proj', 'text')
+	`, path); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.db.Exec(`
+		INSERT INTO indexed_files (path, hash, last_indexed)
+		VALUES (?, ?, NULL)
+	`, path, recoveredSourceHash); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Purge("2026-01-02T00:00:00Z"); err != nil {
+		t.Fatal(err)
+	}
+	var count int
+	if err := db.db.QueryRow(`SELECT COUNT(*) FROM indexed_files WHERE path = ?`, path).Scan(&count); err != nil {
+		t.Fatal(err)
+	}
+	if count != 0 {
+		t.Fatalf("recovered accounting survived purge")
+	}
 }
 
 // TestSearch performs a basic search query.
@@ -638,6 +718,30 @@ func TestGetStats(t *testing.T) {
 
 	if stats.TotalMessages != 2 {
 		t.Fatalf("expected 2 messages, got %d", stats.TotalMessages)
+	}
+}
+
+func TestGetStatsExcludesRecoveredSourceAccounting(t *testing.T) {
+	db, cleanup := newTestDB(t)
+	defer cleanup()
+
+	if _, err := db.db.Exec(`
+		INSERT INTO indexed_files (path, hash, last_indexed) VALUES
+		('/real.jsonl', 'real-hash', '2026-08-18T12:00:00Z'),
+		('/recovered.jsonl', ?, NULL)
+	`, recoveredSourceHash); err != nil {
+		t.Fatal(err)
+	}
+	stats, err := db.GetStats()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if stats.TotalFiles != 1 {
+		t.Fatalf("TotalFiles = %d, want 1", stats.TotalFiles)
+	}
+	want := time.Date(2026, 8, 18, 12, 0, 0, 0, time.UTC)
+	if !stats.IndexedAt.Equal(want) {
+		t.Fatalf("IndexedAt = %s, want %s", stats.IndexedAt, want)
 	}
 }
 

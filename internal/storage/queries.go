@@ -28,7 +28,11 @@ func (d *Database) GetStats() (Stats, error) {
 	var stats Stats
 
 	// Get total files
-	err := d.db.QueryRow("SELECT COUNT(*) FROM indexed_files").Scan(&stats.TotalFiles)
+	err := d.db.QueryRow(`
+		SELECT COUNT(*)
+		FROM indexed_files
+		WHERE hash <> ?
+	`, recoveredSourceHash).Scan(&stats.TotalFiles)
 	if err != nil {
 		return stats, fmt.Errorf("count files: %w", err)
 	}
@@ -41,7 +45,11 @@ func (d *Database) GetStats() (Stats, error) {
 
 	// Get last indexed time (most recent timestamp)
 	var lastIndexed sql.NullString
-	err = d.db.QueryRow("SELECT MAX(last_indexed) FROM indexed_files").Scan(&lastIndexed)
+	err = d.db.QueryRow(`
+		SELECT MAX(last_indexed)
+		FROM indexed_files
+		WHERE hash <> ?
+	`, recoveredSourceHash).Scan(&lastIndexed)
 	if err != nil && err != sql.ErrNoRows {
 		return stats, fmt.Errorf("get last indexed: %w", err)
 	}
