@@ -143,7 +143,7 @@ backscroll list --help
 4. **Two empty searches prove nothing.** Before concluding content is absent from the index: retry with artifact-literal terms; broaden to `--all-projects`; if a path or UUID is known, probe existing indexed rows; run one normal search without `--indexed-only` so normal search autosync can run; repeat the indexed-only probe; then collect diagnostics and report the gap.
 
 ```bash
-backscroll search "literal speaker or error" --all-projects --robot --fields minimal --max-tokens 2000
+backscroll search "literal speaker or error" --all-projects --indexed-only --robot --fields minimal --max-tokens 2000
 backscroll search "" --all-projects --indexed-only --source-path "*SESSION-UUID*" --json --fields minimal --limit 1
 backscroll search "literal speaker or error" --all-projects --robot --fields minimal --max-tokens 2000
 backscroll search "" --all-projects --indexed-only --source-path "*SESSION-UUID*" --json --fields minimal --limit 1
