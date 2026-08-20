@@ -64,8 +64,9 @@ func buildRootCmd(stdout, stderr io.Writer) *cobra.Command {
 
 func buildRootCmdWithStartup(stdout, stderr io.Writer, policy startupPolicyFunc) *cobra.Command {
 	root := &cobra.Command{
-		Use:   "backscroll",
-		Short: "A permanent, searchable record of your coding-agent sessions",
+		Use:           "backscroll",
+		Short:         "A permanent, searchable record of your coding-agent sessions",
+		SilenceErrors: true,
 		Long: `Backscroll turns your coding-agent sessions into a permanent, searchable
 record of what happened. It indexes Claude Code, Pi and OpenCode sessions into
 SQLite and keeps them after the session files expire.

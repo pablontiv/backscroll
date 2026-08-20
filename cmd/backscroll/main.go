@@ -44,7 +44,6 @@ func run(stdout, stderr io.Writer, args []string) error {
 
 	rootCmd := buildRootCmd(stdout, stderr)
 	if indexPolicyMachineArgs(args) {
-		rootCmd.SilenceErrors = true
 		rootCmd.SilenceUsage = true
 	}
 	rootCmd.SetArgs(args)

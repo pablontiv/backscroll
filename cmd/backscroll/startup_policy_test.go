@@ -1,13 +1,16 @@
 package main
 
 import (
+	"bytes"
 	"context"
+	"errors"
 	"io"
 	"path/filepath"
 	"reflect"
 	"strings"
 	"testing"
 
+	"github.com/pablontiv/backscroll/internal/compat"
 	"github.com/pablontiv/backscroll/internal/config"
 	"github.com/spf13/cobra"
 )
@@ -22,40 +25,121 @@ func TestEveryOperationalCommandRunsStartupBeforeHandler(t *testing.T) {
 	for _, argv := range commands {
 		t.Run(strings.Join(argv, "_"), func(t *testing.T) {
 			calls := 0
+			markerCalls := 0
+			events := []string{}
 			policy := func(context.Context, io.Writer) startupResult {
 				calls++
+				events = append(events, "startup")
 				return startupResult{Config: &config.Config{DatabasePath: filepath.Join(t.TempDir(), "index.db")}}
 			}
 			root := buildRootCmdWithStartup(io.Discard, io.Discard, policy)
+			replaceRootCommandRunE(t, root, argv[0], func(cmd *cobra.Command, args []string) error {
+				markerCalls++
+				events = append(events, "handler")
+				return nil
+			})
 			root.SetArgs(argv)
-			_ = root.Execute()
+			if err := root.Execute(); err != nil {
+				t.Fatalf("execute %v: %v", argv, err)
+			}
 			if calls != 1 {
 				t.Fatalf("startup calls=%d, want 1", calls)
 			}
+			if markerCalls != 1 {
+				t.Fatalf("handler calls=%d, want 1", markerCalls)
+			}
+			if want := []string{"startup", "handler"}; !reflect.DeepEqual(events, want) {
+				t.Fatalf("events=%v, want %v", events, want)
+			}
 		})
 	}
+}
 
-	t.Run("startup_before_handler", func(t *testing.T) {
-		var events []string
-		root := buildRootCmdWithStartup(io.Discard, io.Discard, func(context.Context, io.Writer) startupResult {
-			events = append(events, "startup")
-			return startupResult{Config: &config.Config{DatabasePath: filepath.Join(t.TempDir(), "index.db")}}
-		})
-		root.AddCommand(&cobra.Command{
-			Use: "synthetic",
-			RunE: func(cmd *cobra.Command, args []string) error {
-				events = append(events, "handler")
-				return nil
+func TestFailedStartupAllowsOnlyRecoverWithInjectedPolicy(t *testing.T) {
+	testCases := []struct {
+		name   string
+		result startupResult
+	}{
+		{
+			name: "error_only",
+			result: startupResult{
+				Config: &config.Config{DatabasePath: "/tmp/error-only.db"},
+				Err:    errors.New("synthetic startup error"),
 			},
+		},
+		{
+			name: "diagnostic_and_error",
+			result: startupResult{
+				Config: &config.Config{DatabasePath: "/tmp/diagnostic.db"},
+				Diagnostic: &compat.Diagnostic{
+					Code:         compat.CodeIndexStale,
+					Summary:      "synthetic startup diagnostic",
+					Continuation: []string{"recover", "--from", "/tmp/diagnostic.db", "--dry-run"},
+				},
+				Err: errors.New("synthetic startup diagnostic error"),
+			},
+		},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			policyCalls := 0
+			policy := func(context.Context, io.Writer) startupResult {
+				policyCalls++
+				return tc.result
+			}
+
+			var recoverOut, recoverErr bytes.Buffer
+			recoverRoot := buildRootCmdWithStartup(&recoverOut, &recoverErr, policy)
+			recoverReached := false
+			replaceRootCommandRunE(t, recoverRoot, "recover", func(cmd *cobra.Command, args []string) error {
+				recoverReached = true
+				assertStartupResultInContext(t, startupResultFrom(cmd), tc.result)
+				_, _ = io.WriteString(cmd.OutOrStdout(), "recover-marker\n")
+				return nil
+			})
+			recoverRoot.SetArgs([]string{"recover", "--from", "missing.db", "--dry-run"})
+			if err := recoverRoot.Execute(); err != nil {
+				t.Fatalf("recover should proceed on startup failure: %v", err)
+			}
+			if !recoverReached {
+				t.Fatal("recover marker was not reached")
+			}
+			if !strings.Contains(recoverOut.String(), "recover-marker") {
+				t.Fatalf("recover marker output missing: stdout=%q stderr=%q", recoverOut.String(), recoverErr.String())
+			}
+			if policyCalls != 1 {
+				t.Fatalf("recover startup calls=%d, want 1", policyCalls)
+			}
+
+			var blockedOut, blockedErr bytes.Buffer
+			blockedRoot := buildRootCmdWithStartup(&blockedOut, &blockedErr, policy)
+			blockedReached := false
+			replaceRootCommandRunE(t, blockedRoot, "search", func(cmd *cobra.Command, args []string) error {
+				blockedReached = true
+				_, _ = io.WriteString(cmd.OutOrStdout(), "blocked-marker\n")
+				return nil
+			})
+			blockedRoot.SetArgs([]string{"search", "needle"})
+			err := blockedRoot.Execute()
+			if err == nil {
+				t.Fatalf("search unexpectedly succeeded on startup failure; stdout=%q stderr=%q", blockedOut.String(), blockedErr.String())
+			}
+			if blockedReached {
+				t.Fatalf("search marker should not run; stdout=%q stderr=%q", blockedOut.String(), blockedErr.String())
+			}
+			combined := blockedOut.String() + blockedErr.String()
+			if strings.Contains(combined, "blocked-marker") {
+				t.Fatalf("blocked command emitted marker output: stdout=%q stderr=%q", blockedOut.String(), blockedErr.String())
+			}
+			if policyCalls != 2 {
+				t.Fatalf("total startup calls=%d, want 2", policyCalls)
+			}
+			if tc.result.Diagnostic != nil && !strings.Contains(blockedErr.String(), "diagnostic:") {
+				t.Fatalf("expected diagnostic output for blocked command; stdout=%q stderr=%q", blockedOut.String(), blockedErr.String())
+			}
 		})
-		root.SetArgs([]string{"synthetic"})
-		if err := root.Execute(); err != nil {
-			t.Fatalf("synthetic command failed: %v", err)
-		}
-		if want := []string{"startup", "handler"}; !reflect.DeepEqual(events, want) {
-			t.Fatalf("events=%v, want %v", events, want)
-		}
-	})
+	}
 }
 
 func TestDefaultStartupPolicyCallsSyncExactlyOnce(t *testing.T) {
@@ -116,4 +200,37 @@ func TestCommandTreeExcludesIndexedOnlyFlag(t *testing.T) {
 		}
 	}
 	walk(root)
+}
+
+func replaceRootCommandRunE(t *testing.T, root *cobra.Command, commandName string, runE func(*cobra.Command, []string) error) {
+	t.Helper()
+	for _, child := range root.Commands() {
+		if child.Name() == commandName {
+			child.Run = nil
+			child.RunE = runE
+			return
+		}
+	}
+	t.Fatalf("root command %q not found", commandName)
+}
+
+func assertStartupResultInContext(t *testing.T, got, want startupResult) {
+	t.Helper()
+	if got.Config != want.Config {
+		t.Fatalf("startup config pointer mismatch: got=%p want=%p", got.Config, want.Config)
+	}
+	if (got.Err == nil) != (want.Err == nil) {
+		t.Fatalf("startup err nil mismatch: got=%v want=%v", got.Err, want.Err)
+	}
+	if got.Err != nil && got.Err.Error() != want.Err.Error() {
+		t.Fatalf("startup err=%q, want %q", got.Err.Error(), want.Err.Error())
+	}
+	if (got.Diagnostic == nil) != (want.Diagnostic == nil) {
+		t.Fatalf("startup diagnostic nil mismatch: got=%+v want=%+v", got.Diagnostic, want.Diagnostic)
+	}
+	if got.Diagnostic != nil {
+		if got.Diagnostic.Code != want.Diagnostic.Code || got.Diagnostic.Summary != want.Diagnostic.Summary || !reflect.DeepEqual(got.Diagnostic.Continuation, want.Diagnostic.Continuation) {
+			t.Fatalf("startup diagnostic=%+v, want %+v", got.Diagnostic, want.Diagnostic)
+		}
+	}
 }

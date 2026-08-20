@@ -28,7 +28,7 @@ func newStatusCmd(stdout, stderr io.Writer) *cobra.Command {
 - Configuration
 
 Use --json to output as JSON.
-Status is read-only and never auto-syncs.`,
+Startup preflight may sync before status runs; status itself only reads current index state.`,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			return runStatus(stdout, stderr, jsonFormat)
 		},
@@ -45,8 +45,9 @@ func runStatus(stdout, stderr io.Writer, jsonFormat bool) error {
 		return fmt.Errorf("load config: %w", err)
 	}
 
-	// Check if database exists without creating it. Status is diagnostic/read-only
-	// and must not auto-sync or open the index through a writer.
+	// Check if database exists without creating it. Startup policy already handled
+	// preflight sync; status itself remains diagnostic/read-only and uses immutable
+	// openings that avoid writer-side effects.
 	_, err = os.Stat(cfg.DatabasePath)
 	dbExists := err == nil
 	if err != nil && !os.IsNotExist(err) {

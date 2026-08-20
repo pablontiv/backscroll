@@ -120,6 +120,33 @@ func TestMachineModesCarryDiagnosticCodeAndContinuation(t *testing.T) {
 	}
 }
 
+func TestHumanDiagnosticRenderedOnceWithoutCobraEcho(t *testing.T) {
+	dbPath := newUnsupportedIndexedConsumerDB(t)
+	var stdout, stderr bytes.Buffer
+	err := run(&stdout, &stderr, []string{"search", "sentinel"})
+	if err == nil {
+		t.Fatalf("human diagnostic command succeeded; stdout=%q stderr=%q", stdout.String(), stderr.String())
+	}
+	if strings.Contains(stdout.String(), "sentinel") {
+		t.Fatalf("human diagnostic emitted cached sentinel rows: %q", stdout.String())
+	}
+	diagnosticLines := 0
+	for _, line := range strings.Split(stderr.String(), "\n") {
+		if strings.HasPrefix(line, "diagnostic:") {
+			diagnosticLines++
+		}
+	}
+	if diagnosticLines != 1 {
+		t.Fatalf("diagnostic lines=%d, want 1; stderr=%q", diagnosticLines, stderr.String())
+	}
+	if strings.Contains(stderr.String(), "Error:") {
+		t.Fatalf("stderr duplicated by Cobra error echo: %q", stderr.String())
+	}
+	if !strings.Contains(stderr.String(), "continuation: recover --from "+dbPath+" --dry-run") {
+		t.Fatalf("stderr missing continuation path: %q", stderr.String())
+	}
+}
+
 func TestAutoSyncFailuresBlockCachedConsumers(t *testing.T) {
 	cases := []struct {
 		name      string
