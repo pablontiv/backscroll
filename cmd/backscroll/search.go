@@ -262,21 +262,22 @@ func resultsToLines(results []models.SearchResult, format picokitoutput.Format) 
 	for i, result := range results {
 		if format == picokitoutput.FormatRobot {
 			// Robot format: result_N_field=value
+			// String values are escaped to keep each field on a single deterministic line.
 			lines = append(lines,
-				fmt.Sprintf("result_%d_source=%s", i, result.Source),
-				fmt.Sprintf("result_%d_role=%s", i, result.Role),
-				fmt.Sprintf("result_%d_filepath=%s", i, result.FilePath),
-				fmt.Sprintf("result_%d_content=%s", i, result.Content),
+				fmt.Sprintf("result_%d_source=%s", i, escapeRobotValue(result.Source)),
+				fmt.Sprintf("result_%d_role=%s", i, escapeRobotValue(result.Role)),
+				fmt.Sprintf("result_%d_filepath=%s", i, escapeRobotValue(result.FilePath)),
+				fmt.Sprintf("result_%d_content=%s", i, escapeRobotValue(result.Content)),
 			)
 			if result.SessionID != "" {
-				lines = append(lines, fmt.Sprintf("result_%d_session_id=%s", i, result.SessionID))
+				lines = append(lines, fmt.Sprintf("result_%d_session_id=%s", i, escapeRobotValue(result.SessionID)))
 			}
 			if result.ProjectPath != "" {
-				lines = append(lines, fmt.Sprintf("result_%d_project=%s", i, result.ProjectPath))
+				lines = append(lines, fmt.Sprintf("result_%d_project=%s", i, escapeRobotValue(result.ProjectPath)))
 			}
 			lines = append(lines, fmt.Sprintf("result_%d_score=%.2f", i, result.Score))
 			if len(result.Tags) > 0 {
-				lines = append(lines, fmt.Sprintf("result_%d_tags=%s", i, strings.Join(result.Tags, ",")))
+				lines = append(lines, fmt.Sprintf("result_%d_tags=%s", i, escapeRobotValue(strings.Join(result.Tags, ","))))
 			}
 			lines = append(lines, fmt.Sprintf("result_%d_rank=%d", i, result.Rank))
 		} else {
@@ -301,4 +302,11 @@ func resultsToLines(results []models.SearchResult, format picokitoutput.Format) 
 	}
 
 	return lines
+}
+
+func escapeRobotValue(value string) string {
+	escaped := strings.ReplaceAll(value, `\`, `\\`)
+	escaped = strings.ReplaceAll(escaped, "\r", `\r`)
+	escaped = strings.ReplaceAll(escaped, "\n", `\n`)
+	return escaped
 }

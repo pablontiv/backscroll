@@ -209,6 +209,46 @@ func TestSearchRobotFormatStructure(t *testing.T) {
 	}
 }
 
+func TestSearchRobotFormatEscapesStringValuesToSingleLine(t *testing.T) {
+	results := []models.SearchResult{
+		{
+			Source:      "sess\\ion",
+			Role:        "assist\rant",
+			Content:     "line 1\nline 2\r\npath\\tail",
+			FilePath:    "/tmp/file\nname.md",
+			Rank:        2,
+			Score:       0.42,
+			SessionID:   "session\n789",
+			ProjectPath: "project\\root",
+			Tags:        []string{"tag\\one", "tag\ntwo"},
+		},
+	}
+
+	lines := resultsToLines(results, picokitoutput.FormatRobot)
+	allText := strings.Join(lines, "\n")
+
+	for _, line := range lines {
+		if strings.Contains(line, "\n") || strings.Contains(line, "\r") {
+			t.Fatalf("robot line must be one-line escaped output, got %q", line)
+		}
+	}
+
+	expected := []string{
+		`result_0_source=sess\\ion`,
+		`result_0_role=assist\rant`,
+		`result_0_filepath=/tmp/file\nname.md`,
+		`result_0_content=line 1\nline 2\r\npath\\tail`,
+		`result_0_session_id=session\n789`,
+		`result_0_project=project\\root`,
+		`result_0_tags=tag\\one,tag\ntwo`,
+	}
+	for _, want := range expected {
+		if !strings.Contains(allText, want) {
+			t.Fatalf("robot escaped output missing %q in %q", want, allText)
+		}
+	}
+}
+
 func TestSearchWithJSONAndMaxTokens(t *testing.T) {
 	_, cleanup := testEnv(t)
 	defer cleanup()
