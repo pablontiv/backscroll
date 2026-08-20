@@ -18,7 +18,7 @@ jobs:
       coverage-threshold: 85
 
   gitleaks:
-    uses: pablontiv/crossbeam/.github/workflows/gitleaks.yml@v1
+    uses: pablontiv/crossbeam/.github/workflows/gitleaks.yml@v2
 
   release:
     uses: pablontiv/crossbeam/.github/workflows/go-release.yml@v1
