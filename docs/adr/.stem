@@ -1,0 +1,22 @@
+version: 2
+schema:
+    tipo:
+        type: enum
+        enum: [adr]
+        required: true
+    estado:
+        type: enum
+        enum: [proposed, accepted, superseded]
+        required: true
+    fecha:
+        type: string
+        required: true
+    contexto:
+        type: string
+        required: true
+    decision:
+        type: string
+        required: true
+    consecuencias:
+        type: string
+        required: true

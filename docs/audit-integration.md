@@ -1,66 +1,54 @@
-# Downstream audit integration contract
+# Downstream Audit Integration Contract
 
-Backscroll is the corpus and structured-query layer. Downstream tools such as a session-audit runner own deterministic findings, thresholds, redaction policy, report rendering, and any ADR/KE/backlog creation.
+Backscroll owns the perennial corpus and supported CLI query surfaces. A downstream audit tool owns deterministic findings, thresholds, redaction, report rendering, and any ADR or backlog creation.
 
-## Deterministic audit flow
+## Establish a read-only boundary
 
-Use an explicit snapshot boundary before auditing with `--indexed-only`:
+Use diagnostics before reading an existing snapshot:
 
 ```bash
-# 1. Audit preflight against the existing SQLite snapshot (read-only, no sync)
-backscroll status --json --indexed-only
-
-# 2. Scope discovery from indexed items and projects
-backscroll list --json --indexed-only --all-projects --limit 0
-
-# 3. Complete message records for deterministic consumers
-backscroll search "" --json --indexed-only --all-projects --limit 0
-
-# 4. Tool activity (commands, errors, outputs) — narrowly searchable
-backscroll search "" --json --indexed-only --content-type tool --all-projects --limit 0
+backscroll status --json
+backscroll validate --json
 ```
 
-`--indexed-only` opens the existing SQLite index read-only and does not run input discovery or sync. Use it for repeatable audit reads. Commands that require an existing index fail or report `index.usable = false` instead of silently creating a new corpus boundary.
+Both commands are always read-only and never run input discovery or sync. The deprecated `--indexed-only` flag is accepted on them but does not change behavior.
+
+For query commands, `--indexed-only` suppresses auto-sync and reads the configured SQLite snapshot:
+
+```bash
+backscroll list --json --indexed-only --all-projects --order timestamp:asc --limit 100
+backscroll search --text "permission denied" --json --indexed-only --all-projects
+backscroll patterns --kind failures --json --indexed-only --all-projects
+```
+
+Without `--indexed-only`, `list`, `search`, and `patterns` validate active manifests and incrementally index changed inputs before querying.
 
 ## Status JSON
 
-`backscroll status --json --indexed-only` emits one versioned JSON document:
+`backscroll status --json` emits one JSON document with these top-level objects:
 
-```json
-{
-  "version": 1,
-  "database": { "path": "/home/user/.backscroll.db", "exists": true },
-  "inputs": { "active_count": 1, "inputs": [{ "id": "claude", "source": "session", "active": true }] },
-  "index": { "usable": true, "files": 42, "messages": 9001, "projects": 3, "last_sync": "2026-05-11T..." },
-  "projects": [{ "project": "example", "sessions": 10, "messages": 500 }],
-  "diagnostics": []
-}
+- `database`: configured path, existence, and size;
+- `index`: usability, indexed file/message counts, timestamp, and derived-data counts;
+- `config`: configured session directories and active input identifiers.
+
+Status is preflight metadata. It does not expose transcript content.
+
+## Session discovery
+
+`backscroll list --json --indexed-only` returns a JSON object containing `count` and `sessions`. Each session summary includes its path, project, timestamp, and tags. Supported filters are `--project`, `--all-projects`, `--order`, `--limit`, `--offset`, and legacy `--recent`.
+
+`list` does not expose message-level filters such as `--source-path`, `--source`, `--role`, `--after`, `--before`, or `--content-type`.
+
+## Message and tool investigation
+
+`backscroll search` requires a non-empty query and returns ranked matching rows. It supports path, source, project, role, date, tag, and content-type filters. For example:
+
+```bash
+backscroll search --text "go test" --content-type tool --source-path "*/example/*.jsonl" --indexed-only --json
 ```
 
-This is preflight metadata only. It does not expose transcript content.
-
-## Message records via list or search
-
-`backscroll list --json --indexed-only` returns indexed items without full-text ranking. Records include:
-
-- `schema_version`
-- `source`, `source_path`, `project`, `uuid`
-- `ordinal`, `timestamp`
-- `role`, `content_type`
-- bounded `text`
-
-Results are ordered by `source_path`, `ordinal`, `timestamp`, and row id. Use filters such as `--project`, `--all-projects`, `--source`, `--source-path`, `--after`, `--before`, `--limit`, and `--indexed-only`.
-
-Alternatively, `backscroll search "" --json --indexed-only` with an empty query string returns all indexed records (BM25 ranking disabled, deterministic ordering).
-
-## Tool activity
-
-`backscroll search "" --json --indexed-only --content-type tool` returns only messages with `content_type='tool'` — tool inputs (commands, args, file paths) and outputs/errors. Use this to audit what agents actually executed. Supports the same scope filters.
-
-## Search is supplemental
-
-`search` with a non-empty query string is a retrieval/UX surface. It may rank, truncate, aggregate, or use top-k semantics. Useful for investigation, but not sufficient for exhaustive audit discovery. Audit consumers should use `status --json --indexed-only`, `list --json --indexed-only`, and `search "" --json --indexed-only [--content-type tool]` as their corpus contract.
+Search is an investigation surface, not an exhaustive corpus export: ranking, limits, and token budgets may omit rows. The current public CLI does not provide an empty-query stream of every stored message. Consumers requiring a complete message-level export must not infer one from `list` or `search`; they need a separately designed read-only API or an explicitly versioned database integration.
 
 ## Privacy and raw-content boundary
 
-Backscroll stores normalized message text and bounded event snippets in SQLite. It does not make raw provider JSONL the downstream API contract, and examples avoid private absolute paths except where a user explicitly supplies one. Consumers that need full raw transcripts or unlimited tool output must implement an explicit opt-in path and their own redaction policy.
+Backscroll stores normalized message text and serialized tool content in SQLite. The public CLI does not make raw provider JSONL a downstream schema contract. `backscroll read --path <FILE>` directly parses a user-supplied file when raw-source access is intentional, but it requires that file to remain on disk and is separate from indexed snapshot reads.

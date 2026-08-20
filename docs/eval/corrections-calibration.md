@@ -10,10 +10,11 @@ Before running the F3b agent-classification loop, we must establish baseline pre
 
 ### Phase 1: Candidate Extraction (automated)
 
-1. Run full sync on your corpus:
+1. Bring the corpus current with a normal auto-syncing query:
    ```bash
-   backscroll sync
+   backscroll patterns --kind corrections --limit 1
    ```
+   Use `backscroll rebuild` first only when FTS or derived data must be re-derived from the perennial database.
 
 2. Extract 50 candidates from the live DB (stratified by detector, capped per session):
    ```bash

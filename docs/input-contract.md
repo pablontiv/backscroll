@@ -24,8 +24,10 @@ source of ingestion routes.
 
 Backscroll ships Claude and Pi preset manifests in the repository `inputs/`
 directory. Those are source presets; install or copy them into the user input
-config directory before running `backscroll sync`. Preset installation should
-skip existing manifest files by default so user edits are not overwritten.
+config directory before running a query command. The command preflight validates
+active manifests, and normal `search`, `list`, or `patterns` use incremental
+auto-sync. Preset installation should skip existing manifest files by default so
+user edits are not overwritten.
 
 ```text
 discover -> decode -> record -> map -> content -> text -> emit -> search_items

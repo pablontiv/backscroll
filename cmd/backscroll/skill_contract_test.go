@@ -13,6 +13,24 @@ import (
 	"github.com/spf13/cobra"
 )
 
+// livingCLIContractDocs is the explicit current user/operator documentation
+// boundary. Historical records under docs/roadmap, docs/superpowers,
+// docs/research, docs/eval/corrections-labeling-*.md, docs/backlog.md, and
+// docs/intention-agentic-input-definitions.md are intentionally excluded: they
+// preserve decisions, evaluations, or planned surfaces from earlier releases.
+var livingCLIContractDocs = []string{
+	"README.md",
+	"docs/audit-integration.md",
+	"docs/configuration.md",
+	"docs/eval/README.md",
+	"docs/eval/corrections-calibration.md",
+	"docs/input-contract.md",
+	"docs/patterns.md",
+	"docs/read.md",
+	"docs/search.md",
+	"docs/sync.md",
+}
+
 func TestBackscrollSkillContractAcceptsCurrentCLIForms(t *testing.T) {
 	root := buildRootCmd(io.Discard, io.Discard)
 	content := strings.Join([]string{
@@ -72,6 +90,23 @@ func TestBackscrollSkillContractRejectsBareSubcommands(t *testing.T) {
 	)
 }
 
+func TestBackscrollSkillContractAcceptsNarrativeCommandMentions(t *testing.T) {
+	root := buildRootCmd(io.Discard, io.Discard)
+	content := strings.Join([]string{
+		"That answers a question `search` cannot.",
+		"`search` retrieves while `patterns` computes a census.",
+		"backscroll computes complete, reproducible censuses for an agent.",
+		"`--json` is available on `search`, `list`, and `status`.",
+		"config directory before running a query command.",
+		"`backscroll list` does not support `--source-path`.",
+	}, "\n")
+
+	violations := validateSkillMarkdown(root, "synthetic-narrative.md", content)
+	if len(violations) > 0 {
+		t.Fatalf("expected narrative command mentions to pass, got violations:\n%s", formatSkillContractViolations(violations))
+	}
+}
+
 func TestBackscrollSkillContractRejectsStaleAutoupdateOptOut(t *testing.T) {
 	root := buildRootCmd(io.Discard, io.Discard)
 	content := "BACKSCROLL_AUTOUPDATE_DISABLE=1 backscroll status"
@@ -89,6 +124,18 @@ func TestBackscrollSkillCommandsMatchCLI(t *testing.T) {
 	violations := validateSkillMarkdown(root, path, content)
 	if len(violations) > 0 {
 		t.Fatalf("documented backscroll commands must match the Cobra CLI:\n%s", formatSkillContractViolations(violations))
+	}
+}
+
+func TestBackscrollLivingDocsMatchCLI(t *testing.T) {
+	root := buildRootCmd(io.Discard, io.Discard)
+	var violations []skillContractViolation
+	for _, relativePath := range livingCLIContractDocs {
+		path, content := readTrackedSkillMarkdown(t, relativePath)
+		violations = append(violations, validateSkillMarkdown(root, path, content)...)
+	}
+	if len(violations) > 0 {
+		t.Fatalf("living documentation commands must match the Cobra CLI:\n%s", formatSkillContractViolations(violations))
 	}
 }
 
@@ -227,11 +274,13 @@ func validateSkillMarkdown(root *cobra.Command, path, content string) []skillCon
 			})
 		}
 
-		// This is intentionally not a general shell parser. The skill uses simple
-		// one-command snippets, so we tokenize enough Markdown code/prose to catch
-		// documented `backscroll ...` invocations without executing anything.
-		violations = append(violations, validateBackscrollInvocations(root, path, lineNumber, line)...)
-		violations = append(violations, validateBareSubcommand(path, lineNumber, line, registeredSubcommands)...)
+		// This is intentionally not a general shell parser. We tokenize enough
+		// Markdown code/prose to catch documented invocations without executing
+		// anything. Inline spans are checked separately so surrounding prose flags
+		// cannot be attributed to an inline command mention.
+		prose := withoutInlineCodeSpans(line)
+		violations = append(violations, validateBackscrollInvocations(root, path, lineNumber, prose)...)
+		violations = append(violations, validateBareSubcommand(path, lineNumber, prose, registeredSubcommands)...)
 		for _, span := range inlineCodeSpans(line) {
 			violations = append(violations, validateBackscrollInvocations(root, path, lineNumber, span)...)
 			violations = append(violations, validateBareSubcommand(path, lineNumber, span, registeredSubcommands)...)
@@ -265,6 +314,11 @@ func validateBackscrollInvocations(root *cobra.Command, path string, lineNumber 
 		if len(args) > 0 && !strings.HasPrefix(args[0], "-") {
 			child := findSubcommand(root, args[0])
 			if child == nil {
+				// General documentation also uses "backscroll" as the project name
+				// in prose. Long, flag-free phrases are narrative, not shell snippets.
+				if len(args) > 3 && len(longFlags(args)) == 0 {
+					continue
+				}
 				violations = append(violations, skillContractViolation{
 					path:    path,
 					line:    lineNumber,
@@ -299,11 +353,11 @@ func validateBareSubcommand(path string, lineNumber int, text string, registered
 	trimmed = strings.TrimPrefix(trimmed, "$ ")
 	trimmed = strings.TrimPrefix(trimmed, "> ")
 	tokens := shellishFields(trimmed)
-	if len(tokens) == 0 {
+	if len(tokens) < 2 {
 		return nil
 	}
 	command := tokens[0]
-	if _, ok := registeredSubcommands[command]; !ok {
+	if _, ok := registeredSubcommands[command]; !ok || !strings.HasPrefix(tokens[1], "-") {
 		return nil
 	}
 	return []skillContractViolation{{
@@ -414,6 +468,29 @@ func isCommandVBackscroll(tokens []string, index int) bool {
 
 func isURLToken(token string) bool {
 	return strings.Contains(token, "://")
+}
+
+func withoutInlineCodeSpans(line string) string {
+	if strings.HasPrefix(strings.TrimSpace(line), "```") {
+		return line
+	}
+	var out strings.Builder
+	for {
+		start := strings.Index(line, "`")
+		if start == -1 {
+			out.WriteString(line)
+			return out.String()
+		}
+		out.WriteString(line[:start])
+		line = line[start+1:]
+		end := strings.Index(line, "`")
+		if end == -1 {
+			out.WriteString(line)
+			return out.String()
+		}
+		out.WriteByte(' ')
+		line = line[end+1:]
+	}
 }
 
 func inlineCodeSpans(line string) []string {

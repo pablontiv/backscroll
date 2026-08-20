@@ -115,10 +115,18 @@ Invalid TOML, unknown fields, unsupported versions, invalid selectors/globs/rege
 ## Common commands
 
 ```bash
-backscroll inputs validate
-backscroll inputs list
-backscroll inputs test --input claude --file ~/.claude/projects/example/session.jsonl --json
-backscroll sync
+# Show the resolved application configuration and active manifests.
+backscroll config
+backscroll config --json
+
+# Inspect the existing index without triggering ingestion.
+backscroll status --json
+
+# Query commands validate manifests and incrementally index changed inputs.
+backscroll search --text "migration plan" --all-projects
+backscroll list --order timestamp:desc --limit 20
 ```
 
-See [the generic input contract](input-contract.md) for the full manifest schema. For read-only audit consumers, see the [downstream audit integration contract](audit-integration.md), which uses `--indexed-only` status, session, and event queries against the configured database path.
+There is no public `inputs` or `sync` command. Active manifests are validated during command preflight; invalid manifests fail with their path before indexing begins. `search`, `list`, and `patterns` run incremental auto-sync unless `--indexed-only` is supplied. Use `backscroll rebuild` only to re-derive FTS and other derived data from the perennial database before an incremental sync; it is not a replacement for manifest validation.
+
+See [the generic input contract](input-contract.md) for the full manifest schema. For read-only audit consumers, see the [downstream audit integration contract](audit-integration.md).
