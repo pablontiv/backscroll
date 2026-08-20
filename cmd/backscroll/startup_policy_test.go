@@ -12,6 +12,7 @@ import (
 
 	"github.com/pablontiv/backscroll/internal/compat"
 	"github.com/pablontiv/backscroll/internal/config"
+	"github.com/pablontiv/backscroll/internal/recovery"
 	"github.com/spf13/cobra"
 )
 
@@ -81,6 +82,15 @@ func TestFailedStartupAllowsOnlyRecoverWithInjectedPolicy(t *testing.T) {
 		},
 	}
 
+	blockedCommands := []struct {
+		name string
+		argv []string
+	}{
+		{name: "search", argv: []string{"search", "needle"}},
+		{name: "list", argv: []string{"list"}},
+		{name: "config", argv: []string{"config"}},
+	}
+
 	for _, tc := range testCases {
 		t.Run(tc.name, func(t *testing.T) {
 			policyCalls := 0
@@ -112,33 +122,59 @@ func TestFailedStartupAllowsOnlyRecoverWithInjectedPolicy(t *testing.T) {
 				t.Fatalf("recover startup calls=%d, want 1", policyCalls)
 			}
 
-			var blockedOut, blockedErr bytes.Buffer
-			blockedRoot := buildRootCmdWithStartup(&blockedOut, &blockedErr, policy)
-			blockedReached := false
-			replaceRootCommandRunE(t, blockedRoot, "search", func(cmd *cobra.Command, args []string) error {
-				blockedReached = true
-				_, _ = io.WriteString(cmd.OutOrStdout(), "blocked-marker\n")
-				return nil
-			})
-			blockedRoot.SetArgs([]string{"search", "needle"})
-			err := blockedRoot.Execute()
-			if err == nil {
-				t.Fatalf("search unexpectedly succeeded on startup failure; stdout=%q stderr=%q", blockedOut.String(), blockedErr.String())
+			for _, blocked := range blockedCommands {
+				t.Run("blocks_"+blocked.name, func(t *testing.T) {
+					var blockedOut, blockedErr bytes.Buffer
+					blockedRoot := buildRootCmdWithStartup(&blockedOut, &blockedErr, policy)
+					blockedReached := false
+					replaceRootCommandRunE(t, blockedRoot, blocked.name, func(cmd *cobra.Command, args []string) error {
+						blockedReached = true
+						_, _ = io.WriteString(cmd.OutOrStdout(), "blocked-marker\n")
+						return nil
+					})
+					blockedRoot.SetArgs(blocked.argv)
+					err := blockedRoot.Execute()
+					if err == nil {
+						t.Fatalf("%s unexpectedly succeeded on startup failure; stdout=%q stderr=%q", blocked.name, blockedOut.String(), blockedErr.String())
+					}
+					if blockedReached {
+						t.Fatalf("%s marker should not run; stdout=%q stderr=%q", blocked.name, blockedOut.String(), blockedErr.String())
+					}
+					combined := blockedOut.String() + blockedErr.String()
+					if strings.Contains(combined, "blocked-marker") {
+						t.Fatalf("blocked command emitted marker output: stdout=%q stderr=%q", blockedOut.String(), blockedErr.String())
+					}
+					if tc.result.Diagnostic != nil && !strings.Contains(blockedErr.String(), "diagnostic:") {
+						t.Fatalf("expected diagnostic output for blocked command; stdout=%q stderr=%q", blockedOut.String(), blockedErr.String())
+					}
+				})
 			}
-			if blockedReached {
-				t.Fatalf("search marker should not run; stdout=%q stderr=%q", blockedOut.String(), blockedErr.String())
-			}
-			combined := blockedOut.String() + blockedErr.String()
-			if strings.Contains(combined, "blocked-marker") {
-				t.Fatalf("blocked command emitted marker output: stdout=%q stderr=%q", blockedOut.String(), blockedErr.String())
-			}
-			if policyCalls != 2 {
-				t.Fatalf("total startup calls=%d, want 2", policyCalls)
-			}
-			if tc.result.Diagnostic != nil && !strings.Contains(blockedErr.String(), "diagnostic:") {
-				t.Fatalf("expected diagnostic output for blocked command; stdout=%q stderr=%q", blockedOut.String(), blockedErr.String())
+			if policyCalls != 1+len(blockedCommands) {
+				t.Fatalf("total startup calls=%d, want %d", policyCalls, 1+len(blockedCommands))
 			}
 		})
+	}
+}
+
+func TestRecoverAloneContinuesAfterStartupFailure(t *testing.T) {
+	startupErr := errors.New("injected startup failure")
+	called := false
+	root := buildRootCmdWithStartup(io.Discard, io.Discard, func(context.Context, io.Writer) startupResult {
+		return startupResult{Config: &config.Config{DatabasePath: filepath.Join(t.TempDir(), "active.db")}, Err: startupErr}
+	})
+	originalExecute := recoverExecute
+	recoverExecute = func(context.Context, recovery.Options) (recovery.Report, error) {
+		called = true
+		return recovery.Report{}, errors.New("injected recovery failure")
+	}
+	t.Cleanup(func() { recoverExecute = originalExecute })
+	root.SetArgs([]string{"recover", "--from", "stranded.db"})
+	err := root.Execute()
+	if !called {
+		t.Fatal("recover handler did not continue after startup failure")
+	}
+	if !errors.Is(err, startupErr) {
+		t.Fatalf("error=%v does not preserve startup failure", err)
 	}
 }
 

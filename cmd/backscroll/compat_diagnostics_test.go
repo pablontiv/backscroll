@@ -530,7 +530,9 @@ func TestRecoveryContinuationExecutesInConfiguredSamePathContextWithEmptyWAL(t *
 
 	diagnostic := continuationFor(compat.Diagnostic{Code: compat.CodeUnsupportedLineage, Summary: "fixture diagnostic"}, dbPath)
 	var stdout, stderr bytes.Buffer
-	if err := run(&stdout, &stderr, diagnostic.Continuation); err != nil {
+	root := buildRecoverRootWithConfig(t, &stdout, &stderr, dbPath)
+	root.SetArgs(diagnostic.Continuation)
+	if err := root.Execute(); err != nil {
 		t.Fatalf("execute continuation %v: %v\nstdout=%q stderr=%q", diagnostic.Continuation, err, stdout.String(), stderr.String())
 	}
 	if !strings.Contains(stdout.String(), "recovery dry run") {

@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"strings"
@@ -10,6 +11,9 @@ import (
 	"github.com/pablontiv/backscroll/internal/recovery"
 	"github.com/spf13/cobra"
 )
+
+var recoverExecute = recovery.Execute
+var recoverPostInstallSync = maybeAutoSync
 
 func newRecoverCmd(stdout, stderr io.Writer) *cobra.Command {
 	var from string
@@ -22,11 +26,16 @@ func newRecoverCmd(stdout, stderr io.Writer) *cobra.Command {
 		SilenceUsage: true,
 		Args:         cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			cfg, err := config.Load()
-			if err != nil {
-				return err
+			startup := startupResultFrom(cmd)
+			cfg := startup.Config
+			if cfg == nil {
+				loaded, err := config.Load()
+				if err != nil {
+					return errors.Join(startup.Err, fmt.Errorf("load config for recovery: %w", err))
+				}
+				cfg = loaded
 			}
-			report, err := recovery.Execute(context.Background(), recovery.Options{
+			report, err := recoverExecute(context.Background(), recovery.Options{
 				ActivePath: cfg.DatabasePath,
 				FromPath:   from,
 				DryRun:     dryRun,
@@ -35,7 +44,12 @@ func newRecoverCmd(stdout, stderr io.Writer) *cobra.Command {
 				if backupPath, ok := recovery.RestorableBackupPath(err); ok {
 					_, _ = fmt.Fprintf(stderr, "manual recovery backup path: %s\n", backupPath)
 				}
-				return err
+				return errors.Join(startup.Err, fmt.Errorf("recovery failed: %w", err))
+			}
+			if !dryRun {
+				if err := recoverPostInstallSync(cfg, stderr); err != nil {
+					return errors.Join(startup.Err, fmt.Errorf("post-recovery sync: %w", err))
+				}
 			}
 			printRecoveryReport(stdout, report, dryRun)
 			return nil
