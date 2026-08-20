@@ -2,8 +2,10 @@ package main
 
 import (
 	"bytes"
+	"context"
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -36,6 +38,26 @@ func TestValidateUnhealthyIsReadOnly(t *testing.T) {
 	}
 	assertDiagnosticText(t, stdout+stderr, compat.CodeUnsupportedLineage, dbPath)
 	assertSQLiteFilesUnchanged(t, dbPath, before)
+}
+
+func TestRecoveryDiagnosticsForIndexHonorsCanceledContext(t *testing.T) {
+	dbPath := newRecoveryConflictDiagnosticDB(t)
+	db, err := storage.OpenReadOnly(dbPath)
+	if err != nil {
+		t.Fatalf("open recovery diagnostics db: %v", err)
+	}
+	t.Cleanup(func() { _ = db.Close() })
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	diagnostics, err := recoveryDiagnosticsForIndex(ctx, db, dbPath)
+	if err == nil {
+		t.Fatalf("recovery diagnostics succeeded with canceled context; diagnostics=%+v", diagnostics)
+	}
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("recovery diagnostics error = %v, want context canceled", err)
+	}
 }
 
 func TestValidateTextReportsSemanticRecoveryDiagnosticsReadOnly(t *testing.T) {

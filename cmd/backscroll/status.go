@@ -148,8 +148,8 @@ func resolveInputsForStatus(sessionDirs []string) ([]string, bool) {
 	return names, true
 }
 
-func recoveryDiagnosticsForIndex(db *storage.Database, activePath string) ([]compat.Diagnostic, error) {
-	input, diag, err := storage.ReadRecoveryInput(context.Background(), db)
+func recoveryDiagnosticsForIndex(ctx context.Context, db *storage.Database, activePath string) ([]compat.Diagnostic, error) {
+	input, diag, err := storage.ReadRecoveryInput(ctx, db)
 	if diag != nil {
 		d := continuationFor(*diag, activePath)
 		return []compat.Diagnostic{d}, err

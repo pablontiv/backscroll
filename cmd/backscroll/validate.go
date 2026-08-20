@@ -56,7 +56,7 @@ func runValidate(ctx context.Context, stdout, stderr io.Writer, cfg *config.Conf
 		if resolveErr != nil {
 			return fmt.Errorf("resolve active index path: %w", resolveErr)
 		}
-		diagnostics, inspectErr := recoveryDiagnosticsForIndex(db, activePath)
+		diagnostics, inspectErr := recoveryDiagnosticsForIndex(ctx, db, activePath)
 		if inspectErr != nil {
 			return fmt.Errorf("inspect recovery diagnostics: %w", inspectErr)
 		}
