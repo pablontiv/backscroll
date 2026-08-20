@@ -142,6 +142,22 @@ func TestFailedStartupAllowsOnlyRecoverWithInjectedPolicy(t *testing.T) {
 	}
 }
 
+func TestStartupFailurePreventsHandlerOutput(t *testing.T) {
+	var stdout, stderr bytes.Buffer
+	policyErr := errors.New("injected startup failure")
+	root := buildRootCmdWithStartup(&stdout, &stderr, func(context.Context, io.Writer) startupResult {
+		return startupResult{Err: policyErr}
+	})
+	root.SetArgs([]string{"config", "--json"})
+	err := root.Execute()
+	if !errors.Is(err, policyErr) {
+		t.Fatalf("error=%v, want injected startup failure", err)
+	}
+	if stdout.Len() != 0 {
+		t.Fatalf("handler emitted output after startup failure: %q", stdout.String())
+	}
+}
+
 func TestDefaultStartupPolicyCallsSyncExactlyOnce(t *testing.T) {
 	dbPath := filepath.Join(t.TempDir(), "index.db")
 	setIndexPolicyEnv(t, dbPath, t.TempDir())

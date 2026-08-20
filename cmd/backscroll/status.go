@@ -19,8 +19,9 @@ func newStatusCmd(stdout, stderr io.Writer) *cobra.Command {
 	var jsonFormat bool
 
 	cmd := &cobra.Command{
-		Use:   "status",
-		Short: "Show index status and configuration",
+		Use:          "status",
+		Short:        "Show index status and configuration",
+		SilenceUsage: true,
 		Long: `Status displays information about the backscroll index, including:
 - Database path and size
 - Number of indexed files and messages
@@ -30,7 +31,11 @@ func newStatusCmd(stdout, stderr io.Writer) *cobra.Command {
 Use --json to output as JSON.
 Startup preflight may sync before status runs; status itself only reads current index state.`,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			return runStatus(stdout, stderr, jsonFormat)
+			startup := startupResultFrom(cmd)
+			if startup.Config == nil {
+				return fmt.Errorf("startup configuration unavailable")
+			}
+			return runStatus(cmd.Context(), stdout, stderr, startup.Config, jsonFormat)
 		},
 	}
 
@@ -39,49 +44,30 @@ Startup preflight may sync before status runs; status itself only reads current 
 	return cmd
 }
 
-func runStatus(stdout, stderr io.Writer, jsonFormat bool) error {
-	cfg, err := config.Load()
+func runStatus(ctx context.Context, stdout, stderr io.Writer, cfg *config.Config, jsonFormat bool) (retErr error) {
+	db, diag, err := prepareIndex(ctx, cfg, indexDataRead)
+	if diag != nil {
+		return refuseDiagnostics(stdout, stderr, []compat.Diagnostic{*diag}, jsonFormat)
+	}
 	if err != nil {
-		return fmt.Errorf("load config: %w", err)
+		return fmt.Errorf("prepare index: %w", err)
 	}
+	defer func() { retErr = closeIndexDB(db, retErr) }()
 
-	// Check if database exists without creating it. Startup policy already handled
-	// preflight sync; status itself remains diagnostic/read-only and uses immutable
-	// openings that avoid writer-side effects.
-	_, err = os.Stat(cfg.DatabasePath)
-	dbExists := err == nil
-	if err != nil && !os.IsNotExist(err) {
-		return fmt.Errorf("stat database: %w", err)
-	}
-
-	var stats storage.Stats
-	if dbExists {
-		db, diag, err := prepareIndex(context.Background(), cfg, indexDiagnostic)
-		if diag != nil {
-			return refuseDiagnostics(stdout, stderr, []compat.Diagnostic{*diag}, jsonFormat)
-		}
-		if err != nil {
-			return fmt.Errorf("open database read-only: %w", err)
-		}
-		defer func() { _ = db.Close() }()
-
-		stats, err = db.GetStats()
-		if err != nil {
-			return fmt.Errorf("get stats: %w", err)
-		}
+	stats, err := db.GetStats()
+	if err != nil {
+		return fmt.Errorf("get stats: %w", err)
 	}
 
 	// Resolve active inputs for status display
 	activeInputNames, usingDeclarative := resolveInputsForStatus(cfg.SessionDirs)
 
-	// Get database file size
-	var dbSize int64
-	if dbExists {
-		fileInfo, _ := os.Stat(cfg.DatabasePath)
-		if fileInfo != nil {
-			dbSize = fileInfo.Size()
-		}
+	// Get database file size after startup has prepared the canonical database.
+	fileInfo, err := os.Stat(cfg.DatabasePath)
+	if err != nil {
+		return fmt.Errorf("stat database: %w", err)
 	}
+	dbSize := fileInfo.Size()
 
 	// Format output
 	if jsonFormat {
@@ -89,11 +75,11 @@ func runStatus(stdout, stderr io.Writer, jsonFormat bool) error {
 		data := map[string]interface{}{
 			"database": map[string]interface{}{
 				"path":   cfg.DatabasePath,
-				"exists": dbExists,
+				"exists": true,
 				"size":   dbSize,
 			},
 			"index": map[string]interface{}{
-				"usable":           dbExists && stats.TotalFiles > 0,
+				"usable":           stats.TotalFiles > 0,
 				"total_files":      stats.TotalFiles,
 				"total_messages":   stats.TotalMessages,
 				"indexed_at":       stats.IndexedAt,
@@ -116,27 +102,17 @@ func runStatus(stdout, stderr io.Writer, jsonFormat bool) error {
 		_, _ = fmt.Fprintf(stdout, "=================\n\n")
 
 		_, _ = fmt.Fprintf(stdout, "Database:\n")
-		if dbExists {
-			_, _ = fmt.Fprintf(stdout, "  Path: %s\n", cfg.DatabasePath)
-			_, _ = fmt.Fprintf(stdout, "  Size: %.2f MB\n", float64(dbSize)/1024/1024)
-		} else {
-			_, _ = fmt.Fprintf(stdout, "  Path: %s (not yet created)\n", cfg.DatabasePath)
-		}
+		_, _ = fmt.Fprintf(stdout, "  Path: %s\n", cfg.DatabasePath)
+		_, _ = fmt.Fprintf(stdout, "  Size: %.2f MB\n", float64(dbSize)/1024/1024)
 
-		if dbExists {
-			_, _ = fmt.Fprintf(stdout, "\nIndex:\n")
-			_, _ = fmt.Fprintf(stdout, "  Files indexed:    %d\n", stats.TotalFiles)
-			_, _ = fmt.Fprintf(stdout, "  Messages indexed: %d\n", stats.TotalMessages)
-			_, _ = fmt.Fprintf(stdout, "  Chunks stored:    %d\n", stats.TotalChunks)
-			_, _ = fmt.Fprintf(stdout, "  Embeddings:       %d\n", stats.TotalEmbeddings)
-			_, _ = fmt.Fprintf(stdout, "  Vectors stored:   %d\n", stats.TotalVectors)
-			if !stats.IndexedAt.IsZero() {
-				_, _ = fmt.Fprintf(stdout, "  Last indexed:     %s\n", stats.IndexedAt.Format("2006-01-02 15:04:05 MST"))
-			}
-		} else {
-			_, _ = fmt.Fprintf(stdout, "\nIndex: Not yet created\n")
-			_, _ = fmt.Fprintf(stdout, "  Files indexed:    0\n")
-			_, _ = fmt.Fprintf(stdout, "  Messages indexed: 0\n")
+		_, _ = fmt.Fprintf(stdout, "\nIndex:\n")
+		_, _ = fmt.Fprintf(stdout, "  Files indexed:    %d\n", stats.TotalFiles)
+		_, _ = fmt.Fprintf(stdout, "  Messages indexed: %d\n", stats.TotalMessages)
+		_, _ = fmt.Fprintf(stdout, "  Chunks stored:    %d\n", stats.TotalChunks)
+		_, _ = fmt.Fprintf(stdout, "  Embeddings:       %d\n", stats.TotalEmbeddings)
+		_, _ = fmt.Fprintf(stdout, "  Vectors stored:   %d\n", stats.TotalVectors)
+		if !stats.IndexedAt.IsZero() {
+			_, _ = fmt.Fprintf(stdout, "  Last indexed:     %s\n", stats.IndexedAt.Format("2006-01-02 15:04:05 MST"))
 		}
 
 		_, _ = fmt.Fprintf(stdout, "\nConfiguration:\n")

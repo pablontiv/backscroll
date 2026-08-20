@@ -56,7 +56,11 @@ Use --json, --robot for output formats.`,
 			if len(args) > 0 {
 				return fmt.Errorf("unexpected positional argument %q", args[0])
 			}
-			return runPatterns(stdout, stderr, kind, project, allProjects, tag, limit, offset,
+			startup := startupResultFrom(cmd)
+			if startup.Config == nil {
+				return fmt.Errorf("startup configuration unavailable")
+			}
+			return runPatterns(cmd.Context(), stdout, stderr, startup.Config, kind, project, allProjects, tag, limit, offset,
 				jsonFormat, robotFormat, minSupport, minConfidence, pending, batch,
 				minLength, maxLength, after, before, trend)
 		},
@@ -85,7 +89,7 @@ Use --json, --robot for output formats.`,
 	return cmd
 }
 
-func runPatterns(stdout, stderr io.Writer,
+func runPatterns(ctx context.Context, stdout, stderr io.Writer, cfg *config.Config,
 	kind string, project string, allProjects bool, tag string,
 	limit, offset int, jsonFormat, robotFormat bool, minSupport int, minConfidence float64, pending bool, batch int,
 	minLength, maxLength int, after, before string, trend bool) (retErr error) {
@@ -114,12 +118,7 @@ func runPatterns(stdout, stderr io.Writer,
 		return fmt.Errorf("--limit and --offset must be >= 0")
 	}
 
-	cfg, err := config.Load()
-	if err != nil {
-		return fmt.Errorf("load config: %w", err)
-	}
-
-	db, diag, err := prepareIndex(context.Background(), cfg, indexDataRead)
+	db, diag, err := prepareIndex(ctx, cfg, indexDataRead)
 	if diag != nil {
 		return refuseIndex(stdout, stderr, *diag, jsonFormat, robotFormat)
 	}

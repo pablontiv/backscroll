@@ -18,11 +18,15 @@ func newRebuildCmd(stdout, stderr io.Writer) *cobra.Command {
 		Short:        "Rebuild the FTS search indexes from the database",
 		SilenceUsage: true,
 		Long: `Rebuild re-derives the FTS search indexes from the database itself and
-runs an incremental sync. It never deletes indexed content: sessions whose
-source files have expired from disk are preserved (the database is the
-perennial event store). Use 'purge' to delete data explicitly.`,
+operates on the index synchronized at command startup. It never deletes indexed
+content: sessions whose source files have expired from disk are preserved (the
+database is the perennial event store). Use 'purge' to delete data explicitly.`,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			return runRebuild(stdout, stderr)
+			startup := startupResultFrom(cmd)
+			if startup.Config == nil {
+				return fmt.Errorf("startup configuration unavailable")
+			}
+			return runRebuild(cmd.Context(), stdout, stderr, startup.Config)
 		},
 	}
 
@@ -41,13 +45,8 @@ var (
 	}
 )
 
-func runRebuild(stdout, stderr io.Writer) (retErr error) {
-	cfg, err := config.Load()
-	if err != nil {
-		return fmt.Errorf("load config: %w", err)
-	}
-
-	db, diag, err := prepareIndex(context.Background(), cfg, indexMutation)
+func runRebuild(ctx context.Context, stdout, stderr io.Writer, cfg *config.Config) (retErr error) {
+	db, diag, err := prepareIndex(ctx, cfg, indexMutation)
 	if diag != nil {
 		return refuseIndex(stdout, stderr, *diag, false, false)
 	}
@@ -93,7 +92,7 @@ func runRebuild(stdout, stderr io.Writer) (retErr error) {
 		}
 		return ""
 	}
-	resolved, err := rebuildReresolveProjects(db, context.Background(), resolver)
+	resolved, err := rebuildReresolveProjects(db, ctx, resolver)
 	if err != nil {
 		return fmt.Errorf("project re-resolution: %w", err)
 	} else if resolved > 0 {
@@ -103,7 +102,7 @@ func runRebuild(stdout, stderr io.Writer) (retErr error) {
 	// Registry-aware re-resolution: correct historical fallback labels
 	_, _ = fmt.Fprintf(stdout, "Checking registry for project label corrections...\n")
 	registry := projects.LoadGlobalRegistry()
-	registryMatched, err := rebuildReresolveProjectsWithRegistry(db, context.Background(), registry)
+	registryMatched, err := rebuildReresolveProjectsWithRegistry(db, ctx, registry)
 	if err != nil {
 		return fmt.Errorf("registry re-resolution: %w", err)
 	} else if registryMatched > 0 {

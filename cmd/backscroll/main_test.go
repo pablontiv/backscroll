@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -2012,7 +2013,7 @@ func TestRebuildProjectResolution(t *testing.T) {
 
 	// Run rebuild (this should re-resolve projects)
 	var stdout, stderr bytes.Buffer
-	err = runRebuild(&stdout, &stderr)
+	err = runRebuild(context.Background(), &stdout, &stderr, &config.Config{DatabasePath: dbPath})
 	if err != nil {
 		t.Fatalf("rebuild: %v", err)
 	}
@@ -2069,7 +2070,7 @@ func TestRebuildMultipleProjects(t *testing.T) {
 
 	// Run rebuild
 	var stdout, stderr bytes.Buffer
-	err = runRebuild(&stdout, &stderr)
+	err = runRebuild(context.Background(), &stdout, &stderr, &config.Config{DatabasePath: dbPath})
 	if err != nil {
 		t.Fatalf("rebuild: %v", err)
 	}

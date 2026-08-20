@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
-	"os"
 
 	"github.com/spf13/cobra"
 
@@ -17,8 +16,9 @@ func newValidateCmd(stdout, stderr io.Writer) *cobra.Command {
 	var jsonFormat bool
 
 	cmd := &cobra.Command{
-		Use:   "validate",
-		Short: "Validate the index integrity",
+		Use:          "validate",
+		Short:        "Validate the index integrity",
+		SilenceUsage: true,
 		Long: `Validate checks the integrity of the SQLite index by verifying:
 - Required tables exist
 - FTS5 virtual table is set up correctly
@@ -28,7 +28,11 @@ Returns an error if validation fails.
 
 Validate is read-only and never auto-syncs.`,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			return runValidate(stdout, stderr, jsonFormat)
+			startup := startupResultFrom(cmd)
+			if startup.Config == nil {
+				return fmt.Errorf("startup configuration unavailable")
+			}
+			return runValidate(cmd.Context(), stdout, stderr, startup.Config, jsonFormat)
 		},
 	}
 
@@ -37,30 +41,15 @@ Validate is read-only and never auto-syncs.`,
 	return cmd
 }
 
-func runValidate(stdout, stderr io.Writer, jsonFormat bool) error {
-	cfg, err := config.Load()
-	if err != nil {
-		return fmt.Errorf("load config: %w", err)
-	}
-
-	if _, err := os.Stat(cfg.DatabasePath); os.IsNotExist(err) {
-		if jsonFormat {
-			return json.NewEncoder(stdout).Encode(map[string]any{"valid": true, "database_exists": false})
-		}
-		_, _ = fmt.Fprintf(stdout, "✓ Index validation skipped: database not found\n")
-		return nil
-	} else if err != nil {
-		return fmt.Errorf("stat database: %w", err)
-	}
-
-	db, diag, err := prepareIndex(context.Background(), cfg, indexDiagnostic)
+func runValidate(ctx context.Context, stdout, stderr io.Writer, cfg *config.Config, jsonFormat bool) (retErr error) {
+	db, diag, err := prepareIndex(ctx, cfg, indexDataRead)
 	if diag != nil {
 		return refuseDiagnostics(stdout, stderr, []compat.Diagnostic{*diag}, jsonFormat)
 	}
 	if err != nil {
-		return fmt.Errorf("open database read-only: %w", err)
+		return fmt.Errorf("prepare index: %w", err)
 	}
-	defer func() { _ = db.Close() }()
+	defer func() { retErr = closeIndexDB(db, retErr) }()
 
 	if err := db.Validate(); err != nil {
 		activePath, resolveErr := resolveActiveIndexPath(cfg.DatabasePath)

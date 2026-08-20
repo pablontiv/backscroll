@@ -30,7 +30,11 @@ fallback. Re-annotating the same (source_path, ordinal, kind) replaces the label
 			if len(args) > 0 {
 				return fmt.Errorf("unexpected positional argument %q", args[0])
 			}
-			return runAnnotate(stdout, stderr, uuid, path, ordinal, kind, label)
+			startup := startupResultFrom(cmd)
+			if startup.Config == nil {
+				return fmt.Errorf("startup configuration unavailable")
+			}
+			return runAnnotate(cmd.Context(), stdout, stderr, startup.Config, uuid, path, ordinal, kind, label)
 		},
 	}
 
@@ -46,7 +50,7 @@ fallback. Re-annotating the same (source_path, ordinal, kind) replaces the label
 	return cmd
 }
 
-func runAnnotate(stdout, stderr io.Writer,
+func runAnnotate(ctx context.Context, stdout, stderr io.Writer, cfg *config.Config,
 	uuid, path string, ordinal int, kind, label string) (retErr error) {
 
 	// Early flag validation
@@ -58,12 +62,7 @@ func runAnnotate(stdout, stderr io.Writer,
 		return fmt.Errorf("--kind and --label are required")
 	}
 
-	cfg, err := config.Load()
-	if err != nil {
-		return fmt.Errorf("load config: %w", err)
-	}
-
-	db, diag, err := prepareIndex(context.Background(), cfg, indexMutation)
+	db, diag, err := prepareIndex(ctx, cfg, indexMutation)
 	if diag != nil {
 		return refuseIndex(stdout, stderr, *diag, false, false)
 	}

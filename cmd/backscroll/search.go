@@ -65,7 +65,11 @@ Use --max-tokens to limit output size (approximate token count).`,
 			if query == "" {
 				return fmt.Errorf("search query required (use --text <query> or positional argument)")
 			}
-			return runSearch(stdout, stderr, query, project, allProjects, jsonFormat, robotFormat,
+			startup := startupResultFrom(cmd)
+			if startup.Config == nil {
+				return fmt.Errorf("startup configuration unavailable")
+			}
+			return runSearch(cmd.Context(), stdout, stderr, startup.Config, query, project, allProjects, jsonFormat, robotFormat,
 				source, sourcePath, after, before, role, limit, offset, contentType, tag,
 				fields, maxTokens, lexicalOnly, similarityThreshold)
 		},
@@ -93,7 +97,7 @@ Use --max-tokens to limit output size (approximate token count).`,
 	return cmd
 }
 
-func runSearch(stdout, stderr io.Writer,
+func runSearch(ctx context.Context, stdout, stderr io.Writer, cfg *config.Config,
 	query string,
 	project string, allProjects bool, jsonFormat, robotFormat bool,
 	source, sourcePath, after, before, role string,
@@ -117,12 +121,7 @@ func runSearch(stdout, stderr io.Writer,
 		return fmt.Errorf("invalid --content-type %q; must be one of: text, code, tool, reasoning", contentType)
 	}
 
-	cfg, err := config.Load()
-	if err != nil {
-		return fmt.Errorf("load config: %w", err)
-	}
-
-	db, diag, err := prepareIndex(context.Background(), cfg, indexDataRead)
+	db, diag, err := prepareIndex(ctx, cfg, indexDataRead)
 	if diag != nil {
 		return refuseIndex(stdout, stderr, *diag, jsonFormat, robotFormat)
 	}

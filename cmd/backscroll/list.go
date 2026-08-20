@@ -41,7 +41,11 @@ Use --json to output as JSON.`,
 			if len(args) > 0 {
 				return fmt.Errorf("unexpected positional argument %q; use --text for text search", args[0])
 			}
-			return runList(stdout, stderr, project, allProjects, recent, jsonFormat, robotFormat,
+			startup := startupResultFrom(cmd)
+			if startup.Config == nil {
+				return fmt.Errorf("startup configuration unavailable")
+			}
+			return runList(cmd.Context(), stdout, stderr, startup.Config, project, allProjects, recent, jsonFormat, robotFormat,
 				order, limit, offset)
 		},
 	}
@@ -58,16 +62,11 @@ Use --json to output as JSON.`,
 	return cmd
 }
 
-func runList(stdout, stderr io.Writer,
+func runList(ctx context.Context, stdout, stderr io.Writer, cfg *config.Config,
 	project string, allProjects bool, recent int, jsonFormat, robotFormat bool,
 	order string, limit, offset int) (retErr error) {
 
-	cfg, err := config.Load()
-	if err != nil {
-		return fmt.Errorf("load config: %w", err)
-	}
-
-	db, diag, err := prepareIndex(context.Background(), cfg, indexDataRead)
+	db, diag, err := prepareIndex(ctx, cfg, indexDataRead)
 	if diag != nil {
 		return refuseIndex(stdout, stderr, *diag, jsonFormat, robotFormat)
 	}

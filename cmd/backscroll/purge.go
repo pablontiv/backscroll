@@ -23,7 +23,11 @@ The date should be in YYYY-MM-DD format (e.g., 2024-01-15).
 
 Example: backscroll purge --before 2024-01-01`,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			return runPurge(stdout, stderr, before)
+			startup := startupResultFrom(cmd)
+			if startup.Config == nil {
+				return fmt.Errorf("startup configuration unavailable")
+			}
+			return runPurge(cmd.Context(), stdout, stderr, startup.Config, before)
 		},
 	}
 
@@ -33,17 +37,12 @@ Example: backscroll purge --before 2024-01-01`,
 	return cmd
 }
 
-func runPurge(stdout, stderr io.Writer, before string) (retErr error) {
+func runPurge(ctx context.Context, stdout, stderr io.Writer, cfg *config.Config, before string) (retErr error) {
 	if before == "" {
 		return fmt.Errorf("--before date is required")
 	}
 
-	cfg, err := config.Load()
-	if err != nil {
-		return fmt.Errorf("load config: %w", err)
-	}
-
-	db, diag, err := prepareIndex(context.Background(), cfg, indexMutation)
+	db, diag, err := prepareIndex(ctx, cfg, indexMutation)
 	if diag != nil {
 		return refuseIndex(stdout, stderr, *diag, false, false)
 	}
