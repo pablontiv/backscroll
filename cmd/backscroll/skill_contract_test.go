@@ -3,6 +3,9 @@ package main
 import (
 	"fmt"
 	"io"
+	"os"
+	"path/filepath"
+	"runtime"
 	"sort"
 	"strings"
 	"testing"
@@ -79,6 +82,50 @@ func TestBackscrollSkillContractRejectsStaleAutoupdateOptOut(t *testing.T) {
 	)
 }
 
+func TestBackscrollSkillCommandsMatchCLI(t *testing.T) {
+	root := buildRootCmd(io.Discard, io.Discard)
+	path, content := readTrackedSkillMarkdown(t, ".claude/skills/backscroll/SKILL.md")
+
+	violations := validateSkillMarkdown(root, path, content)
+	if len(violations) > 0 {
+		t.Fatalf("documented backscroll commands must match the Cobra CLI:\n%s", formatSkillContractViolations(violations))
+	}
+}
+
+func TestBackscrollSkillContainsSearchDiscipline(t *testing.T) {
+	_, content := readTrackedSkillMarkdown(t, ".claude/skills/backscroll/SKILL.md")
+
+	anchors := []string{
+		"Search discipline (hard rules)",
+		"Drill the top hit",
+		"artifact's vocabulary",
+		"failed invocation is a syntax problem",
+		"Two empty searches prove nothing",
+		"Raw-file boundary",
+		"--source-path",
+		"--indexed-only",
+		"backscroll validate --indexed-only",
+	}
+	for _, anchor := range anchors {
+		if !strings.Contains(content, anchor) {
+			t.Errorf("missing search-discipline anchor %q", anchor)
+		}
+	}
+
+	rawBoundaryAnchors := []string{
+		"cat",
+		"jq",
+		"Python",
+		"direct `backscroll read`",
+		"not a normal retrieval fallback",
+	}
+	for _, anchor := range rawBoundaryAnchors {
+		if !strings.Contains(content, anchor) {
+			t.Errorf("missing raw-file boundary anchor %q", anchor)
+		}
+	}
+}
+
 func assertSkillContractViolations(t *testing.T, got []skillContractViolation, want ...string) {
 	t.Helper()
 	gotText := strings.TrimSpace(formatSkillContractViolations(got))
@@ -86,6 +133,20 @@ func assertSkillContractViolations(t *testing.T, got []skillContractViolation, w
 	if gotText != wantText {
 		t.Fatalf("unexpected violations:\nwant:\n%s\n\ngot:\n%s", wantText, gotText)
 	}
+}
+
+func readTrackedSkillMarkdown(t *testing.T, relativePath string) (string, string) {
+	t.Helper()
+	_, testFile, _, ok := runtime.Caller(0)
+	if !ok {
+		t.Fatalf("resolve test source path")
+	}
+	repoRoot := filepath.Clean(filepath.Join(filepath.Dir(testFile), "..", ".."))
+	content, err := os.ReadFile(filepath.Join(repoRoot, relativePath))
+	if err != nil {
+		t.Fatalf("read %s: %v", relativePath, err)
+	}
+	return relativePath, string(content)
 }
 
 type skillContractViolation struct {
@@ -135,7 +196,7 @@ func validateBackscrollInvocations(root *cobra.Command, path string, lineNumber 
 	tokens := shellishFields(text)
 	var violations []skillContractViolation
 	for i, token := range tokens {
-		if token != "backscroll" || isURLToken(token) || isCommandVBackscroll(tokens, i) {
+		if token != "backscroll" || isURLToken(token) || isCommandVBackscroll(tokens, i) || !isInvocationStart(tokens, i) {
 			continue
 		}
 
@@ -227,6 +288,36 @@ func isShellTerminator(token string) bool {
 	default:
 		return strings.HasPrefix(token, "#")
 	}
+}
+
+func isInvocationStart(tokens []string, index int) bool {
+	if index == 0 {
+		return true
+	}
+	previous := tokens[index-1]
+	if previous == "$" || previous == ">" || isShellTerminator(previous) {
+		return true
+	}
+	for _, token := range tokens[:index] {
+		if !isShellAssignment(token) {
+			return false
+		}
+	}
+	return true
+}
+
+func isShellAssignment(token string) bool {
+	name, _, ok := strings.Cut(token, "=")
+	if !ok || name == "" || strings.HasPrefix(name, "-") {
+		return false
+	}
+	for _, r := range name {
+		if r == '_' || r >= 'A' && r <= 'Z' || r >= 'a' && r <= 'z' || r >= '0' && r <= '9' {
+			continue
+		}
+		return false
+	}
+	return true
 }
 
 func longFlags(tokens []string) []string {
