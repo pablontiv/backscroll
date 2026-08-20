@@ -63,7 +63,7 @@ func runAnnotate(stdout, stderr io.Writer,
 		return fmt.Errorf("load config: %w", err)
 	}
 
-	db, diag, err := prepareIndex(context.Background(), cfg, indexMutation, false)
+	db, diag, err := prepareIndex(context.Background(), cfg, indexMutation)
 	if diag != nil {
 		return refuseIndex(stdout, stderr, *diag, false, false)
 	}

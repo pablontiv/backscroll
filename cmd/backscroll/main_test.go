@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -70,7 +71,7 @@ func syncForTest(t *testing.T, args ...string) (string, string, error) {
 			if err != nil {
 				return "", "", err
 			}
-			return "", "", maybeAutoSync(cfg)
+			return "", "", maybeAutoSync(cfg, io.Discard)
 		}
 	}
 	return "", "", nil
@@ -1914,7 +1915,7 @@ func TestAutoSyncReParsesStalePaths(t *testing.T) {
 		DatabasePath: dbPath,
 		SessionDirs:  []string{sessionDir},
 	}
-	if err := maybeAutoSync(cfg); err != nil {
+	if err := maybeAutoSync(cfg, io.Discard); err != nil {
 		t.Logf("sync warning (acceptable): %v", err)
 	}
 
@@ -1967,7 +1968,7 @@ func TestAutoSyncCapsStaleParsesPerRun(t *testing.T) {
 		DatabasePath: dbPath,
 		SessionDirs:  []string{sessionDir},
 	}
-	_ = maybeAutoSync(cfg)
+	_ = maybeAutoSync(cfg, io.Discard)
 
 	// Count how many were re-parsed (uuid not NULL)
 	db, _ = storage.Open(dbPath)
@@ -2198,7 +2199,7 @@ func TestQ3AutoSyncUpgradesStaleTemplates(t *testing.T) {
 
 	// Auto-sync alone must re-mine the stale path — no rebuild.
 	cfg := &config.Config{DatabasePath: dbPath, SessionDirs: []string{sessionDir}}
-	if err := maybeAutoSync(cfg); err != nil {
+	if err := maybeAutoSync(cfg, io.Discard); err != nil {
 		t.Fatalf("maybeAutoSync: %v", err)
 	}
 
@@ -2229,7 +2230,7 @@ func TestQ3AutoSyncUpgradesStaleTemplates(t *testing.T) {
 	}
 
 	// Idempotence: another sync must not double-count or duplicate matches.
-	if err := maybeAutoSync(cfg); err != nil {
+	if err := maybeAutoSync(cfg, io.Discard); err != nil {
 		t.Fatalf("second maybeAutoSync: %v", err)
 	}
 	var occAfter, matchesAfter int
@@ -2333,7 +2334,7 @@ func TestQ5AutoSyncClearsSupersededSignalsWithoutRebuild(t *testing.T) {
 	_ = db.Close()
 
 	cfg := &config.Config{DatabasePath: dbPath, SessionDirs: []string{sessionDir}}
-	if err := maybeAutoSync(cfg); err != nil {
+	if err := maybeAutoSync(cfg, io.Discard); err != nil {
 		t.Fatalf("maybeAutoSync: %v", err)
 	}
 

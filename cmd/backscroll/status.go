@@ -55,7 +55,7 @@ func runStatus(stdout, stderr io.Writer, jsonFormat bool) error {
 
 	var stats storage.Stats
 	if dbExists {
-		db, diag, err := prepareIndex(context.Background(), cfg, indexDiagnostic, false)
+		db, diag, err := prepareIndex(context.Background(), cfg, indexDiagnostic)
 		if diag != nil {
 			return refuseDiagnostics(stdout, stderr, []compat.Diagnostic{*diag}, jsonFormat)
 		}

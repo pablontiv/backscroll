@@ -282,7 +282,7 @@ func TestResolveActiveIndexPathPropagatesBrokenSymlink(t *testing.T) {
 	if err := os.Symlink(filepath.Join(dir, "missing-target.db"), broken); err != nil {
 		t.Skipf("symlink unavailable: %v", err)
 	}
-	_, diag, err := prepareIndex(context.Background(), &config.Config{DatabasePath: broken}, indexDataRead, true)
+	_, diag, err := prepareIndex(context.Background(), &config.Config{DatabasePath: broken}, indexDataRead)
 	if err == nil {
 		t.Fatalf("broken symlink resolved successfully; diagnostic=%+v", diag)
 	}

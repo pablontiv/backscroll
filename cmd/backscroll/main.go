@@ -8,10 +8,6 @@ import (
 	"time"
 
 	"github.com/pablontiv/picokit/autoupdate"
-	"github.com/spf13/cobra"
-
-	"github.com/pablontiv/backscroll/internal/config"
-	"github.com/pablontiv/backscroll/internal/input_config"
 )
 
 var version = "dev"
@@ -65,43 +61,4 @@ func run(stdout, stderr io.Writer, args []string) error {
 	}
 
 	return err
-}
-
-func buildRootCmd(stdout, stderr io.Writer) *cobra.Command {
-	root := &cobra.Command{
-		Use:   "backscroll",
-		Short: "A permanent, searchable record of your coding-agent sessions",
-		Long: `Backscroll turns your coding-agent sessions into a permanent, searchable
-record of what happened. It indexes Claude Code, Pi and OpenCode sessions into
-SQLite and keeps them after the session files expire.
-
-Prose and tool activity are indexed separately — a Porter-stemmed FTS5 index for
-conversation, a trigram index for commands, paths and errors — and an unfiltered
-query merges both by rank position (RRF).`,
-		Version: version,
-		PersistentPreRunE: func(cmd *cobra.Command, args []string) error {
-			inputsDir, err := input_config.InputsDir()
-			if err != nil {
-				return fmt.Errorf("resolve inputs directory: %w", err)
-			}
-			return config.ValidateNoLegacySources(inputsDir)
-		},
-	}
-	root.SetOut(stdout)
-	root.SetErr(stderr)
-
-	root.AddCommand(
-		newSearchCmd(stdout, stderr),
-		newListCmd(stdout, stderr),
-		newPatternsCmd(stdout, stderr),
-		newRebuildCmd(stdout, stderr),
-		newPurgeCmd(stdout, stderr),
-		newValidateCmd(stdout, stderr),
-		newStatusCmd(stdout, stderr),
-		newConfigCmd(stdout, stderr),
-		newAnnotateCmd(stdout, stderr),
-		newRecoverCmd(stdout, stderr),
-	)
-
-	return root
 }

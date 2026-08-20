@@ -53,7 +53,7 @@ func runValidate(stdout, stderr io.Writer, jsonFormat bool) error {
 		return fmt.Errorf("stat database: %w", err)
 	}
 
-	db, diag, err := prepareIndex(context.Background(), cfg, indexDiagnostic, false)
+	db, diag, err := prepareIndex(context.Background(), cfg, indexDiagnostic)
 	if diag != nil {
 		return refuseDiagnostics(stdout, stderr, []compat.Diagnostic{*diag}, jsonFormat)
 	}

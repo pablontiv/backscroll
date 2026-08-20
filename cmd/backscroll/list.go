@@ -67,7 +67,7 @@ func runList(stdout, stderr io.Writer,
 		return fmt.Errorf("load config: %w", err)
 	}
 
-	db, diag, err := prepareIndex(context.Background(), cfg, indexDataRead, true)
+	db, diag, err := prepareIndex(context.Background(), cfg, indexDataRead)
 	if diag != nil {
 		return refuseIndex(stdout, stderr, *diag, jsonFormat, robotFormat)
 	}

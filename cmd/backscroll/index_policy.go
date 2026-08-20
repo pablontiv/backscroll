@@ -25,7 +25,7 @@ const (
 	indexRemediation
 )
 
-func prepareIndex(ctx context.Context, cfg *config.Config, class indexCommandClass, autoSync bool) (*storage.Database, *compat.Diagnostic, error) {
+func prepareIndex(ctx context.Context, cfg *config.Config, class indexCommandClass) (*storage.Database, *compat.Diagnostic, error) {
 	if cfg == nil {
 		return nil, &compat.Diagnostic{Code: compat.CodeIndexStale, Summary: "index configuration is unavailable"}, fmt.Errorf("index configuration is unavailable")
 	}
@@ -35,31 +35,16 @@ func prepareIndex(ctx context.Context, cfg *config.Config, class indexCommandCla
 		return nil, &d, err
 	}
 
-	if class == indexDataRead && !autoSync {
-		if _, statErr := os.Stat(cfg.DatabasePath); os.IsNotExist(statErr) {
-			return nil, nil, fmt.Errorf("backscroll database not found: %s: %w", cfg.DatabasePath, statErr)
-		} else if statErr != nil {
-			return nil, nil, fmt.Errorf("stat database: %w", statErr)
-		}
+	var db *storage.Database
+	var diag *compat.Diagnostic
+	switch class {
+	case indexDataRead, indexMutation:
+		db, diag, err = storage.OpenCompatible(ctx, cfg.DatabasePath)
+	case indexDiagnostic, indexRemediation:
+		db, diag, err = openImmutableCurrentIndex(ctx, cfg.DatabasePath)
+	default:
+		return nil, nil, fmt.Errorf("unknown index command class %d", class)
 	}
-
-	openPrepared := func() (*storage.Database, *compat.Diagnostic, error) {
-		switch class {
-		case indexDataRead:
-			if !autoSync {
-				return openReadOnlyCurrentIndex(ctx, cfg.DatabasePath)
-			}
-			return storage.OpenCompatible(ctx, cfg.DatabasePath)
-		case indexMutation:
-			return storage.OpenCompatible(ctx, cfg.DatabasePath)
-		case indexDiagnostic, indexRemediation:
-			return openImmutableCurrentIndex(ctx, cfg.DatabasePath)
-		default:
-			return nil, nil, fmt.Errorf("unknown index command class %d", class)
-		}
-	}
-
-	db, diag, err := openPrepared()
 	if diag != nil {
 		d := continuationFor(*diag, activePath)
 		return nil, &d, nil
@@ -74,33 +59,6 @@ func prepareIndex(ctx context.Context, cfg *config.Config, class indexCommandCla
 		}
 		d := continuationFor(compat.Diagnostic{Code: compat.CodeMigrationFailed, Summary: fmt.Sprintf("prepare index failed: %v", err)}, activePath)
 		return nil, &d, err
-	}
-
-	if autoSync {
-		if closeErr := db.Close(); closeErr != nil {
-			d := continuationFor(compat.Diagnostic{Code: compat.CodeIndexStale, Summary: fmt.Sprintf("close prepared index before sync: %v", closeErr)}, activePath)
-			return nil, &d, closeErr
-		}
-		if err := maybeAutoSync(cfg); err != nil {
-			d := continuationFor(compat.Diagnostic{Code: compat.CodeIndexStale, Summary: fmt.Sprintf("index sync failed: %v", err)}, activePath)
-			return nil, &d, err
-		}
-		db, diag, err = openPrepared()
-		if diag != nil {
-			d := continuationFor(*diag, activePath)
-			return nil, &d, nil
-		}
-		if err != nil {
-			if errors.Is(err, storage.ErrImmutableReadOnlyWALUnsafe) {
-				d := compat.Diagnostic{
-					Code:    compat.CodeIndexStale,
-					Summary: fmt.Sprintf("current index snapshot cannot be inspected without side effects while its WAL has uncheckpointed frames; close the writer or checkpoint the database, then retry: %v", err),
-				}
-				return nil, &d, err
-			}
-			d := continuationFor(compat.Diagnostic{Code: compat.CodeMigrationFailed, Summary: fmt.Sprintf("prepare index after sync failed: %v", err)}, activePath)
-			return nil, &d, err
-		}
 	}
 
 	return db, nil, nil
