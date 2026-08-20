@@ -256,7 +256,7 @@ func TestRecoverInstalledDestinationPassesIndexedValidation(t *testing.T) {
 
 	var validateOut, validateErr bytes.Buffer
 	validateCmd := buildRootCmd(&validateOut, &validateErr)
-	validateCmd.SetArgs([]string{"validate", "--indexed-only"})
+	validateCmd.SetArgs([]string{"validate"})
 	if err := validateCmd.Execute(); err != nil {
 		t.Fatalf("validate recovered destination: %v\nstdout=%s\nstderr=%s", err, validateOut.String(), validateErr.String())
 	}

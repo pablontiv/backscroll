@@ -38,7 +38,7 @@ func TestBackscrollSkillContractAcceptsCurrentCLIForms(t *testing.T) {
 		"backscroll --help",
 		"backscroll search --help",
 		"command -v backscroll >/dev/null",
-		"backscroll search \"needle\" --all-projects --source-path \"*uuid*\" --indexed-only --robot --fields full --max-tokens 4000",
+		"backscroll search \"needle\" --all-projects --source-path \"*uuid*\" --robot --fields full --max-tokens 4000",
 		"backscroll list --all-projects --limit 10 --json",
 		"backscroll patterns --kind corrections --pending --batch 50 --robot",
 		"backscroll annotate --uuid u --kind correction --label false-positive",

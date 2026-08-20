@@ -426,7 +426,7 @@ func TestSearchRobotDiagnosticIsMachineReadableAndPreservesIndexBytes(t *testing
 	dbPath := newUnsupportedIndexedConsumerDB(t)
 	before := readDBBytes(t, dbPath)
 
-	stdout, stderr, err := runCmd("search", "sentinel", "--robot", "--indexed-only")
+	stdout, stderr, err := runCmd("search", "sentinel", "--robot")
 	if err == nil {
 		t.Fatalf("search --robot unsupported index succeeded; stdout=%q stderr=%q", stdout, stderr)
 	}
