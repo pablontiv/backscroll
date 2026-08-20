@@ -126,6 +126,64 @@ func TestBackscrollSkillContainsSearchDiscipline(t *testing.T) {
 	}
 }
 
+func TestBackscrollContextModeCommandsMatchCLI(t *testing.T) {
+	root := buildRootCmd(io.Discard, io.Discard)
+	path, content := readTrackedSkillMarkdown(t, ".claude/skills/backscroll/ref-context-mode.md")
+
+	violations := validateSkillMarkdown(root, path, content)
+	if len(violations) > 0 {
+		t.Fatalf("documented context-mode backscroll commands must match the Cobra CLI:\n%s", formatSkillContractViolations(violations))
+	}
+
+	if strings.Contains(content, "--input") {
+		t.Error("context mode must not document removed --input flags")
+	}
+	assertSourceSessionOnlyOnSearch(t, content)
+	assertExactContextOutputSections(t, content)
+	if !strings.Contains(content, "main skill's search discipline") && !strings.Contains(content, "indexed boundary") {
+		t.Error("context mode must point to the main search discipline or preserve the indexed boundary")
+	}
+}
+
+func assertSourceSessionOnlyOnSearch(t *testing.T, content string) {
+	t.Helper()
+	found := false
+	for _, line := range strings.Split(strings.ReplaceAll(content, "\r\n", "\n"), "\n") {
+		trimmed := strings.TrimSpace(line)
+		if !strings.Contains(trimmed, "--source session") {
+			continue
+		}
+		found = true
+		if !strings.HasPrefix(trimmed, "backscroll search ") {
+			t.Errorf("--source session must be used only on backscroll search, got %q", trimmed)
+		}
+	}
+	if !found {
+		t.Error("context mode must include a session-only search with --source session")
+	}
+}
+
+func assertExactContextOutputSections(t *testing.T, content string) {
+	t.Helper()
+	want := []string{
+		"1. `Backscroll`: relevant sessions/documents and paths.",
+		"2. `Rootline`: live records found, or `not available` with the skipped gate.",
+		"3. `Gaps`: missing manifests, empty index, absent session-state, or schema/validation errors.",
+	}
+	lastIndex := -1
+	for _, section := range want {
+		if strings.Count(content, section) != 1 {
+			t.Errorf("context mode must require exactly one output section line %q", section)
+			continue
+		}
+		index := strings.Index(content, section)
+		if index <= lastIndex {
+			t.Errorf("context output section %q is out of order", section)
+		}
+		lastIndex = index
+	}
+}
+
 func assertSkillContractViolations(t *testing.T, got []skillContractViolation, want ...string) {
 	t.Helper()
 	gotText := strings.TrimSpace(formatSkillContractViolations(got))
