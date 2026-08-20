@@ -23,7 +23,6 @@ func TestStaleIndexBlocksIndexBackedCommands(t *testing.T) {
 		mutation bool
 	}{
 		{"search", []string{"search", "sentinel"}, false},
-		{"search-indexed-only", []string{"search", "sentinel", "--indexed-only"}, false},
 		{"search-json", []string{"search", "sentinel", "--json"}, false},
 		{"search-robot", []string{"search", "sentinel", "--robot"}, false},
 		{"list", []string{"list"}, false},
@@ -77,22 +76,6 @@ func TestStaleIndexBlocksIndexBackedCommands(t *testing.T) {
 	}
 }
 
-func TestIndexedOnlyDoesNotBypassStaleBlock(t *testing.T) {
-	dbPath := newUnsupportedIndexedConsumerDB(t)
-	var stdout, stderr bytes.Buffer
-	err := run(&stdout, &stderr, []string{"search", "sentinel", "--indexed-only", "--source-path", "/sentinel/%"})
-	if err == nil {
-		t.Fatalf("indexed-only search succeeded; stdout=%q stderr=%q", stdout.String(), stderr.String())
-	}
-	combined := stdout.String() + stderr.String()
-	if !strings.Contains(combined, string(compat.CodeUnsupportedLineage)) {
-		t.Fatalf("missing stale diagnostic for %s; stdout=%q stderr=%q", dbPath, stdout.String(), stderr.String())
-	}
-	if strings.Contains(combined, "sentinel") {
-		t.Fatalf("indexed-only/filter path emitted cached sentinel output; stdout=%q stderr=%q", stdout.String(), stderr.String())
-	}
-}
-
 func TestMachineModesCarryDiagnosticCodeAndContinuation(t *testing.T) {
 	for _, tc := range []struct {
 		name string
@@ -134,25 +117,6 @@ func TestMachineModesCarryDiagnosticCodeAndContinuation(t *testing.T) {
 				}
 			}
 		})
-	}
-}
-
-func TestIndexedOnlyRejectsPendingMigrationWithoutMutating(t *testing.T) {
-	dbPath := newFixtureIndexDB(t, "v12.sql")
-	before := readDBBytes(t, dbPath)
-	setIndexPolicyEnv(t, dbPath, t.TempDir())
-
-	var stdout, stderr bytes.Buffer
-	err := run(&stdout, &stderr, []string{"search", "sentinel", "--indexed-only"})
-	if err == nil {
-		t.Fatalf("indexed-only pending migration succeeded; stdout=%q stderr=%q", stdout.String(), stderr.String())
-	}
-	combined := stdout.String() + stderr.String()
-	if !strings.Contains(combined, string(compat.CodeIndexStale)) || !strings.Contains(combined, "pending migration") {
-		t.Fatalf("missing pending-migration diagnostic; stdout=%q stderr=%q err=%v", stdout.String(), stderr.String(), err)
-	}
-	if !bytes.Equal(readDBBytes(t, dbPath), before) {
-		t.Fatal("indexed-only pending migration mutated the database")
 	}
 }
 

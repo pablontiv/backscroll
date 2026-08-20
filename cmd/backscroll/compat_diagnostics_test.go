@@ -14,33 +14,6 @@ import (
 	"github.com/pablontiv/backscroll/internal/storage"
 )
 
-func TestDirectReadRemainsAvailableButClaimsNoIndexFreshness(t *testing.T) {
-	fixture, err := filepath.Abs(filepath.Join(fixturesDir(), "pi-session.jsonl"))
-	if err != nil {
-		t.Fatalf("resolve fixture path: %v", err)
-	}
-	dbPath := newUnsupportedIndexedConsumerDB(t)
-	before := readDBBytes(t, dbPath)
-
-	stdout, stderr, err := runCmd("read", fixture)
-	if err != nil {
-		t.Fatalf("read with unsupported index configured failed: %v\nstderr: %s", err, stderr)
-	}
-	for _, want := range []string{"pi manifest fixture signal", "pi visible answer"} {
-		if !strings.Contains(stdout, want) {
-			t.Fatalf("read output missing decoded fixture content %q:\n%s", want, stdout)
-		}
-	}
-	for _, forbidden := range []string{"usable", "fresh", "current index"} {
-		if strings.Contains(strings.ToLower(stdout+stderr), forbidden) {
-			t.Fatalf("direct read made index-freshness claim %q; stdout=%q stderr=%q", forbidden, stdout, stderr)
-		}
-	}
-	if after := readDBBytes(t, dbPath); !bytes.Equal(after, before) {
-		t.Fatal("direct read mutated unsupported database bytes")
-	}
-}
-
 func TestStatusUnhealthyIsReadOnly(t *testing.T) {
 	dbPath := newUnsupportedIndexedConsumerDB(t)
 	before := snapshotSQLiteFiles(t, dbPath)

@@ -16,10 +16,7 @@ import (
 )
 
 func newStatusCmd(stdout, stderr io.Writer) *cobra.Command {
-	var (
-		jsonFormat  bool
-		indexedOnly bool
-	)
+	var jsonFormat bool
 
 	cmd := &cobra.Command{
 		Use:   "status",
@@ -33,18 +30,16 @@ func newStatusCmd(stdout, stderr io.Writer) *cobra.Command {
 Use --json to output as JSON.
 Status is read-only and never auto-syncs.`,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			return runStatus(stdout, stderr, jsonFormat, indexedOnly)
+			return runStatus(stdout, stderr, jsonFormat)
 		},
 	}
 
 	cmd.Flags().BoolVar(&jsonFormat, "json", false, "Output as JSON")
-	cmd.Flags().BoolVar(&indexedOnly, "indexed-only", false, "Deprecated: status is always read-only")
 
 	return cmd
 }
 
-func runStatus(stdout, stderr io.Writer, jsonFormat, indexedOnly bool) error {
-	_ = indexedOnly
+func runStatus(stdout, stderr io.Writer, jsonFormat bool) error {
 	cfg, err := config.Load()
 	if err != nil {
 		return fmt.Errorf("load config: %w", err)

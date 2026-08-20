@@ -24,7 +24,6 @@ func newPatternsCmd(stdout, stderr io.Writer) *cobra.Command {
 		offset        int
 		jsonFormat    bool
 		robotFormat   bool
-		indexedOnly   bool
 		minSupport    int
 		minConfidence float64
 		pending       bool
@@ -52,13 +51,14 @@ Use --min-support for template/sequence filtering (default 3; minimum occurrence
 Use --min-length, --max-length for sequence pattern length bounds (default 2, 6).
 Use --min-confidence for correction filtering (default 0.6; detector confidence threshold).
 Use --limit, --offset for pagination.
-Use --json, --robot for output formats.
-Use --indexed-only to skip auto-sync (read existing index only).`,
+Use --json, --robot for output formats.`,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			if len(args) > 0 {
 				return fmt.Errorf("unexpected positional argument %q", args[0])
 			}
-			return runPatterns(stdout, stderr, kind, project, allProjects, tag, limit, offset, jsonFormat, robotFormat, indexedOnly, minSupport, minConfidence, pending, batch, minLength, maxLength, after, before, trend)
+			return runPatterns(stdout, stderr, kind, project, allProjects, tag, limit, offset,
+				jsonFormat, robotFormat, minSupport, minConfidence, pending, batch,
+				minLength, maxLength, after, before, trend)
 		},
 	}
 
@@ -76,7 +76,6 @@ Use --indexed-only to skip auto-sync (read existing index only).`,
 	cmd.Flags().StringVar(&before, "before", "", "Filter before date (ISO 8601, for --kind sequences)")
 	cmd.Flags().BoolVar(&jsonFormat, "json", false, "Output as JSON")
 	cmd.Flags().BoolVar(&robotFormat, "robot", false, "Output in robot format")
-	cmd.Flags().BoolVar(&indexedOnly, "indexed-only", false, "Read existing index without auto-sync")
 	cmd.Flags().BoolVar(&pending, "pending", false, "Only corrections without a 'correction' annotation (checkpoint resume)")
 	cmd.Flags().IntVar(&batch, "batch", 0, "Alias for --limit (batch size for loop)")
 	cmd.Flags().BoolVar(&trend, "trend", false, "Week-over-week bucketing (--kind commands|failures only)")
@@ -88,7 +87,7 @@ Use --indexed-only to skip auto-sync (read existing index only).`,
 
 func runPatterns(stdout, stderr io.Writer,
 	kind string, project string, allProjects bool, tag string,
-	limit, offset int, jsonFormat, robotFormat, indexedOnly bool, minSupport int, minConfidence float64, pending bool, batch int,
+	limit, offset int, jsonFormat, robotFormat bool, minSupport int, minConfidence float64, pending bool, batch int,
 	minLength, maxLength int, after, before string, trend bool) (retErr error) {
 
 	// Early flag validation before DB open
@@ -120,7 +119,7 @@ func runPatterns(stdout, stderr io.Writer,
 		return fmt.Errorf("load config: %w", err)
 	}
 
-	db, diag, err := prepareIndex(context.Background(), cfg, indexDataRead, !indexedOnly)
+	db, diag, err := prepareIndex(context.Background(), cfg, indexDataRead, true)
 	if diag != nil {
 		return refuseIndex(stdout, stderr, *diag, jsonFormat, robotFormat)
 	}

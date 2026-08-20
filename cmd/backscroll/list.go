@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
-	"os"
 
 	"github.com/spf13/cobra"
 
@@ -20,7 +19,6 @@ func newListCmd(stdout, stderr io.Writer) *cobra.Command {
 		recent      int
 		jsonFormat  bool
 		robotFormat bool
-		indexedOnly bool
 		order       string
 		limit       int
 		offset      int
@@ -38,13 +36,12 @@ Use --order to sort results (e.g., timestamp:desc).
 Use --limit to restrict result count.
 Use --offset to skip results.
 Use --recent N to show N most recent sessions (legacy flag; prefer --order timestamp:desc --limit N).
-Use --indexed-only to skip auto-sync (read existing index only).
 Use --json to output as JSON.`,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			if len(args) > 0 {
 				return fmt.Errorf("unexpected positional argument %q; use --text for text search", args[0])
 			}
-			return runList(stdout, stderr, project, allProjects, recent, jsonFormat, robotFormat, indexedOnly,
+			return runList(stdout, stderr, project, allProjects, recent, jsonFormat, robotFormat,
 				order, limit, offset)
 		},
 	}
@@ -52,7 +49,6 @@ Use --json to output as JSON.`,
 	cmd.Flags().StringVar(&project, "project", "", "Filter to project")
 	cmd.Flags().BoolVar(&allProjects, "all-projects", false, "List all projects")
 	cmd.Flags().IntVar(&recent, "recent", 20, "Show N most recent sessions (0 = all)")
-	cmd.Flags().BoolVar(&indexedOnly, "indexed-only", false, "Read existing index without auto-sync")
 	cmd.Flags().BoolVar(&jsonFormat, "json", false, "Output as JSON")
 	cmd.Flags().BoolVar(&robotFormat, "robot", false, "Output in robot format")
 	cmd.Flags().StringVar(&order, "order", "", "Sort results (e.g., timestamp:desc)")
@@ -63,7 +59,7 @@ Use --json to output as JSON.`,
 }
 
 func runList(stdout, stderr io.Writer,
-	project string, allProjects bool, recent int, jsonFormat, robotFormat, indexedOnly bool,
+	project string, allProjects bool, recent int, jsonFormat, robotFormat bool,
 	order string, limit, offset int) (retErr error) {
 
 	cfg, err := config.Load()
@@ -71,18 +67,7 @@ func runList(stdout, stderr io.Writer,
 		return fmt.Errorf("load config: %w", err)
 	}
 
-	if indexedOnly {
-		if _, statErr := os.Stat(cfg.DatabasePath); os.IsNotExist(statErr) {
-			if jsonFormat {
-				_, _ = fmt.Fprintf(stdout, "{\"count\":0,\"sessions\":[]}\n")
-			} else {
-				_, _ = fmt.Fprintf(stdout, "No sessions found\n")
-			}
-			return nil
-		}
-	}
-
-	db, diag, err := prepareIndex(context.Background(), cfg, indexDataRead, !indexedOnly)
+	db, diag, err := prepareIndex(context.Background(), cfg, indexDataRead, true)
 	if diag != nil {
 		return refuseIndex(stdout, stderr, *diag, jsonFormat, robotFormat)
 	}

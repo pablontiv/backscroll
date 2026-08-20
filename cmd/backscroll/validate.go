@@ -14,7 +14,6 @@ import (
 )
 
 func newValidateCmd(stdout, stderr io.Writer) *cobra.Command {
-	var indexedOnly bool
 	var jsonFormat bool
 
 	cmd := &cobra.Command{
@@ -29,18 +28,16 @@ Returns an error if validation fails.
 
 Validate is read-only and never auto-syncs.`,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			return runValidate(stdout, stderr, indexedOnly, jsonFormat)
+			return runValidate(stdout, stderr, jsonFormat)
 		},
 	}
 
-	cmd.Flags().BoolVar(&indexedOnly, "indexed-only", false, "Deprecated: validate is always read-only")
 	cmd.Flags().BoolVar(&jsonFormat, "json", false, "Output as JSON")
 
 	return cmd
 }
 
-func runValidate(stdout, stderr io.Writer, indexedOnly bool, jsonFormat bool) error {
-	_ = indexedOnly
+func runValidate(stdout, stderr io.Writer, jsonFormat bool) error {
 	cfg, err := config.Load()
 	if err != nil {
 		return fmt.Errorf("load config: %w", err)

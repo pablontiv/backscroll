@@ -35,7 +35,6 @@ func newSearchCmd(stdout, stderr io.Writer) *cobra.Command {
 		lexicalOnly         bool
 		similarityThreshold float64
 		text                string
-		indexedOnly         bool
 	)
 
 	cmd := &cobra.Command{
@@ -56,8 +55,7 @@ Use --tag to filter sessions by auto-detected tags.
 Use --source-path to filter by indexed source path (exact, SQL LIKE pattern, or * glob).
 Use --json to output as JSON.
 Use --fields to choose JSON detail: minimal (default) or full.
-Use --max-tokens to limit output size (approximate token count).
-Use --indexed-only to skip auto-sync (read existing index only).`,
+Use --max-tokens to limit output size (approximate token count).`,
 		Args: cobra.MaximumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			query := text
@@ -67,10 +65,9 @@ Use --indexed-only to skip auto-sync (read existing index only).`,
 			if query == "" {
 				return fmt.Errorf("search query required (use --text <query> or positional argument)")
 			}
-			return runSearch(stdout, stderr, query,
-				project, allProjects, jsonFormat, robotFormat,
+			return runSearch(stdout, stderr, query, project, allProjects, jsonFormat, robotFormat,
 				source, sourcePath, after, before, role, limit, offset, contentType, tag,
-				fields, maxTokens, lexicalOnly, similarityThreshold, indexedOnly)
+				fields, maxTokens, lexicalOnly, similarityThreshold)
 		},
 	}
 
@@ -92,7 +89,6 @@ Use --indexed-only to skip auto-sync (read existing index only).`,
 	cmd.Flags().BoolVar(&lexicalOnly, "lexical-only", false, "Use BM25 only, skip vector search")
 	cmd.Flags().Float64Var(&similarityThreshold, "similarity-threshold", 0.3, "Minimum cosine similarity for vector results (0=no threshold)")
 	cmd.Flags().StringVar(&text, "text", "", "Search text (v2 preferred grammar)")
-	cmd.Flags().BoolVar(&indexedOnly, "indexed-only", false, "Read existing index without auto-sync")
 
 	return cmd
 }
@@ -103,7 +99,7 @@ func runSearch(stdout, stderr io.Writer,
 	source, sourcePath, after, before, role string,
 	limit, offset int, contentType, tag string,
 	fields string, maxTokens int,
-	lexicalOnly bool, similarityThreshold float64, indexedOnly bool) (retErr error) {
+	lexicalOnly bool, similarityThreshold float64) (retErr error) {
 
 	// Validate flag values before opening the database
 	if fields != "minimal" && fields != "full" {
@@ -126,7 +122,7 @@ func runSearch(stdout, stderr io.Writer,
 		return fmt.Errorf("load config: %w", err)
 	}
 
-	db, diag, err := prepareIndex(context.Background(), cfg, indexDataRead, !indexedOnly)
+	db, diag, err := prepareIndex(context.Background(), cfg, indexDataRead, true)
 	if diag != nil {
 		return refuseIndex(stdout, stderr, *diag, jsonFormat, robotFormat)
 	}

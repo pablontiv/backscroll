@@ -92,7 +92,6 @@ query merges both by rank position (RRF).`,
 
 	root.AddCommand(
 		newSearchCmd(stdout, stderr),
-		newReadCmd(stdout, stderr),
 		newListCmd(stdout, stderr),
 		newPatternsCmd(stdout, stderr),
 		newRebuildCmd(stdout, stderr),
