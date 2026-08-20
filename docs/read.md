@@ -1,52 +1,60 @@
 ---
 estado: Completed
 ---
-# Indexed Path Lookup
+# Direct File Reading and Indexed Path Search
 
-Backscroll no longer exposes a public direct-file `read` workflow. User-visible retrieval should come from the SQLite index populated by `backscroll sync` or search autosync.
+Backscroll exposes two distinct retrieval paths:
 
-Use `backscroll search` with `--source-path` when you already know an indexed path, filename fragment, or session UUID embedded in the path.
+- `backscroll read` parses a session or plan file directly from disk. It does not read from the SQLite index.
+- `backscroll search --source-path` searches rows already stored in SQLite and narrows matches to an indexed path or pattern.
 
-## CLI Usage
+Choose direct reading when the file still exists and you need its contents. Choose indexed search when the database is the source of truth, including sessions whose original files may have expired.
+
+## Direct file reading
 
 ```bash
-backscroll inputs validate
-backscroll sync
+# Structured message output
+backscroll read --path ~/.claude/projects/example/session.jsonl
 
-# Exact indexed path
-backscroll search "query terms" --source-path "/home/user/.claude/projects/example/session.jsonl" --robot
+# Positional path is equivalent
+backscroll read ~/.claude/projects/example/session.jsonl
 
-# Glob-style path pattern
-backscroll search "query terms" --source-path "*/example/*.jsonl" --robot
+# Concise semantic rows, limited to the last 45 rows
+backscroll read --path ~/.claude/projects/example/session.jsonl --semantic --tail 45
 
-# UUID/session-id fragment in an indexed source_path
-backscroll search "query terms" --source sessions --source-path "*019e0d38-c437-7565-ba11-5dd57d516744*" --all-projects --robot
-
-# Exhaustive ordered records without a search term (empty search string)
-backscroll search "" --json --indexed-only --all-projects --source-path "*/example/*.jsonl"
-
-# Tool activity — commands, args, outputs, errors
-backscroll search "" --json --indexed-only --all-projects --content-type tool
+# Human-readable semantic formatting
+backscroll read --path ~/.claude/projects/example/session.jsonl --semantic --pretty
 ```
 
-The search query still controls the full-text match. `--source-path` narrows those matches to rows whose indexed `search_items.source_path` equals the provided path or matches the provided `*`/SQL `LIKE` pattern.
+Use either the positional path or `--path`, not both. `--tail` and `--pretty` apply to semantic output. Direct reading requires the source file to exist and does not fall back to the perennial index.
 
-For deterministic local tooling, use `backscroll list --json` or `backscroll search "" --json` with `--indexed-only` to stream indexed records without full-text ranking. Records are ordered by `source_path`, `ordinal`, `timestamp`, and row id, include schema version plus project/source identifiers, role, content type, timestamp, ordinal, and bounded text, and support filters such as `--project`, `--all-projects`, `--source`, `--source-path`, `--after`, `--before`, `--limit`, and `--indexed-only`.
+## Indexed path search
 
-For tool activity, use `backscroll search "" --json --indexed-only --content-type tool` to retrieve only messages with `content_type='tool'` — serialized tool inputs, outputs, and errors.
+```bash
+# Exact indexed path
+backscroll search --text "query terms" --source-path "/home/user/.claude/projects/example/session.jsonl" --robot
 
-## How It Works
+# Glob-style path pattern
+backscroll search --text "query terms" --source-path "*/example/*.jsonl" --robot
 
-- Files are indexed via `backscroll search` auto-sync (or manually via `backscroll rebuild`).
-- Each indexed message stores its original `source_path` in SQLite.
-- `search --source-path` and `list --source-path` filter over that indexed `source_path`; they do not parse arbitrary files directly.
-- Search and list output includes `source_path` in text, JSON, and robot formats; JSON emits one indexed record per line.
+# UUID/session-id fragment in an indexed source_path
+backscroll search --text "query terms" --source session --source-path "*019e0d38-c437-7565-ba11-5dd57d516744*" --all-projects --robot
 
-This preserves the database as the source of truth and avoids stale direct-file reads.
+# Tool activity matching a known term within the selected path
+backscroll search --text "go test" --content-type tool --source-path "*/example/*.jsonl" --indexed-only --json
+```
 
-## Exit Codes
+`search` requires a non-empty query. `--source-path` filters rows whose stored `source_path` equals the value or matches its `*`/SQL `LIKE` pattern. It does not parse arbitrary files.
+
+`backscroll list` lists indexed sessions and supports project, ordering, limit, and offset flags. It does **not** support `--source-path`, source, role, date, or content-type filtering; use `backscroll search` for those filters.
+
+## Auto-sync and snapshot reads
+
+Normal `search` and `list` calls validate active manifests and incrementally index changed inputs before querying. Add `--indexed-only` to read the existing index without discovery or mutation. `backscroll status` and `backscroll validate` are always read-only.
+
+## Exit codes
 
 | Code | Meaning |
 |------|---------|
-| `0` | Search completed (results may be empty) |
-| `1` | Error (invalid input manifests, database/query failure) |
+| `0` | Read or search completed; search results may be empty |
+| `1` | Invalid arguments, unreadable file, manifest preflight failure, or database/query failure |

@@ -83,7 +83,7 @@ Exit code: 0 (success) if recall@5 ≥ 80%, else 1 (gate failed).
 
 - **Recall@5 ≥ 80%**: Most queries return useful results in the top 5. Agents can rely on backscroll for recall.
 - **Recall@5 60–80%**: Some queries miss the top 5; scoring or content may be improving. Check `--verbose` output for which queries fail.
-- **Recall@5 < 60%**: Significant ranking issue or missing content. Investigate failures with `backscroll search --verbose` and `backscroll status`.
+- **Recall@5 < 60%**: Significant ranking issue or missing content. Run `scripts/eval.sh --verbose`, then inspect failed queries with `backscroll search --robot --fields full` and check the index with `backscroll status`.
 
 ## Eval-Set Evolution
 
