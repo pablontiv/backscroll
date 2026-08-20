@@ -520,6 +520,40 @@ func TestLiveWALDiagnosticDoesNotClaimMigrationFailureOrRecovery(t *testing.T) {
 	})
 }
 
+func TestRecoveryContinuationExecutesInConfiguredSamePathContextWithEmptyWAL(t *testing.T) {
+	dbPath := newFixtureIndexDB(t, "v13-development-alter-built.sql")
+	setIndexPolicyEnv(t, dbPath, t.TempDir())
+	walPath := dbPath + "-wal"
+	if err := os.WriteFile(walPath, nil, 0o600); err != nil {
+		t.Fatalf("write empty WAL: %v", err)
+	}
+	before := snapshotSQLiteFiles(t, dbPath)
+	walBefore, err := os.Stat(walPath)
+	if err != nil {
+		t.Fatalf("stat empty WAL before continuation: %v", err)
+	}
+
+	diagnostic := continuationFor(compat.Diagnostic{Code: compat.CodeUnsupportedLineage, Summary: "fixture diagnostic"}, dbPath)
+	var stdout, stderr bytes.Buffer
+	if err := run(&stdout, &stderr, diagnostic.Continuation); err != nil {
+		t.Fatalf("execute continuation %v: %v\nstdout=%q stderr=%q", diagnostic.Continuation, err, stdout.String(), stderr.String())
+	}
+	if !strings.Contains(stdout.String(), "recovery dry run") {
+		t.Fatalf("continuation output = %q, want recovery dry run", stdout.String())
+	}
+	if stderr.Len() != 0 {
+		t.Fatalf("continuation stderr = %q, want empty", stderr.String())
+	}
+	assertSQLiteFilesUnchanged(t, dbPath, before)
+	walAfter, err := os.Stat(walPath)
+	if err != nil {
+		t.Fatalf("stat empty WAL after continuation: %v", err)
+	}
+	if walAfter.Size() != 0 || walAfter.Mode() != walBefore.Mode() || !walAfter.ModTime().Equal(walBefore.ModTime()) {
+		t.Fatalf("empty WAL metadata changed: before=%+v after=%+v", walBefore, walAfter)
+	}
+}
+
 func TestBlockingDiagnosticsHaveExecutableContinuations(t *testing.T) {
 	cases := []struct {
 		name     string

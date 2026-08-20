@@ -51,6 +51,7 @@ func readRecordsForSignature(ctx context.Context, q compat.Queryer, signature st
 		"sha256:975656bb5e894e12bd30aa65bb3366ca2bdeee23f59aca8e133b18a62e7ffad5", // v11
 		"sha256:ff136d58048d69f02be857f632750ef3e2daa35fd6ba637f7645986950f83d31", // v12
 		"sha256:ef52be2fb56acd0e51b38506746fa3594ed1de76bb0b5dd180767d3c903fb46d", // v13 canonical
+		"sha256:952e517fe590b0c75a02996b6035ac6bb22143b9a707b6448ad05a592bf015b4", // v13 observed development ALTER-built alias
 		"sha256:19d65765b8b0d0bb7d1c41692712c395627e005b7aeccca5f887c75be781e314", // v13 legacy ALTER-built alias
 		"sha256:f52b4132322f3addb0fc01304f92ca6a2c2f4706e5ac010c59a5ea594cbd25b2": // v13 legacy schema_migrations alias
 		return readCanonicalSearchItems(ctx, q)

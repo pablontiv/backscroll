@@ -273,6 +273,44 @@ func TestConservativeSignatureStableForExactSameSQL(t *testing.T) {
 	}
 }
 
+func TestInspectIndexRecognizesObservedDevelopmentV13Shape(t *testing.T) {
+	db := openFixtureCopy(t, "v13-development-alter-built.sql")
+	defer db.Close()
+
+	shape, err := inspectShape(context.Background(), db)
+	if err != nil {
+		t.Fatal(err)
+	}
+	const observedSignature = "sha256:952e517fe590b0c75a02996b6035ac6bb22143b9a707b6448ad05a592bf015b4"
+	if shape.Signature != observedSignature {
+		t.Fatalf("development V13 signature = %s, want %s", shape.Signature, observedSignature)
+	}
+
+	plan, diag, err := InspectIndex(context.Background(), db)
+	if err != nil || diag != nil {
+		t.Fatalf("inspect error=%v diagnostic=%+v", err, diag)
+	}
+	if plan.From.AppliedVersion != 13 || len(plan.Steps) != 0 {
+		t.Fatalf("development V13 plan = %+v, want current with no steps", plan)
+	}
+}
+
+func TestObservedDevelopmentV13StillRejectsUnknownAlteration(t *testing.T) {
+	db := openFixtureCopy(t, "v13-development-alter-built.sql")
+	defer db.Close()
+	if _, err := db.Exec("CREATE TABLE unexpected_development_shape (id INTEGER PRIMARY KEY)"); err != nil {
+		t.Fatal(err)
+	}
+
+	_, diag, err := InspectIndex(context.Background(), db)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if diag == nil || diag.Code != CodeUnsupportedLineage {
+		t.Fatalf("diagnostic = %+v, want %s", diag, CodeUnsupportedLineage)
+	}
+}
+
 func TestInspectIndexRecognizesCanonicalAndExplicitLegacyV13Shapes(t *testing.T) {
 	for _, fixture := range []string{"v13.sql", "v13-legacy-alter-built.sql", "v13-legacy-existing-schema-migrations.sql"} {
 		t.Run(fixture, func(t *testing.T) {
