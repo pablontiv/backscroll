@@ -54,6 +54,45 @@ func buildRecoverRootWithConfig(t *testing.T, stdout, stderr io.Writer, activePa
 	})
 }
 
+func TestRecoverExecuteReceivesCommandContext(t *testing.T) {
+	cfg := &config.Config{DatabasePath: filepath.Join(t.TempDir(), "active.db")}
+	type contextKey string
+	const markerKey contextKey = "recover-context-marker"
+	baseCtx := context.WithValue(context.Background(), markerKey, "present")
+	ctx, cancel := context.WithCancel(baseCtx)
+	cancel()
+
+	called := false
+	originalExecute := recoverExecute
+	recoverExecute = func(execCtx context.Context, opts recovery.Options) (recovery.Report, error) {
+		called = true
+		if got := execCtx.Value(markerKey); got != "present" {
+			t.Fatalf("recovery context marker = %v, want present", got)
+		}
+		if !errors.Is(execCtx.Err(), context.Canceled) {
+			t.Fatalf("recovery context err = %v, want context canceled", execCtx.Err())
+		}
+		if opts.ActivePath != cfg.DatabasePath || opts.FromPath != "stranded.db" || !opts.DryRun {
+			t.Fatalf("recovery options = %+v, want active=%q from=stranded.db dryRun=true", opts, cfg.DatabasePath)
+		}
+		return recovery.Report{ActivePath: opts.ActivePath}, nil
+	}
+	t.Cleanup(func() { recoverExecute = originalExecute })
+
+	var stdout, stderr bytes.Buffer
+	root := buildRootCmdWithStartup(&stdout, &stderr, func(context.Context, io.Writer) startupResult {
+		return startupResult{Config: cfg}
+	})
+	root.SetContext(ctx)
+	root.SetArgs([]string{"recover", "--from", "stranded.db", "--dry-run"})
+	if err := root.Execute(); err != nil {
+		t.Fatalf("recover returned error: %v", err)
+	}
+	if !called {
+		t.Fatal("recover execute seam was not called")
+	}
+}
+
 func TestRecoverPostInstallSyncBeforeReport(t *testing.T) {
 	cfg := &config.Config{DatabasePath: filepath.Join(t.TempDir(), "active.db")}
 	events := []string{}

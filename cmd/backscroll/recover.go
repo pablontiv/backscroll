@@ -1,7 +1,6 @@
 package main
 
 import (
-	"context"
 	"errors"
 	"fmt"
 	"io"
@@ -35,7 +34,7 @@ func newRecoverCmd(stdout, stderr io.Writer) *cobra.Command {
 				}
 				cfg = loaded
 			}
-			report, err := recoverExecute(context.Background(), recovery.Options{
+			report, err := recoverExecute(cmd.Context(), recovery.Options{
 				ActivePath: cfg.DatabasePath,
 				FromPath:   from,
 				DryRun:     dryRun,

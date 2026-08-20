@@ -158,6 +158,7 @@ func TestFailedStartupAllowsOnlyRecoverWithInjectedPolicy(t *testing.T) {
 
 func TestRecoverAloneContinuesAfterStartupFailure(t *testing.T) {
 	startupErr := errors.New("injected startup failure")
+	recoveryErr := errors.New("injected recovery failure")
 	called := false
 	root := buildRootCmdWithStartup(io.Discard, io.Discard, func(context.Context, io.Writer) startupResult {
 		return startupResult{Config: &config.Config{DatabasePath: filepath.Join(t.TempDir(), "active.db")}, Err: startupErr}
@@ -165,7 +166,7 @@ func TestRecoverAloneContinuesAfterStartupFailure(t *testing.T) {
 	originalExecute := recoverExecute
 	recoverExecute = func(context.Context, recovery.Options) (recovery.Report, error) {
 		called = true
-		return recovery.Report{}, errors.New("injected recovery failure")
+		return recovery.Report{}, recoveryErr
 	}
 	t.Cleanup(func() { recoverExecute = originalExecute })
 	root.SetArgs([]string{"recover", "--from", "stranded.db"})
@@ -175,6 +176,9 @@ func TestRecoverAloneContinuesAfterStartupFailure(t *testing.T) {
 	}
 	if !errors.Is(err, startupErr) {
 		t.Fatalf("error=%v does not preserve startup failure", err)
+	}
+	if !errors.Is(err, recoveryErr) {
+		t.Fatalf("error=%v does not preserve recovery failure", err)
 	}
 }
 

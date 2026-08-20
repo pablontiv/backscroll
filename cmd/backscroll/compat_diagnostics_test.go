@@ -7,12 +7,14 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 
 	"github.com/pablontiv/backscroll/internal/compat"
+	"github.com/pablontiv/backscroll/internal/config"
 	"github.com/pablontiv/backscroll/internal/storage"
 )
 
@@ -528,12 +530,21 @@ func TestRecoveryContinuationExecutesInConfiguredSamePathContextWithEmptyWAL(t *
 		t.Fatalf("stat empty WAL before continuation: %v", err)
 	}
 
-	diagnostic := continuationFor(compat.Diagnostic{Code: compat.CodeUnsupportedLineage, Summary: "fixture diagnostic"}, dbPath)
+	emptyInputs := filepath.Join(t.TempDir(), "empty-inputs")
+	if err := os.MkdirAll(emptyInputs, 0o755); err != nil {
+		t.Fatalf("mkdir empty recovery inputs: %v", err)
+	}
+	cfg := &config.Config{DatabasePath: dbPath, SessionDirs: []string{emptyInputs}}
+	startupDiagnostic := continuationFor(compat.Diagnostic{Code: compat.CodeUnsupportedLineage, Summary: "fixture diagnostic"}, dbPath)
+	startupErr := indexDiagnosticError{diagnostic: startupDiagnostic}
+
 	var stdout, stderr bytes.Buffer
-	root := buildRecoverRootWithConfig(t, &stdout, &stderr, dbPath)
-	root.SetArgs(diagnostic.Continuation)
+	root := buildRootCmdWithStartup(&stdout, &stderr, func(context.Context, io.Writer) startupResult {
+		return startupResult{Config: cfg, Diagnostic: &startupDiagnostic, Err: startupErr}
+	})
+	root.SetArgs(startupDiagnostic.Continuation)
 	if err := root.Execute(); err != nil {
-		t.Fatalf("execute continuation %v: %v\nstdout=%q stderr=%q", diagnostic.Continuation, err, stdout.String(), stderr.String())
+		t.Fatalf("execute continuation %v after startup diagnostic %s: %v\nstdout=%q stderr=%q", startupDiagnostic.Continuation, startupDiagnostic.Code, err, stdout.String(), stderr.String())
 	}
 	if !strings.Contains(stdout.String(), "recovery dry run") {
 		t.Fatalf("continuation output = %q, want recovery dry run", stdout.String())
