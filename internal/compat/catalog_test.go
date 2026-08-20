@@ -194,11 +194,81 @@ func TestFixtureMigrationRowsMatchPublishedCurrentLedger(t *testing.T) {
 				if !ok {
 					t.Fatalf("fixture has unknown migration version %d", row.version)
 				}
+				if filepath.Base(fixturePath) == "v13-development-alter-built.sql" && row.version == 9 {
+					const historicalV9Checksum = "a84857185adb25a812c78f05b1ba4ee4d28e52b52b28812e077c03e7ae539917"
+					if row.name != expected.name || row.checksum != historicalV9Checksum {
+						t.Fatalf("observed development migration 9 row = (%q, %q), want (%q, %q)", row.name, row.checksum, expected.name, historicalV9Checksum)
+					}
+					continue
+				}
 				if row.name != expected.name || row.checksum != expected.checksum {
 					t.Fatalf("migration %d row = (%q, %q), want (%q, %q)", row.version, row.name, row.checksum, expected.name, expected.checksum)
 				}
 			}
 		})
+	}
+}
+
+func TestObservedDevelopmentV13IsStructurallyEquivalentToLegacyV13(t *testing.T) {
+	development := openFixtureCopy(t, "v13-development-alter-built.sql")
+	defer development.Close()
+	legacy := openFixtureCopy(t, "v13-legacy-alter-built.sql")
+	defer legacy.Close()
+
+	developmentShape, err := inspectShape(context.Background(), development)
+	if err != nil {
+		t.Fatal(err)
+	}
+	legacyShape, err := inspectShape(context.Background(), legacy)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(developmentShape.columnsByTable, legacyShape.columnsByTable) {
+		t.Fatal("development V13 columns differ from supported legacy V13")
+	}
+
+	developmentObjects, err := loadSQLiteObjects(context.Background(), development)
+	if err != nil {
+		t.Fatal(err)
+	}
+	legacyObjects, err := loadSQLiteObjects(context.Background(), legacy)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(developmentObjects) != len(legacyObjects) {
+		t.Fatalf("SQLite object counts differ: development=%d legacy=%d", len(developmentObjects), len(legacyObjects))
+	}
+	for i := range developmentObjects {
+		got, want := developmentObjects[i], legacyObjects[i]
+		if got.typ != want.typ || got.name != want.name || got.table != want.table {
+			t.Fatalf("SQLite object %d identity differs: development=%+v legacy=%+v", i, got, want)
+		}
+		if got.name != "search_items" && got.sql != want.sql {
+			t.Fatalf("SQLite object %s SQL differs outside documented search_items DDL", got.name)
+		}
+	}
+
+	developmentSQL, err := fs.ReadFile(releaseSchemaFS, "testdata/release-schemas/v13-development-alter-built.sql")
+	if err != nil {
+		t.Fatal(err)
+	}
+	legacySQL, err := fs.ReadFile(releaseSchemaFS, "testdata/release-schemas/v13-legacy-alter-built.sql")
+	if err != nil {
+		t.Fatal(err)
+	}
+	developmentRows := loadFixtureMigrationRows(t, developmentSQL)
+	legacyRows := loadFixtureMigrationRows(t, legacySQL)
+	if len(developmentRows) != len(legacyRows) {
+		t.Fatalf("migration row counts differ: development=%d legacy=%d", len(developmentRows), len(legacyRows))
+	}
+	for i := range developmentRows {
+		got, want := developmentRows[i], legacyRows[i]
+		if got.version != want.version || got.name != want.name {
+			t.Fatalf("migration %d identity differs: development=%+v legacy=%+v", i, got, want)
+		}
+		if got.version != 9 && got.checksum != want.checksum {
+			t.Fatalf("migration %d checksum differs outside documented V9 lineage", got.version)
+		}
 	}
 }
 

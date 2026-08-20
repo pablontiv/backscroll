@@ -1360,6 +1360,25 @@ func TestRecoverRejectsLateActiveSidecarAfterBackup(t *testing.T) {
 }
 
 func TestRecoverSQLiteSidecarPolicy(t *testing.T) {
+	t.Run("empty same-path WAL is safe for dry-run and remains unchanged", func(t *testing.T) {
+		dir := t.TempDir()
+		activePath := filepath.Join(dir, "active.db")
+		createRecoveryDB(t, activePath, []storage.IndexedMessage{{Ordinal: 0, Role: "user", Text: "active with empty WAL", UUID: "22222222-2222-4222-8222-222222222222", ContentType: "text"}})
+		if err := os.WriteFile(activePath+"-wal", nil, 0o600); err != nil {
+			t.Fatalf("write empty WAL: %v", err)
+		}
+		before := snapshotRecoveryDBFile(t, activePath)
+
+		report, err := Execute(context.Background(), Options{ActivePath: activePath, FromPath: activePath, DryRun: true})
+		if err != nil {
+			t.Fatalf("Execute same-path dry run with empty WAL: %v", err)
+		}
+		if !reflect.DeepEqual(report.InputCounts, []int{1}) || report.FinalCount != 1 {
+			t.Fatalf("report = %+v, want one input and one final row", report)
+		}
+		assertRecoveryDBFileSnapshot(t, "same-path source with empty WAL after dry-run", activePath, before)
+	})
+
 	t.Run("stranded non-empty WAL rejected before immutable planning", func(t *testing.T) {
 		dir := t.TempDir()
 		activePath := filepath.Join(dir, "active.db")

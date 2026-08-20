@@ -589,6 +589,14 @@
       "Provenance": "No manifest release tag maps to this partial legacy per-step V6-before-V7 lineage fixture; no release shipped V6 alone."
     },
     {
+      "Fixture": "v13-development-alter-built.sql",
+      "ProvenanceSHA256": "20766795c6e1cc8196310f9146298161791aef9ba6fbc654753ec2c1cd2fed7d",
+      "Signature": "sha256:952e517fe590b0c75a02996b6035ac6bb22143b9a707b6448ad05a592bf015b4",
+      "AppliedVersion": 13,
+      "HasSourceMetadata": false,
+      "Provenance": "Explicit observed pre-release V13 development lineage produced by the historical ALTER migration path with the original V9 checksum; schema-only fixture with no user data."
+    },
+    {
       "Fixture": "v13-legacy-alter-built.sql",
       "ProvenanceSHA256": "b2c09d4fb99893464e99a0d5b990ef84a23d7a46ecefc924ed5820eacc7b86ca",
       "Signature": "sha256:19d65765b8b0d0bb7d1c41692712c395627e005b7aeccca5f887c75be781e314",

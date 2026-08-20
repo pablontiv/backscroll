@@ -936,8 +936,12 @@ func restoreBackup(activePath, backupPath string, backupSidecars []string, plann
 func ensureSourceSidecarsSafe(dbPath string) error {
 	for _, suffix := range sqliteSidecarSuffixes() {
 		path := dbPath + suffix
-		if _, err := os.Lstat(path); err == nil {
+		info, err := os.Lstat(path)
+		if err == nil {
 			if suffix == "-wal" {
+				if info.Mode().IsRegular() && info.Size() == 0 {
+					continue
+				}
 				return fmt.Errorf("%w: unexpected SQLite sidecar namespace entry %s", storage.ErrImmutableReadOnlyWALUnsafe, path)
 			}
 			return fmt.Errorf("unexpected SQLite sidecar namespace entry %s", path)
