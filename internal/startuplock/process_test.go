@@ -3,6 +3,7 @@ package startuplock
 import (
 	"bufio"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -51,6 +52,30 @@ func init() {
 
 func TestLockHelperProcess(t *testing.T) {}
 
+func waitForReadyLine(t *testing.T, r io.Reader, name string) {
+	t.Helper()
+	lineCh := make(chan string, 1)
+	errCh := make(chan error, 1)
+	go func() {
+		line, err := bufio.NewReader(r).ReadString('\n')
+		if err != nil {
+			errCh <- err
+			return
+		}
+		lineCh <- line
+	}()
+	select {
+	case line := <-lineCh:
+		if strings.TrimSpace(line) != "locked" {
+			t.Fatalf("%s readiness line=%q err=<nil>", name, line)
+		}
+	case err := <-errCh:
+		t.Fatalf("%s readiness line=<nil> err=%v", name, err)
+	case <-time.After(time.Second):
+		t.Fatalf("timeout waiting for %s readiness", name)
+	}
+}
+
 func TestProcessDeathReleasesLock(t *testing.T) {
 	dbPath := filepath.Join(t.TempDir(), "index.db")
 	cmd := exec.Command(os.Args[0], "-test.run=^TestLockHelperProcess$")
@@ -68,26 +93,7 @@ func TestProcessDeathReleasesLock(t *testing.T) {
 	}
 	defer func() { _ = cmd.Process.Kill(); _ = cmd.Wait() }()
 
-	lineCh := make(chan string, 1)
-	errCh := make(chan error, 1)
-	go func() {
-		line, err := bufio.NewReader(stdout).ReadString('\n')
-		if err != nil {
-			errCh <- err
-			return
-		}
-		lineCh <- line
-	}()
-	select {
-	case line := <-lineCh:
-		if strings.TrimSpace(line) != "locked" {
-			t.Fatalf("helper readiness line=%q err=<nil>", line)
-		}
-	case err := <-errCh:
-		t.Fatalf("helper readiness line=<nil> err=%v", err)
-	case <-time.After(time.Second):
-		t.Fatal("timeout waiting for helper readiness")
-	}
+	waitForReadyLine(t, stdout, "helper")
 
 	if lease, locked, err := TryAcquire(dbPath); err != nil || locked || lease != nil {
 		t.Fatalf("parent bypassed helper lock: lease=%v locked=%v err=%v", lease, locked, err)
@@ -133,9 +139,7 @@ func TestProcessTryReportsBusyFromSecondProcess(t *testing.T) {
 	}
 	defer func() { _ = holdCmd.Process.Kill(); _ = holdCmd.Wait() }()
 
-	if line, err := bufio.NewReader(holdStdout).ReadString('\n'); err != nil || strings.TrimSpace(line) != "locked" {
-		t.Fatalf("holder readiness line=%q err=%v", line, err)
-	}
+	waitForReadyLine(t, holdStdout, "holder")
 
 	tryCmd := exec.Command(os.Args[0], "-test.run=^TestLockHelperProcess$")
 	tryCmd.Env = append(os.Environ(),
