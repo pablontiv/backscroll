@@ -83,7 +83,7 @@ Exit code: 0 (success) if recall@5 ≥ 80%, else 1 (gate failed).
 
 - **Recall@5 ≥ 80%**: Most queries return useful results in the top 5. Agents can rely on backscroll for recall.
 - **Recall@5 60–80%**: Some queries miss the top 5; scoring or content may be improving. Check `--verbose` output for which queries fail.
-- **Recall@5 < 60%**: Significant ranking issue or missing content. Run `scripts/eval.sh --verbose`, then inspect failed queries with `backscroll search --robot --fields full` and check the index with `backscroll status`.
+- **Recall@5 < 60%**: Significant ranking issue or missing content. Run `scripts/eval.sh --verbose`, then inspect failed queries with `backscroll search --text "$QUERY" --robot --fields full` and check the index with `backscroll status`.
 
 ## Eval-Set Evolution
 
@@ -91,7 +91,7 @@ Exit code: 0 (success) if recall@5 ≥ 80%, else 1 (gate failed).
 1. Run `scripts/eval.sh --verbose` and log baseline recall@5.
 2. If recall drops, investigate:
    - New content added by slice (new tool calls, reasoning)? Queries may need refinement.
-   - Ranking changed? Run `backscroll search <query> --robot --fields full` and inspect scores.
+   - Ranking changed? Run `backscroll search --text "$QUERY" --robot --fields full` and inspect scores.
 3. Document regressions in the PR or commit message.
 
 **After M1 completion:**
@@ -107,7 +107,7 @@ Queries were extracted from:
 4. **Error recovery** — common bugs and investigation patterns.
 5. **Cross-project patterns** — behaviors that span multiple projects.
 
-Each query was verified to return a meaningful result on the live index (as of 2026-07-02 snapshot).
+Each query was verified to return a meaningful result on the then-current live index as of 2026-07-02. Re-run the eval against the current mandatory-startup-sync index before drawing conclusions.
 
 ## Notes
 

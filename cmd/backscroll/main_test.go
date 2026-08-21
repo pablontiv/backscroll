@@ -127,6 +127,19 @@ func TestHelp(t *testing.T) {
 	}
 }
 
+func TestValidateHelpDescribesStartupPreparedIndex(t *testing.T) {
+	out, _, err := runCmd("validate", "--help")
+	if err != nil {
+		t.Fatalf("validate --help error: %v", err)
+	}
+	if strings.Contains(out, "never auto-syncs") {
+		t.Fatalf("validate help contains stale no-sync claim: %s", out)
+	}
+	if !strings.Contains(out, "Command startup may synchronize active inputs") || !strings.Contains(out, "second sync") {
+		t.Fatalf("validate help does not describe startup-prepared validation: %s", out)
+	}
+}
+
 func TestVersion(t *testing.T) {
 	out, _, err := runCmd("--version")
 	if err != nil {
@@ -1324,7 +1337,7 @@ roots = ["/home/shared/myproject"]
 	t.Setenv("BACKSCROLL_CONFIG_DIR", cfgDir)
 	t.Setenv("HOME", home)
 
-	// Status is read-only; search below is responsible for auto-syncing content.
+	// Status participates in mandatory startup sync and should prepare indexed content.
 	out, stderr, err := runCmd("status")
 	if err != nil {
 		t.Fatalf("status failed: %v; stderr: %s", err, stderr)

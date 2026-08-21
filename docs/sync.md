@@ -8,7 +8,7 @@ Backscroll has no public `sync` command. Ingestion is integrated into operationa
 Every operational command validates active manifests and attempts one incremental
 sync before executing. Session, plan, and Markdown files are ingestion inputs;
 SQLite is the perennial record used by search, list, patterns, status, and validate.
-Use search --source-path for database-backed retrieval scoped to a known input path.
+Use `--source-path` on search as a filter, paired with query text, for database-backed retrieval scoped to a known input path.
 
 ## Normal workflow
 
@@ -24,12 +24,12 @@ backscroll status --json
 backscroll validate --json
 ```
 
-Startup sync writes progress and warnings to stderr so JSON and robot stdout remain machine-readable. Invalid active manifests fail during preflight instead of being silently ignored.
+Human startup sync writes progress and warnings to stderr. JSON/robot startup progress is discarded so stdout remains machine-readable, and invalid active manifests fail during preflight instead of being silently ignored.
 
 A search scoped to a known input path stays database-backed:
 
 ```bash
-backscroll search --source-path "*session-id*" --all-projects --json
+backscroll search --text "artifact literal" --source-path "*session-id*" --all-projects --json
 backscroll search --text "permission denied" --source-path "*/example/*.jsonl" --all-projects --json
 ```
 
@@ -39,7 +39,7 @@ backscroll search --text "permission denied" --source-path "*/example/*.jsonl" -
 backscroll rebuild
 ```
 
-`rebuild` is non-destructive. It runs incremental ingestion through the normal index preparation path, re-derives both FTS5 indexes from the perennial `search_items` table, backfills derived templates/corrections/tool events from stored text where possible, and re-resolves project identities. It does not discard sessions whose files have expired.
+`rebuild` is non-destructive. The mandatory root startup sync runs first and prepares the database. The rebuild handler does not perform a second sync: it re-derives both FTS5 indexes from the perennial `search_items` table, backfills derived templates/corrections/tool events from stored text where possible, and re-resolves project identities. It does not discard sessions whose files have expired.
 
 Use `rebuild` after index-recovery work or when derived search structures need regeneration. It is not a substitute for a removed manual sync command. `backscroll purge --before <DATE>` is the explicit deletion path.
 
@@ -89,7 +89,7 @@ The SQLite database is the perennial event store, not a disposable cache. When a
 
 ## Machine output
 
-`--json` writes one JSON payload to stdout. `--robot` writes `field=value` lines to stdout for result-set commands. Robot string values escape backslash as `\\`, carriage return as `\r`, and newline as `\n`.
+`--json` writes one JSON payload to stdout. JSON and robot startup progress is discarded so stdout stays parseable; human progress and warnings use stderr. Structured diagnostics remain parseable in machine modes. `--robot` writes `field=value` lines to stdout for result-set commands; robot mode on search emits `result_N_field=value` lines and escapes search string values with backslash as `\\`, carriage return as `\r`, and newline as `\n`.
 
 ## Noise filtering
 

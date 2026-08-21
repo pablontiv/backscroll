@@ -141,14 +141,14 @@ How a file is re-synced depends on whether its messages carry identity. Sessions
 Every operational command validates active manifests and attempts one incremental
 sync before executing. Session, plan, and Markdown files are ingestion inputs;
 SQLite is the perennial record used by search, list, patterns, status, and validate.
-Use search --source-path for database-backed retrieval scoped to a known input path.
+Use `--source-path` on search as a filter, paired with query text, for database-backed retrieval scoped to a known input path.
 
 ```bash
 backscroll search --text "QUERY" --project <name>     # this project
 backscroll search --text "QUERY" --all-projects       # everywhere
 backscroll search --text "QUERY" --content-type tool  # commands, paths, errors
 backscroll list --order timestamp:desc --limit 10     # recent sessions
-backscroll search --source-path "*SESSION-ID*" --all-projects --json  # one known input path
+backscroll search --text "artifact literal" --source-path "*SESSION-ID*" --all-projects --json  # filter one known input path
 ```
 
 Filters worth knowing: `--after` / `--before` for a date window, `--tag` for auto-detected session categories (debugging, refactoring, testing…), `--source-path` to pin one stored input path, `--source` to keep one source class, and `--role` to keep only what you said.
@@ -178,18 +178,18 @@ Labelled candidates drop out of `--pending`, so the loop resumes wherever it sto
 
 ```bash
 backscroll status            # size, counts, last sync
-backscroll validate          # integrity check
+backscroll validate --json   # parseable integrity check
 backscroll rebuild           # re-derive search indexes from the database
 backscroll purge --before <DATE>   # the only deletion path
 ```
 
-`rebuild` does not re-read your session files as the source of truth: it rebuilds the search indexes from what is already stored, re-derives templates and correction signals, then runs an ordinary incremental sync. Sessions that vanished from disk survive it untouched.
+`rebuild` operates after the mandatory root startup sync has already prepared the database. The handler does not perform a second sync: it re-derives search indexes from stored rows, re-derives templates/correction signals/tool-event satellites where possible, and re-resolves project identities. Sessions that vanished from disk survive it untouched.
 
 ### Output for whoever is reading
 
-Output is tab-separated text with no ANSI escapes by default, so it pipes cleanly.
+Default output is human-readable text. Machine modes keep stdout parseable: human progress and warnings go to stderr, JSON/robot startup progress is discarded, and structured diagnostics remain parseable.
 
-`--json` is available on `search`, `list`, `patterns`, `status` and `config`. `--robot`, which emits `field=value` lines, is available on `search`, `list` and `patterns` — the three that return result sets. Robot string values escape backslash as `\\`, carriage return as `\r`, and newline as `\n`. `validate`, `rebuild`, `purge` and `annotate` report in plain text only.
+`--json` is available on `search`, `list`, `patterns`, `status`, `validate`, and `config`. JSON mode on search emits a JSON array. `--robot` is available on `search`, `list`, and `patterns`; robot mode on search emits `result_N_field=value` lines, and search robot string values escape backslash as `\\`, carriage return as `\r`, and newline as `\n`. `rebuild`, `purge`, and `annotate` report in plain text only.
 
 On `search`, `--fields minimal|full` controls density and `--max-tokens N` caps output for a context window.
 

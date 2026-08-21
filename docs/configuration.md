@@ -130,8 +130,8 @@ backscroll list --order timestamp:desc --limit 20
 Every operational command validates active manifests and attempts one incremental
 sync before executing. Session, plan, and Markdown files are ingestion inputs;
 SQLite is the perennial record used by search, list, patterns, status, and validate.
-Use search --source-path for database-backed retrieval scoped to a known input path.
+Use `--source-path` on search as a filter, paired with query text, for database-backed retrieval scoped to a known input path.
 
-There is no public `inputs` or `sync` command. Active manifests are validated during command preflight; invalid manifests fail with their path before indexing begins. Use `backscroll rebuild` only to re-derive FTS and other derived data from the perennial database before an incremental sync; it is not a replacement for manifest validation.
+There is no public `inputs` or `sync` command. Active manifests are validated during command preflight; invalid manifests fail with their path before indexing begins. Use `backscroll rebuild` only after the mandatory startup sync has prepared the database; the handler re-derives FTS and other derived data from the perennial database and performs no second sync. It is not a replacement for manifest validation.
 
-See [the generic input contract](input-contract.md) for the full manifest schema. For read-only audit consumers, see the [downstream audit integration contract](audit-integration.md).
+See [the generic input contract](input-contract.md) for the full manifest schema. For downstream audit consumers, see the [downstream audit integration contract](audit-integration.md).

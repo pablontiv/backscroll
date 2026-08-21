@@ -26,7 +26,9 @@ func newValidateCmd(stdout, stderr io.Writer) *cobra.Command {
 
 Returns an error if validation fails.
 
-Validate is read-only and never auto-syncs.`,
+Command startup may synchronize active inputs before this handler runs. The
+validate handler then checks the prepared SQLite index without performing a
+second sync.`,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			startup := startupResultFrom(cmd)
 			if startup.Config == nil {

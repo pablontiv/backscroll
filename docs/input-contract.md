@@ -33,7 +33,7 @@ user edits are not overwritten.
 discover -> decode -> record -> map -> content -> text -> emit -> search_items
 ```
 
-`search_items` is optimized for both retrieval UX and audit surfaces. Each indexed row carries `source`, `source_path`, `project`, `role`, `content_type`, `timestamp`, `ordinal`, and bounded `text`. Tool inputs, outputs, and errors are indexed with `content_type='tool'` and stored in a separate FTS5 index (`tool_fts`) for substring/exact matching; prose and code use the main messages_fts index for morphological search. Every operational command validates active manifests and attempts one incremental sync before executing. Session, plan, and Markdown files are ingestion inputs; SQLite is the perennial record used by search, list, patterns, status, and validate. Use search --source-path for database-backed retrieval scoped to a known input path. Downstream consumers should treat the JSON surfaces described in [Downstream audit integration contract](audit-integration.md) as the stable read boundary.
+`search_items` is optimized for both retrieval UX and audit surfaces. Each indexed row carries `source`, `source_path`, `project`, `role`, `content_type`, `timestamp`, `ordinal`, and bounded `text`. Tool inputs, outputs, and errors are indexed with `content_type='tool'` and stored in a separate FTS5 index (`tool_fts`) for substring/exact matching; prose and code use the main messages_fts index for morphological search. Every operational command validates active manifests and attempts one incremental sync before executing. Session, plan, and Markdown files are ingestion inputs; SQLite is the perennial record used by search, list, patterns, status, and validate. Use `--source-path` on search as a filter, paired with query text, for database-backed retrieval scoped to a known input path. Downstream consumers should treat the JSON surfaces described in [Downstream audit integration contract](audit-integration.md) as the stable read boundary.
 
 ## File shape
 
@@ -138,7 +138,7 @@ Declares the technical file format.
 
 | Field | Type | Default | Meaning |
 |---|---:|---:|---|
-| `format` | enum | required | MVP values: `jsonl`, `json`, `markdown`, `markdown_sections`. |
+| `format` | enum | required | MVP values: `jsonl`, `json`, `markdown_document`, `markdown_sections`. |
 | `encoding` | string | `utf-8` | Text encoding for file reads. |
 
 ## `record`

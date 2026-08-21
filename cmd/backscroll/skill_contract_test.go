@@ -76,6 +76,51 @@ func TestBackscrollSkillContractRejectsUnknownFlags(t *testing.T) {
 	)
 }
 
+func TestBackscrollSkillContractRequiresSearchQueryText(t *testing.T) {
+	root := buildRootCmd(io.Discard, io.Discard)
+	content := strings.Join([]string{
+		`backscroll search --source-path "*/session.jsonl" --all-projects --json`,
+		`backscroll search --source-path "*/session.jsonl" --text --all-projects --json`,
+		`backscroll search --all-projects --limit 5`,
+	}, "\n")
+
+	violations := validateSkillMarkdown(root, "synthetic-queryless-search.md", content)
+	assertSkillContractViolations(t, violations,
+		"synthetic-queryless-search.md:1: search invocation lacks query text (use --text <query> or positional query)",
+		"synthetic-queryless-search.md:2: search invocation lacks query text (use --text <query> or positional query)",
+		"synthetic-queryless-search.md:3: search invocation lacks query text (use --text <query> or positional query)",
+	)
+}
+
+func TestBackscrollSkillContractAcceptsSearchQueryText(t *testing.T) {
+	root := buildRootCmd(io.Discard, io.Discard)
+	content := strings.Join([]string{
+		`backscroll search "artifact literal" --source-path "*/session.jsonl" --all-projects --json`,
+		`backscroll search --text "$QUERY" --source-path "$SOURCE_PATH" --robot --fields full`,
+		`backscroll search --source-path "*/session.jsonl" --text "artifact literal" --limit 5`,
+		`backscroll search --help`,
+	}, "\n")
+
+	violations := validateSkillMarkdown(root, "synthetic-search-with-query.md", content)
+	if len(violations) > 0 {
+		t.Fatalf("expected search invocations with query text to pass, got violations:\n%s", formatSkillContractViolations(violations))
+	}
+}
+
+func TestBackscrollSkillContractDetectsRemovedReadInvocation(t *testing.T) {
+	content := strings.Join([]string{
+		"The literal `backscroll read` names the removed command in narrative prose.",
+		"backscroll read /tmp/session.jsonl",
+	}, "\n")
+
+	if !containsBackscrollReadInvocation(content) {
+		t.Fatal("expected actual backscroll read invocation to be detected")
+	}
+	if containsBackscrollReadInvocation("The literal `backscroll read` names the removed command in narrative prose.") {
+		t.Fatal("narrative literal backscroll read mention must not be treated as an invocation")
+	}
+}
+
 func TestBackscrollSkillContractRejectsBareSubcommands(t *testing.T) {
 	root := buildRootCmd(io.Discard, io.Discard)
 	content := strings.Join([]string{
@@ -215,7 +260,7 @@ func containsBackscrollReadInvocation(content string) bool {
 
 func startsWithBackscrollRead(tokens []string) bool {
 	for i, token := range tokens {
-		if token == "backscroll" && i+1 < len(tokens) && tokens[i+1] == "read" && isInvocationStart(tokens, i) {
+		if token == "backscroll" && i+2 < len(tokens) && tokens[i+1] == "read" && isInvocationStart(tokens, i) {
 			return true
 		}
 	}
@@ -371,8 +416,84 @@ func validateBackscrollInvocations(root *cobra.Command, path string, lineNumber 
 				message: fmt.Sprintf("unknown flag --%s for %s", flagName, cmdName),
 			})
 		}
+		if cmd.Name() == "search" && !searchInvocationHasQuery(cmd, flagArgs) {
+			violations = append(violations, skillContractViolation{
+				path:    path,
+				line:    lineNumber,
+				message: "search invocation lacks query text (use --text <query> or positional query)",
+			})
+		}
 	}
 	return violations
+}
+
+func searchInvocationHasQuery(cmd *cobra.Command, tokens []string) bool {
+	for i := 0; i < len(tokens); i++ {
+		token := tokens[i]
+		if isShellTerminator(token) {
+			return false
+		}
+		if token == "--help" || token == "-h" {
+			return true
+		}
+		if token == "--" {
+			return firstNonFlagToken(tokens[i+1:]) != ""
+		}
+		if strings.HasPrefix(token, "--") {
+			name, value, hasValue := splitLongFlag(token)
+			if name == "text" && hasValue {
+				return strings.TrimSpace(value) != ""
+			}
+			if flagConsumesNext(cmd, name) {
+				if i+1 < len(tokens) {
+					if name == "text" {
+						return !strings.HasPrefix(tokens[i+1], "--") && strings.TrimSpace(tokens[i+1]) != "" && !isShellTerminator(tokens[i+1])
+					}
+					i++
+				}
+			}
+			continue
+		}
+		if strings.HasPrefix(token, "-") {
+			continue
+		}
+		return strings.TrimSpace(token) != ""
+	}
+	return false
+}
+
+func firstNonFlagToken(tokens []string) string {
+	for _, token := range tokens {
+		if isShellTerminator(token) {
+			return ""
+		}
+		if strings.HasPrefix(token, "-") {
+			continue
+		}
+		if strings.TrimSpace(token) != "" {
+			return token
+		}
+	}
+	return ""
+}
+
+func splitLongFlag(token string) (name, value string, hasValue bool) {
+	name = strings.TrimPrefix(token, "--")
+	if before, after, ok := strings.Cut(name, "="); ok {
+		return before, after, true
+	}
+	return name, "", false
+}
+
+func flagConsumesNext(cmd *cobra.Command, name string) bool {
+	flag := cmd.Flags().Lookup(name)
+	if flag == nil {
+		flag = cmd.InheritedFlags().Lookup(name)
+	}
+	if flag == nil {
+		flag = cmd.PersistentFlags().Lookup(name)
+	}
+	return flag != nil && flag.NoOptDefVal == ""
 }
 
 func validateBareSubcommand(path string, lineNumber int, text string, registeredSubcommands map[string]struct{}) []skillContractViolation {

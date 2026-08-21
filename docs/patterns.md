@@ -102,12 +102,12 @@ not from loop state: there is nothing to checkpoint.
 
 ## Operating notes
 
-- Every operational command validates active manifests and attempts one incremental sync before executing. Session, plan, and Markdown files are ingestion inputs; SQLite is the perennial record used by search, list, patterns, status, and validate. Use search --source-path for database-backed retrieval scoped to a known input path.
+- Every operational command validates active manifests and attempts one incremental sync before executing. Session, plan, and Markdown files are ingestion inputs; SQLite is the perennial record used by search, list, patterns, status, and validate. Use `--source-path` on search as a filter, paired with query text, for database-backed retrieval scoped to a known input path.
 - Zero-result guidance goes to stderr; stdout stays clean for `--json`.
-- Robot string values escape backslash as `\\`, carriage return as `\r`, and newline as `\n`.
+- Robot mode on search emits `result_N_field=value` lines and escapes search string values with backslash as `\\`, carriage return as `\r`, and newline as `\n`.
 - A malformed `categories.toml` fails the command (non-zero exit) rather
   than masquerading as an empty result.
 - Historical supply: rich capture exists for rows synced after migration
-  v8; `rebuild` backfills expired files from stored text (lossy for tool
+  v8; `rebuild` backfills expired-file derived data from stored text (lossy for tool
   events, marked `extraction_version=0`) and stale on-disk files re-parse
   at full fidelity during sync (capped per run, FIFO).

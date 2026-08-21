@@ -12,11 +12,11 @@ active manifests -> mandatory startup sync -> perennial SQLite -> database-backe
 Every operational command validates active manifests and attempts one incremental
 sync before executing. Session, plan, and Markdown files are ingestion inputs;
 SQLite is the perennial record used by search, list, patterns, status, and validate.
-Use search --source-path for database-backed retrieval scoped to a known input path.
+Use `--source-path` on search as a filter, paired with query text, for database-backed retrieval scoped to a known input path.
 
 ## Database-backed source path lookup
 
-Use `backscroll search --source-path` when you know a stored input path, a path fragment, or a session identifier. The filter matches the `search_items.source_path` value stored in SQLite; it does not parse arbitrary files from disk.
+Use the search `--source-path` filter when you know a stored input path, a path fragment, or a session identifier. The filter matches the `search_items.source_path` value stored in SQLite; it narrows a normal text query and does not parse arbitrary files from disk.
 
 ```bash
 # Exact or glob-style stored input path.
@@ -24,8 +24,8 @@ backscroll search --text "query terms" --source-path "/home/user/.claude/project
 backscroll search --text "query terms" --source-path "*/example/*.jsonl" --robot
 
 # UUID/session-id fragment in an indexed source_path.
-backscroll search --source-path "*019e0d38-c437-7565-ba11-5dd57d516744*" --all-projects --json
-backscroll search --source session --source-path "*session-id*" --all-projects --json
+backscroll search --text "artifact literal" --source-path "*019e0d38-c437-7565-ba11-5dd57d516744*" --all-projects --json
+backscroll search --text "$QUERY" --source session --source-path "*session-id*" --all-projects --json
 
 # Tool activity matching a known term within the selected path.
 backscroll search --text "go test" --content-type tool --source-path "*/example/*.jsonl" --json
@@ -34,7 +34,7 @@ backscroll search --text "go test" --content-type tool --source-path "*/example/
 Use `--fields full` and a bounded `--max-tokens` value when drilling into a selected path for agent context:
 
 ```bash
-backscroll search --source-path "*session-id*" --all-projects --robot --fields full --max-tokens 4000
+backscroll search --text "$QUERY" --source-path "*session-id*" --all-projects --robot --fields full --max-tokens 4000
 ```
 
 ## What changed

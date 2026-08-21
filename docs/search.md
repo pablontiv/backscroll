@@ -3,7 +3,7 @@ estado: Completed
 ---
 # Search Engine
 
-`backscroll search` performs full-text search across all indexed sessions using BM25 relevance ranking. Results include highlighted snippets showing where the query matched.
+The search command performs full-text search across all indexed sessions using BM25 relevance ranking. Results include highlighted snippets showing where the query matched. `--source-path` is a filter: every executable search example must include positional query text or `--text <query>`.
 
 ## CLI Usage
 
@@ -13,7 +13,7 @@ backscroll search "error handling" --project "backscroll"
 backscroll search "architecture" --json
 backscroll search "deployment" --robot --max-tokens 2000
 backscroll search "refactor" --fields full
-backscroll search "handoff" --source-path "*/session.jsonl" --robot
+backscroll search "artifact literal" --source-path "*/session.jsonl" --robot
 ```
 
 ### Flags
@@ -21,11 +21,11 @@ backscroll search "handoff" --source-path "*/session.jsonl" --robot
 | Flag | Description |
 |------|-------------|
 | `--project <NAME>` | Filter results to a specific project |
-| `--json` | Output as JSON lines (one object per result) |
-| `--robot` | Output as compact tab-separated format |
+| `--json` | Output as a JSON array |
+| `--robot` | Output compact `result_N_field=value` lines |
 | `--fields minimal\|full` | Field set to include (default: `minimal`) |
 | `--max-tokens <N>` | Approximate token limit for total output |
-| `--source-path <PATH_OR_PATTERN>` | Filter by indexed `source_path`; exact paths or `*`/SQL `LIKE` patterns |
+| `--source-path <PATH_OR_PATTERN>` | Filter a normal text query by indexed `source_path`; exact paths or `*`/SQL `LIKE` patterns |
 
 ## Output Formats
 
@@ -43,27 +43,30 @@ Match markers (`>>>` and `<<<` in the raw snippet) are rendered as bold text in 
 
 ### JSON
 
-One JSON object per line. With `--fields minimal`:
+`--json` emits one JSON array. With `--fields minimal`:
 
 ```json
-{"source_path": "~/.claude/.../session.jsonl", "snippet": "...matched text...", "score": 12.34}
+[
+  {"source_path": "~/.claude/.../session.jsonl", "snippet": "...matched text...", "score": 12.34, "role": "assistant", "timestamp": "2026-08-20T12:34:56Z"}
+]
 ```
 
-With `--fields full`, includes the complete message text alongside the snippet:
-
-```json
-{"source_path": "...", "text": "full message content", "match_snippet": "...matched text...", "score": 12.34}
-```
+With `--fields full`, the array contains full search-result objects, including the complete message content in `content` and source metadata such as `file_path`, `source`, `role`, `score`, and `rank`.
 
 ### Robot
 
-Compact tab-separated format designed for LLM consumption. Each line contains three fields separated by tabs:
+Robot mode on search emits deterministic `result_N_field=value` lines:
 
 ```
-source_path\tscore\tsnippet
+result_0_source=session
+result_0_role=assistant
+result_0_filepath=/home/user/.claude/projects/example/session.jsonl
+result_0_content=matched content with escaped newlines
+result_0_score=12.34
+result_0_rank=1
 ```
 
-No ANSI escape codes. No headers. Minimal overhead — suitable for piping into context windows.
+No ANSI escape codes. Search robot string values escape backslash as `\\`, carriage return as `\r`, and newline as `\n`, keeping each field on one line for context windows.
 
 ## Token Limiting
 
@@ -71,6 +74,7 @@ The `--max-tokens` flag applies an approximate token limit (characters / 4) to t
 
 ```bash
 backscroll search "decisions" --robot --max-tokens 4000
+backscroll search --text "$QUERY" --source-path "$SOURCE_PATH" --robot --fields full --max-tokens 4000
 ```
 
 The limit is approximate — it will not truncate a result mid-output, but will stop before starting a result that would exceed the budget.
