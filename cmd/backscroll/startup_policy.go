@@ -46,6 +46,9 @@ func (f *startupFailure) Error() string {
 	if f.Diagnostic.Code != "" || strings.TrimSpace(f.Diagnostic.Summary) != "" {
 		rendered = append(rendered, fmt.Sprintf("diagnostic %s: %s", f.Diagnostic.Code, strings.TrimSpace(f.Diagnostic.Summary)))
 	}
+	if len(f.Diagnostic.Continuation) > 0 {
+		rendered = append(rendered, fmt.Sprintf("continuation: %s", strings.Join(f.Diagnostic.Continuation, " ")))
+	}
 	if f.Cause != nil {
 		rendered = append(rendered, f.Cause.Error())
 	}
@@ -77,6 +80,13 @@ type startupResult struct {
 
 func (r startupResult) startupFailure() *startupFailure {
 	return r.Failure
+}
+
+func optionalStartupFailureError(f *startupFailure) error {
+	if f == nil {
+		return nil
+	}
+	return f
 }
 
 type startupContextKey struct{}

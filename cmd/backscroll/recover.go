@@ -26,7 +26,7 @@ func newRecoverCmd(stdout, stderr io.Writer) *cobra.Command {
 		Args:         cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			startup := startupResultFrom(cmd)
-			startupFailure := startup.startupFailure()
+			startupFailure := optionalStartupFailureError(startup.startupFailure())
 			cfg := startup.Config
 			if cfg == nil {
 				loaded, err := config.Load()

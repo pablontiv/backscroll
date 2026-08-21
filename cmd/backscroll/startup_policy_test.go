@@ -306,6 +306,68 @@ func TestRecoverableStartupFailuresPermitControlledRecovery(t *testing.T) {
 	}
 }
 
+func TestSuccessfulStartupRecoveryFailureOmitsTypedNilStartupFailure(t *testing.T) {
+	cfg := &config.Config{DatabasePath: filepath.Join(t.TempDir(), "active.db")}
+	recoveryErr := errors.New("injected recovery failure")
+
+	originalExecute := recoverExecute
+	recoverExecute = func(context.Context, recovery.Options) (recovery.Report, error) {
+		return recovery.Report{}, recoveryErr
+	}
+	t.Cleanup(func() { recoverExecute = originalExecute })
+
+	root := buildRootCmdWithStartup(io.Discard, io.Discard, func(context.Context, io.Writer) startupResult {
+		return startupResult{Config: cfg}
+	})
+	root.SetArgs([]string{"recover", "--from", "stranded.db"})
+	err := root.Execute()
+	if !errors.Is(err, recoveryErr) {
+		t.Fatalf("error=%v does not preserve recovery failure", err)
+	}
+	if strings.Contains(err.Error(), "startup failure") {
+		t.Fatalf("error=%v includes phantom startup failure", err)
+	}
+	var failure *startupFailure
+	if errors.As(err, &failure) {
+		t.Fatalf("error=%v unexpectedly matches startupFailure target %#v", err, failure)
+	}
+}
+
+func TestSuccessfulStartupPostInstallSyncFailureOmitsTypedNilStartupFailure(t *testing.T) {
+	cfg := &config.Config{DatabasePath: filepath.Join(t.TempDir(), "active.db")}
+	syncErr := errors.New("injected post-install sync failure")
+
+	originalExecute := recoverExecute
+	recoverExecute = func(context.Context, recovery.Options) (recovery.Report, error) {
+		return recovery.Report{ActivePath: cfg.DatabasePath}, nil
+	}
+	t.Cleanup(func() { recoverExecute = originalExecute })
+
+	originalPostInstallSync := recoverPostInstallSync
+	recoverPostInstallSync = func(*config.Config, io.Writer) error { return syncErr }
+	t.Cleanup(func() { recoverPostInstallSync = originalPostInstallSync })
+
+	var stdout bytes.Buffer
+	root := buildRootCmdWithStartup(&stdout, io.Discard, func(context.Context, io.Writer) startupResult {
+		return startupResult{Config: cfg}
+	})
+	root.SetArgs([]string{"recover", "--from", "stranded.db"})
+	err := root.Execute()
+	if !errors.Is(err, syncErr) {
+		t.Fatalf("error=%v does not preserve post-install sync failure", err)
+	}
+	if strings.Contains(err.Error(), "startup failure") {
+		t.Fatalf("error=%v includes phantom startup failure", err)
+	}
+	var failure *startupFailure
+	if errors.As(err, &failure) {
+		t.Fatalf("error=%v unexpectedly matches startupFailure target %#v", err, failure)
+	}
+	if stdout.Len() != 0 {
+		t.Fatalf("report printed before failed post-install sync: %q", stdout.String())
+	}
+}
+
 func TestDiagnosticOnlyStartupFailurePlusRecoveryFailurePreservesBothCauses(t *testing.T) {
 	cfg := &config.Config{DatabasePath: filepath.Join(t.TempDir(), "active.db")}
 	startupDiag := continuationFor(compat.Diagnostic{Code: compat.CodeUnsupportedLineage, Summary: "diagnostic-only startup"}, cfg.DatabasePath)
@@ -325,9 +387,11 @@ func TestDiagnosticOnlyStartupFailurePlusRecoveryFailurePreservesBothCauses(t *t
 	if !errors.Is(err, recoveryErr) {
 		t.Fatalf("error=%v does not preserve recovery failure", err)
 	}
-	if !strings.Contains(err.Error(), string(startupDiag.Code)) || !strings.Contains(err.Error(), startupDiag.Summary) {
-		t.Fatalf("error=%v does not preserve original startup diagnostic %+v", err, startupDiag)
+	var failure *startupFailure
+	if !errors.As(err, &failure) || failure == nil {
+		t.Fatalf("error=%v does not expose structural startup failure", err)
 	}
+	assertDiagnosticAggregateRenderedOnce(t, err, startupDiag, recoveryErr)
 }
 
 func TestDiagnosticOnlyStartupFailurePlusPostInstallSyncFailurePreservesBothCauses(t *testing.T) {
@@ -354,11 +418,43 @@ func TestDiagnosticOnlyStartupFailurePlusPostInstallSyncFailurePreservesBothCaus
 	if !errors.Is(err, syncErr) {
 		t.Fatalf("error=%v does not preserve post-install sync failure", err)
 	}
-	if !strings.Contains(err.Error(), string(startupDiag.Code)) || !strings.Contains(err.Error(), startupDiag.Summary) {
-		t.Fatalf("error=%v does not preserve original startup diagnostic %+v", err, startupDiag)
+	var failure *startupFailure
+	if !errors.As(err, &failure) || failure == nil {
+		t.Fatalf("error=%v does not expose structural startup failure", err)
 	}
+	assertDiagnosticAggregateRenderedOnce(t, err, startupDiag, syncErr)
 	if stdout.Len() != 0 {
 		t.Fatalf("report printed before failed post-install sync: %q", stdout.String())
+	}
+}
+
+func assertDiagnosticAggregateRenderedOnce(t *testing.T, err error, diagnostic compat.Diagnostic, cause error) {
+	t.Helper()
+	if err == nil {
+		t.Fatal("error is nil")
+	}
+	text := err.Error()
+	for _, want := range []string{string(diagnostic.Code), diagnostic.Summary, strings.Join(diagnostic.Continuation, " "), cause.Error()} {
+		if got := strings.Count(text, want); got != 1 {
+			t.Fatalf("error=%q contains %q %d times, want exactly once", text, want, got)
+		}
+	}
+}
+
+func TestStartupFailureNilAndFallbackRendering(t *testing.T) {
+	var nilFailure *startupFailure
+	if got := nilFailure.Error(); got != "startup failure" {
+		t.Fatalf("nil startup failure Error() = %q, want startup failure", got)
+	}
+	if got := nilFailure.Unwrap(); got != nil {
+		t.Fatalf("nil startup failure Unwrap() = %v, want nil", got)
+	}
+
+	fallback := (&startupFailure{}).Error()
+	for _, want := range []string{string(startupStageUnknown), "startup failed"} {
+		if !strings.Contains(fallback, want) {
+			t.Fatalf("fallback startup failure rendering = %q, want %q", fallback, want)
+		}
 	}
 }
 
