@@ -2,6 +2,7 @@ package startuplock
 
 import (
 	"bufio"
+	"context"
 	"fmt"
 	"io"
 	"os"
@@ -141,29 +142,21 @@ func TestProcessTryReportsBusyFromSecondProcess(t *testing.T) {
 
 	waitForReadyLine(t, holdStdout, "holder")
 
-	tryCmd := exec.Command(os.Args[0], "-test.run=^TestLockHelperProcess$")
+	ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
+	defer cancel()
+	tryCmd := exec.CommandContext(ctx, os.Args[0], "-test.run=^TestLockHelperProcess$")
 	tryCmd.Env = append(os.Environ(),
 		"BACKSCROLL_LOCK_HELPER=try",
 		"BACKSCROLL_LOCK_DB="+dbPath,
 	)
-	outCh := make(chan []byte, 1)
-	errCh2 := make(chan error, 1)
-	go func() {
-		out, err := tryCmd.Output()
-		if err != nil {
-			errCh2 <- err
-			return
+	out, err := tryCmd.Output()
+	if err != nil {
+		if ctx.Err() != nil {
+			t.Fatalf("timeout waiting for try helper: %v", ctx.Err())
 		}
-		outCh <- out
-	}()
-	select {
-	case out := <-outCh:
-		if got := string(out); got != "busy\n" {
-			t.Fatalf("output=%q want busy\\n", got)
-		}
-	case err := <-errCh2:
 		t.Fatalf("try helper failed: %v", err)
-	case <-time.After(time.Second):
-		t.Fatal("timeout waiting for try helper")
+	}
+	if got := string(out); got != "busy\n" {
+		t.Fatalf("output=%q want busy\\n", got)
 	}
 }
