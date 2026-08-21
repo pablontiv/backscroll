@@ -8,7 +8,7 @@ Backscroll is a Go CLI tool that indexes Claude Code, Pi, OpenCode, and declarat
 
 **Status**: Go port complete — `main` branch is the active Go implementation. The Rust implementation is frozen in the `v0` branch.
 
-Implemented: `internal/config`, `internal/input_config`, `internal/models`, `internal/readers`, `internal/sync`, `internal/tagging`, `internal/plans`, `internal/sources`, `internal/storage`, `internal/projects`, `internal/reader`, `internal/templates`, `internal/corrections`, `internal/categories`, `internal/sequences`, `internal/compat`, `internal/recovery`. CLI commands in `cmd/backscroll/` (11 v2 commands via cobra).
+Implemented: `internal/config`, `internal/input_config`, `internal/models`, `internal/readers`, `internal/sync`, `internal/tagging`, `internal/plans`, `internal/sources`, `internal/storage`, `internal/projects`, `internal/templates`, `internal/corrections`, `internal/categories`, `internal/sequences`, `internal/compat`, `internal/recovery`. CLI commands in `cmd/backscroll/` (10 v2 commands via cobra).
 
 Stack: cobra, go-toml/v2, goldmark, modernc.org/sqlite (pure Go, no CGO), stdlib testing.
 
@@ -32,7 +32,7 @@ Run a single test: `go test -run TestName ./internal/...`
 
 **Coverage**: the release-blocking gate is **aggregate** statement coverage ≥85%, checked identically by CI (crossbeam `go-ci` light profile) and the local pre-push hook via `just ci`. Per-package floors in `.coverage-floors.toml` (default 85%) remain available as an advisory quality check via `just coverage-check` (pkcov), but are **not** release-blocking — individual packages may dip below 85% as long as the aggregate holds. backscroll conforms to [coverage-spec v1.0](https://github.com/pablontiv/picokit/blob/main/docs/coverage-spec.md).
 
-Tests use stdlib `testing` + subprocess or direct `run()` invocation. Unit tests are co-located in each package. Integration tests in `cmd/backscroll/main_test.go` (CLI integration via direct `run()` invocation). Additional unit tests: `internal/storage/unit_test.go`, `internal/sync/noise_test.go`, `internal/reader/semantic_test.go`. The push gate and CI both enforce aggregate coverage ≥85% (`just ci`); `just coverage-check` (pkcov per-package floors) is advisory. Tests must be hermetic — scrub machine state with `testEnv(t)` / `t.Setenv("HOME", tempDir)` so they pass in CI's bare environment, which `just ci` reproduces via a scrubbed `HOME`/`BACKSCROLL_CONFIG_DIR`.
+Tests use stdlib `testing` + subprocess or direct `run()` invocation. Unit tests are co-located in each package. Integration tests in `cmd/backscroll/main_test.go` (CLI integration via direct `run()` invocation). Additional unit tests include `internal/storage/unit_test.go` and `internal/sync/noise_test.go`. The push gate and CI both enforce aggregate coverage ≥85% (`just ci`); `just coverage-check` (pkcov per-package floors) is advisory. Tests must be hermetic — scrub machine state with `testEnv(t)` / `t.Setenv("HOME", tempDir)` so they pass in CI's bare environment, which `just ci` reproduces via a scrubbed `HOME`/`BACKSCROLL_CONFIG_DIR`.
 
 ## Architecture
 
@@ -41,14 +41,13 @@ Tests use stdlib `testing` + subprocess or direct `run()` invocation. Unit tests
 ```
 cmd/backscroll/
 ├── main.go            — entrypoint; run(stdout, stderr, args) for testability
-├── list.go            — list command (v2: --input, --order, --type, --tool)
-├── search.go          — search command (v2: --text, --input)
-├── read.go            — read command (v2: --path, --tail, --semantic, --pretty)
-├── patterns.go        — patterns command (v2: --kind commands|failures|templates|sequences|corrections [--pending] [--batch N] [--trend], --project, --tag, --min-support, --min-confidence, --min-length, --max-length, --json, --robot)
+├── list.go            — list command (v2: --project, --all-projects, --recent, --order, --limit, --offset, --json, --robot)
+├── search.go          — search command (v2: --text, --project, --all-projects, --source, --source-path, --after, --before, --role, --content-type, --tag, --fields, --max-tokens, --lexical-only, --similarity-threshold, --json, --robot)
+├── patterns.go        — patterns command (v2: --kind commands|failures|templates|sequences|corrections [--pending] [--batch N] [--trend], --project, --all-projects, --tag, --min-support, --min-confidence, --min-length, --max-length, --json, --robot)
 ├── annotate.go        — annotate command (F3b: --uuid --kind --label; validates message existence; upsert semantics)
 ├── recover.go         — recover command (--from, --dry-run; lossless active+stranded database union)
 ├── status.go          — status command
-├── validate.go        — validate command (--indexed-only)
+├── validate.go        — validate command (--json)
 ├── rebuild.go         — rebuild command (replaces reindex)
 ├── purge.go           — purge command
 ├── config.go          — config command (shows effective config + inputs)
@@ -63,7 +62,6 @@ internal/
 ├── plans/             — Markdown plan parser (split by ## headers, goldmark)
 ├── sources/           — external source parsers (ke, decision, memory, rule, spec, backlog) + SourceRegistry
 ├── projects/          — project identity registry: LoadGlobalRegistry(), Identify(), LoadLocalHint()
-├── reader/            — direct reading and filtering of individual session files
 ├── readers/           — SessionReader interface, Registry, ClaudeReader (text+tool_use+tool_result), PiReader (text+toolCall+custom results), OpenCodeReader (text+tool state.input+state.output), MarkdownDocumentReader (`markdown_document`), MarkdownSectionsReader (`markdown_sections`); toolfmt serializer
 ├── recovery/          — stranded database recovery orchestration, verified active+stranded union, durable backup, and atomic replacement
 ├── templates/         — F2 Drain-inspired miner: Miner, ProcessLine, ExtractErrorLines, deterministic signature via SHA256
@@ -73,20 +71,21 @@ internal/
 └── storage/           — SQLite adapter (dual FTS5 indexes: tool_fts + messages_fts, BM25, WAL mode, migrations v1–v13, search_items, session_tags, tool_events, message_templates, template_matches, correction_signals, annotations, AggregateCommands, AggregateFailures, AggregateTemplates, AggregateCorrections, UpsertAnnotation, LoadToolSequences)
 ```
 
-Eleven v2 CLI commands: `list [--project] [--all-projects] [--order timestamp:desc|asc] [--limit] [--offset] [--json]`, `search [--text <query>] [--project] [--all-projects] [--after] [--before] [--limit] [--offset] [--indexed-only] [--json]`, `read --path <path> [--tail <n>] [--semantic] [--pretty]`, `patterns --kind commands|failures|templates|sequences|corrections [--pending] [--batch N] [--project] [--all-projects] [--tag] [--trend] [--min-support N] [--min-confidence F] [--min-length N] [--max-length N] [--limit] [--offset] [--indexed-only] [--json] [--robot]`, `annotate --uuid <u> --kind <k> --label <l> [--path <p> --ordinal <n>]`, `recover --from <path> [--dry-run]`, `status`, `validate [--indexed-only]`, `rebuild`, `purge --before <date>`, `config [--json]`.
+Ten v2 CLI commands: `list [--project] [--all-projects] [--recent] [--order timestamp:desc|asc] [--limit] [--offset] [--json] [--robot]`, `search [--text <query>] [--project] [--all-projects] [--source] [--source-path] [--after] [--before] [--role] [--content-type] [--tag] [--limit] [--offset] [--fields minimal|full] [--max-tokens N] [--lexical-only] [--similarity-threshold F] [--json] [--robot]`, `patterns --kind commands|failures|templates|sequences|corrections [--pending] [--batch N] [--project] [--all-projects] [--tag] [--trend] [--after] [--before] [--min-support N] [--min-confidence F] [--min-length N] [--max-length N] [--limit] [--offset] [--json] [--robot]`, `annotate --uuid <u> --kind <k> --label <l> [--path <p> --ordinal <n>]`, `recover --from <path> [--dry-run]`, `status [--json]`, `validate [--json]`, `rebuild`, `purge --before <date>`, `config [--json]`.
 
 The `SearchEngine` interface is the port; `internal/storage` is the adapter. Database opened lazily. `OpenReadOnly()` provides read-only access for external consumers.
 
 ### Core Pipeline
 
 ```
-JSONL files → fs.WalkDir → SHA-256 dedup → ParseSessions() ─┐
+Active manifests → mandatory startup sync ───────────────────┐
+JSONL files → fs.WalkDir → SHA-256 dedup → ParseSessions() ─┤
 Markdown plans → DiscoverPlanFiles() → ParsePlan() ──────────┤
 Declarative Markdown inputs → markdown readers ──────────────┤
                                                               ▼
-                                              SyncFiles() → SQLite FTS5
+                                              SyncFiles() → perennial SQLite FTS5
                                                             │
-CLI query → Search() → BM25 → format_results()
+search/list/patterns/status/validate → database-backed query/output
 ```
 
 ### Declarative Markdown Source Types
@@ -98,6 +97,7 @@ External knowledge sources are configured with active `*.inputs.toml` manifests 
 - **Defensive parsing**: `SessionRecord` wrapper with `json.RawMessage` for fields handles legacy schemas and noise.
 - **Noise filtering**: Excludes `system-reminder`, `task-notification`, and subagent sessions by default.
 - **External FTS5**: Uses `search_items` as content table with SQLite triggers, `snippet()` extraction, and Porter stemmer tokenizer for morphological matching.
+- **Mandatory root startup sync**: Every operational command validates active manifests and attempts one incremental sync before executing. Session, plan, and Markdown files are ingestion inputs; SQLite is the perennial record used by search, list, patterns, status, and validate. Use search --source-path for database-backed retrieval scoped to a known input path.
 - **Incremental sync**: SHA-256 hash per file stored in `indexed_files` table; unchanged files are skipped.
 - **Plan indexing**: Markdown plans from `~/.claude/plans/` split by `##` headers, each section indexed as a separate search item with `source='plan'`.
 - **Declarative Markdown inputs**: `markdown_document` and `markdown_sections` readers reuse `internal/sources` parsers, flow through the normal input manifest registry/autosync path, and store the manifest `source` value on indexed rows. They do not parse YAML frontmatter into structured metadata.
@@ -135,7 +135,7 @@ External knowledge sources are configured with active `*.inputs.toml` manifests 
 - **Early input validation**: CLI commands validate flag values (e.g. `--format`) before opening the database, so invalid inputs fail fast without side effects.
 - **Coverage gate**: CI enforces ≥85% aggregate statement coverage via `go test ./... -race -coverprofile`. Local check: `bash scripts/check-coverage.sh`. Tests that depend on local machine state (e.g. `~/.config/backscroll/projects.toml`) must use `t.Setenv("HOME", tempDir)` to stay reproducible on CI. Likewise, `InputsDir` branches requiring `BACKSCROLL_CONFIG_DIR` to be unset must set it to `""` via `t.Setenv`. To test the `Validate` orphan path, insert directly into `search_items` without a matching `indexed_files` row.
 - **Zero-result guidance**: when `search`/`list` return no rows, actionable suggestions (`--all-projects`, `--content-type tool`, `backscroll status`) are printed to STDERR — never STDOUT, so `--json` stays a clean empty payload.
-- **Robot output contract**: `search --robot` emits `result_N_field=value` lines exactly once-wrapped (the robot path writes lines directly; passing pre-formatted lines through the picokit formatter double-wraps them as `result_N=result_N_field=...`).
+- **Robot output contract**: `search --robot` emits `result_N_field=value` lines exactly once-wrapped (the robot path writes lines directly; passing pre-formatted lines through the picokit formatter double-wraps them as `result_N=result_N_field=...`). Robot string values escape backslash as `\\`, carriage return as `\r`, and newline as `\n`.
 - **Cross-host project identity**: `projects.Identify()` normalizes session cwd against registry roots by matching root tails (≥2 components, case-insensitive), so `/home/shared/<proj>` sessions resolve against `/Users/Shared/<proj>` roots on a synced index. Registry roots should keep distinct suffixes — two projects whose roots share the same trailing components could misbucket.
 - **Recall eval-set**: `docs/eval/queries.toml` (~20 real mined queries with `expected_match` ground truth) + `scripts/eval.sh` compute recall@5; a query counts only if its expected target appears in the top 5. Local regression gate, not a required CI step.
 
@@ -222,7 +222,6 @@ github.com/pablontiv/backscroll/internal/categories    — F4 category map loade
 github.com/pablontiv/backscroll/internal/sequences     — F4 PrefixSpan mining (deterministic pattern discovery per session)
 github.com/pablontiv/backscroll/internal/storage       — Database schema, migrations v1–v13, FTS5 indexes
 github.com/pablontiv/backscroll/internal/projects      — Project identity registry
-github.com/pablontiv/backscroll/internal/reader        — Direct session file reader
 github.com/pablontiv/backscroll/internal/readers       — SessionReader interface, Registry, ClaudeReader (text+tool_use+tool_result), PiReader (text+toolCall+custom results), OpenCodeReader (text+tool state.input+state.output), MarkdownDocumentReader (`markdown_document`), MarkdownSectionsReader (`markdown_sections`); toolfmt serializer
 github.com/pablontiv/backscroll/internal/recovery      — Stranded database recovery orchestration, durable backup, and atomic replacement
 ```

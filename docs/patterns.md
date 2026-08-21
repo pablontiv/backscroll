@@ -23,7 +23,7 @@ backscroll patterns --kind commands|failures|templates|corrections|sequences
 ```
 
 Base flags for every kind: `--project` / `--all-projects`, `--tag`,
-`--limit` / `--offset`, `--indexed-only`, `--json` / `--robot`.
+`--limit` / `--offset`, `--json` / `--robot`.
 
 ### commands — what runs most
 
@@ -102,7 +102,9 @@ not from loop state: there is nothing to checkpoint.
 
 ## Operating notes
 
+- Every operational command validates active manifests and attempts one incremental sync before executing. Session, plan, and Markdown files are ingestion inputs; SQLite is the perennial record used by search, list, patterns, status, and validate. Use search --source-path for database-backed retrieval scoped to a known input path.
 - Zero-result guidance goes to stderr; stdout stays clean for `--json`.
+- Robot string values escape backslash as `\\`, carriage return as `\r`, and newline as `\n`.
 - A malformed `categories.toml` fails the command (non-zero exit) rather
   than masquerading as an empty result.
 - Historical supply: rich capture exists for rows synced after migration

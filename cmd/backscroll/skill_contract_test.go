@@ -150,7 +150,8 @@ func TestBackscrollSkillContainsSearchDiscipline(t *testing.T) {
 		"Two empty searches prove nothing",
 		"Raw-file boundary",
 		"--source-path",
-		"backscroll validate --indexed-only",
+		"mandatory startup sync",
+		"backscroll validate",
 	}
 	for _, anchor := range anchors {
 		if !strings.Contains(content, anchor) {
@@ -158,11 +159,18 @@ func TestBackscrollSkillContainsSearchDiscipline(t *testing.T) {
 		}
 	}
 
+	if strings.Contains(content, "--indexed-only") {
+		t.Error("shipped skill must not document removed --indexed-only flag")
+	}
+	if containsBackscrollReadInvocation(content) {
+		t.Error("shipped skill must not invoke removed backscroll read command")
+	}
+
 	rawBoundaryAnchors := []string{
 		"cat",
 		"jq",
 		"Python",
-		"direct `backscroll read`",
+		"filesystem session hunting",
 		"not a normal retrieval fallback",
 	}
 	for _, anchor := range rawBoundaryAnchors {
@@ -189,6 +197,29 @@ func TestBackscrollContextModeCommandsMatchCLI(t *testing.T) {
 	if !strings.Contains(content, "main skill's search discipline") && !strings.Contains(content, "indexed boundary") {
 		t.Error("context mode must point to the main search discipline or preserve the indexed boundary")
 	}
+}
+
+func containsBackscrollReadInvocation(content string) bool {
+	for _, line := range strings.Split(strings.ReplaceAll(content, "\r\n", "\n"), "\n") {
+		if startsWithBackscrollRead(shellishFields(withoutInlineCodeSpans(line))) {
+			return true
+		}
+		for _, span := range inlineCodeSpans(line) {
+			if startsWithBackscrollRead(shellishFields(span)) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func startsWithBackscrollRead(tokens []string) bool {
+	for i, token := range tokens {
+		if token == "backscroll" && i+1 < len(tokens) && tokens[i+1] == "read" && isInvocationStart(tokens, i) {
+			return true
+		}
+	}
+	return false
 }
 
 func assertSourceSessionOnlyOnSearch(t *testing.T, content string) {
