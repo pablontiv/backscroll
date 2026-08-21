@@ -98,6 +98,8 @@ func TestBackscrollSkillContractAcceptsSearchQueryText(t *testing.T) {
 		`backscroll search "artifact literal" --source-path "*/session.jsonl" --all-projects --json`,
 		`backscroll search --text "$QUERY" --source-path "$SOURCE_PATH" --robot --fields full`,
 		`backscroll search --source-path "*/session.jsonl" --text "artifact literal" --limit 5`,
+		`backscroll search --text=2>out.txt --all-projects`,
+		`backscroll search "artifact literal">out.txt --all-projects`,
 		`backscroll search --help`,
 	}, "\n")
 
@@ -144,6 +146,7 @@ func TestBackscrollSkillContractRejectsSearchNonQueryTokens(t *testing.T) {
 		`backscroll search --source-path "*/session.jsonl" < in.txt`,
 		`backscroll search --source-path "*/session.jsonl" 2>err.txt`,
 		`backscroll search --source-path "*/session.jsonl" 2>&1`,
+		`backscroll search --source-path "*/session.jsonl" &`,
 		`backscroll search --source-path "*/session.jsonl" <<< marker`,
 		`backscroll search --source-path "*/session.jsonl" \`,
 		`backscroll search --source-path "*/session.jsonl" ''>out.txt`,
@@ -168,6 +171,7 @@ func TestBackscrollSkillContractRejectsSearchNonQueryTokens(t *testing.T) {
 		"synthetic-search-non-query-tokens.md:11: search invocation lacks query text (use --text <query> or positional query)",
 		"synthetic-search-non-query-tokens.md:12: search invocation lacks query text (use --text <query> or positional query)",
 		"synthetic-search-non-query-tokens.md:13: search invocation lacks query text (use --text <query> or positional query)",
+		"synthetic-search-non-query-tokens.md:14: search invocation lacks query text (use --text <query> or positional query)",
 	)
 }
 
@@ -195,6 +199,11 @@ func TestBackscrollSkillContractReadNarrativeLiteralPassesButInvocationsFail(t *
 		"You must use the removed command `backscroll read`.",
 		"Operators should execute the deprecated command `backscroll read`.",
 		"Try to invoke the literal `backscroll read` in the historical narrative.",
+		"Reference `backscroll read` when checking an old transcript.",
+		"You may mention `backscroll read` in migration notes.",
+		"Operators can cite `backscroll read` in examples.",
+		"The guide will include `backscroll read` as history.",
+		"Reviewers need `backscroll read` for this case.",
 	}, "\n")
 	violations = validateSkillMarkdown(root, "synthetic-read-descriptor-imperative.md", descriptorImperative)
 	assertSkillContractViolations(t, violations,
@@ -202,6 +211,23 @@ func TestBackscrollSkillContractReadNarrativeLiteralPassesButInvocationsFail(t *
 		"synthetic-read-descriptor-imperative.md:2: unknown backscroll command \"read\"",
 		"synthetic-read-descriptor-imperative.md:3: unknown backscroll command \"read\"",
 		"synthetic-read-descriptor-imperative.md:4: unknown backscroll command \"read\"",
+		"synthetic-read-descriptor-imperative.md:5: unknown backscroll command \"read\"",
+		"synthetic-read-descriptor-imperative.md:6: unknown backscroll command \"read\"",
+		"synthetic-read-descriptor-imperative.md:7: unknown backscroll command \"read\"",
+		"synthetic-read-descriptor-imperative.md:8: unknown backscroll command \"read\"",
+		"synthetic-read-descriptor-imperative.md:9: unknown backscroll command \"read\"",
+	)
+
+	changedClause := strings.Join([]string{
+		"The literal `backscroll read` names the removed command in narrative prose, but keep it in mind.",
+		"The literal `backscroll read` names the removed command in historical prose.",
+		"The literal `backscroll read` names a removed command in narrative prose.",
+	}, "\n")
+	violations = validateSkillMarkdown(root, "synthetic-read-changed-clause.md", changedClause)
+	assertSkillContractViolations(t, violations,
+		"synthetic-read-changed-clause.md:1: unknown backscroll command \"read\"",
+		"synthetic-read-changed-clause.md:2: unknown backscroll command \"read\"",
+		"synthetic-read-changed-clause.md:3: unknown backscroll command \"read\"",
 	)
 
 	multipleSpans := "The literal `backscroll read` names the removed command in narrative prose, while `backscroll read` remains removed."
@@ -495,66 +521,17 @@ func validateSkillMarkdown(root *cobra.Command, path, content string) []skillCon
 	return uniqueSkillContractViolations(violations)
 }
 
+const normalizedHistoricalBackscrollReadNarrative = "the literal `backscroll read` names the removed command in narrative prose."
+
 func isNarrativeInlineLiteralBackscrollRead(line, span string) bool {
 	if strings.TrimSpace(span) != "backscroll read" {
 		return false
 	}
-	if len(inlineCodeSpans(line)) != 1 {
-		return false
-	}
-
-	prose := strings.TrimSpace(withoutInlineCodeSpans(line))
-	if prose == "" {
-		return false
-	}
-
-	normalized := strings.ToLower(prose)
-	if hasReadImperativeCue(normalized) {
-		return false
-	}
-	return hasReadLiteralNameCue(normalized) && hasReadRemovedCommandCue(normalized) && hasReadNarrativeContextCue(normalized)
+	return normalizeHistoricalNarrativeLine(line) == normalizedHistoricalBackscrollReadNarrative
 }
 
-func hasReadLiteralNameCue(normalizedLine string) bool {
-	return containsAnyWord(normalizedLine, "literal", "verbatim", "name", "names", "named", "mention", "mentions", "reference", "references")
-}
-
-func hasReadRemovedCommandCue(normalizedLine string) bool {
-	return containsAnyWord(normalizedLine, "command") && containsAnyWord(normalizedLine, "removed", "deprecated", "legacy")
-}
-
-func hasReadNarrativeContextCue(normalizedLine string) bool {
-	return containsAnyWord(normalizedLine, "narrative", "descriptive", "description", "prose", "historical", "history", "migration", "documentation", "reference")
-}
-
-func hasReadImperativeCue(normalizedLine string) bool {
-	return containsAnyWord(normalizedLine,
-		"run",
-		"use",
-		"execute",
-		"invoke",
-		"try",
-		"must",
-		"should",
-		"please",
-		"rerun",
-		"retry",
-	)
-}
-
-func containsAnyWord(text string, words ...string) bool {
-	wanted := make(map[string]struct{}, len(words))
-	for _, word := range words {
-		wanted[word] = struct{}{}
-	}
-	for _, word := range strings.FieldsFunc(text, func(r rune) bool {
-		return !(r == '_' || r >= '0' && r <= '9' || r >= 'a' && r <= 'z')
-	}) {
-		if _, ok := wanted[word]; ok {
-			return true
-		}
-	}
-	return false
+func normalizeHistoricalNarrativeLine(line string) string {
+	return strings.Join(strings.Fields(strings.ToLower(strings.TrimSpace(line))), " ")
 }
 
 func validateBackscrollInvocations(root *cobra.Command, path string, lineNumber int, text string) []skillContractViolation {
@@ -793,7 +770,7 @@ func shellishTokenValues(tokens []shellishToken) []string {
 
 func isShellTerminator(token string) bool {
 	switch token {
-	case "|", "||", "&&", ";", "#":
+	case "|", "||", "&", "&&", ";", "#":
 		return true
 	default:
 		return strings.HasPrefix(token, "#")
@@ -1000,6 +977,8 @@ func shellishTokens(text string) []shellishToken {
 			flushWord()
 		case r == '\\':
 			appendOperator(`\`)
+		case isDigitRune(r) && wordStarted:
+			current.WriteRune(r)
 		case r == ';' || r == '|' || r == '&' || r == '#' || r == '<' || r == '>' || isDigitRune(r):
 			if operator, width := scanShellOperator(runes, i); width > 0 {
 				appendOperator(operator)
@@ -1055,6 +1034,10 @@ func scanControlOperator(runes []rune, index int) int {
 		if hasRunePrefix(runes, index, "&&") {
 			return 2
 		}
+		if hasRunePrefix(runes, index, "&>") || hasRunePrefix(runes, index, "&>>") {
+			return 0
+		}
+		return 1
 	}
 	return 0
 }
