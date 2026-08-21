@@ -13,7 +13,7 @@ import (
 	"github.com/spf13/cobra"
 )
 
-type startupPolicyFunc func(context.Context, io.Writer) startupResult
+type startupPolicyFunc func(context.Context, io.Writer, startupCommandClass) startupResult
 
 type startupStage string
 
@@ -23,6 +23,7 @@ const (
 	startupStageLegacySource   startupStage = "legacy_source"
 	startupStageConfigLoad     startupStage = "config_load"
 	startupStageActiveManifest startupStage = "active_manifest"
+	startupStageSyncLock       startupStage = "sync_lock"
 	startupStageIndexPrepare   startupStage = "index_prepare"
 	startupStageStartupSync    startupStage = "startup_sync"
 )
@@ -73,13 +74,34 @@ func (f *startupFailure) renderedDiagnostic() compat.Diagnostic {
 	return d
 }
 
+type startupLease interface {
+	Release() error
+}
+
+type startupWarning struct {
+	Code    compat.Code
+	Summary string
+}
+
 type startupResult struct {
 	Config  *config.Config
 	Failure *startupFailure
+	Warning *startupWarning
+	Lease   startupLease
 }
 
 func (r startupResult) startupFailure() *startupFailure {
 	return r.Failure
+}
+
+func (r startupResult) release(retErr error) error {
+	if r.Lease == nil {
+		return retErr
+	}
+	if releaseErr := r.Lease.Release(); releaseErr != nil {
+		return errors.Join(retErr, fmt.Errorf("release startup lock: %w", releaseErr))
+	}
+	return retErr
 }
 
 func optionalStartupFailureError(f *startupFailure) error {
@@ -98,7 +120,7 @@ func startupResultFrom(cmd *cobra.Command) startupResult {
 	return result
 }
 
-func defaultStartupPolicy(ctx context.Context, progress io.Writer) startupResult {
+func defaultStartupPolicy(ctx context.Context, progress io.Writer, class startupCommandClass) startupResult {
 	inputsDir, err := input_config.InputsDir()
 	if err != nil {
 		cause := fmt.Errorf("resolve inputs directory: %w", err)
@@ -121,25 +143,7 @@ func defaultStartupPolicy(ctx context.Context, progress io.Writer) startupResult
 		cause := fmt.Errorf("validate active inputs: %w", err)
 		return startupResult{Config: cfg, Failure: &startupFailure{Stage: startupStageActiveManifest, Cause: cause, Diagnostic: compat.Diagnostic{Code: compat.CodeMigrationFailed, Summary: cause.Error()}}}
 	}
-	db, diag, err := prepareIndex(ctx, cfg, indexMutation)
-	if db != nil {
-		err = closeIndexDB(db, err)
-	}
-	if diag != nil || err != nil {
-		d := compat.Diagnostic{Code: compat.CodeMigrationFailed, Summary: "prepare index failed"}
-		if diag != nil {
-			d = *diag
-		} else if err != nil {
-			d.Summary = fmt.Sprintf("prepare index failed: %v", err)
-		}
-		return startupResult{Config: cfg, Failure: &startupFailure{Stage: startupStageIndexPrepare, Cause: err, Diagnostic: d, Recoverable: true}}
-	}
-	if err := startupSync(cfg, progress); err != nil {
-		activePath, _ := resolveActiveIndexPath(cfg.DatabasePath)
-		d := continuationFor(compat.Diagnostic{Code: compat.CodeIndexStale, Summary: fmt.Sprintf("index sync failed: %v", err)}, activePath)
-		return startupResult{Config: cfg, Failure: &startupFailure{Stage: startupStageStartupSync, Cause: err, Diagnostic: d, Recoverable: true}}
-	}
-	return startupResult{Config: cfg}
+	return coordinateStartup(ctx, cfg, progress, class)
 }
 
 func validateCommandBeforeStartup(cmd *cobra.Command, args []string, positional cobra.PositionalArgs, semantic func() error) error {
@@ -185,36 +189,41 @@ query merges both by rank position (RRF).`,
 			if err := validateRequiredFlagsAndGroups(cmd); err != nil {
 				return err
 			}
-			result := policy(cmd.Context(), startupProgressWriter(cmd, stderr))
+			class, _ := startupCommandClassFor(cmd)
+			result := policy(cmd.Context(), startupProgressWriter(cmd, stderr), class)
 			cmd.SetContext(context.WithValue(cmd.Context(), startupContextKey{}, result))
+			if result.Warning != nil {
+				if _, err := fmt.Fprintf(stderr, "warning: %s: %s\n", result.Warning.Code, result.Warning.Summary); err != nil {
+					return result.release(err)
+				}
+			}
 			failure := result.startupFailure()
 			if failure == nil {
 				return nil
 			}
-			if cmd.Name() == "recover" && failure.Recoverable {
+			if cmd.Name() == "recover" && failure.Recoverable && class == startupMutation {
 				return nil
 			}
+			failureErr := result.release(failure)
 			if failure.Diagnostic.Code != "" || strings.TrimSpace(failure.Diagnostic.Summary) != "" {
-				return refuseIndexWithCause(stdout, stderr, failure.renderedDiagnostic(), failure, commandBoolFlag(cmd, "json"), commandBoolFlag(cmd, "robot"))
+				return refuseIndexWithCause(stdout, stderr, failure.renderedDiagnostic(), failureErr, commandBoolFlag(cmd, "json"), commandBoolFlag(cmd, "robot"))
 			}
-			return failure
+			return failureErr
 		},
 	}
 	root.SetOut(stdout)
 	root.SetErr(stderr)
 
-	root.AddCommand(
-		newSearchCmd(stdout, stderr),
-		newListCmd(stdout, stderr),
-		newPatternsCmd(stdout, stderr),
-		newRebuildCmd(stdout, stderr),
-		newPurgeCmd(stdout, stderr),
-		newValidateCmd(stdout, stderr),
-		newStatusCmd(stdout, stderr),
-		newConfigCmd(stdout, stderr),
-		newAnnotateCmd(stdout, stderr),
-		newRecoverCmd(stdout, stderr),
-	)
+	registerStartupCommand(root, startupSnapshotRead, newSearchCmd(stdout, stderr))
+	registerStartupCommand(root, startupSnapshotRead, newListCmd(stdout, stderr))
+	registerStartupCommand(root, startupSnapshotRead, newPatternsCmd(stdout, stderr))
+	registerStartupCommand(root, startupMutation, newRebuildCmd(stdout, stderr))
+	registerStartupCommand(root, startupMutation, newPurgeCmd(stdout, stderr))
+	registerStartupCommand(root, startupSnapshotRead, newValidateCmd(stdout, stderr))
+	registerStartupCommand(root, startupSnapshotRead, newStatusCmd(stdout, stderr))
+	registerStartupCommand(root, startupMetadataRead, newConfigCmd(stdout, stderr))
+	registerStartupCommand(root, startupMutation, newAnnotateCmd(stdout, stderr))
+	registerStartupCommand(root, startupMutation, newRecoverCmd(stdout, stderr))
 
 	return root
 }

@@ -49,7 +49,7 @@ func buildRecoverRootWithConfig(t *testing.T, stdout, stderr io.Writer, activePa
 		t.Fatalf("mkdir empty recovery inputs: %v", err)
 	}
 	cfg := &config.Config{DatabasePath: activePath, SessionDirs: []string{emptyInputs}}
-	return buildRootCmdWithStartup(stdout, stderr, func(context.Context, io.Writer) startupResult {
+	return buildRootCmdWithStartup(stdout, stderr, func(context.Context, io.Writer, startupCommandClass) startupResult {
 		return startupResult{Config: cfg}
 	})
 }
@@ -80,7 +80,7 @@ func TestRecoverExecuteReceivesCommandContext(t *testing.T) {
 	t.Cleanup(func() { recoverExecute = originalExecute })
 
 	var stdout, stderr bytes.Buffer
-	root := buildRootCmdWithStartup(&stdout, &stderr, func(context.Context, io.Writer) startupResult {
+	root := buildRootCmdWithStartup(&stdout, &stderr, func(context.Context, io.Writer, startupCommandClass) startupResult {
 		return startupResult{Config: cfg}
 	})
 	root.SetContext(ctx)
@@ -122,7 +122,7 @@ func TestRecoverPostInstallSyncBeforeReport(t *testing.T) {
 	}
 	t.Cleanup(func() { recoverPostInstallSync = originalPostInstallSync })
 
-	root := buildRootCmdWithStartup(stdout, &stderr, func(context.Context, io.Writer) startupResult {
+	root := buildRootCmdWithStartup(stdout, &stderr, func(context.Context, io.Writer, startupCommandClass) startupResult {
 		return startupResult{Config: cfg}
 	})
 	root.SetArgs([]string{"recover", "--from", "stranded.db"})
@@ -155,7 +155,7 @@ func TestRecoverDryRunSkipsPostInstallSync(t *testing.T) {
 	t.Cleanup(func() { recoverPostInstallSync = originalPostInstallSync })
 
 	var stdout, stderr bytes.Buffer
-	root := buildRootCmdWithStartup(&stdout, &stderr, func(context.Context, io.Writer) startupResult {
+	root := buildRootCmdWithStartup(&stdout, &stderr, func(context.Context, io.Writer, startupCommandClass) startupResult {
 		return startupResult{Config: cfg}
 	})
 	root.SetArgs([]string{"recover", "--from", "stranded.db", "--dry-run"})
@@ -187,7 +187,7 @@ func TestRecoverPostInstallSyncFailurePreservesStartupCause(t *testing.T) {
 	t.Cleanup(func() { recoverPostInstallSync = originalPostInstallSync })
 
 	var stdout, stderr bytes.Buffer
-	root := buildRootCmdWithStartup(&stdout, &stderr, func(context.Context, io.Writer) startupResult {
+	root := buildRootCmdWithStartup(&stdout, &stderr, func(context.Context, io.Writer, startupCommandClass) startupResult {
 		return startupResult{Config: cfg, Failure: &startupFailure{
 			Stage:       startupStageStartupSync,
 			Cause:       startupErr,
@@ -231,7 +231,7 @@ func TestRecoverSuccessfulContinuationRemediatesStartupFailure(t *testing.T) {
 	t.Cleanup(func() { recoverPostInstallSync = originalPostInstallSync })
 
 	var stdout, stderr bytes.Buffer
-	root := buildRootCmdWithStartup(&stdout, &stderr, func(context.Context, io.Writer) startupResult {
+	root := buildRootCmdWithStartup(&stdout, &stderr, func(context.Context, io.Writer, startupCommandClass) startupResult {
 		return startupResult{Config: cfg, Failure: &startupFailure{
 			Stage:       startupStageStartupSync,
 			Cause:       startupErr,

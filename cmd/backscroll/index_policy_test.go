@@ -122,6 +122,62 @@ func TestMachineModesCarryDiagnosticCodeAndContinuation(t *testing.T) {
 	}
 }
 
+func TestPrepareIndexDataReadReturnsReadOnlyConnection(t *testing.T) {
+	dbPath := filepath.Join(t.TempDir(), "index.db")
+	writer, err := storage.Open(dbPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := writer.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	db, diag, err := prepareIndex(context.Background(), &config.Config{DatabasePath: dbPath}, indexDataRead)
+	if err != nil || diag != nil {
+		t.Fatalf("prepare read db=%v diag=%+v err=%v", db, diag, err)
+	}
+	defer db.Close()
+	if _, err := db.DB().Exec(`CREATE TABLE must_not_exist (id INTEGER)`); err == nil {
+		t.Fatal("indexDataRead returned a write-capable connection")
+	}
+}
+
+func TestPrepareIndexDataReadDoesNotApplyPendingMigration(t *testing.T) {
+	dbPath := filepath.Join(t.TempDir(), "index.db")
+	writer, err := storage.Open(dbPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := writer.DB().Exec(`DELETE FROM schema_migrations WHERE version = 13`); err != nil {
+		t.Fatal(err)
+	}
+	if err := writer.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	db, diag, err := prepareIndex(context.Background(), &config.Config{DatabasePath: dbPath}, indexDataRead)
+	if db != nil {
+		_ = db.Close()
+		t.Fatal("read preparation returned DB requiring migration")
+	}
+	if err == nil && diag == nil {
+		t.Fatal("read preparation accepted pending migration")
+	}
+
+	inspect, err := storage.OpenReadOnly(dbPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer inspect.Close()
+	var count int
+	if err := inspect.DB().QueryRow(`SELECT COUNT(*) FROM schema_migrations WHERE version = 13`).Scan(&count); err != nil {
+		t.Fatal(err)
+	}
+	if count != 0 {
+		t.Fatalf("read path applied migration 13 count=%d", count)
+	}
+}
+
 func TestHumanDiagnosticRenderedOnceWithoutCobraEcho(t *testing.T) {
 	dbPath := newUnsupportedIndexedConsumerDB(t)
 	var stdout, stderr bytes.Buffer

@@ -1,7 +1,11 @@
 package tagging
 
 import (
+	"fmt"
+	"reflect"
+	"slices"
 	"sort"
+	"strings"
 	"testing"
 )
 
@@ -102,5 +106,61 @@ func TestTagDetectsSixCategories(t *testing.T) {
 		if !found {
 			t.Errorf("category %q not detected in: %s", category, content)
 		}
+	}
+}
+
+func TestAccumulatorMatchesJoinedSessionTagSet(t *testing.T) {
+	cases := [][]string{
+		nil,
+		{"BUG in parser", "Document the README"},
+		{"clean", "up does not cross the newline"},
+		{"Implement feature", "add tests", "configure CI"},
+		{"", "Random text", "PANIC"},
+	}
+	for _, messages := range cases {
+		var acc Accumulator
+		for _, message := range messages {
+			acc.Add(message)
+		}
+		got := acc.Tags()
+		want := Tag(strings.Join(messages, "\n"))
+		sort.Strings(got)
+		sort.Strings(want)
+		if !reflect.DeepEqual(got, want) {
+			t.Fatalf("messages=%q tags=%v want=%v", messages, got, want)
+		}
+	}
+}
+
+func TestAccumulatorTagsReturnsIndependentSlice(t *testing.T) {
+	var acc Accumulator
+	acc.Add("fix bug and add tests")
+	first := acc.Tags()
+	first[0] = "mutated"
+	second := acc.Tags()
+	if slices.Contains(second, "mutated") {
+		t.Fatalf("Tags returned aliased state: %v", second)
+	}
+}
+
+func BenchmarkAccumulatorScaling(b *testing.B) {
+	base := strings.Repeat("ordinary prose with a final bug marker ", 256)
+	for _, records := range []int{128, 256, 512} {
+		b.Run(fmt.Sprintf("records_%d", records), func(b *testing.B) {
+			messages := make([]string, records)
+			for i := range messages {
+				messages[i] = base
+			}
+			b.ReportAllocs()
+			b.SetBytes(int64(records * len(base)))
+			b.ResetTimer()
+			for i := 0; i < b.N; i++ {
+				var acc Accumulator
+				for _, message := range messages {
+					acc.Add(message)
+				}
+				_ = acc.Tags()
+			}
+		})
 	}
 }

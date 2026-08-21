@@ -91,7 +91,7 @@ func TestValidateTextReportsSemanticRecoveryDiagnosticsReadOnly(t *testing.T) {
 			if !strings.Contains(combined, wantContinuation) {
 				t.Fatalf("plain validate continuation mismatch: want exact line %q in %q", wantContinuation, combined)
 			}
-			assertSQLiteFilesUnchanged(t, dbPath, before)
+			assertSQLiteFilesUnchangedAllowingSHM(t, dbPath, before)
 		})
 	}
 }
@@ -111,7 +111,7 @@ func TestValidateTextReportsMultipleSemanticRecoveryDiagnosticsReadOnly(t *testi
 	if got := strings.Count(combined, "continuation: recover --from "+dbPath+" --dry-run"); got < 2 {
 		t.Fatalf("plain validate continuation count = %d, want at least 2 in %q", got, combined)
 	}
-	assertSQLiteFilesUnchanged(t, dbPath, before)
+	assertSQLiteFilesUnchangedAllowingSHM(t, dbPath, before)
 }
 
 func TestStatusHealthyIndexReportsTextAndJSON(t *testing.T) {
@@ -415,7 +415,7 @@ func TestValidateCurrentIndexIntegrityFailureIsGenericAndReadOnly(t *testing.T) 
 	if payload.Valid || !strings.Contains(payload.Error, "orphaned search_items") {
 		t.Fatalf("validate --json orphaned index payload = %+v, want generic validation failure", payload)
 	}
-	assertSQLiteFilesUnchanged(t, dbPath, before)
+	assertSQLiteFilesUnchangedAllowingSHM(t, dbPath, before)
 
 	stdout, stderr, err = runCmd("validate")
 	if err == nil {
@@ -430,7 +430,7 @@ func TestValidateCurrentIndexIntegrityFailureIsGenericAndReadOnly(t *testing.T) 
 			t.Fatalf("validate orphaned index emitted recovery diagnostic %q in stdout=%q stderr=%q", forbidden, stdout, stderr)
 		}
 	}
-	assertSQLiteFilesUnchanged(t, dbPath, before)
+	assertSQLiteFilesUnchangedAllowingSHM(t, dbPath, before)
 }
 
 func TestSearchRobotDiagnosticIsMachineReadableAndPreservesIndexBytes(t *testing.T) {
@@ -562,7 +562,7 @@ func TestRecoveryContinuationExecutesInConfiguredSamePathContextWithEmptyWAL(t *
 	startupErr := indexDiagnosticError{diagnostic: startupDiagnostic}
 
 	var stdout, stderr bytes.Buffer
-	root := buildRootCmdWithStartup(&stdout, &stderr, func(context.Context, io.Writer) startupResult {
+	root := buildRootCmdWithStartup(&stdout, &stderr, func(context.Context, io.Writer, startupCommandClass) startupResult {
 		return startupResult{Config: cfg, Failure: &startupFailure{
 			Stage:       startupStageIndexPrepare,
 			Cause:       startupErr,
@@ -911,6 +911,18 @@ func assertSQLiteFilesUnchanged(t *testing.T, dbPath string, before map[string][
 	for path, want := range before {
 		if !bytes.Equal(after[path], want) {
 			t.Fatalf("sqlite file %s changed: before %d bytes after %d bytes", path, len(want), len(after[path]))
+		}
+	}
+}
+
+func assertSQLiteFilesUnchangedAllowingSHM(t *testing.T, dbPath string, before map[string][]byte) {
+	t.Helper()
+	// WAL readers may update the transient -shm coordination file without changing
+	// the database content or WAL/rollback bytes.
+	after := snapshotSQLiteFiles(t, dbPath)
+	for _, path := range []string{dbPath, dbPath + "-wal", dbPath + "-journal"} {
+		if !bytes.Equal(after[path], before[path]) {
+			t.Fatalf("sqlite file %s changed: before %d bytes after %d bytes", path, len(before[path]), len(after[path]))
 		}
 	}
 }

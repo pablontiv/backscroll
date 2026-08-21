@@ -121,10 +121,10 @@ func maybeAutoSync(cfg *config.Config, progress io.Writer) (retErr error) {
 			}
 			ident := projects.Identify(identPath, registry)
 
-			var sessionText string
+			var sessionTags tagging.Accumulator
 			var indexedMsgs []storage.IndexedMessage
 			for ordinal, msg := range pf.Records {
-				sessionText += msg.Content + "\n"
+				sessionTags.Add(msg.Content)
 				indexedMsgs = append(indexedMsgs, storage.IndexedMessage{
 					Ordinal:           ordinal,
 					Role:              msg.Role,
@@ -141,15 +141,13 @@ func maybeAutoSync(cfg *config.Config, progress io.Writer) (retErr error) {
 				})
 			}
 
-			sessionTags := tagging.Tag(sessionText)
-
 			indexedFiles = append(indexedFiles, storage.IndexedFile{
 				SourcePath: ref,
 				Source:     def.Source,
 				Hash:       pf.Hash,
 				Project:    ident.ProjectID,
 				Messages:   indexedMsgs,
-				Tags:       sessionTags,
+				Tags:       sessionTags.Tags(),
 			})
 		}
 	}

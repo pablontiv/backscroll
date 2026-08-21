@@ -14,6 +14,7 @@ const (
 	CodeMigrationFailed    Code = "migration_failed"
 	CodeIndexStale         Code = "index_stale"
 	CodeRecoveryConflict   Code = "recovery_conflict"
+	CodeSyncInProgress     Code = "sync_in_progress"
 	CodeUninterpretableRow Code = "uninterpretable_row"
 )
 
