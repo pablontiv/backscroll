@@ -18,11 +18,84 @@ import (
 	"github.com/spf13/cobra"
 )
 
+func TestInvalidOperationalCommandsSkipStartup(t *testing.T) {
+	testCases := []struct {
+		name string
+		argv []string
+	}{
+		{name: "search missing query", argv: []string{"search"}},
+		{name: "search invalid fields", argv: []string{"search", "needle", "--fields", "invalid"}},
+		{name: "search invalid content type", argv: []string{"search", "needle", "--content-type", "invalid"}},
+		{name: "search invalid after", argv: []string{"search", "needle", "--after", "not-a-date"}},
+		{name: "search invalid before", argv: []string{"search", "needle", "--before", "not-a-date"}},
+		{name: "list positional argument", argv: []string{"list", "unexpected"}},
+		{name: "patterns positional argument", argv: []string{"patterns", "unexpected", "--kind", "commands"}},
+		{name: "patterns invalid kind", argv: []string{"patterns", "--kind", "invalid"}},
+		{name: "patterns invalid trend", argv: []string{"patterns", "--kind", "templates", "--trend"}},
+		{name: "patterns conflicting project scope", argv: []string{"patterns", "--kind", "commands", "--project", "p", "--all-projects"}},
+		{name: "patterns negative limit", argv: []string{"patterns", "--kind", "commands", "--limit", "-1"}},
+		{name: "annotate positional argument", argv: []string{"annotate", "unexpected", "--uuid", "u", "--kind", "correction", "--label", "x"}},
+		{name: "annotate missing label", argv: []string{"annotate", "--uuid", "u", "--kind", "correction"}},
+		{name: "annotate missing identity", argv: []string{"annotate", "--kind", "correction", "--label", "x"}},
+		{name: "purge positional argument", argv: []string{"purge", "unexpected", "--before", "2030-01-01"}},
+		{name: "purge missing before", argv: []string{"purge"}},
+		{name: "purge invalid before", argv: []string{"purge", "--before", "not-a-date"}},
+		{name: "recover missing from", argv: []string{"recover"}},
+		{name: "recover empty from", argv: []string{"recover", "--from", ""}},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			startupCalls := 0
+			root := buildRootCmdWithStartup(io.Discard, io.Discard, func(context.Context, io.Writer) startupResult {
+				startupCalls++
+				return startupResult{Config: &config.Config{DatabasePath: filepath.Join(t.TempDir(), "index.db")}}
+			})
+			root.SetArgs(tc.argv)
+
+			if err := root.Execute(); err == nil {
+				t.Fatalf("execute %v succeeded, want validation error", tc.argv)
+			}
+			if startupCalls != 0 {
+				t.Fatalf("startup calls=%d, want 0 for invalid invocation %v", startupCalls, tc.argv)
+			}
+		})
+	}
+}
+
+func TestInvalidSearchDoesNotCreateDatabase(t *testing.T) {
+	dir := t.TempDir()
+	homeDir := filepath.Join(dir, "home")
+	configDir := filepath.Join(dir, "config")
+	sessionDir := filepath.Join(dir, "sessions")
+	for _, path := range []string{homeDir, configDir, sessionDir} {
+		if err := os.MkdirAll(path, 0o755); err != nil {
+			t.Fatalf("mkdir %s: %v", path, err)
+		}
+	}
+	dbPath := filepath.Join(dir, "index.db")
+	t.Setenv("HOME", homeDir)
+	t.Setenv("BACKSCROLL_CONFIG_DIR", configDir)
+	t.Setenv("BACKSCROLL_DATABASE_PATH", dbPath)
+	t.Setenv("BACKSCROLL_SESSION_DIRS", sessionDir)
+
+	root := buildRootCmd(io.Discard, io.Discard)
+	root.SetArgs([]string{"search"})
+	if err := root.Execute(); err == nil {
+		t.Fatal("search without a query succeeded, want validation error")
+	}
+	if _, err := os.Stat(dbPath); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("database stat error=%v, want not-exist after invalid invocation", err)
+	}
+}
+
 func TestEveryOperationalCommandRunsStartupBeforeHandler(t *testing.T) {
 	commands := [][]string{
 		{"search", "needle"}, {"list"}, {"patterns", "--kind", "commands"},
 		{"annotate", "--uuid", "u", "--kind", "correction", "--label", "x"},
-		{"purge", "--before", "2030-01-01"}, {"rebuild"}, {"status"},
+		{"purge", "--before", "2030-01-01"},
+		{"purge", "--before", "2030-01-01T12:30:00Z"},
+		{"rebuild"}, {"status"},
 		{"validate"}, {"config"}, {"recover", "--from", "missing.db", "--dry-run"},
 	}
 	for _, argv := range commands {

@@ -171,10 +171,12 @@ func TestRecoverPostInstallSyncFailurePreservesStartupCause(t *testing.T) {
 	startupErr := errors.New("injected startup failure")
 	syncErr := errors.New("injected post-sync failure")
 	cfg := &config.Config{DatabasePath: filepath.Join(t.TempDir(), "active.db")}
+	installedPath := cfg.DatabasePath + ".installed"
+	backupPath := cfg.DatabasePath + ".backup-test"
 
 	originalExecute := recoverExecute
 	recoverExecute = func(context.Context, recovery.Options) (recovery.Report, error) {
-		return recovery.Report{ActivePath: cfg.DatabasePath}, nil
+		return recovery.Report{ActivePath: installedPath, BackupPath: backupPath}, nil
 	}
 	t.Cleanup(func() { recoverExecute = originalExecute })
 
@@ -203,6 +205,14 @@ func TestRecoverPostInstallSyncFailurePreservesStartupCause(t *testing.T) {
 	}
 	if stdout.Len() != 0 {
 		t.Fatalf("report printed before failed post-sync: %q", stdout.String())
+	}
+	for _, want := range []string{
+		"recovery replacement installed at: " + installedPath,
+		"manual recovery backup path: " + backupPath,
+	} {
+		if !strings.Contains(stderr.String(), want) {
+			t.Fatalf("stderr=%q, want failure diagnostic %q", stderr.String(), want)
+		}
 	}
 }
 
@@ -531,7 +541,7 @@ func TestRecoverCommandReturnsStructuredApplyFailure(t *testing.T) {
 	}
 }
 
-func TestRecoverCommandEmptyFromReturnsApplyFailure(t *testing.T) {
+func TestRecoverCommandRejectsEmptyFromBeforeApply(t *testing.T) {
 	dir := t.TempDir()
 	home := filepath.Join(dir, "home")
 	if err := os.MkdirAll(home, 0o755); err != nil {
@@ -549,14 +559,14 @@ func TestRecoverCommandEmptyFromReturnsApplyFailure(t *testing.T) {
 	root.SetArgs([]string{"recover", "--from", ""})
 	err := root.Execute()
 	if err == nil {
-		t.Fatal("recover command succeeded; want structured missing --from failure")
+		t.Fatal("recover command succeeded; want empty --from validation failure")
+	}
+	if !strings.Contains(err.Error(), "--from path must not be empty") {
+		t.Fatalf("command error = %v, want empty --from validation failure", err)
 	}
 	var failure *recovery.ApplyFailure
-	if !errors.As(err, &failure) {
-		t.Fatalf("command error %T %[1]v, want *recovery.ApplyFailure", err)
-	}
-	if failure.Phase != recovery.ApplyFailurePhase("source-read") || failure.ActivePath == "" || failure.FromPath != "" {
-		t.Fatalf("ApplyFailure = %+v, want source-read with active and missing from", failure)
+	if errors.As(err, &failure) {
+		t.Fatalf("command reached recovery apply: %+v", failure)
 	}
 }
 

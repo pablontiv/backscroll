@@ -142,6 +142,28 @@ func defaultStartupPolicy(ctx context.Context, progress io.Writer) startupResult
 	return startupResult{Config: cfg}
 }
 
+func validateCommandBeforeStartup(cmd *cobra.Command, args []string, positional cobra.PositionalArgs, semantic func() error) error {
+	if positional != nil {
+		if err := positional(cmd, args); err != nil {
+			return err
+		}
+	}
+	if err := validateRequiredFlagsAndGroups(cmd); err != nil {
+		return err
+	}
+	if semantic != nil {
+		return semantic()
+	}
+	return nil
+}
+
+func validateRequiredFlagsAndGroups(cmd *cobra.Command) error {
+	if err := cmd.ValidateRequiredFlags(); err != nil {
+		return err
+	}
+	return cmd.ValidateFlagGroups()
+}
+
 func buildRootCmd(stdout, stderr io.Writer) *cobra.Command {
 	return buildRootCmdWithStartup(stdout, stderr, defaultStartupPolicy)
 }
@@ -160,6 +182,9 @@ conversation, a trigram index for commands, paths and errors — and an unfilter
 query merges both by rank position (RRF).`,
 		Version: version,
 		PersistentPreRunE: func(cmd *cobra.Command, args []string) error {
+			if err := validateRequiredFlagsAndGroups(cmd); err != nil {
+				return err
+			}
 			result := policy(cmd.Context(), startupProgressWriter(cmd, stderr))
 			cmd.SetContext(context.WithValue(cmd.Context(), startupContextKey{}, result))
 			failure := result.startupFailure()

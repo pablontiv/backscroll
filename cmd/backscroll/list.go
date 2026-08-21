@@ -37,10 +37,15 @@ Use --limit to restrict result count.
 Use --offset to skip results.
 Use --recent N to show N most recent sessions (legacy flag; prefer --order timestamp:desc --limit N).
 Use --json to output as JSON.`,
+		Args: func(cmd *cobra.Command, args []string) error {
+			return validateCommandBeforeStartup(cmd, args, func(_ *cobra.Command, args []string) error {
+				if len(args) > 0 {
+					return fmt.Errorf("unexpected positional argument %q; use --text for text search", args[0])
+				}
+				return nil
+			}, nil)
+		},
 		RunE: func(cmd *cobra.Command, args []string) error {
-			if len(args) > 0 {
-				return fmt.Errorf("unexpected positional argument %q; use --text for text search", args[0])
-			}
 			startup := startupResultFrom(cmd)
 			if startup.Config == nil {
 				return fmt.Errorf("startup configuration unavailable")

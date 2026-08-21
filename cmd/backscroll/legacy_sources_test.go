@@ -17,7 +17,7 @@ func TestLegacySourcesBlockEveryExecutableCommand(t *testing.T) {
 		name string
 		args []string
 	}{
-		{name: "search", args: []string{"search"}},
+		{name: "search", args: []string{"search", "needle"}},
 		{name: "list", args: []string{"list"}},
 		{name: "patterns", args: []string{"patterns", "--kind", "commands"}},
 		{name: "rebuild", args: []string{"rebuild"}},
@@ -51,7 +51,7 @@ func TestLegacySourcesPreflightHasNoSideEffects(t *testing.T) {
 		name string
 		args []string
 	}{
-		{name: "search", args: []string{"search"}},
+		{name: "search", args: []string{"search", "needle"}},
 		{name: "list", args: []string{"list"}},
 		{name: "patterns", args: []string{"patterns", "--kind", "commands"}},
 		{name: "rebuild", args: []string{"rebuild"}},

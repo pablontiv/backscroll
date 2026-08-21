@@ -52,10 +52,17 @@ Use --min-length, --max-length for sequence pattern length bounds (default 2, 6)
 Use --min-confidence for correction filtering (default 0.6; detector confidence threshold).
 Use --limit, --offset for pagination.
 Use --json, --robot for output formats.`,
+		Args: func(cmd *cobra.Command, args []string) error {
+			return validateCommandBeforeStartup(cmd, args, func(_ *cobra.Command, args []string) error {
+				if len(args) > 0 {
+					return fmt.Errorf("unexpected positional argument %q", args[0])
+				}
+				return nil
+			}, func() error {
+				return validatePatternsRequest(kind, project, allProjects, limit, offset, trend)
+			})
+		},
 		RunE: func(cmd *cobra.Command, args []string) error {
-			if len(args) > 0 {
-				return fmt.Errorf("unexpected positional argument %q", args[0])
-			}
 			startup := startupResultFrom(cmd)
 			if startup.Config == nil {
 				return fmt.Errorf("startup configuration unavailable")
@@ -89,12 +96,7 @@ Use --json, --robot for output formats.`,
 	return cmd
 }
 
-func runPatterns(ctx context.Context, stdout, stderr io.Writer, cfg *config.Config,
-	kind string, project string, allProjects bool, tag string,
-	limit, offset int, jsonFormat, robotFormat bool, minSupport int, minConfidence float64, pending bool, batch int,
-	minLength, maxLength int, after, before string, trend bool) (retErr error) {
-
-	// Early flag validation before DB open
+func validatePatternsRequest(kind, project string, allProjects bool, limit, offset int, trend bool) error {
 	validKinds := map[string]bool{
 		"commands":    true,
 		"failures":    true,
@@ -105,17 +107,25 @@ func runPatterns(ctx context.Context, stdout, stderr io.Writer, cfg *config.Conf
 	if !validKinds[kind] {
 		return fmt.Errorf("unsupported --kind %q (supported: commands, failures, templates, sequences, corrections)", kind)
 	}
-
 	if trend && kind != "commands" && kind != "failures" {
 		return fmt.Errorf("--trend only supported for --kind commands|failures, got %q", kind)
 	}
-
 	if project != "" && allProjects {
 		return fmt.Errorf("--project and --all-projects are mutually exclusive")
 	}
-
 	if limit < 0 || offset < 0 {
 		return fmt.Errorf("--limit and --offset must be >= 0")
+	}
+	return nil
+}
+
+func runPatterns(ctx context.Context, stdout, stderr io.Writer, cfg *config.Config,
+	kind string, project string, allProjects bool, tag string,
+	limit, offset int, jsonFormat, robotFormat bool, minSupport int, minConfidence float64, pending bool, batch int,
+	minLength, maxLength int, after, before string, trend bool) (retErr error) {
+
+	if err := validatePatternsRequest(kind, project, allProjects, limit, offset, trend); err != nil {
+		return err
 	}
 
 	db, diag, err := prepareIndex(ctx, cfg, indexDataRead)

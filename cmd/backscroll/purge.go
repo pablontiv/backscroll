@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"time"
 
 	"github.com/spf13/cobra"
 
@@ -22,6 +23,11 @@ func newPurgeCmd(stdout, stderr io.Writer) *cobra.Command {
 The date should be in YYYY-MM-DD format (e.g., 2024-01-15).
 
 Example: backscroll purge --before 2024-01-01`,
+		Args: func(cmd *cobra.Command, args []string) error {
+			return validateCommandBeforeStartup(cmd, args, cobra.NoArgs, func() error {
+				return validatePurgeBefore(before)
+			})
+		},
 		RunE: func(cmd *cobra.Command, args []string) error {
 			startup := startupResultFrom(cmd)
 			if startup.Config == nil {
@@ -37,9 +43,22 @@ Example: backscroll purge --before 2024-01-01`,
 	return cmd
 }
 
-func runPurge(ctx context.Context, stdout, stderr io.Writer, cfg *config.Config, before string) (retErr error) {
+func validatePurgeBefore(before string) error {
 	if before == "" {
 		return fmt.Errorf("--before date is required")
+	}
+	if _, err := time.Parse(time.RFC3339, before); err == nil {
+		return nil
+	}
+	if _, err := time.Parse("2006-01-02", before); err != nil {
+		return fmt.Errorf("invalid --before date %q: expected YYYY-MM-DD or RFC3339", before)
+	}
+	return nil
+}
+
+func runPurge(ctx context.Context, stdout, stderr io.Writer, cfg *config.Config, before string) (retErr error) {
+	if err := validatePurgeBefore(before); err != nil {
+		return err
 	}
 
 	db, diag, err := prepareIndex(ctx, cfg, indexMutation)

@@ -56,15 +56,14 @@ Use --source-path to filter by indexed source path (exact, SQL LIKE pattern, or 
 Use --json to output as JSON.
 Use --fields to choose JSON detail: minimal (default) or full.
 Use --max-tokens to limit output size (approximate token count).`,
-		Args: cobra.MaximumNArgs(1),
+		Args: func(cmd *cobra.Command, args []string) error {
+			return validateCommandBeforeStartup(cmd, args, cobra.MaximumNArgs(1), func() error {
+				_, _, err := validateAndParseSearchRequest(searchQuery(text, args), fields, contentType, after, before)
+				return err
+			})
+		},
 		RunE: func(cmd *cobra.Command, args []string) error {
-			query := text
-			if query == "" && len(args) > 0 {
-				query = args[0]
-			}
-			if query == "" {
-				return fmt.Errorf("search query required (use --text <query> or positional argument)")
-			}
+			query := searchQuery(text, args)
 			startup := startupResultFrom(cmd)
 			if startup.Config == nil {
 				return fmt.Errorf("startup configuration unavailable")
@@ -97,17 +96,19 @@ Use --max-tokens to limit output size (approximate token count).`,
 	return cmd
 }
 
-func runSearch(ctx context.Context, stdout, stderr io.Writer, cfg *config.Config,
-	query string,
-	project string, allProjects bool, jsonFormat, robotFormat bool,
-	source, sourcePath, after, before, role string,
-	limit, offset int, contentType, tag string,
-	fields string, maxTokens int,
-	lexicalOnly bool, similarityThreshold float64) (retErr error) {
+func searchQuery(text string, args []string) string {
+	if text == "" && len(args) > 0 {
+		return args[0]
+	}
+	return text
+}
 
-	// Validate flag values before opening the database
+func validateAndParseSearchRequest(query, fields, contentType, after, before string) (*time.Time, *time.Time, error) {
+	if query == "" {
+		return nil, nil, fmt.Errorf("search query required (use --text <query> or positional argument)")
+	}
 	if fields != "minimal" && fields != "full" {
-		return fmt.Errorf("invalid --fields value %q: must be minimal or full", fields)
+		return nil, nil, fmt.Errorf("invalid --fields value %q: must be minimal or full", fields)
 	}
 
 	validContentTypes := map[string]bool{
@@ -116,9 +117,39 @@ func runSearch(ctx context.Context, stdout, stderr io.Writer, cfg *config.Config
 		"tool":      true,
 		"reasoning": true,
 	}
-
 	if contentType != "" && !validContentTypes[contentType] {
-		return fmt.Errorf("invalid --content-type %q; must be one of: text, code, tool, reasoning", contentType)
+		return nil, nil, fmt.Errorf("invalid --content-type %q; must be one of: text, code, tool, reasoning", contentType)
+	}
+
+	var afterTime, beforeTime *time.Time
+	if after != "" {
+		parsed, err := time.Parse("2006-01-02", after)
+		if err != nil {
+			return nil, nil, fmt.Errorf("parse --after date: %w", err)
+		}
+		afterTime = &parsed
+	}
+	if before != "" {
+		parsed, err := time.Parse("2006-01-02", before)
+		if err != nil {
+			return nil, nil, fmt.Errorf("parse --before date: %w", err)
+		}
+		beforeTime = &parsed
+	}
+	return afterTime, beforeTime, nil
+}
+
+func runSearch(ctx context.Context, stdout, stderr io.Writer, cfg *config.Config,
+	query string,
+	project string, allProjects bool, jsonFormat, robotFormat bool,
+	source, sourcePath, after, before, role string,
+	limit, offset int, contentType, tag string,
+	fields string, maxTokens int,
+	lexicalOnly bool, similarityThreshold float64) (retErr error) {
+
+	afterTime, beforeTime, err := validateAndParseSearchRequest(query, fields, contentType, after, before)
+	if err != nil {
+		return err
 	}
 
 	db, diag, err := prepareIndex(ctx, cfg, indexDataRead)
@@ -134,23 +165,6 @@ func runSearch(ctx context.Context, stdout, stderr io.Writer, cfg *config.Config
 
 	// Derive effective project from cwd if not explicitly set
 	project = effectiveProject(project, allProjects)
-
-	// Parse dates
-	var afterTime, beforeTime *time.Time
-	if after != "" {
-		t, err := time.Parse("2006-01-02", after)
-		if err != nil {
-			return fmt.Errorf("parse --after date: %w", err)
-		}
-		afterTime = &t
-	}
-	if before != "" {
-		t, err := time.Parse("2006-01-02", before)
-		if err != nil {
-			return fmt.Errorf("parse --before date: %w", err)
-		}
-		beforeTime = &t
-	}
 
 	// Build search options
 	opts := models.SearchOptions{

@@ -26,10 +26,17 @@ func newAnnotateCmd(stdout, stderr io.Writer) *cobra.Command {
 		Long: `Annotate a message with a classification label. Validates message existence
 before writing. Supports both uuid (preferred) and legacy source_path+ordinal
 fallback. Re-annotating the same (source_path, ordinal, kind) replaces the label.`,
+		Args: func(cmd *cobra.Command, args []string) error {
+			return validateCommandBeforeStartup(cmd, args, func(_ *cobra.Command, args []string) error {
+				if len(args) > 0 {
+					return fmt.Errorf("unexpected positional argument %q", args[0])
+				}
+				return nil
+			}, func() error {
+				return validateAnnotateRequest(uuid, path, ordinal, kind, label)
+			})
+		},
 		RunE: func(cmd *cobra.Command, args []string) error {
-			if len(args) > 0 {
-				return fmt.Errorf("unexpected positional argument %q", args[0])
-			}
 			startup := startupResultFrom(cmd)
 			if startup.Config == nil {
 				return fmt.Errorf("startup configuration unavailable")
@@ -50,16 +57,21 @@ fallback. Re-annotating the same (source_path, ordinal, kind) replaces the label
 	return cmd
 }
 
-func runAnnotate(ctx context.Context, stdout, stderr io.Writer, cfg *config.Config,
-	uuid, path string, ordinal int, kind, label string) (retErr error) {
-
-	// Early flag validation
+func validateAnnotateRequest(uuid, path string, ordinal int, kind, label string) error {
 	if uuid == "" && (path == "" || ordinal < 0) {
 		return fmt.Errorf("must provide either --uuid or both --path and --ordinal")
 	}
-
 	if kind == "" || label == "" {
 		return fmt.Errorf("--kind and --label are required")
+	}
+	return nil
+}
+
+func runAnnotate(ctx context.Context, stdout, stderr io.Writer, cfg *config.Config,
+	uuid, path string, ordinal int, kind, label string) (retErr error) {
+
+	if err := validateAnnotateRequest(uuid, path, ordinal, kind, label); err != nil {
+		return err
 	}
 
 	db, diag, err := prepareIndex(ctx, cfg, indexMutation)

@@ -23,7 +23,14 @@ func newRecoverCmd(stdout, stderr io.Writer) *cobra.Command {
 		Use:          "recover",
 		Short:        "Recover stranded database rows into the configured database",
 		SilenceUsage: true,
-		Args:         cobra.NoArgs,
+		Args: func(cmd *cobra.Command, args []string) error {
+			return validateCommandBeforeStartup(cmd, args, cobra.NoArgs, func() error {
+				if from == "" {
+					return fmt.Errorf("--from path must not be empty")
+				}
+				return nil
+			})
+		},
 		RunE: func(cmd *cobra.Command, args []string) error {
 			startup := startupResultFrom(cmd)
 			startupFailure := optionalStartupFailureError(startup.startupFailure())
@@ -48,6 +55,14 @@ func newRecoverCmd(stdout, stderr io.Writer) *cobra.Command {
 			}
 			if !dryRun {
 				if err := recoverPostInstallSync(cfg, stderr); err != nil {
+					installedPath := report.ActivePath
+					if installedPath == "" {
+						installedPath = cfg.DatabasePath
+					}
+					_, _ = fmt.Fprintf(stderr, "recovery replacement installed at: %s\n", installedPath)
+					if report.BackupPath != "" {
+						_, _ = fmt.Fprintf(stderr, "manual recovery backup path: %s\n", report.BackupPath)
+					}
 					return errors.Join(startupFailure, fmt.Errorf("post-recovery sync: %w", err))
 				}
 			}
