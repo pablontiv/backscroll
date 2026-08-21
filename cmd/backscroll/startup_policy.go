@@ -13,7 +13,7 @@ import (
 	"github.com/spf13/cobra"
 )
 
-type startupPolicyFunc func(context.Context, io.Writer) startupResult
+type startupPolicyFunc func(context.Context, io.Writer, startupCommandClass) startupResult
 
 type startupStage string
 
@@ -73,13 +73,34 @@ func (f *startupFailure) renderedDiagnostic() compat.Diagnostic {
 	return d
 }
 
+type startupLease interface {
+	Release() error
+}
+
+type startupWarning struct {
+	Code    compat.Code
+	Summary string
+}
+
 type startupResult struct {
 	Config  *config.Config
 	Failure *startupFailure
+	Warning *startupWarning
+	Lease   startupLease
 }
 
 func (r startupResult) startupFailure() *startupFailure {
 	return r.Failure
+}
+
+func (r startupResult) release(retErr error) error {
+	if r.Lease == nil {
+		return retErr
+	}
+	if releaseErr := r.Lease.Release(); releaseErr != nil {
+		return errors.Join(retErr, fmt.Errorf("release startup lock: %w", releaseErr))
+	}
+	return retErr
 }
 
 func optionalStartupFailureError(f *startupFailure) error {
@@ -98,7 +119,7 @@ func startupResultFrom(cmd *cobra.Command) startupResult {
 	return result
 }
 
-func defaultStartupPolicy(ctx context.Context, progress io.Writer) startupResult {
+func defaultStartupPolicy(ctx context.Context, progress io.Writer, _ startupCommandClass) startupResult {
 	inputsDir, err := input_config.InputsDir()
 	if err != nil {
 		cause := fmt.Errorf("resolve inputs directory: %w", err)
@@ -185,7 +206,8 @@ query merges both by rank position (RRF).`,
 			if err := validateRequiredFlagsAndGroups(cmd); err != nil {
 				return err
 			}
-			result := policy(cmd.Context(), startupProgressWriter(cmd, stderr))
+			class, _ := startupCommandClassFor(cmd)
+			result := policy(cmd.Context(), startupProgressWriter(cmd, stderr), class)
 			cmd.SetContext(context.WithValue(cmd.Context(), startupContextKey{}, result))
 			failure := result.startupFailure()
 			if failure == nil {
@@ -203,18 +225,16 @@ query merges both by rank position (RRF).`,
 	root.SetOut(stdout)
 	root.SetErr(stderr)
 
-	root.AddCommand(
-		newSearchCmd(stdout, stderr),
-		newListCmd(stdout, stderr),
-		newPatternsCmd(stdout, stderr),
-		newRebuildCmd(stdout, stderr),
-		newPurgeCmd(stdout, stderr),
-		newValidateCmd(stdout, stderr),
-		newStatusCmd(stdout, stderr),
-		newConfigCmd(stdout, stderr),
-		newAnnotateCmd(stdout, stderr),
-		newRecoverCmd(stdout, stderr),
-	)
+	registerStartupCommand(root, startupSnapshotRead, newSearchCmd(stdout, stderr))
+	registerStartupCommand(root, startupSnapshotRead, newListCmd(stdout, stderr))
+	registerStartupCommand(root, startupSnapshotRead, newPatternsCmd(stdout, stderr))
+	registerStartupCommand(root, startupMutation, newRebuildCmd(stdout, stderr))
+	registerStartupCommand(root, startupMutation, newPurgeCmd(stdout, stderr))
+	registerStartupCommand(root, startupSnapshotRead, newValidateCmd(stdout, stderr))
+	registerStartupCommand(root, startupSnapshotRead, newStatusCmd(stdout, stderr))
+	registerStartupCommand(root, startupMetadataRead, newConfigCmd(stdout, stderr))
+	registerStartupCommand(root, startupMutation, newAnnotateCmd(stdout, stderr))
+	registerStartupCommand(root, startupMutation, newRecoverCmd(stdout, stderr))
 
 	return root
 }

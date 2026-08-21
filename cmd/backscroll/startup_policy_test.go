@@ -47,7 +47,7 @@ func TestInvalidOperationalCommandsSkipStartup(t *testing.T) {
 	for _, tc := range testCases {
 		t.Run(tc.name, func(t *testing.T) {
 			startupCalls := 0
-			root := buildRootCmdWithStartup(io.Discard, io.Discard, func(context.Context, io.Writer) startupResult {
+			root := buildRootCmdWithStartup(io.Discard, io.Discard, func(context.Context, io.Writer, startupCommandClass) startupResult {
 				startupCalls++
 				return startupResult{Config: &config.Config{DatabasePath: filepath.Join(t.TempDir(), "index.db")}}
 			})
@@ -90,21 +90,32 @@ func TestInvalidSearchDoesNotCreateDatabase(t *testing.T) {
 }
 
 func TestEveryOperationalCommandRunsStartupBeforeHandler(t *testing.T) {
-	commands := [][]string{
-		{"search", "needle"}, {"list"}, {"patterns", "--kind", "commands"},
-		{"annotate", "--uuid", "u", "--kind", "correction", "--label", "x"},
-		{"purge", "--before", "2030-01-01"},
-		{"purge", "--before", "2030-01-01T12:30:00Z"},
-		{"rebuild"}, {"status"},
-		{"validate"}, {"config"}, {"recover", "--from", "missing.db", "--dry-run"},
+	commands := []struct {
+		argv      []string
+		wantClass startupCommandClass
+	}{
+		{argv: []string{"search", "needle"}, wantClass: startupSnapshotRead},
+		{argv: []string{"list"}, wantClass: startupSnapshotRead},
+		{argv: []string{"patterns", "--kind", "commands"}, wantClass: startupSnapshotRead},
+		{argv: []string{"annotate", "--uuid", "u", "--kind", "correction", "--label", "x"}, wantClass: startupMutation},
+		{argv: []string{"purge", "--before", "2030-01-01"}, wantClass: startupMutation},
+		{argv: []string{"purge", "--before", "2030-01-01T12:30:00Z"}, wantClass: startupMutation},
+		{argv: []string{"rebuild"}, wantClass: startupMutation},
+		{argv: []string{"status"}, wantClass: startupSnapshotRead},
+		{argv: []string{"validate"}, wantClass: startupSnapshotRead},
+		{argv: []string{"config"}, wantClass: startupMetadataRead},
+		{argv: []string{"recover", "--from", "missing.db", "--dry-run"}, wantClass: startupMutation},
 	}
-	for _, argv := range commands {
+	for _, command := range commands {
+		argv := command.argv
 		t.Run(strings.Join(argv, "_"), func(t *testing.T) {
 			calls := 0
 			markerCalls := 0
 			events := []string{}
-			policy := func(context.Context, io.Writer) startupResult {
+			var gotClass startupCommandClass
+			policy := func(_ context.Context, _ io.Writer, class startupCommandClass) startupResult {
 				calls++
+				gotClass = class
 				events = append(events, "startup")
 				return startupResult{Config: &config.Config{DatabasePath: filepath.Join(t.TempDir(), "index.db")}}
 			}
@@ -120,6 +131,9 @@ func TestEveryOperationalCommandRunsStartupBeforeHandler(t *testing.T) {
 			}
 			if calls != 1 {
 				t.Fatalf("startup calls=%d, want 1", calls)
+			}
+			if gotClass != command.wantClass {
+				t.Fatalf("startup class=%q, want %q", gotClass, command.wantClass)
 			}
 			if markerCalls != 1 {
 				t.Fatalf("handler calls=%d, want 1", markerCalls)
@@ -178,7 +192,7 @@ func TestFailedStartupAllowsOnlyRecoverWithInjectedPolicy(t *testing.T) {
 	for _, tc := range testCases {
 		t.Run(tc.name, func(t *testing.T) {
 			policyCalls := 0
-			policy := func(context.Context, io.Writer) startupResult {
+			policy := func(context.Context, io.Writer, startupCommandClass) startupResult {
 				policyCalls++
 				return tc.result
 			}
@@ -244,7 +258,7 @@ func TestRecoverAloneContinuesAfterStartupFailure(t *testing.T) {
 	startupErr := errors.New("injected startup failure")
 	recoveryErr := errors.New("injected recovery failure")
 	called := false
-	root := buildRootCmdWithStartup(io.Discard, io.Discard, func(context.Context, io.Writer) startupResult {
+	root := buildRootCmdWithStartup(io.Discard, io.Discard, func(context.Context, io.Writer, startupCommandClass) startupResult {
 		dbPath := filepath.Join(t.TempDir(), "active.db")
 		return startupResult{Config: &config.Config{DatabasePath: dbPath}, Failure: &startupFailure{
 			Stage:       startupStageStartupSync,
@@ -275,7 +289,7 @@ func TestRecoverAloneContinuesAfterStartupFailure(t *testing.T) {
 func TestStartupFailurePreventsHandlerOutput(t *testing.T) {
 	var stdout, stderr bytes.Buffer
 	policyErr := errors.New("injected startup failure")
-	root := buildRootCmdWithStartup(&stdout, &stderr, func(context.Context, io.Writer) startupResult {
+	root := buildRootCmdWithStartup(&stdout, &stderr, func(context.Context, io.Writer, startupCommandClass) startupResult {
 		return startupResult{Failure: &startupFailure{Stage: startupStageConfigLoad, Cause: policyErr, Diagnostic: compat.Diagnostic{Code: compat.CodeMigrationFailed, Summary: "injected startup failure"}}}
 	})
 	root.SetArgs([]string{"config", "--json"})
@@ -313,7 +327,7 @@ func TestRecoverBlocksNonrecoverableStartupFailures(t *testing.T) {
 			t.Cleanup(func() { recoverExecute = originalExecute })
 
 			var stdout, stderr bytes.Buffer
-			root := buildRootCmdWithStartup(&stdout, &stderr, func(context.Context, io.Writer) startupResult {
+			root := buildRootCmdWithStartup(&stdout, &stderr, func(context.Context, io.Writer, startupCommandClass) startupResult {
 				return startupResult{Config: cfg, Failure: &startupFailure{
 					Stage:       tc.stage,
 					Cause:       cause,
@@ -362,7 +376,7 @@ func TestRecoverableStartupFailuresPermitControlledRecovery(t *testing.T) {
 			t.Cleanup(func() { recoverExecute = originalExecute })
 
 			var stdout, stderr bytes.Buffer
-			root := buildRootCmdWithStartup(&stdout, &stderr, func(context.Context, io.Writer) startupResult {
+			root := buildRootCmdWithStartup(&stdout, &stderr, func(context.Context, io.Writer, startupCommandClass) startupResult {
 				return startupResult{Config: cfg, Failure: &startupFailure{Stage: tc.stage, Diagnostic: startupDiag, Recoverable: true}}
 			})
 			root.SetArgs(startupDiag.Continuation)
@@ -389,7 +403,7 @@ func TestSuccessfulStartupRecoveryFailureOmitsTypedNilStartupFailure(t *testing.
 	}
 	t.Cleanup(func() { recoverExecute = originalExecute })
 
-	root := buildRootCmdWithStartup(io.Discard, io.Discard, func(context.Context, io.Writer) startupResult {
+	root := buildRootCmdWithStartup(io.Discard, io.Discard, func(context.Context, io.Writer, startupCommandClass) startupResult {
 		return startupResult{Config: cfg}
 	})
 	root.SetArgs([]string{"recover", "--from", "stranded.db"})
@@ -421,7 +435,7 @@ func TestSuccessfulStartupPostInstallSyncFailureOmitsTypedNilStartupFailure(t *t
 	t.Cleanup(func() { recoverPostInstallSync = originalPostInstallSync })
 
 	var stdout bytes.Buffer
-	root := buildRootCmdWithStartup(&stdout, io.Discard, func(context.Context, io.Writer) startupResult {
+	root := buildRootCmdWithStartup(&stdout, io.Discard, func(context.Context, io.Writer, startupCommandClass) startupResult {
 		return startupResult{Config: cfg}
 	})
 	root.SetArgs([]string{"recover", "--from", "stranded.db"})
@@ -452,7 +466,7 @@ func TestDiagnosticOnlyStartupFailurePlusRecoveryFailurePreservesBothCauses(t *t
 	}
 	t.Cleanup(func() { recoverExecute = originalExecute })
 
-	root := buildRootCmdWithStartup(io.Discard, io.Discard, func(context.Context, io.Writer) startupResult {
+	root := buildRootCmdWithStartup(io.Discard, io.Discard, func(context.Context, io.Writer, startupCommandClass) startupResult {
 		return startupResult{Config: cfg, Failure: &startupFailure{Stage: startupStageIndexPrepare, Diagnostic: startupDiag, Recoverable: true}}
 	})
 	root.SetArgs([]string{"recover", "--from", "stranded.db"})
@@ -483,7 +497,7 @@ func TestDiagnosticOnlyStartupFailurePlusPostInstallSyncFailurePreservesBothCaus
 	t.Cleanup(func() { recoverPostInstallSync = originalPostInstallSync })
 
 	var stdout bytes.Buffer
-	root := buildRootCmdWithStartup(&stdout, io.Discard, func(context.Context, io.Writer) startupResult {
+	root := buildRootCmdWithStartup(&stdout, io.Discard, func(context.Context, io.Writer, startupCommandClass) startupResult {
 		return startupResult{Config: cfg, Failure: &startupFailure{Stage: startupStageIndexPrepare, Diagnostic: startupDiag, Recoverable: true}}
 	})
 	root.SetArgs([]string{"recover", "--from", "stranded.db"})
@@ -542,7 +556,7 @@ func TestStartupFailureMachineDiagnosticsAreStructuredAndUncontaminated(t *testi
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			var stdout, stderr bytes.Buffer
-			root := buildRootCmdWithStartup(&stdout, &stderr, func(context.Context, io.Writer) startupResult {
+			root := buildRootCmdWithStartup(&stdout, &stderr, func(context.Context, io.Writer, startupCommandClass) startupResult {
 				return startupResult{Failure: &startupFailure{
 					Stage:      startupStageActiveManifest,
 					Cause:      errors.New("active manifest invalid"),
@@ -593,7 +607,7 @@ func TestRobotDiagnosticEscapesMultilineValuesAndEncodesContinuationArgv(t *test
 		Summary:      "first line\\with slash\r\nsecond line",
 		Continuation: []string{"recover", "--from", "path with spaces\\and\\slashes\r\nnext", "--dry-run"},
 	}
-	root := buildRootCmdWithStartup(&stdout, &stderr, func(context.Context, io.Writer) startupResult {
+	root := buildRootCmdWithStartup(&stdout, &stderr, func(context.Context, io.Writer, startupCommandClass) startupResult {
 		return startupResult{Failure: &startupFailure{Stage: startupStageStartupSync, Diagnostic: diag, Recoverable: true}}
 	})
 	root.SetArgs([]string{"search", "needle", "--robot"})
@@ -646,7 +660,7 @@ func TestDefaultStartupPolicyCallsSyncExactlyOnce(t *testing.T) {
 	}
 	t.Cleanup(func() { startupSync = originalSync })
 
-	result := defaultStartupPolicy(context.Background(), io.Discard)
+	result := defaultStartupPolicy(context.Background(), io.Discard, startupMutation)
 	if result.Failure != nil {
 		t.Fatalf("startup result=%+v", result)
 	}
@@ -718,7 +732,7 @@ func TestDefaultStartupPolicyNonrecoverableStages(t *testing.T) {
 			t.Cleanup(func() { startupSync = originalSync })
 			tc.setup(t)
 
-			result := defaultStartupPolicy(context.Background(), io.Discard)
+			result := defaultStartupPolicy(context.Background(), io.Discard, startupMutation)
 			failure := result.startupFailure()
 			if failure == nil {
 				t.Fatal("default startup unexpectedly succeeded")
@@ -750,7 +764,7 @@ func TestDiagnosticAlreadyRenderedOnlySuppressesTopLevelDiagnostic(t *testing.T)
 func TestMetadataCommandsSkipStartup(t *testing.T) {
 	for _, argv := range [][]string{{"--help"}, {"--version"}, {"search", "--help"}} {
 		calls := 0
-		root := buildRootCmdWithStartup(io.Discard, io.Discard, func(context.Context, io.Writer) startupResult {
+		root := buildRootCmdWithStartup(io.Discard, io.Discard, func(context.Context, io.Writer, startupCommandClass) startupResult {
 			calls++
 			return startupResult{}
 		})

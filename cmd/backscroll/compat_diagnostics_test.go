@@ -562,7 +562,7 @@ func TestRecoveryContinuationExecutesInConfiguredSamePathContextWithEmptyWAL(t *
 	startupErr := indexDiagnosticError{diagnostic: startupDiagnostic}
 
 	var stdout, stderr bytes.Buffer
-	root := buildRootCmdWithStartup(&stdout, &stderr, func(context.Context, io.Writer) startupResult {
+	root := buildRootCmdWithStartup(&stdout, &stderr, func(context.Context, io.Writer, startupCommandClass) startupResult {
 		return startupResult{Config: cfg, Failure: &startupFailure{
 			Stage:       startupStageIndexPrepare,
 			Cause:       startupErr,
