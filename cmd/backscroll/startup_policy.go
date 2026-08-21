@@ -23,6 +23,7 @@ const (
 	startupStageLegacySource   startupStage = "legacy_source"
 	startupStageConfigLoad     startupStage = "config_load"
 	startupStageActiveManifest startupStage = "active_manifest"
+	startupStageSyncLock       startupStage = "sync_lock"
 	startupStageIndexPrepare   startupStage = "index_prepare"
 	startupStageStartupSync    startupStage = "startup_sync"
 )
@@ -119,7 +120,7 @@ func startupResultFrom(cmd *cobra.Command) startupResult {
 	return result
 }
 
-func defaultStartupPolicy(ctx context.Context, progress io.Writer, _ startupCommandClass) startupResult {
+func defaultStartupPolicy(ctx context.Context, progress io.Writer, class startupCommandClass) startupResult {
 	inputsDir, err := input_config.InputsDir()
 	if err != nil {
 		cause := fmt.Errorf("resolve inputs directory: %w", err)
@@ -142,25 +143,7 @@ func defaultStartupPolicy(ctx context.Context, progress io.Writer, _ startupComm
 		cause := fmt.Errorf("validate active inputs: %w", err)
 		return startupResult{Config: cfg, Failure: &startupFailure{Stage: startupStageActiveManifest, Cause: cause, Diagnostic: compat.Diagnostic{Code: compat.CodeMigrationFailed, Summary: cause.Error()}}}
 	}
-	db, diag, err := prepareIndex(ctx, cfg, indexMutation)
-	if db != nil {
-		err = closeIndexDB(db, err)
-	}
-	if diag != nil || err != nil {
-		d := compat.Diagnostic{Code: compat.CodeMigrationFailed, Summary: "prepare index failed"}
-		if diag != nil {
-			d = *diag
-		} else if err != nil {
-			d.Summary = fmt.Sprintf("prepare index failed: %v", err)
-		}
-		return startupResult{Config: cfg, Failure: &startupFailure{Stage: startupStageIndexPrepare, Cause: err, Diagnostic: d, Recoverable: true}}
-	}
-	if err := startupSync(cfg, progress); err != nil {
-		activePath, _ := resolveActiveIndexPath(cfg.DatabasePath)
-		d := continuationFor(compat.Diagnostic{Code: compat.CodeIndexStale, Summary: fmt.Sprintf("index sync failed: %v", err)}, activePath)
-		return startupResult{Config: cfg, Failure: &startupFailure{Stage: startupStageStartupSync, Cause: err, Diagnostic: d, Recoverable: true}}
-	}
-	return startupResult{Config: cfg}
+	return coordinateStartup(ctx, cfg, progress, class)
 }
 
 func validateCommandBeforeStartup(cmd *cobra.Command, args []string, positional cobra.PositionalArgs, semantic func() error) error {
@@ -209,17 +192,23 @@ query merges both by rank position (RRF).`,
 			class, _ := startupCommandClassFor(cmd)
 			result := policy(cmd.Context(), startupProgressWriter(cmd, stderr), class)
 			cmd.SetContext(context.WithValue(cmd.Context(), startupContextKey{}, result))
+			if result.Warning != nil {
+				if _, err := fmt.Fprintf(stderr, "warning: %s: %s\n", result.Warning.Code, result.Warning.Summary); err != nil {
+					return result.release(err)
+				}
+			}
 			failure := result.startupFailure()
 			if failure == nil {
 				return nil
 			}
-			if cmd.Name() == "recover" && failure.Recoverable {
+			if cmd.Name() == "recover" && failure.Recoverable && class == startupMutation {
 				return nil
 			}
+			failureErr := result.release(failure)
 			if failure.Diagnostic.Code != "" || strings.TrimSpace(failure.Diagnostic.Summary) != "" {
-				return refuseIndexWithCause(stdout, stderr, failure.renderedDiagnostic(), failure, commandBoolFlag(cmd, "json"), commandBoolFlag(cmd, "robot"))
+				return refuseIndexWithCause(stdout, stderr, failure.renderedDiagnostic(), failureErr, commandBoolFlag(cmd, "json"), commandBoolFlag(cmd, "robot"))
 			}
-			return failure
+			return failureErr
 		},
 	}
 	root.SetOut(stdout)
