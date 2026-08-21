@@ -51,7 +51,27 @@ Match markers (`>>>` and `<<<` in the raw snippet) are rendered as bold text in 
 ]
 ```
 
-With `--fields full`, the array contains full search-result objects, including the complete message content in `content` and source metadata such as `file_path`, `source`, `role`, `score`, and `rank`.
+With `--fields full`, the array encodes `models.SearchResult` without JSON tags, so keys are emitted in the current Go field names (PascalCase), not snake_case:
+
+```json
+[
+  {
+    "Source": "session",
+    "Role": "assistant",
+    "Content": "...matched text...",
+    "FilePath": "~/.claude/.../session.jsonl",
+    "Timestamp": "2026-08-20T12:34:56Z",
+    "SessionID": "",
+    "ProjectPath": "/Users/Shared/harness/backscroll",
+    "Score": 12.34,
+    "Tags": null,
+    "ContentType": "text",
+    "Rank": 1
+  }
+]
+```
+
+Current full-mode fields are exactly: `Source`, `Role`, `Content`, `FilePath`, `Timestamp`, `SessionID`, `ProjectPath`, `Score`, `Tags`, `ContentType`, and `Rank`. Only `--fields minimal` uses the snake_case payload (`source_path`, `snippet`, `score`, `role`, `timestamp`).
 
 ### Robot
 

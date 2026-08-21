@@ -89,7 +89,7 @@ The SQLite database is the perennial event store, not a disposable cache. When a
 
 ## Machine output
 
-`--json` writes one JSON payload to stdout. JSON and robot startup progress is discarded so stdout stays parseable; human progress and warnings use stderr. Structured diagnostics remain parseable in machine modes. `--robot` writes `field=value` lines to stdout for result-set commands; robot mode on search emits `result_N_field=value` lines and escapes search string values with backslash as `\\`, carriage return as `\r`, and newline as `\n`.
+`--json` writes one JSON payload to stdout. JSON and robot startup progress is discarded so stdout stays parseable; human progress and warnings use stderr. Structured diagnostics remain parseable in machine modes. `--robot` output shape is command-specific: `backscroll list` and `backscroll patterns` include command-defined sections, while only `backscroll search "<query>" --robot` guarantees deterministic `result_N_field=value` lines. Search robot string values escape backslash as `\\`, carriage return as `\r`, and newline as `\n` so each field remains one line.
 
 ## Noise filtering
 

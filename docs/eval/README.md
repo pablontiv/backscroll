@@ -70,9 +70,8 @@ Loaded 20 queries from eval-set
 Results
 =======
 Queries evaluated: 20
-Results found: 18
-Results at rank ≤5: 16
-Recall@5: 80.0%
+Matches found at rank ≤4: 16
+Recall@5 (with ground-truth matching): 80.0%
 
 ✓ Recall@5 target met (≥80%)
 ```

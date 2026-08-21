@@ -107,16 +107,64 @@ func TestBackscrollSkillContractAcceptsSearchQueryText(t *testing.T) {
 	}
 }
 
-func TestBackscrollSkillContractDetectsRemovedReadInvocation(t *testing.T) {
+func TestBackscrollSkillContractAcceptsInlineValueFlagsBeforePositionalQuery(t *testing.T) {
+	root := buildRootCmd(io.Discard, io.Discard)
 	content := strings.Join([]string{
-		"The literal `backscroll read` names the removed command in narrative prose.",
-		"backscroll read /tmp/session.jsonl",
+		`backscroll search --source-path="*/session.jsonl" --all-projects "artifact literal"`,
+		`backscroll search --project=backscroll --limit=5 "migration plan" --json`,
 	}, "\n")
 
-	if !containsBackscrollReadInvocation(content) {
-		t.Fatal("expected actual backscroll read invocation to be detected")
+	violations := validateSkillMarkdown(root, "synthetic-inline-flags-with-query.md", content)
+	if len(violations) > 0 {
+		t.Fatalf("expected inline-value flags with positional query to pass, got violations:\n%s", formatSkillContractViolations(violations))
 	}
-	if containsBackscrollReadInvocation("The literal `backscroll read` names the removed command in narrative prose.") {
+}
+
+func TestBackscrollSkillContractRejectsSearchNonQueryTokens(t *testing.T) {
+	root := buildRootCmd(io.Discard, io.Discard)
+	content := strings.Join([]string{
+		`backscroll search --source-path "*/session.jsonl" > out.txt`,
+		`backscroll search --source-path "*/session.jsonl" 2>err.log`,
+		`backscroll search --source-path "*/session.jsonl" \`,
+		`backscroll search --text= --all-projects`,
+		`backscroll search --all-projects --limit 5`,
+		`backscroll search --source-path="*/session.jsonl" --all-projects`,
+	}, "\n")
+
+	violations := validateSkillMarkdown(root, "synthetic-search-non-query-tokens.md", content)
+	assertSkillContractViolations(t, violations,
+		"synthetic-search-non-query-tokens.md:1: search invocation lacks query text (use --text <query> or positional query)",
+		"synthetic-search-non-query-tokens.md:2: search invocation lacks query text (use --text <query> or positional query)",
+		"synthetic-search-non-query-tokens.md:3: search invocation lacks query text (use --text <query> or positional query)",
+		"synthetic-search-non-query-tokens.md:4: search invocation lacks query text (use --text <query> or positional query)",
+		"synthetic-search-non-query-tokens.md:5: search invocation lacks query text (use --text <query> or positional query)",
+		"synthetic-search-non-query-tokens.md:6: search invocation lacks query text (use --text <query> or positional query)",
+	)
+}
+
+func TestBackscrollSkillContractReadNarrativeLiteralPassesButInvocationsFail(t *testing.T) {
+	root := buildRootCmd(io.Discard, io.Discard)
+
+	narrative := "The literal `backscroll read` names the removed command in narrative prose."
+	violations := validateSkillMarkdown(root, "synthetic-read-narrative.md", narrative)
+	if len(violations) > 0 {
+		t.Fatalf("expected narrative inline literal to pass full validator, got violations:\n%s", formatSkillContractViolations(violations))
+	}
+
+	content := strings.Join([]string{
+		"backscroll read",
+		"backscroll read /tmp/session.jsonl",
+	}, "\n")
+	violations = validateSkillMarkdown(root, "synthetic-read-invocations.md", content)
+	assertSkillContractViolations(t, violations,
+		"synthetic-read-invocations.md:1: unknown backscroll command \"read\"",
+		"synthetic-read-invocations.md:2: unknown backscroll command \"read\"",
+	)
+
+	if !containsBackscrollReadInvocation(content) {
+		t.Fatal("expected actual backscroll read invocation with argument to be detected")
+	}
+	if containsBackscrollReadInvocation(narrative) {
 		t.Fatal("narrative literal backscroll read mention must not be treated as an invocation")
 	}
 }
@@ -357,6 +405,9 @@ func validateSkillMarkdown(root *cobra.Command, path, content string) []skillCon
 		violations = append(violations, validateBackscrollInvocations(root, path, lineNumber, prose)...)
 		violations = append(violations, validateBareSubcommand(path, lineNumber, prose, registeredSubcommands)...)
 		for _, span := range inlineCodeSpans(line) {
+			if isNarrativeInlineLiteralBackscrollRead(line, span) {
+				continue
+			}
 			violations = append(violations, validateBackscrollInvocations(root, path, lineNumber, span)...)
 			violations = append(violations, validateBareSubcommand(path, lineNumber, span, registeredSubcommands)...)
 		}
@@ -372,6 +423,13 @@ func validateSkillMarkdown(root *cobra.Command, path, content string) []skillCon
 		return violations[i].message < violations[j].message
 	})
 	return uniqueSkillContractViolations(violations)
+}
+
+func isNarrativeInlineLiteralBackscrollRead(line, span string) bool {
+	if strings.TrimSpace(span) != "backscroll read" {
+		return false
+	}
+	return strings.TrimSpace(withoutInlineCodeSpans(line)) != ""
 }
 
 func validateBackscrollInvocations(root *cobra.Command, path string, lineNumber int, text string) []skillContractViolation {
@@ -428,53 +486,88 @@ func validateBackscrollInvocations(root *cobra.Command, path string, lineNumber 
 }
 
 func searchInvocationHasQuery(cmd *cobra.Command, tokens []string) bool {
+	if hasUnsupportedLineContinuation(tokens) {
+		return false
+	}
+
 	for i := 0; i < len(tokens); i++ {
 		token := tokens[i]
-		if isShellTerminator(token) {
+		if isShellTerminator(token) || isRedirectOperator(token) {
 			return false
 		}
 		if token == "--help" || token == "-h" {
 			return true
 		}
 		if token == "--" {
-			return firstNonFlagToken(tokens[i+1:]) != ""
+			return firstQueryToken(tokens[i+1:]) != ""
 		}
 		if strings.HasPrefix(token, "--") {
 			name, value, hasValue := splitLongFlag(token)
 			if name == "text" && hasValue {
-				return strings.TrimSpace(value) != ""
+				return isValidQueryToken(value)
+			}
+			if hasValue {
+				continue
 			}
 			if flagConsumesNext(cmd, name) {
-				if i+1 < len(tokens) {
+				if i+1 >= len(tokens) {
 					if name == "text" {
-						return !strings.HasPrefix(tokens[i+1], "--") && strings.TrimSpace(tokens[i+1]) != "" && !isShellTerminator(tokens[i+1])
+						return false
 					}
-					i++
+					continue
 				}
+				next := tokens[i+1]
+				if name == "text" {
+					if strings.HasPrefix(next, "--") {
+						return false
+					}
+					return isValidQueryToken(next)
+				}
+				if isShellTerminator(next) || isRedirectOperator(next) {
+					return false
+				}
+				i++
 			}
 			continue
 		}
 		if strings.HasPrefix(token, "-") {
 			continue
 		}
-		return strings.TrimSpace(token) != ""
+		return isValidQueryToken(token)
 	}
 	return false
 }
 
-func firstNonFlagToken(tokens []string) string {
+func hasUnsupportedLineContinuation(tokens []string) bool {
 	for _, token := range tokens {
-		if isShellTerminator(token) {
+		if token == `\` {
+			return true
+		}
+	}
+	return false
+}
+
+func firstQueryToken(tokens []string) string {
+	for _, token := range tokens {
+		if isShellTerminator(token) || isRedirectOperator(token) || token == `\` {
 			return ""
 		}
-		if strings.HasPrefix(token, "-") {
-			continue
-		}
-		if strings.TrimSpace(token) != "" {
+		if isValidQueryToken(token) {
 			return token
 		}
 	}
 	return ""
+}
+
+func isValidQueryToken(token string) bool {
+	trimmed := strings.TrimSpace(token)
+	if trimmed == "" {
+		return false
+	}
+	if isShellTerminator(trimmed) || isRedirectOperator(trimmed) || trimmed == `\` {
+		return false
+	}
+	return true
 }
 
 func splitLongFlag(token string) (name, value string, hasValue bool) {
@@ -551,6 +644,35 @@ func isShellTerminator(token string) bool {
 	default:
 		return strings.HasPrefix(token, "#")
 	}
+}
+
+func isRedirectOperator(token string) bool {
+	trimmed := strings.TrimSpace(token)
+	if trimmed == "" {
+		return false
+	}
+	if strings.HasPrefix(trimmed, "<") && strings.HasSuffix(trimmed, ">") && len(trimmed) > 2 {
+		return false
+	}
+
+	rest := trimmed
+	for len(rest) > 0 && rest[0] >= '0' && rest[0] <= '9' {
+		rest = rest[1:]
+	}
+	if rest == "" {
+		return false
+	}
+
+	if strings.HasPrefix(rest, "&>>") || strings.HasPrefix(rest, "&>") {
+		return true
+	}
+	if strings.HasPrefix(rest, ">>") || strings.HasPrefix(rest, ">") || strings.HasPrefix(rest, "<<") || strings.HasPrefix(rest, "<<<") || strings.HasPrefix(rest, "<") || strings.HasPrefix(rest, "<>") {
+		return true
+	}
+	if strings.HasPrefix(rest, ">&") || strings.HasPrefix(rest, "<&") {
+		return true
+	}
+	return false
 }
 
 func isInvocationStart(tokens []string, index int) bool {
