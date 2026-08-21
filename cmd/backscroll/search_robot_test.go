@@ -31,22 +31,18 @@ func TestSearchRobotFormatUnwrapped(t *testing.T) {
 
 	lines := strings.Split(strings.TrimSpace(out), "\n")
 
-	// Check each robot format line for double-wrapping
+	// Check each robot format line for double-wrapping and strict line contract.
+	correctPattern := regexp.MustCompile(`^result_\d+_\w+=.*$`)
+	bugPattern := regexp.MustCompile(`^result_\d+=result_\d+_`)
 	for _, line := range lines {
-		if strings.HasPrefix(line, "result_") {
-			// Correct pattern: result_0_source=value or result_0_rank=0
-			correctPattern := regexp.MustCompile(`^result_\d+_\w+=.+$`)
-			// Bug pattern: result_0=result_0_source=value (double-wrapped)
-			bugPattern := regexp.MustCompile(`^result_\d+=result_\d+_`)
-
-			if !correctPattern.MatchString(line) && !bugPattern.MatchString(line) {
-				// Line might be in a different format (e.g., from text output)
-				continue
-			}
-
-			if bugPattern.MatchString(line) {
-				t.Errorf("detected double-wrapped robot line (bug): %s", line)
-			}
+		if strings.TrimSpace(line) == "" {
+			continue
+		}
+		if !correctPattern.MatchString(line) {
+			t.Fatalf("non-result or malformed robot line: %q", line)
+		}
+		if bugPattern.MatchString(line) {
+			t.Errorf("detected double-wrapped robot line (bug): %s", line)
 		}
 	}
 }

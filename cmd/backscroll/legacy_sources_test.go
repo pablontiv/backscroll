@@ -17,13 +17,12 @@ func TestLegacySourcesBlockEveryExecutableCommand(t *testing.T) {
 		name string
 		args []string
 	}{
-		{name: "search", args: []string{"search"}},
-		{name: "read", args: []string{"read", "--path", missingPath}},
+		{name: "search", args: []string{"search", "needle"}},
 		{name: "list", args: []string{"list"}},
 		{name: "patterns", args: []string{"patterns", "--kind", "commands"}},
 		{name: "rebuild", args: []string{"rebuild"}},
 		{name: "purge", args: []string{"purge", "--before", "2026-01-01"}},
-		{name: "validate", args: []string{"validate", "--indexed-only"}},
+		{name: "validate", args: []string{"validate"}},
 		{name: "status", args: []string{"status"}},
 		{name: "config", args: []string{"config"}},
 		{name: "annotate", args: []string{"annotate", "--uuid", "test-uuid", "--kind", "correction", "--label", "false-positive"}},
@@ -52,13 +51,12 @@ func TestLegacySourcesPreflightHasNoSideEffects(t *testing.T) {
 		name string
 		args []string
 	}{
-		{name: "search", args: []string{"search"}},
-		{name: "read", args: []string{"read", "--path", missingPath}},
+		{name: "search", args: []string{"search", "needle"}},
 		{name: "list", args: []string{"list"}},
 		{name: "patterns", args: []string{"patterns", "--kind", "commands"}},
 		{name: "rebuild", args: []string{"rebuild"}},
 		{name: "purge", args: []string{"purge", "--before", "2026-01-01"}},
-		{name: "validate", args: []string{"validate", "--indexed-only"}},
+		{name: "validate", args: []string{"validate"}},
 		{name: "status", args: []string{"status"}},
 		{name: "config", args: []string{"config"}},
 		{name: "annotate", args: []string{"annotate", "--uuid", "test-uuid", "--kind", "correction", "--label", "false-positive"}},

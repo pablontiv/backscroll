@@ -24,7 +24,6 @@ func newPatternsCmd(stdout, stderr io.Writer) *cobra.Command {
 		offset        int
 		jsonFormat    bool
 		robotFormat   bool
-		indexedOnly   bool
 		minSupport    int
 		minConfidence float64
 		pending       bool
@@ -52,13 +51,25 @@ Use --min-support for template/sequence filtering (default 3; minimum occurrence
 Use --min-length, --max-length for sequence pattern length bounds (default 2, 6).
 Use --min-confidence for correction filtering (default 0.6; detector confidence threshold).
 Use --limit, --offset for pagination.
-Use --json, --robot for output formats.
-Use --indexed-only to skip auto-sync (read existing index only).`,
+Use --json, --robot for output formats.`,
+		Args: func(cmd *cobra.Command, args []string) error {
+			return validateCommandBeforeStartup(cmd, args, func(_ *cobra.Command, args []string) error {
+				if len(args) > 0 {
+					return fmt.Errorf("unexpected positional argument %q", args[0])
+				}
+				return nil
+			}, func() error {
+				return validatePatternsRequest(kind, project, allProjects, limit, offset, trend)
+			})
+		},
 		RunE: func(cmd *cobra.Command, args []string) error {
-			if len(args) > 0 {
-				return fmt.Errorf("unexpected positional argument %q", args[0])
+			startup := startupResultFrom(cmd)
+			if startup.Config == nil {
+				return fmt.Errorf("startup configuration unavailable")
 			}
-			return runPatterns(stdout, stderr, kind, project, allProjects, tag, limit, offset, jsonFormat, robotFormat, indexedOnly, minSupport, minConfidence, pending, batch, minLength, maxLength, after, before, trend)
+			return runPatterns(cmd.Context(), stdout, stderr, startup.Config, kind, project, allProjects, tag, limit, offset,
+				jsonFormat, robotFormat, minSupport, minConfidence, pending, batch,
+				minLength, maxLength, after, before, trend)
 		},
 	}
 
@@ -76,7 +87,6 @@ Use --indexed-only to skip auto-sync (read existing index only).`,
 	cmd.Flags().StringVar(&before, "before", "", "Filter before date (ISO 8601, for --kind sequences)")
 	cmd.Flags().BoolVar(&jsonFormat, "json", false, "Output as JSON")
 	cmd.Flags().BoolVar(&robotFormat, "robot", false, "Output in robot format")
-	cmd.Flags().BoolVar(&indexedOnly, "indexed-only", false, "Read existing index without auto-sync")
 	cmd.Flags().BoolVar(&pending, "pending", false, "Only corrections without a 'correction' annotation (checkpoint resume)")
 	cmd.Flags().IntVar(&batch, "batch", 0, "Alias for --limit (batch size for loop)")
 	cmd.Flags().BoolVar(&trend, "trend", false, "Week-over-week bucketing (--kind commands|failures only)")
@@ -86,12 +96,7 @@ Use --indexed-only to skip auto-sync (read existing index only).`,
 	return cmd
 }
 
-func runPatterns(stdout, stderr io.Writer,
-	kind string, project string, allProjects bool, tag string,
-	limit, offset int, jsonFormat, robotFormat, indexedOnly bool, minSupport int, minConfidence float64, pending bool, batch int,
-	minLength, maxLength int, after, before string, trend bool) (retErr error) {
-
-	// Early flag validation before DB open
+func validatePatternsRequest(kind, project string, allProjects bool, limit, offset int, trend bool) error {
 	validKinds := map[string]bool{
 		"commands":    true,
 		"failures":    true,
@@ -102,25 +107,28 @@ func runPatterns(stdout, stderr io.Writer,
 	if !validKinds[kind] {
 		return fmt.Errorf("unsupported --kind %q (supported: commands, failures, templates, sequences, corrections)", kind)
 	}
-
 	if trend && kind != "commands" && kind != "failures" {
 		return fmt.Errorf("--trend only supported for --kind commands|failures, got %q", kind)
 	}
-
 	if project != "" && allProjects {
 		return fmt.Errorf("--project and --all-projects are mutually exclusive")
 	}
-
 	if limit < 0 || offset < 0 {
 		return fmt.Errorf("--limit and --offset must be >= 0")
 	}
+	return nil
+}
 
-	cfg, err := config.Load()
-	if err != nil {
-		return fmt.Errorf("load config: %w", err)
+func runPatterns(ctx context.Context, stdout, stderr io.Writer, cfg *config.Config,
+	kind string, project string, allProjects bool, tag string,
+	limit, offset int, jsonFormat, robotFormat bool, minSupport int, minConfidence float64, pending bool, batch int,
+	minLength, maxLength int, after, before string, trend bool) (retErr error) {
+
+	if err := validatePatternsRequest(kind, project, allProjects, limit, offset, trend); err != nil {
+		return err
 	}
 
-	db, diag, err := prepareIndex(context.Background(), cfg, indexDataRead, !indexedOnly)
+	db, diag, err := prepareIndex(ctx, cfg, indexDataRead)
 	if diag != nil {
 		return refuseIndex(stdout, stderr, *diag, jsonFormat, robotFormat)
 	}

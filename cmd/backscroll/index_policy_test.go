@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"testing"
 
@@ -23,7 +24,6 @@ func TestStaleIndexBlocksIndexBackedCommands(t *testing.T) {
 		mutation bool
 	}{
 		{"search", []string{"search", "sentinel"}, false},
-		{"search-indexed-only", []string{"search", "sentinel", "--indexed-only"}, false},
 		{"search-json", []string{"search", "sentinel", "--json"}, false},
 		{"search-robot", []string{"search", "sentinel", "--robot"}, false},
 		{"list", []string{"list"}, false},
@@ -77,22 +77,6 @@ func TestStaleIndexBlocksIndexBackedCommands(t *testing.T) {
 	}
 }
 
-func TestIndexedOnlyDoesNotBypassStaleBlock(t *testing.T) {
-	dbPath := newUnsupportedIndexedConsumerDB(t)
-	var stdout, stderr bytes.Buffer
-	err := run(&stdout, &stderr, []string{"search", "sentinel", "--indexed-only", "--source-path", "/sentinel/%"})
-	if err == nil {
-		t.Fatalf("indexed-only search succeeded; stdout=%q stderr=%q", stdout.String(), stderr.String())
-	}
-	combined := stdout.String() + stderr.String()
-	if !strings.Contains(combined, string(compat.CodeUnsupportedLineage)) {
-		t.Fatalf("missing stale diagnostic for %s; stdout=%q stderr=%q", dbPath, stdout.String(), stderr.String())
-	}
-	if strings.Contains(combined, "sentinel") {
-		t.Fatalf("indexed-only/filter path emitted cached sentinel output; stdout=%q stderr=%q", stdout.String(), stderr.String())
-	}
-}
-
 func TestMachineModesCarryDiagnosticCodeAndContinuation(t *testing.T) {
 	for _, tc := range []struct {
 		name string
@@ -129,30 +113,129 @@ func TestMachineModesCarryDiagnosticCodeAndContinuation(t *testing.T) {
 				if !strings.Contains(out, "diagnostic_code="+string(compat.CodeUnsupportedLineage)) {
 					t.Fatalf("robot diagnostic missing code: %q", out)
 				}
-				if !strings.Contains(out, "diagnostic_continuation_argv=recover --from "+dbPath+" --dry-run") {
-					t.Fatalf("robot diagnostic missing exact continuation: %q", out)
+				wantContinuation := fmt.Sprintf(`diagnostic_continuation_argv=["recover","--from","%s","--dry-run"]`, dbPath)
+				if !strings.Contains(out, wantContinuation) {
+					t.Fatalf("robot diagnostic missing encoded continuation %q: %q", wantContinuation, out)
 				}
 			}
 		})
 	}
 }
 
-func TestIndexedOnlyRejectsPendingMigrationWithoutMutating(t *testing.T) {
-	dbPath := newFixtureIndexDB(t, "v12.sql")
-	before := readDBBytes(t, dbPath)
+func TestHumanDiagnosticRenderedOnceWithoutCobraEcho(t *testing.T) {
+	dbPath := newUnsupportedIndexedConsumerDB(t)
+	var stdout, stderr bytes.Buffer
+	err := run(&stdout, &stderr, []string{"search", "sentinel"})
+	if err == nil {
+		t.Fatalf("human diagnostic command succeeded; stdout=%q stderr=%q", stdout.String(), stderr.String())
+	}
+	if strings.Contains(stdout.String(), "sentinel") {
+		t.Fatalf("human diagnostic emitted cached sentinel rows: %q", stdout.String())
+	}
+	diagnosticLines := 0
+	for _, line := range strings.Split(stderr.String(), "\n") {
+		if strings.HasPrefix(line, "diagnostic:") {
+			diagnosticLines++
+		}
+	}
+	if diagnosticLines != 1 {
+		t.Fatalf("diagnostic lines=%d, want 1; stderr=%q", diagnosticLines, stderr.String())
+	}
+	if strings.Contains(stderr.String(), "Error:") {
+		t.Fatalf("stderr duplicated by Cobra error echo: %q", stderr.String())
+	}
+	if !strings.Contains(stderr.String(), "continuation: recover --from "+dbPath+" --dry-run") {
+		t.Fatalf("stderr missing continuation path: %q", stderr.String())
+	}
+}
+
+func TestMandatoryStartupIndexesMarkdownDocumentForSearch(t *testing.T) {
+	dbPath := filepath.Join(t.TempDir(), "index.db")
+	root := filepath.Join(t.TempDir(), "notes")
 	setIndexPolicyEnv(t, dbPath, t.TempDir())
+	writeInputManifest(t, root, "markdown_document", root, []string{"*.md"}, nil)
+	path := filepath.Join(root, "decision.md")
+	writeFile(t, path, "# Decision\n\nperennial sqlite sentinel\n")
 
 	var stdout, stderr bytes.Buffer
-	err := run(&stdout, &stderr, []string{"search", "sentinel", "--indexed-only"})
-	if err == nil {
-		t.Fatalf("indexed-only pending migration succeeded; stdout=%q stderr=%q", stdout.String(), stderr.String())
+	err := run(&stdout, &stderr, []string{"search", "perennial sqlite sentinel", "--all-projects", "--source-path", path, "--json"})
+	if err != nil {
+		t.Fatalf("search: %v stderr=%q", err, stderr.String())
 	}
-	combined := stdout.String() + stderr.String()
-	if !strings.Contains(combined, string(compat.CodeIndexStale)) || !strings.Contains(combined, "pending migration") {
-		t.Fatalf("missing pending-migration diagnostic; stdout=%q stderr=%q err=%v", stdout.String(), stderr.String(), err)
+	var rows []minimalSearchResult
+	if err := json.Unmarshal(stdout.Bytes(), &rows); err != nil {
+		t.Fatalf("invalid JSON %q: %v", stdout.String(), err)
 	}
-	if !bytes.Equal(readDBBytes(t, dbPath), before) {
-		t.Fatal("indexed-only pending migration mutated the database")
+	if len(rows) != 1 || rows[0].SourcePath != path {
+		t.Fatalf("rows=%+v, want indexed markdown path %s", rows, path)
+	}
+}
+
+func TestMandatoryStartupMarkdownSearchSurvivesMissingSourceFile(t *testing.T) {
+	dbPath := filepath.Join(t.TempDir(), "index.db")
+	root := filepath.Join(t.TempDir(), "notes")
+	setIndexPolicyEnv(t, dbPath, t.TempDir())
+	writeInputManifest(t, root, "markdown_document", root, []string{"*.md"}, nil)
+	path := filepath.Join(root, "decision.md")
+	writeFile(t, path, "# Decision\n\nperennial sqlite sentinel\n")
+
+	// First run must trigger mandatory startup ingestion from markdown.
+	var firstStdout, firstStderr bytes.Buffer
+	if err := run(&firstStdout, &firstStderr, []string{"search", "perennial sqlite sentinel", "--all-projects", "--source-path", path, "--json"}); err != nil {
+		t.Fatalf("initial search: %v stdout=%q stderr=%q", err, firstStdout.String(), firstStderr.String())
+	}
+	var firstRows []minimalSearchResult
+	if err := json.Unmarshal(firstStdout.Bytes(), &firstRows); err != nil {
+		t.Fatalf("initial invalid JSON %q: %v", firstStdout.String(), err)
+	}
+	if len(firstRows) != 1 || firstRows[0].SourcePath != path {
+		t.Fatalf("initial rows=%+v, want indexed markdown path %s", firstRows, path)
+	}
+
+	if err := os.Remove(path); err != nil {
+		t.Fatalf("remove markdown source: %v", err)
+	}
+	if _, err := os.Stat(path); !os.IsNotExist(err) {
+		t.Fatalf("source path still available after removal: stat err=%v", err)
+	}
+
+	// Second run proves retrieval from the perennial SQLite index via public search API,
+	// even when the original markdown file is unavailable.
+	var secondStdout, secondStderr bytes.Buffer
+	if err := run(&secondStdout, &secondStderr, []string{"search", "perennial sqlite sentinel", "--all-projects", "--source-path", path, "--json"}); err != nil {
+		t.Fatalf("search after source removal: %v stdout=%q stderr=%q", err, secondStdout.String(), secondStderr.String())
+	}
+	var secondRows []minimalSearchResult
+	if err := json.Unmarshal(secondStdout.Bytes(), &secondRows); err != nil {
+		t.Fatalf("post-removal invalid JSON %q: %v", secondStdout.String(), err)
+	}
+	if len(secondRows) != 1 || secondRows[0].SourcePath != path {
+		t.Fatalf("post-removal rows=%+v, want indexed markdown path %s", secondRows, path)
+	}
+	if !strings.Contains(secondRows[0].Snippet, "sqlite sentinel") {
+		t.Fatalf("post-removal snippet missing sentinel: rows=%+v", secondRows)
+	}
+}
+
+func TestMandatoryStartupIndexesMarkdownSectionsForSearch(t *testing.T) {
+	dbPath := filepath.Join(t.TempDir(), "index.db")
+	root := filepath.Join(t.TempDir(), "notes")
+	setIndexPolicyEnv(t, dbPath, t.TempDir())
+	writeInputManifest(t, root, "markdown_sections", root, []string{"*.md"}, nil)
+	path := filepath.Join(root, "decisions.md")
+	writeFile(t, path, "# Decisions\n\n## First\nalpha\n\n## Second\nsection sentinel omega\n")
+
+	var stdout, stderr bytes.Buffer
+	err := run(&stdout, &stderr, []string{"search", "section sentinel omega", "--all-projects", "--source-path", path, "--json"})
+	if err != nil {
+		t.Fatalf("search: %v stderr=%q", err, stderr.String())
+	}
+	var rows []minimalSearchResult
+	if err := json.Unmarshal(stdout.Bytes(), &rows); err != nil {
+		t.Fatalf("invalid JSON %q: %v", stdout.String(), err)
+	}
+	if len(rows) != 1 || rows[0].SourcePath != path || !strings.Contains(rows[0].Snippet, "sentinel") {
+		t.Fatalf("rows=%+v, want second indexed section from %s", rows, path)
 	}
 }
 
@@ -209,25 +292,71 @@ func TestAutoSyncFailuresBlockCachedConsumers(t *testing.T) {
 
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			dbPath := newSupportedIndexedConsumerDB(t)
-			root := filepath.Join(t.TempDir(), "inputs-root")
-			if err := os.MkdirAll(root, 0o755); err != nil {
-				t.Fatalf("mkdir input root: %v", err)
+			modes := []struct {
+				name    string
+				argv    []string
+				machine bool
+				json    bool
+			}{
+				{name: "text", argv: []string{"search", "sentinel"}},
+				{name: "robot", argv: []string{"search", "sentinel", "--robot"}, machine: true},
+				{name: "json", argv: []string{"search", "sentinel", "--json"}, machine: true, json: true},
 			}
-			setIndexPolicyEnv(t, dbPath, t.TempDir())
-			tc.setup(t, root)
+			for _, mode := range modes {
+				t.Run(mode.name, func(t *testing.T) {
+					dbPath := newSupportedIndexedConsumerDB(t)
+					root := filepath.Join(t.TempDir(), "inputs-root")
+					if err := os.MkdirAll(root, 0o755); err != nil {
+						t.Fatalf("mkdir input root: %v", err)
+					}
+					setIndexPolicyEnv(t, dbPath, t.TempDir())
+					tc.setup(t, root)
 
-			var stdout, stderr bytes.Buffer
-			err := run(&stdout, &stderr, []string{"search", "sentinel"})
-			if err == nil {
-				t.Fatalf("auto-sync %s failure succeeded; stdout=%q stderr=%q", tc.name, stdout.String(), stderr.String())
-			}
-			combined := stdout.String() + stderr.String()
-			if !strings.Contains(combined, string(compat.CodeIndexStale)) || !strings.Contains(combined, tc.wantError) {
-				t.Fatalf("missing %s diagnostic; stdout=%q stderr=%q err=%v", tc.wantError, stdout.String(), stderr.String(), err)
-			}
-			if strings.Contains(combined, "sentinel") {
-				t.Fatalf("auto-sync %s failure emitted cached sentinel: stdout=%q stderr=%q", tc.name, stdout.String(), stderr.String())
+					var stdout, stderr bytes.Buffer
+					err := run(&stdout, &stderr, mode.argv)
+					if err == nil {
+						t.Fatalf("auto-sync %s failure succeeded; stdout=%q stderr=%q", tc.name, stdout.String(), stderr.String())
+					}
+					combined := stdout.String() + stderr.String()
+					if strings.Contains(combined, "sentinel cached") {
+						t.Fatalf("auto-sync %s failure emitted cached sentinel row: stdout=%q stderr=%q", tc.name, stdout.String(), stderr.String())
+					}
+					if strings.Contains(stdout.String(), "result_") {
+						t.Fatalf("auto-sync %s failure emitted cached result rows: stdout=%q stderr=%q", tc.name, stdout.String(), stderr.String())
+					}
+
+					if mode.machine && stderr.Len() != 0 {
+						t.Fatalf("auto-sync %s %s diagnostic wrote stderr: %q", tc.name, mode.name, stderr.String())
+					}
+
+					if mode.json {
+						var diag struct {
+							Code         string   `json:"code"`
+							Summary      string   `json:"summary"`
+							Continuation []string `json:"continuation_argv"`
+						}
+						if err := json.Unmarshal(stdout.Bytes(), &diag); err != nil {
+							t.Fatalf("auto-sync %s JSON diagnostic is invalid: %v stdout=%q", tc.name, err, stdout.String())
+						}
+						if diag.Code != string(compat.CodeIndexStale) {
+							t.Fatalf("auto-sync %s JSON code=%q, want %q", tc.name, diag.Code, compat.CodeIndexStale)
+						}
+						if !strings.Contains(diag.Summary, tc.wantError) {
+							t.Fatalf("auto-sync %s JSON summary=%q missing %q", tc.name, diag.Summary, tc.wantError)
+						}
+						if len(diag.Continuation) == 0 {
+							t.Fatalf("auto-sync %s JSON continuation is empty: stdout=%q", tc.name, stdout.String())
+						}
+						if strings.Contains(stdout.String(), `"source_path"`) {
+							t.Fatalf("auto-sync %s JSON diagnostic leaked result payload: %q", tc.name, stdout.String())
+						}
+						return
+					}
+
+					if !strings.Contains(combined, string(compat.CodeIndexStale)) || !strings.Contains(combined, tc.wantError) {
+						t.Fatalf("missing %s diagnostic; stdout=%q stderr=%q err=%v", tc.wantError, stdout.String(), stderr.String(), err)
+					}
+				})
 			}
 		})
 	}
@@ -268,25 +397,67 @@ func TestMigrationFailureBlocksCachedConsumer(t *testing.T) {
 }
 
 func TestMachineModesSuppressAutoSyncProgressStderr(t *testing.T) {
-	dbPath := newSupportedIndexedConsumerDB(t)
-	root := filepath.Join(t.TempDir(), "inputs-root")
-	if err := os.MkdirAll(root, 0o755); err != nil {
-		t.Fatalf("mkdir input root: %v", err)
-	}
-	setIndexPolicyEnv(t, dbPath, t.TempDir())
-	writeInputManifest(t, root, "claude", root, []string{"*.jsonl"}, nil)
-	writeFile(t, filepath.Join(root, "session.jsonl"), `{"type":"message","message":{"role":"user","content":"fresh machine"}}`+"\n")
+	for _, tc := range []struct {
+		name     string
+		flag     string
+		query    string
+		content  string
+		validate func(t *testing.T, stdout string)
+	}{
+		{
+			name:    "json",
+			flag:    "--json",
+			query:   "fresh machine json sentinel",
+			content: "fresh machine json sentinel",
+			validate: func(t *testing.T, stdout string) {
+				t.Helper()
+				var rows []minimalSearchResult
+				if err := json.Unmarshal([]byte(stdout), &rows); err != nil {
+					t.Fatalf("startup contaminated JSON stdout %q: %v", stdout, err)
+				}
+				if len(rows) == 0 {
+					t.Fatalf("JSON machine search returned no rows: stdout=%q", stdout)
+				}
+			},
+		},
+		{
+			name:    "robot",
+			flag:    "--robot",
+			query:   "fresh machine robot sentinel",
+			content: "fresh machine robot sentinel",
+			validate: func(t *testing.T, stdout string) {
+				t.Helper()
+				assertRobotResultLines(t, stdout)
+			},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			dbPath := newSupportedIndexedConsumerDB(t)
+			root := filepath.Join(t.TempDir(), "inputs-root")
+			if err := os.MkdirAll(root, 0o755); err != nil {
+				t.Fatalf("mkdir input root: %v", err)
+			}
+			setIndexPolicyEnv(t, dbPath, t.TempDir())
+			writeInputManifest(t, root, "claude", root, []string{"*.jsonl"}, nil)
+			writeFile(t, filepath.Join(root, "session.jsonl"), fmt.Sprintf(`{"type":"message","message":{"role":"user","content":%q}}`+"\n", tc.content))
 
-	for _, argv := range [][]string{{"search", "fresh", "--json", "--all-projects"}, {"search", "fresh", "--robot", "--all-projects"}} {
-		t.Run(strings.Join(argv, " "), func(t *testing.T) {
 			var stdout, stderr bytes.Buffer
+			argv := []string{"search", tc.query, tc.flag, "--all-projects"}
 			if err := run(&stdout, &stderr, argv); err != nil {
 				t.Fatalf("machine search failed: %v stdout=%q stderr=%q", err, stdout.String(), stderr.String())
 			}
 			if stderr.Len() != 0 {
 				t.Fatalf("machine mode wrote progress to stderr: %q", stderr.String())
 			}
+			tc.validate(t, stdout.String())
 		})
+	}
+}
+
+func TestValidateRobotResultLinesRejectsNonResultLines(t *testing.T) {
+	err := validateRobotResultLines("result_0_source=session\nthis is not a result line")
+	if err == nil {
+		t.Fatal("validateRobotResultLines accepted non-result nonempty output")
 	}
 }
 
@@ -318,13 +489,45 @@ func TestResolveActiveIndexPathPropagatesBrokenSymlink(t *testing.T) {
 	if err := os.Symlink(filepath.Join(dir, "missing-target.db"), broken); err != nil {
 		t.Skipf("symlink unavailable: %v", err)
 	}
-	_, diag, err := prepareIndex(context.Background(), &config.Config{DatabasePath: broken}, indexDataRead, true)
+	_, diag, err := prepareIndex(context.Background(), &config.Config{DatabasePath: broken}, indexDataRead)
 	if err == nil {
 		t.Fatalf("broken symlink resolved successfully; diagnostic=%+v", diag)
 	}
 	if diag == nil || !strings.Contains(diag.Summary, "no such file") {
 		t.Fatalf("diagnostic=%+v err=%v, want EvalSymlinks error", diag, err)
 	}
+}
+
+func assertRobotResultLines(t *testing.T, robotStdout string) {
+	t.Helper()
+	if err := validateRobotResultLines(robotStdout); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func validateRobotResultLines(robotStdout string) error {
+	if strings.TrimSpace(robotStdout) == "" {
+		return fmt.Errorf("robot machine search returned empty stdout")
+	}
+	resultLine := regexp.MustCompile(`^result_[0-9]+_[a-z_]+=.*$`)
+	resultLines := 0
+	for _, raw := range strings.Split(strings.TrimSpace(robotStdout), "\n") {
+		line := strings.TrimSpace(raw)
+		if line == "" {
+			continue
+		}
+		if !resultLine.MatchString(line) {
+			return fmt.Errorf("invalid robot output line %q; expected result_N_field=value", raw)
+		}
+		if strings.Contains(line, "\r") {
+			return fmt.Errorf("robot output contains unescaped carriage return: %q", raw)
+		}
+		resultLines++
+	}
+	if resultLines == 0 {
+		return fmt.Errorf("robot machine search returned no result lines: %q", robotStdout)
+	}
+	return nil
 }
 
 func assertDiagnosticFields(t *testing.T, code string, continuation []string, dbPath string) {

@@ -32,8 +32,8 @@ func TestAnnotateCommand(t *testing.T) {
 	}
 	_ = db.Close()
 
-	// Test: annotate via CLI
-	t.Setenv("BACKSCROLL_DATABASE_PATH", dbPath)
+	// Test: annotate via CLI with hermetic startup inputs/config
+	setIndexPolicyEnv(t, dbPath, t.TempDir())
 	var stdout, stderr bytes.Buffer
 	err = run(&stdout, &stderr, []string{"annotate", "--uuid", "u1", "--kind", "correction", "--label", "fixable"})
 	if err != nil {
@@ -57,8 +57,8 @@ func TestAnnotateCommandMissingMessage(t *testing.T) {
 	}
 	_ = db.Close()
 
-	// Test: annotate non-existent message
-	t.Setenv("BACKSCROLL_DATABASE_PATH", dbPath)
+	// Test: annotate non-existent message with hermetic startup inputs/config
+	setIndexPolicyEnv(t, dbPath, t.TempDir())
 	var stdout, stderr bytes.Buffer
 	err = run(&stdout, &stderr, []string{"annotate", "--uuid", "nonexistent", "--kind", "correction", "--label", "label"})
 	if err == nil {

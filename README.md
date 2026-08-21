@@ -138,15 +138,20 @@ How a file is re-synced depends on whether its messages carry identity. Sessions
 
 ### Recover what happened
 
+Every operational command validates active manifests and attempts one incremental
+sync before executing. Session, plan, and Markdown files are ingestion inputs;
+SQLite is the perennial record used by search, list, patterns, status, and validate.
+Use `--source-path` on search as a filter, paired with query text, for database-backed retrieval scoped to a known input path.
+
 ```bash
 backscroll search --text "QUERY" --project <name>     # this project
 backscroll search --text "QUERY" --all-projects       # everywhere
 backscroll search --text "QUERY" --content-type tool  # commands, paths, errors
 backscroll list --order timestamp:desc --limit 10     # recent sessions
-backscroll read --path <FILE> --tail 45 --semantic    # one session, condensed
+backscroll search --text "artifact literal" --source-path "*SESSION-ID*" --all-projects --json  # filter one known input path
 ```
 
-Filters worth knowing: `--after` / `--before` for a date window, `--tag` for auto-detected session categories (debugging, refactoring, testing…), `--source-path` to pin one file, `--role` to keep only what you said.
+Filters worth knowing: `--after` / `--before` for a date window, `--tag` for auto-detected session categories (debugging, refactoring, testing…), `--source-path` to pin one stored input path, `--source` to keep one source class, and `--role` to keep only what you said.
 
 ### Discover what recurs
 
@@ -173,18 +178,18 @@ Labelled candidates drop out of `--pending`, so the loop resumes wherever it sto
 
 ```bash
 backscroll status            # size, counts, last sync
-backscroll validate          # integrity check
+backscroll validate --json   # parseable integrity check
 backscroll rebuild           # re-derive search indexes from the database
 backscroll purge --before <DATE>   # the only deletion path
 ```
 
-`rebuild` does not re-read your session files as the source of truth: it rebuilds the search indexes from what is already stored, re-derives templates and correction signals, then runs an ordinary incremental sync. Sessions that vanished from disk survive it untouched.
+`rebuild` operates after the mandatory root startup sync has already prepared the database. The handler does not perform a second sync: it re-derives search indexes from stored rows, re-derives templates/correction signals/tool-event satellites where possible, and re-resolves project identities. Sessions that vanished from disk survive it untouched.
 
 ### Output for whoever is reading
 
-Output is tab-separated text with no ANSI escapes by default, so it pipes cleanly.
+Default output is human-readable text. Machine modes keep stdout parseable: human progress and warnings go to stderr, JSON/robot startup progress is discarded, and structured diagnostics remain parseable.
 
-`--json` is available on `search`, `list`, `patterns`, `status` and `config`. `--robot`, which emits `field=value` lines, is available on `search`, `list` and `patterns` — the three that return result sets. `read` takes `--pretty` instead, and `validate`, `rebuild`, `purge` and `annotate` report in plain text only.
+`--json` is available on `search`, `list`, `patterns`, `status`, `validate`, and `config`. JSON mode on search emits a JSON array. `--robot` is available on `search`, `list`, and `patterns`; robot mode on search emits `result_N_field=value` lines, and search robot string values escape backslash as `\\`, carriage return as `\r`, and newline as `\n`. `rebuild`, `purge`, and `annotate` report in plain text only.
 
 On `search`, `--fields minimal|full` controls density and `--max-tokens N` caps output for a context window.
 
@@ -203,7 +208,7 @@ Agents use the same commands with `--robot --fields minimal --max-tokens N`. A `
 Backscroll separates application configuration from input configuration.
 
 - **Application config** (`backscroll.toml`) controls where the database lives. By default, Backscroll creates an index at `~/.backscroll.db`.
-- **Input config** (`*.inputs.toml`) controls what files are ingested via `backscroll search` and `backscroll list`. The canonical runtime location is `<config_dir>/backscroll/inputs/*.inputs.toml`, where `<config_dir>` is the OS config directory or `BACKSCROLL_CONFIG_DIR` when set.
+- **Input config** (`*.inputs.toml`) controls what files are ingested before operational commands query SQLite. The canonical runtime location is `<config_dir>/backscroll/inputs/*.inputs.toml`, where `<config_dir>` is the OS config directory or `BACKSCROLL_CONFIG_DIR` when set.
 
 Override app settings by creating `~/.config/backscroll/config.toml` or `backscroll.toml` in the current directory:
 
@@ -249,7 +254,7 @@ See [Configuration docs](docs/configuration.md) for the full resolution order an
 | [Sync & Indexing](docs/sync.md) | Incremental sync, noise filtering, project detection |
 | [Search Engine](docs/search.md) | BM25 ranking, output formats, token limiting |
 | [Pattern Discovery](docs/patterns.md) | The five censuses, the classification loop, calibration |
-| [Indexed Path Lookup](docs/read.md) | DB-backed lookup using `search_items.source_path` |
+| [Source Path Retrieval](docs/read.md) | DB-backed lookup using `search_items.source_path` |
 | [Configuration](docs/configuration.md) | Config resolution, TOML format, environment variables |
 | [Generic Input Contract](docs/input-contract.md) | Global `*.inputs.toml` contract for provider-neutral ingestion |
 | [Session Search Research](docs/research/backscroll-session-search-cli.md) | Feasibility study: axioms, evidence tables, capabilities matrix |

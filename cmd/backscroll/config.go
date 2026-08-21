@@ -15,8 +15,9 @@ func newConfigCmd(stdout, stderr io.Writer) *cobra.Command {
 	var jsonFormat bool
 
 	cmd := &cobra.Command{
-		Use:   "config",
-		Short: "Show effective configuration and input manifests",
+		Use:          "config",
+		Short:        "Show effective configuration and input manifests",
+		SilenceUsage: true,
 		Long: `Config displays the effective configuration, including:
 - Database path
 - Session directories
@@ -25,7 +26,11 @@ func newConfigCmd(stdout, stderr io.Writer) *cobra.Command {
 
 Use --json to output as JSON.`,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			return runConfig(stdout, stderr, jsonFormat)
+			startup := startupResultFrom(cmd)
+			if startup.Config == nil {
+				return fmt.Errorf("startup configuration unavailable")
+			}
+			return runConfig(stdout, stderr, startup.Config, jsonFormat)
 		},
 	}
 
@@ -34,12 +39,7 @@ Use --json to output as JSON.`,
 	return cmd
 }
 
-func runConfig(stdout, stderr io.Writer, jsonFormat bool) error {
-	cfg, err := config.Load()
-	if err != nil {
-		return fmt.Errorf("load config: %w", err)
-	}
-
+func runConfig(stdout, stderr io.Writer, cfg *config.Config, jsonFormat bool) error {
 	// Resolve active inputs
 	defs, mode, err := input_config.ActiveInputs(cfg.SessionDirs)
 	if err != nil {

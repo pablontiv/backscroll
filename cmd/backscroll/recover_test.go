@@ -6,6 +6,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -15,14 +16,233 @@ import (
 	"time"
 
 	"github.com/pablontiv/backscroll/internal/compat"
+	"github.com/pablontiv/backscroll/internal/config"
 	"github.com/pablontiv/backscroll/internal/recovery"
 	"github.com/pablontiv/backscroll/internal/storage"
+	"github.com/spf13/cobra"
 )
 
 type fileSnapshot struct {
 	Bytes []byte
 	Mode  os.FileMode
 	MTime time.Time
+}
+
+type firstWriteMarker struct {
+	bytes.Buffer
+	events *[]string
+	marked bool
+}
+
+func (w *firstWriteMarker) Write(p []byte) (int, error) {
+	if !w.marked {
+		*w.events = append(*w.events, "report")
+		w.marked = true
+	}
+	return w.Buffer.Write(p)
+}
+
+func buildRecoverRootWithConfig(t *testing.T, stdout, stderr io.Writer, activePath string) *cobra.Command {
+	t.Helper()
+	emptyInputs := filepath.Join(t.TempDir(), "empty-inputs")
+	if err := os.MkdirAll(emptyInputs, 0o755); err != nil {
+		t.Fatalf("mkdir empty recovery inputs: %v", err)
+	}
+	cfg := &config.Config{DatabasePath: activePath, SessionDirs: []string{emptyInputs}}
+	return buildRootCmdWithStartup(stdout, stderr, func(context.Context, io.Writer) startupResult {
+		return startupResult{Config: cfg}
+	})
+}
+
+func TestRecoverExecuteReceivesCommandContext(t *testing.T) {
+	cfg := &config.Config{DatabasePath: filepath.Join(t.TempDir(), "active.db")}
+	type contextKey string
+	const markerKey contextKey = "recover-context-marker"
+	baseCtx := context.WithValue(context.Background(), markerKey, "present")
+	ctx, cancel := context.WithCancel(baseCtx)
+	cancel()
+
+	called := false
+	originalExecute := recoverExecute
+	recoverExecute = func(execCtx context.Context, opts recovery.Options) (recovery.Report, error) {
+		called = true
+		if got := execCtx.Value(markerKey); got != "present" {
+			t.Fatalf("recovery context marker = %v, want present", got)
+		}
+		if !errors.Is(execCtx.Err(), context.Canceled) {
+			t.Fatalf("recovery context err = %v, want context canceled", execCtx.Err())
+		}
+		if opts.ActivePath != cfg.DatabasePath || opts.FromPath != "stranded.db" || !opts.DryRun {
+			t.Fatalf("recovery options = %+v, want active=%q from=stranded.db dryRun=true", opts, cfg.DatabasePath)
+		}
+		return recovery.Report{ActivePath: opts.ActivePath}, nil
+	}
+	t.Cleanup(func() { recoverExecute = originalExecute })
+
+	var stdout, stderr bytes.Buffer
+	root := buildRootCmdWithStartup(&stdout, &stderr, func(context.Context, io.Writer) startupResult {
+		return startupResult{Config: cfg}
+	})
+	root.SetContext(ctx)
+	root.SetArgs([]string{"recover", "--from", "stranded.db", "--dry-run"})
+	if err := root.Execute(); err != nil {
+		t.Fatalf("recover returned error: %v", err)
+	}
+	if !called {
+		t.Fatal("recover execute seam was not called")
+	}
+}
+
+func TestRecoverPostInstallSyncBeforeReport(t *testing.T) {
+	cfg := &config.Config{DatabasePath: filepath.Join(t.TempDir(), "active.db")}
+	events := []string{}
+	stdout := &firstWriteMarker{events: &events}
+	var stderr bytes.Buffer
+
+	originalExecute := recoverExecute
+	recoverExecute = func(_ context.Context, opts recovery.Options) (recovery.Report, error) {
+		events = append(events, "recover")
+		if opts.ActivePath != cfg.DatabasePath || opts.FromPath != "stranded.db" || opts.DryRun {
+			t.Fatalf("recovery options = %+v, want active=%q from=stranded.db dryRun=false", opts, cfg.DatabasePath)
+		}
+		return recovery.Report{ActivePath: opts.ActivePath}, nil
+	}
+	t.Cleanup(func() { recoverExecute = originalExecute })
+
+	originalPostInstallSync := recoverPostInstallSync
+	recoverPostInstallSync = func(got *config.Config, progress io.Writer) error {
+		events = append(events, "sync")
+		if got != cfg {
+			t.Fatalf("post-install sync config pointer = %p, want %p", got, cfg)
+		}
+		if progress != &stderr {
+			t.Fatalf("post-install sync progress writer = %T, want stderr buffer", progress)
+		}
+		return nil
+	}
+	t.Cleanup(func() { recoverPostInstallSync = originalPostInstallSync })
+
+	root := buildRootCmdWithStartup(stdout, &stderr, func(context.Context, io.Writer) startupResult {
+		return startupResult{Config: cfg}
+	})
+	root.SetArgs([]string{"recover", "--from", "stranded.db"})
+	if err := root.Execute(); err != nil {
+		t.Fatalf("recover returned error: %v", err)
+	}
+	want := []string{"recover", "sync", "report"}
+	if !reflect.DeepEqual(events, want) {
+		t.Fatalf("events=%v, want %v", events, want)
+	}
+}
+
+func TestRecoverDryRunSkipsPostInstallSync(t *testing.T) {
+	cfg := &config.Config{DatabasePath: filepath.Join(t.TempDir(), "active.db")}
+	originalExecute := recoverExecute
+	recoverExecute = func(_ context.Context, opts recovery.Options) (recovery.Report, error) {
+		if !opts.DryRun {
+			t.Fatalf("DryRun = false, want true")
+		}
+		return recovery.Report{ActivePath: opts.ActivePath}, nil
+	}
+	t.Cleanup(func() { recoverExecute = originalExecute })
+
+	syncCalled := false
+	originalPostInstallSync := recoverPostInstallSync
+	recoverPostInstallSync = func(*config.Config, io.Writer) error {
+		syncCalled = true
+		return nil
+	}
+	t.Cleanup(func() { recoverPostInstallSync = originalPostInstallSync })
+
+	var stdout, stderr bytes.Buffer
+	root := buildRootCmdWithStartup(&stdout, &stderr, func(context.Context, io.Writer) startupResult {
+		return startupResult{Config: cfg}
+	})
+	root.SetArgs([]string{"recover", "--from", "stranded.db", "--dry-run"})
+	if err := root.Execute(); err != nil {
+		t.Fatalf("recover dry-run returned error: %v", err)
+	}
+	if syncCalled {
+		t.Fatal("post-install sync ran during dry-run")
+	}
+}
+
+func TestRecoverPostInstallSyncFailurePreservesStartupCause(t *testing.T) {
+	startupErr := errors.New("injected startup failure")
+	syncErr := errors.New("injected post-sync failure")
+	cfg := &config.Config{DatabasePath: filepath.Join(t.TempDir(), "active.db")}
+	installedPath := cfg.DatabasePath + ".installed"
+	backupPath := cfg.DatabasePath + ".backup-test"
+
+	originalExecute := recoverExecute
+	recoverExecute = func(context.Context, recovery.Options) (recovery.Report, error) {
+		return recovery.Report{ActivePath: installedPath, BackupPath: backupPath}, nil
+	}
+	t.Cleanup(func() { recoverExecute = originalExecute })
+
+	originalPostInstallSync := recoverPostInstallSync
+	recoverPostInstallSync = func(*config.Config, io.Writer) error {
+		return syncErr
+	}
+	t.Cleanup(func() { recoverPostInstallSync = originalPostInstallSync })
+
+	var stdout, stderr bytes.Buffer
+	root := buildRootCmdWithStartup(&stdout, &stderr, func(context.Context, io.Writer) startupResult {
+		return startupResult{Config: cfg, Failure: &startupFailure{
+			Stage:       startupStageStartupSync,
+			Cause:       startupErr,
+			Diagnostic:  continuationFor(compat.Diagnostic{Code: compat.CodeIndexStale, Summary: startupErr.Error()}, cfg.DatabasePath),
+			Recoverable: true,
+		}}
+	})
+	root.SetArgs([]string{"recover", "--from", "stranded.db"})
+	err := root.Execute()
+	if !errors.Is(err, startupErr) {
+		t.Fatalf("error=%v does not preserve startup failure", err)
+	}
+	if !errors.Is(err, syncErr) {
+		t.Fatalf("error=%v does not preserve post-sync failure", err)
+	}
+	if stdout.Len() != 0 {
+		t.Fatalf("report printed before failed post-sync: %q", stdout.String())
+	}
+	for _, want := range []string{
+		"recovery replacement installed at: " + installedPath,
+		"manual recovery backup path: " + backupPath,
+	} {
+		if !strings.Contains(stderr.String(), want) {
+			t.Fatalf("stderr=%q, want failure diagnostic %q", stderr.String(), want)
+		}
+	}
+}
+
+func TestRecoverSuccessfulContinuationRemediatesStartupFailure(t *testing.T) {
+	startupErr := errors.New("injected startup failure")
+	cfg := &config.Config{DatabasePath: filepath.Join(t.TempDir(), "active.db")}
+
+	originalExecute := recoverExecute
+	recoverExecute = func(context.Context, recovery.Options) (recovery.Report, error) {
+		return recovery.Report{ActivePath: cfg.DatabasePath}, nil
+	}
+	t.Cleanup(func() { recoverExecute = originalExecute })
+
+	originalPostInstallSync := recoverPostInstallSync
+	recoverPostInstallSync = func(*config.Config, io.Writer) error { return nil }
+	t.Cleanup(func() { recoverPostInstallSync = originalPostInstallSync })
+
+	var stdout, stderr bytes.Buffer
+	root := buildRootCmdWithStartup(&stdout, &stderr, func(context.Context, io.Writer) startupResult {
+		return startupResult{Config: cfg, Failure: &startupFailure{
+			Stage:       startupStageStartupSync,
+			Cause:       startupErr,
+			Diagnostic:  continuationFor(compat.Diagnostic{Code: compat.CodeIndexStale, Summary: startupErr.Error()}, cfg.DatabasePath),
+			Recoverable: true,
+		}}
+	})
+	root.SetArgs([]string{"recover", "--from", "stranded.db"})
+	if err := root.Execute(); err != nil {
+		t.Fatalf("recover returned startup failure after successful remediation: %v", err)
+	}
 }
 
 func TestRecoverDryRunMatchesUnionApplyPlanWithoutWrites(t *testing.T) {
@@ -72,7 +292,7 @@ func TestRecoverDryRunMatchesUnionApplyPlanWithoutWrites(t *testing.T) {
 	t.Chdir(dir)
 
 	var stdout, stderr bytes.Buffer
-	root := buildRootCmd(&stdout, &stderr)
+	root := buildRecoverRootWithConfig(t, &stdout, &stderr, activePath)
 	root.SetArgs([]string{"recover", "--from", fromPath, "--dry-run"})
 	err := root.Execute()
 	if err != nil {
@@ -126,7 +346,7 @@ func TestRecoverCommandPreservesApplyFailureAs(t *testing.T) {
 	t.Chdir(dir)
 
 	var stdout, stderr bytes.Buffer
-	root := buildRootCmd(&stdout, &stderr)
+	root := buildRecoverRootWithConfig(t, &stdout, &stderr, activePath)
 	root.SetArgs([]string{"recover", "--from", fromPath})
 	err := root.Execute()
 	if err == nil {
@@ -176,7 +396,7 @@ func TestRecoverApplyReportsActualBackupAndCounts(t *testing.T) {
 	t.Chdir(dir)
 
 	var stdout, stderr bytes.Buffer
-	root := buildRootCmd(&stdout, &stderr)
+	root := buildRecoverRootWithConfig(t, &stdout, &stderr, activePath)
 	root.SetArgs([]string{"recover", "--from", fromPath})
 	if err := root.Execute(); err != nil {
 		t.Fatalf("recover apply returned error: %v\nstderr=%s", err, stderr.String())
@@ -237,7 +457,7 @@ func TestRecoverInstalledDestinationPassesIndexedValidation(t *testing.T) {
 	t.Chdir(dir)
 
 	var recoverOut, recoverErr bytes.Buffer
-	recoverCmd := buildRootCmd(&recoverOut, &recoverErr)
+	recoverCmd := buildRecoverRootWithConfig(t, &recoverOut, &recoverErr, activePath)
 	recoverCmd.SetArgs([]string{"recover", "--from", strandedPath})
 	if err := recoverCmd.Execute(); err != nil {
 		t.Fatalf("recover: %v\nstderr=%s", err, recoverErr.String())
@@ -256,7 +476,7 @@ func TestRecoverInstalledDestinationPassesIndexedValidation(t *testing.T) {
 
 	var validateOut, validateErr bytes.Buffer
 	validateCmd := buildRootCmd(&validateOut, &validateErr)
-	validateCmd.SetArgs([]string{"validate", "--indexed-only"})
+	validateCmd.SetArgs([]string{"validate"})
 	if err := validateCmd.Execute(); err != nil {
 		t.Fatalf("validate recovered destination: %v\nstdout=%s\nstderr=%s", err, validateOut.String(), validateErr.String())
 	}
@@ -306,7 +526,7 @@ func TestRecoverCommandReturnsStructuredApplyFailure(t *testing.T) {
 	t.Chdir(dir)
 
 	var stdout, stderr bytes.Buffer
-	root := buildRootCmd(&stdout, &stderr)
+	root := buildRecoverRootWithConfig(t, &stdout, &stderr, missingActivePath)
 	root.SetArgs([]string{"recover", "--from", fromPath})
 	err := root.Execute()
 	if err == nil {
@@ -321,7 +541,7 @@ func TestRecoverCommandReturnsStructuredApplyFailure(t *testing.T) {
 	}
 }
 
-func TestRecoverCommandEmptyFromReturnsApplyFailure(t *testing.T) {
+func TestRecoverCommandRejectsEmptyFromBeforeApply(t *testing.T) {
 	dir := t.TempDir()
 	home := filepath.Join(dir, "home")
 	if err := os.MkdirAll(home, 0o755); err != nil {
@@ -335,18 +555,18 @@ func TestRecoverCommandEmptyFromReturnsApplyFailure(t *testing.T) {
 	t.Chdir(dir)
 
 	var stdout, stderr bytes.Buffer
-	root := buildRootCmd(&stdout, &stderr)
+	root := buildRecoverRootWithConfig(t, &stdout, &stderr, activePath)
 	root.SetArgs([]string{"recover", "--from", ""})
 	err := root.Execute()
 	if err == nil {
-		t.Fatal("recover command succeeded; want structured missing --from failure")
+		t.Fatal("recover command succeeded; want empty --from validation failure")
+	}
+	if !strings.Contains(err.Error(), "--from path must not be empty") {
+		t.Fatalf("command error = %v, want empty --from validation failure", err)
 	}
 	var failure *recovery.ApplyFailure
-	if !errors.As(err, &failure) {
-		t.Fatalf("command error %T %[1]v, want *recovery.ApplyFailure", err)
-	}
-	if failure.Phase != recovery.ApplyFailurePhase("source-read") || failure.ActivePath == "" || failure.FromPath != "" {
-		t.Fatalf("ApplyFailure = %+v, want source-read with active and missing from", failure)
+	if errors.As(err, &failure) {
+		t.Fatalf("command reached recovery apply: %+v", failure)
 	}
 }
 
@@ -369,7 +589,7 @@ func TestRecoverCommandPathCanonicalizationFailurePreservesApplyFailureAs(t *tes
 	t.Chdir(dir)
 
 	var stdout, stderr bytes.Buffer
-	root := buildRootCmd(&stdout, &stderr)
+	root := buildRecoverRootWithConfig(t, &stdout, &stderr, activePath)
 	root.SetArgs([]string{"recover", "--from", fromPath})
 	execErr := root.Execute()
 	if execErr == nil {
@@ -393,7 +613,7 @@ func TestRecoverCommandPathCanonicalizationFailurePreservesApplyFailureAs(t *tes
 
 func TestRecoverRejectsMissingFrom(t *testing.T) {
 	var stdout, stderr bytes.Buffer
-	cmd := buildRootCmd(&stdout, &stderr)
+	cmd := buildRecoverRootWithConfig(t, &stdout, &stderr, filepath.Join(t.TempDir(), "active.db"))
 	cmd.SetArgs([]string{"recover", "--dry-run"})
 	err := cmd.Execute()
 	if err == nil {
@@ -439,7 +659,7 @@ func TestRecoverHasNoGeneralMergeFlags(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			var stdout, stderr bytes.Buffer
-			cmd := buildRootCmd(&stdout, &stderr)
+			cmd := buildRecoverRootWithConfig(t, &stdout, &stderr, filepath.Join(t.TempDir(), "active.db"))
 			cmd.SetArgs(tt.args)
 			err := cmd.Execute()
 			if err == nil {

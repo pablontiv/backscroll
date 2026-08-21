@@ -1,3 +1,4 @@
+root: true
 version: 2
 schema:
     tipo:

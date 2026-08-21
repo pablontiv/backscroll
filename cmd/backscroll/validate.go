@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
-	"os"
 
 	"github.com/spf13/cobra"
 
@@ -14,12 +13,12 @@ import (
 )
 
 func newValidateCmd(stdout, stderr io.Writer) *cobra.Command {
-	var indexedOnly bool
 	var jsonFormat bool
 
 	cmd := &cobra.Command{
-		Use:   "validate",
-		Short: "Validate the index integrity",
+		Use:          "validate",
+		Short:        "Validate the index integrity",
+		SilenceUsage: true,
 		Long: `Validate checks the integrity of the SQLite index by verifying:
 - Required tables exist
 - FTS5 virtual table is set up correctly
@@ -27,50 +26,39 @@ func newValidateCmd(stdout, stderr io.Writer) *cobra.Command {
 
 Returns an error if validation fails.
 
-Validate is read-only and never auto-syncs.`,
+Command startup may synchronize active inputs before this handler runs. The
+validate handler then checks the prepared SQLite index without performing a
+second sync.`,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			return runValidate(stdout, stderr, indexedOnly, jsonFormat)
+			startup := startupResultFrom(cmd)
+			if startup.Config == nil {
+				return fmt.Errorf("startup configuration unavailable")
+			}
+			return runValidate(cmd.Context(), stdout, stderr, startup.Config, jsonFormat)
 		},
 	}
 
-	cmd.Flags().BoolVar(&indexedOnly, "indexed-only", false, "Deprecated: validate is always read-only")
 	cmd.Flags().BoolVar(&jsonFormat, "json", false, "Output as JSON")
 
 	return cmd
 }
 
-func runValidate(stdout, stderr io.Writer, indexedOnly bool, jsonFormat bool) error {
-	_ = indexedOnly
-	cfg, err := config.Load()
-	if err != nil {
-		return fmt.Errorf("load config: %w", err)
-	}
-
-	if _, err := os.Stat(cfg.DatabasePath); os.IsNotExist(err) {
-		if jsonFormat {
-			return json.NewEncoder(stdout).Encode(map[string]any{"valid": true, "database_exists": false})
-		}
-		_, _ = fmt.Fprintf(stdout, "✓ Index validation skipped: database not found\n")
-		return nil
-	} else if err != nil {
-		return fmt.Errorf("stat database: %w", err)
-	}
-
-	db, diag, err := prepareIndex(context.Background(), cfg, indexDiagnostic, false)
+func runValidate(ctx context.Context, stdout, stderr io.Writer, cfg *config.Config, jsonFormat bool) (retErr error) {
+	db, diag, err := prepareIndex(ctx, cfg, indexDataRead)
 	if diag != nil {
 		return refuseDiagnostics(stdout, stderr, []compat.Diagnostic{*diag}, jsonFormat)
 	}
 	if err != nil {
-		return fmt.Errorf("open database read-only: %w", err)
+		return fmt.Errorf("prepare index: %w", err)
 	}
-	defer func() { _ = db.Close() }()
+	defer func() { retErr = closeIndexDB(db, retErr) }()
 
 	if err := db.Validate(); err != nil {
 		activePath, resolveErr := resolveActiveIndexPath(cfg.DatabasePath)
 		if resolveErr != nil {
 			return fmt.Errorf("resolve active index path: %w", resolveErr)
 		}
-		diagnostics, inspectErr := recoveryDiagnosticsForIndex(db, activePath)
+		diagnostics, inspectErr := recoveryDiagnosticsForIndex(ctx, db, activePath)
 		if inspectErr != nil {
 			return fmt.Errorf("inspect recovery diagnostics: %w", inspectErr)
 		}

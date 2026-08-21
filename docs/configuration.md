@@ -80,7 +80,7 @@ role = "$.message.role"
 selector = "$.message.content"
 ```
 
-Markdown documents use the same input list with `decode.format = "markdown"` for whole-document indexing or `decode.format = "markdown_sections"` for `## ` header splitting:
+Markdown documents use the same input list with `decode.format = "markdown_document"` for whole-document indexing or `decode.format = "markdown_sections"` for `## ` header splitting:
 
 ```toml
 version = 1
@@ -107,7 +107,7 @@ roots = ["docs/knowledge"]
 include = ["**/*.md"]
 
 [inputs.decode]
-format = "markdown"
+format = "markdown_document"
 ```
 
 Invalid TOML, unknown fields, unsupported versions, invalid selectors/globs/regexes, or invalid active manifests fail with an error that includes the manifest path. Missing discovery roots are skipped so shipped Claude/Pi presets can coexist on machines that only have one tool installed.
@@ -119,14 +119,19 @@ Invalid TOML, unknown fields, unsupported versions, invalid selectors/globs/rege
 backscroll config
 backscroll config --json
 
-# Inspect the existing index without triggering ingestion.
+# Inspect the index and manifest health.
 backscroll status --json
 
-# Query commands validate manifests and incrementally index changed inputs.
+# Operational commands validate manifests and incrementally index changed inputs.
 backscroll search --text "migration plan" --all-projects
 backscroll list --order timestamp:desc --limit 20
 ```
 
-There is no public `inputs` or `sync` command. Active manifests are validated during command preflight; invalid manifests fail with their path before indexing begins. `search`, `list`, and `patterns` run incremental auto-sync unless `--indexed-only` is supplied. Use `backscroll rebuild` only to re-derive FTS and other derived data from the perennial database before an incremental sync; it is not a replacement for manifest validation.
+Every operational command validates active manifests and attempts one incremental
+sync before executing. Session, plan, and Markdown files are ingestion inputs;
+SQLite is the perennial record used by search, list, patterns, status, and validate.
+Use `--source-path` on search as a filter, paired with query text, for database-backed retrieval scoped to a known input path.
 
-See [the generic input contract](input-contract.md) for the full manifest schema. For read-only audit consumers, see the [downstream audit integration contract](audit-integration.md).
+There is no public `inputs` or `sync` command. Active manifests are validated during command preflight; invalid manifests fail with their path before indexing begins. Use `backscroll rebuild` only after the mandatory startup sync has prepared the database; the handler re-derives FTS and other derived data from the perennial database and performs no second sync. It is not a replacement for manifest validation.
+
+See [the generic input contract](input-contract.md) for the full manifest schema. For downstream audit consumers, see the [downstream audit integration contract](audit-integration.md).

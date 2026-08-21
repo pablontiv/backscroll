@@ -1,7 +1,7 @@
 package main
 
 import (
-	"context"
+	"errors"
 	"fmt"
 	"io"
 	"strings"
@@ -10,6 +10,9 @@ import (
 	"github.com/pablontiv/backscroll/internal/recovery"
 	"github.com/spf13/cobra"
 )
+
+var recoverExecute = recovery.Execute
+var recoverPostInstallSync = maybeAutoSync
 
 func newRecoverCmd(stdout, stderr io.Writer) *cobra.Command {
 	var from string
@@ -20,13 +23,26 @@ func newRecoverCmd(stdout, stderr io.Writer) *cobra.Command {
 		Use:          "recover",
 		Short:        "Recover stranded database rows into the configured database",
 		SilenceUsage: true,
-		Args:         cobra.NoArgs,
+		Args: func(cmd *cobra.Command, args []string) error {
+			return validateCommandBeforeStartup(cmd, args, cobra.NoArgs, func() error {
+				if from == "" {
+					return fmt.Errorf("--from path must not be empty")
+				}
+				return nil
+			})
+		},
 		RunE: func(cmd *cobra.Command, args []string) error {
-			cfg, err := config.Load()
-			if err != nil {
-				return err
+			startup := startupResultFrom(cmd)
+			startupFailure := optionalStartupFailureError(startup.startupFailure())
+			cfg := startup.Config
+			if cfg == nil {
+				loaded, err := config.Load()
+				if err != nil {
+					return errors.Join(startupFailure, fmt.Errorf("load config for recovery: %w", err))
+				}
+				cfg = loaded
 			}
-			report, err := recovery.Execute(context.Background(), recovery.Options{
+			report, err := recoverExecute(cmd.Context(), recovery.Options{
 				ActivePath: cfg.DatabasePath,
 				FromPath:   from,
 				DryRun:     dryRun,
@@ -35,7 +51,20 @@ func newRecoverCmd(stdout, stderr io.Writer) *cobra.Command {
 				if backupPath, ok := recovery.RestorableBackupPath(err); ok {
 					_, _ = fmt.Fprintf(stderr, "manual recovery backup path: %s\n", backupPath)
 				}
-				return err
+				return errors.Join(startupFailure, fmt.Errorf("recovery failed: %w", err))
+			}
+			if !dryRun {
+				if err := recoverPostInstallSync(cfg, stderr); err != nil {
+					installedPath := report.ActivePath
+					if installedPath == "" {
+						installedPath = cfg.DatabasePath
+					}
+					_, _ = fmt.Fprintf(stderr, "recovery replacement installed at: %s\n", installedPath)
+					if report.BackupPath != "" {
+						_, _ = fmt.Fprintf(stderr, "manual recovery backup path: %s\n", report.BackupPath)
+					}
+					return errors.Join(startupFailure, fmt.Errorf("post-recovery sync: %w", err))
+				}
 			}
 			printRecoveryReport(stdout, report, dryRun)
 			return nil

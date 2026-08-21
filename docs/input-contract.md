@@ -33,7 +33,7 @@ user edits are not overwritten.
 discover -> decode -> record -> map -> content -> text -> emit -> search_items
 ```
 
-`search_items` is optimized for both retrieval UX and audit surfaces. Each indexed row carries `source`, `source_path`, `project`, `role`, `content_type`, `timestamp`, `ordinal`, and bounded `text`. Tool inputs, outputs, and errors are indexed with `content_type='tool'` and stored in a separate FTS5 index (`tool_fts`) for substring/exact matching; prose and code use the main messages_fts index for morphological search. Downstream consumers should treat the JSON surfaces described in [Downstream audit integration contract](audit-integration.md) as the stable read boundary.
+`search_items` is optimized for both retrieval UX and audit surfaces. Each indexed row carries `source`, `source_path`, `project`, `role`, `content_type`, `timestamp`, `ordinal`, and bounded `text`. Tool inputs, outputs, and errors are indexed with `content_type='tool'` and stored in a separate FTS5 index (`tool_fts`) for substring/exact matching; prose and code use the main messages_fts index for morphological search. Every operational command validates active manifests and attempts one incremental sync before executing. Session, plan, and Markdown files are ingestion inputs; SQLite is the perennial record used by search, list, patterns, status, and validate. Use `--source-path` on search as a filter, paired with query text, for database-backed retrieval scoped to a known input path. Downstream consumers should treat the JSON surfaces described in [Downstream audit integration contract](audit-integration.md) as the stable read boundary.
 
 ## File shape
 
@@ -138,7 +138,7 @@ Declares the technical file format.
 
 | Field | Type | Default | Meaning |
 |---|---:|---:|---|
-| `format` | enum | required | MVP values: `jsonl`, `json`, `markdown`, `markdown_sections`. |
+| `format` | enum | required | MVP values: `jsonl`, `json`, `markdown_document`, `markdown_sections`. |
 | `encoding` | string | `utf-8` | Text encoding for file reads. |
 
 ## `record`
@@ -161,7 +161,7 @@ MVP operators are `eq`, `ne`, `in`, `exists`, and `missing`.
 
 ## `map`
 
-Maps record fields to Backscroll metadata. Required for `jsonl` and `json` inputs. Markdown inputs (`markdown` and `markdown_sections`) emit document text directly and may omit this section. `project` is also evaluated against the full JSON document (or each JSONL line) before record filtering, so file/session metadata records can provide a project for emitted messages.
+Maps record fields to Backscroll metadata. Required for `jsonl` and `json` inputs. Markdown inputs (`markdown_document` and `markdown_sections`) emit document text directly and may omit this section. `project` is also evaluated against the full JSON document (or each JSONL line) before record filtering, so file/session metadata records can provide a project for emitted messages.
 
 | Field | Type | Default | Meaning |
 |---|---:|---:|---|
@@ -325,7 +325,7 @@ drop_empty = true
 
 ## Markdown document inputs
 
-Plans and external documents are declared as normal inputs. Whole-document markdown uses `decode.format = "markdown"`; sectioned markdown uses `decode.format = "markdown_sections"`, which splits on `## ` headers and preserves any pre-header preamble as the first message.
+Plans and external documents are declared as normal inputs. Whole-document markdown uses `decode.format = "markdown_document"`; sectioned markdown uses `decode.format = "markdown_sections"`, which splits on `## ` headers and preserves any pre-header preamble as the first message.
 
 ```toml
 version = 1
@@ -356,7 +356,7 @@ roots = ["docs/knowledge"]
 include = ["**/*.md"]
 
 [inputs.decode]
-format = "markdown"
+format = "markdown_document"
 ```
 
 Use `source = "plan"`, `"ke"`, `"decision"`, `"memory"`, `"rule"`, `"spec"`, or `"backlog"` to preserve the semantic source stored in SQLite. Specs can opt into `markdown_sections` when section-level indexing is desired.

@@ -35,7 +35,7 @@ func TestPatternsCommandsJSONWithData(t *testing.T) {
 	_, cleanup := testEnv(t)
 	defer cleanup()
 	seedToolEvents(t)
-	stdout, _, err := runCmd("patterns", "--kind", "commands", "--json", "--all-projects", "--indexed-only")
+	stdout, _, err := runCmd("patterns", "--kind", "commands", "--json", "--all-projects")
 	if err != nil {
 		t.Fatalf("run: %v", err)
 	}
@@ -48,7 +48,7 @@ func TestPatternsFailuresRobotWithData(t *testing.T) {
 	_, cleanup := testEnv(t)
 	defer cleanup()
 	seedToolEvents(t)
-	stdout, _, err := runCmd("patterns", "--kind", "failures", "--robot", "--all-projects", "--indexed-only")
+	stdout, _, err := runCmd("patterns", "--kind", "failures", "--robot", "--all-projects")
 	if err != nil {
 		t.Fatalf("run: %v", err)
 	}
@@ -61,7 +61,7 @@ func TestPatternsSequencesRobotSeeded(t *testing.T) {
 	_, cleanup := testEnv(t)
 	defer cleanup()
 	seedToolEvents(t)
-	if _, _, err := runCmd("patterns", "--kind", "sequences", "--robot", "--min-support", "1", "--min-length", "2", "--indexed-only"); err != nil {
+	if _, _, err := runCmd("patterns", "--kind", "sequences", "--robot", "--min-support", "1", "--min-length", "2"); err != nil {
 		t.Fatalf("run: %v", err)
 	}
 }
@@ -70,7 +70,7 @@ func TestPatternsCorrectionsJSONEmpty(t *testing.T) {
 	_, cleanup := testEnv(t)
 	defer cleanup()
 	seedToolEvents(t) // creates the DB; corpus has no correction signals
-	if _, _, err := runCmd("patterns", "--kind", "corrections", "--json", "--all-projects", "--indexed-only"); err != nil {
+	if _, _, err := runCmd("patterns", "--kind", "corrections", "--json", "--all-projects"); err != nil {
 		t.Fatalf("run: %v", err)
 	}
 }
@@ -95,7 +95,7 @@ func TestPatternsCommandsRobotSeeded(t *testing.T) {
 	_, cleanup := testEnv(t)
 	defer cleanup()
 	seedToolEvents(t)
-	stdout, _, err := runCmd("patterns", "--kind", "commands", "--robot", "--all-projects", "--indexed-only")
+	stdout, _, err := runCmd("patterns", "--kind", "commands", "--robot", "--all-projects")
 	if err != nil {
 		t.Fatalf("run: %v", err)
 	}
@@ -108,7 +108,7 @@ func TestPatternsFailuresJSONSeeded(t *testing.T) {
 	_, cleanup := testEnv(t)
 	defer cleanup()
 	seedToolEvents(t)
-	stdout, _, err := runCmd("patterns", "--kind", "failures", "--json", "--all-projects", "--indexed-only")
+	stdout, _, err := runCmd("patterns", "--kind", "failures", "--json", "--all-projects")
 	if err != nil {
 		t.Fatalf("run: %v", err)
 	}
@@ -121,7 +121,7 @@ func TestPatternsFailuresTextWithTag(t *testing.T) {
 	_, cleanup := testEnv(t)
 	defer cleanup()
 	seedToolEvents(t)
-	if _, _, err := runCmd("patterns", "--kind", "failures", "--tag", "debugging", "--all-projects", "--indexed-only"); err != nil {
+	if _, _, err := runCmd("patterns", "--kind", "failures", "--tag", "debugging", "--all-projects"); err != nil {
 		t.Fatalf("run: %v", err)
 	}
 }
@@ -130,7 +130,7 @@ func TestPatternsTemplatesMinSupportSeeded(t *testing.T) {
 	_, cleanup := testEnv(t)
 	defer cleanup()
 	seedToolEvents(t)
-	if _, _, err := runCmd("patterns", "--kind", "templates", "--min-support", "1", "--all-projects", "--indexed-only"); err != nil {
+	if _, _, err := runCmd("patterns", "--kind", "templates", "--min-support", "1", "--all-projects"); err != nil {
 		t.Fatalf("run: %v", err)
 	}
 }
@@ -140,7 +140,7 @@ func TestPatternsFailuresTextFormatNullExitCode(t *testing.T) {
 	_, cleanup := testEnv(t)
 	defer cleanup()
 	seedToolEvents(t)
-	stdout, _, err := runCmd("patterns", "--kind", "failures", "--all-projects", "--indexed-only")
+	stdout, _, err := runCmd("patterns", "--kind", "failures", "--all-projects")
 	if err != nil {
 		t.Fatalf("run: %v", err)
 	}
@@ -159,7 +159,7 @@ func TestPatternsFailuresRobotFormatNullExitCode(t *testing.T) {
 	_, cleanup := testEnv(t)
 	defer cleanup()
 	seedToolEvents(t)
-	stdout, _, err := runCmd("patterns", "--kind", "failures", "--robot", "--all-projects", "--indexed-only")
+	stdout, _, err := runCmd("patterns", "--kind", "failures", "--robot", "--all-projects")
 	if err != nil {
 		t.Fatalf("run: %v", err)
 	}
@@ -243,7 +243,7 @@ func TestPatternsTrendCommandsText(t *testing.T) {
 	_, cleanup := testEnv(t)
 	defer cleanup()
 	seedTrendData(t)
-	stdout, _, err := runCmd("patterns", "--kind", "commands", "--trend", "--all-projects", "--indexed-only")
+	stdout, _, err := runCmd("patterns", "--kind", "commands", "--trend", "--all-projects")
 	if err != nil {
 		t.Fatalf("run: %v", err)
 	}
@@ -263,7 +263,7 @@ func TestPatternsTrendCommandsJSON(t *testing.T) {
 	_, cleanup := testEnv(t)
 	defer cleanup()
 	seedTrendData(t)
-	stdout, _, err := runCmd("patterns", "--kind", "commands", "--trend", "--json", "--all-projects", "--indexed-only")
+	stdout, _, err := runCmd("patterns", "--kind", "commands", "--trend", "--json", "--all-projects")
 	if err != nil {
 		t.Fatalf("run: %v", err)
 	}
@@ -284,7 +284,7 @@ func TestPatternsTrendCommandsRobot(t *testing.T) {
 	_, cleanup := testEnv(t)
 	defer cleanup()
 	seedTrendData(t)
-	stdout, _, err := runCmd("patterns", "--kind", "commands", "--trend", "--robot", "--all-projects", "--indexed-only")
+	stdout, _, err := runCmd("patterns", "--kind", "commands", "--trend", "--robot", "--all-projects")
 	if err != nil {
 		t.Fatalf("run: %v", err)
 	}
@@ -301,7 +301,7 @@ func TestPatternsTrendFailuresText(t *testing.T) {
 	_, cleanup := testEnv(t)
 	defer cleanup()
 	seedTrendData(t)
-	stdout, _, err := runCmd("patterns", "--kind", "failures", "--trend", "--all-projects", "--indexed-only")
+	stdout, _, err := runCmd("patterns", "--kind", "failures", "--trend", "--all-projects")
 	if err != nil {
 		t.Fatalf("run: %v", err)
 	}
@@ -318,7 +318,7 @@ func TestPatternsTrendFailuresJSON(t *testing.T) {
 	_, cleanup := testEnv(t)
 	defer cleanup()
 	seedTrendData(t)
-	stdout, _, err := runCmd("patterns", "--kind", "failures", "--trend", "--json", "--all-projects", "--indexed-only")
+	stdout, _, err := runCmd("patterns", "--kind", "failures", "--trend", "--json", "--all-projects")
 	if err != nil {
 		t.Fatalf("run: %v", err)
 	}
@@ -339,7 +339,7 @@ func TestPatternsTrendFailuresRobot(t *testing.T) {
 	_, cleanup := testEnv(t)
 	defer cleanup()
 	seedTrendData(t)
-	stdout, _, err := runCmd("patterns", "--kind", "failures", "--trend", "--robot", "--all-projects", "--indexed-only")
+	stdout, _, err := runCmd("patterns", "--kind", "failures", "--trend", "--robot", "--all-projects")
 	if err != nil {
 		t.Fatalf("run: %v", err)
 	}
@@ -356,7 +356,7 @@ func TestPatternsCommandsText(t *testing.T) {
 	_, cleanup := testEnv(t)
 	defer cleanup()
 	seedToolEvents(t)
-	stdout, _, err := runCmd("patterns", "--kind", "commands", "--all-projects", "--indexed-only")
+	stdout, _, err := runCmd("patterns", "--kind", "commands", "--all-projects")
 	if err != nil {
 		t.Fatalf("run: %v", err)
 	}
@@ -373,7 +373,7 @@ func TestPatternsFailuresText(t *testing.T) {
 	_, cleanup := testEnv(t)
 	defer cleanup()
 	seedToolEvents(t)
-	stdout, _, err := runCmd("patterns", "--kind", "failures", "--all-projects", "--indexed-only")
+	stdout, _, err := runCmd("patterns", "--kind", "failures", "--all-projects")
 	if err != nil {
 		t.Fatalf("run: %v", err)
 	}
@@ -390,7 +390,7 @@ func TestPatternsTemplatesText(t *testing.T) {
 	_, cleanup := testEnv(t)
 	defer cleanup()
 	seedToolEvents(t)
-	stdout, _, err := runCmd("patterns", "--kind", "templates", "--min-support", "1", "--all-projects", "--indexed-only")
+	stdout, _, err := runCmd("patterns", "--kind", "templates", "--min-support", "1", "--all-projects")
 	if err != nil {
 		t.Fatalf("run: %v", err)
 	}
@@ -404,7 +404,7 @@ func TestPatternsCorrectionsText(t *testing.T) {
 	_, cleanup := testEnv(t)
 	defer cleanup()
 	seedToolEvents(t)
-	stdout, _, err := runCmd("patterns", "--kind", "corrections", "--all-projects", "--indexed-only")
+	stdout, _, err := runCmd("patterns", "--kind", "corrections", "--all-projects")
 	if err != nil {
 		t.Fatalf("run: %v", err)
 	}
@@ -419,7 +419,7 @@ func TestPatternsSequencesText(t *testing.T) {
 	_, cleanup := testEnv(t)
 	defer cleanup()
 	seedToolEvents(t)
-	stdout, _, err := runCmd("patterns", "--kind", "sequences", "--min-support", "1", "--min-length", "2", "--all-projects", "--indexed-only")
+	stdout, _, err := runCmd("patterns", "--kind", "sequences", "--min-support", "1", "--min-length", "2", "--all-projects")
 	if err != nil {
 		t.Fatalf("run: %v", err)
 	}
@@ -440,7 +440,7 @@ func TestPatternsCommandsZeroResultText(t *testing.T) {
 	}
 	_ = db.Close()
 
-	stdout, _, err := runCmd("patterns", "--kind", "commands", "--all-projects", "--indexed-only")
+	stdout, _, err := runCmd("patterns", "--kind", "commands", "--all-projects")
 	if err != nil {
 		t.Fatalf("run: %v", err)
 	}
@@ -459,7 +459,7 @@ func TestPatternsFailuresZeroResultText(t *testing.T) {
 	}
 	_ = db.Close()
 
-	stdout, _, err := runCmd("patterns", "--kind", "failures", "--all-projects", "--indexed-only")
+	stdout, _, err := runCmd("patterns", "--kind", "failures", "--all-projects")
 	if err != nil {
 		t.Fatalf("run: %v", err)
 	}
@@ -478,7 +478,7 @@ func TestPatternsTemplatesZeroResultText(t *testing.T) {
 	}
 	_ = db.Close()
 
-	stdout, _, err := runCmd("patterns", "--kind", "templates", "--all-projects", "--indexed-only")
+	stdout, _, err := runCmd("patterns", "--kind", "templates", "--all-projects")
 	if err != nil {
 		t.Fatalf("run: %v", err)
 	}
@@ -497,7 +497,7 @@ func TestPatternsCorrectionsZeroResultText(t *testing.T) {
 	}
 	_ = db.Close()
 
-	stdout, _, err := runCmd("patterns", "--kind", "corrections", "--all-projects", "--indexed-only")
+	stdout, _, err := runCmd("patterns", "--kind", "corrections", "--all-projects")
 	if err != nil {
 		t.Fatalf("run: %v", err)
 	}
@@ -516,7 +516,7 @@ func TestPatternsSequencesZeroResultText(t *testing.T) {
 	}
 	_ = db.Close()
 
-	stdout, _, err := runCmd("patterns", "--kind", "sequences", "--all-projects", "--indexed-only")
+	stdout, _, err := runCmd("patterns", "--kind", "sequences", "--all-projects")
 	if err != nil {
 		t.Fatalf("run: %v", err)
 	}
@@ -530,7 +530,7 @@ func TestPatternsCommandsLimitZero(t *testing.T) {
 	_, cleanup := testEnv(t)
 	defer cleanup()
 	seedToolEvents(t)
-	stdout, _, err := runCmd("patterns", "--kind", "commands", "--limit", "0", "--all-projects", "--indexed-only")
+	stdout, _, err := runCmd("patterns", "--kind", "commands", "--limit", "0", "--all-projects")
 	if err != nil {
 		t.Fatalf("run: %v", err)
 	}
@@ -543,7 +543,7 @@ func TestPatternsCommandsOffsetBeyond(t *testing.T) {
 	_, cleanup := testEnv(t)
 	defer cleanup()
 	seedToolEvents(t)
-	stdout, _, err := runCmd("patterns", "--kind", "commands", "--offset", "999", "--all-projects", "--indexed-only")
+	stdout, _, err := runCmd("patterns", "--kind", "commands", "--offset", "999", "--all-projects")
 	if err != nil {
 		t.Fatalf("run: %v", err)
 	}
@@ -557,7 +557,7 @@ func TestPatternsBatchAlias(t *testing.T) {
 	defer cleanup()
 	seedToolEvents(t)
 	// --batch should alias to --limit for corrections
-	stdout, _, err := runCmd("patterns", "--kind", "corrections", "--batch", "10", "--all-projects", "--indexed-only")
+	stdout, _, err := runCmd("patterns", "--kind", "corrections", "--batch", "10", "--all-projects")
 	if err != nil {
 		t.Fatalf("run: %v", err)
 	}
@@ -577,7 +577,7 @@ func TestPatternsCommandsZeroResultJSON(t *testing.T) {
 	}
 	_ = db.Close()
 
-	stdout, _, err := runCmd("patterns", "--kind", "commands", "--json", "--all-projects", "--indexed-only")
+	stdout, _, err := runCmd("patterns", "--kind", "commands", "--json", "--all-projects")
 	if err != nil {
 		t.Fatalf("run: %v", err)
 	}
@@ -596,7 +596,7 @@ func TestPatternsFailuresZeroResultJSON(t *testing.T) {
 	}
 	_ = db.Close()
 
-	stdout, _, err := runCmd("patterns", "--kind", "failures", "--json", "--all-projects", "--indexed-only")
+	stdout, _, err := runCmd("patterns", "--kind", "failures", "--json", "--all-projects")
 	if err != nil {
 		t.Fatalf("run: %v", err)
 	}
@@ -610,7 +610,7 @@ func TestPatternsCommandsJSONOutput(t *testing.T) {
 	_, cleanup := testEnv(t)
 	defer cleanup()
 	seedToolEvents(t)
-	stdout, _, err := runCmd("patterns", "--kind", "commands", "--json", "--all-projects", "--indexed-only")
+	stdout, _, err := runCmd("patterns", "--kind", "commands", "--json", "--all-projects")
 	if err != nil {
 		t.Fatalf("run: %v", err)
 	}
@@ -657,7 +657,7 @@ func TestPatternsTemplatesRobotOutput(t *testing.T) {
 	// error result so there is something to template, otherwise this test asserts on an
 	// empty census and would pass or fail for the wrong reason.
 	seedErrorOutput(t)
-	stdout, _, err := runCmd("patterns", "--kind", "templates", "--robot", "--min-support", "1", "--all-projects", "--indexed-only")
+	stdout, _, err := runCmd("patterns", "--kind", "templates", "--robot", "--min-support", "1", "--all-projects")
 	if err != nil {
 		t.Fatalf("run: %v", err)
 	}
@@ -679,7 +679,7 @@ func TestPatternsSequencesRobotOutput(t *testing.T) {
 	_, cleanup := testEnv(t)
 	defer cleanup()
 	seedToolEvents(t)
-	stdout, _, err := runCmd("patterns", "--kind", "sequences", "--robot", "--min-support", "1", "--all-projects", "--indexed-only")
+	stdout, _, err := runCmd("patterns", "--kind", "sequences", "--robot", "--min-support", "1", "--all-projects")
 	if err != nil {
 		t.Fatalf("run: %v", err)
 	}
@@ -693,7 +693,7 @@ func TestPatternsCorrectionsRobotOutput(t *testing.T) {
 	_, cleanup := testEnv(t)
 	defer cleanup()
 	seedToolEvents(t)
-	_, _, err := runCmd("patterns", "--kind", "corrections", "--robot", "--all-projects", "--indexed-only")
+	_, _, err := runCmd("patterns", "--kind", "corrections", "--robot", "--all-projects")
 	if err != nil {
 		t.Fatalf("run: %v", err)
 	}
@@ -711,7 +711,7 @@ func TestPatternsTemplatesZeroResultJSON(t *testing.T) {
 	}
 	_ = db.Close()
 
-	stdout, _, err := runCmd("patterns", "--kind", "templates", "--json", "--all-projects", "--indexed-only")
+	stdout, _, err := runCmd("patterns", "--kind", "templates", "--json", "--all-projects")
 	if err != nil {
 		t.Fatalf("run: %v", err)
 	}
@@ -730,7 +730,7 @@ func TestPatternsSequencesZeroResultJSON(t *testing.T) {
 	}
 	_ = db.Close()
 
-	stdout, _, err := runCmd("patterns", "--kind", "sequences", "--json", "--all-projects", "--indexed-only")
+	stdout, _, err := runCmd("patterns", "--kind", "sequences", "--json", "--all-projects")
 	if err != nil {
 		t.Fatalf("run: %v", err)
 	}
@@ -749,7 +749,7 @@ func TestPatternsCorrectionsZeroResultJSON(t *testing.T) {
 	}
 	_ = db.Close()
 
-	stdout, _, err := runCmd("patterns", "--kind", "corrections", "--json", "--all-projects", "--indexed-only")
+	stdout, _, err := runCmd("patterns", "--kind", "corrections", "--json", "--all-projects")
 	if err != nil {
 		t.Fatalf("run: %v", err)
 	}

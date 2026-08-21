@@ -38,7 +38,7 @@ func TestBackscrollSkillContractAcceptsCurrentCLIForms(t *testing.T) {
 		"backscroll --help",
 		"backscroll search --help",
 		"command -v backscroll >/dev/null",
-		"backscroll search \"needle\" --all-projects --source-path \"*uuid*\" --indexed-only --robot --fields full --max-tokens 4000",
+		"backscroll search \"needle\" --all-projects --source-path \"*uuid*\" --robot --fields full --max-tokens 4000",
 		"backscroll list --all-projects --limit 10 --json",
 		"backscroll patterns --kind corrections --pending --batch 50 --robot",
 		"backscroll annotate --uuid u --kind correction --label false-positive",
@@ -74,6 +74,192 @@ func TestBackscrollSkillContractRejectsUnknownFlags(t *testing.T) {
 	assertSkillContractViolations(t, violations,
 		"synthetic-unknown-flags.md:1: unknown flag --input for backscroll search",
 	)
+}
+
+func TestBackscrollSkillContractRequiresSearchQueryText(t *testing.T) {
+	root := buildRootCmd(io.Discard, io.Discard)
+	content := strings.Join([]string{
+		`backscroll search --source-path "*/session.jsonl" --all-projects --json`,
+		`backscroll search --source-path "*/session.jsonl" --text --all-projects --json`,
+		`backscroll search --all-projects --limit 5`,
+	}, "\n")
+
+	violations := validateSkillMarkdown(root, "synthetic-queryless-search.md", content)
+	assertSkillContractViolations(t, violations,
+		"synthetic-queryless-search.md:1: search invocation lacks query text (use --text <query> or positional query)",
+		"synthetic-queryless-search.md:2: search invocation lacks query text (use --text <query> or positional query)",
+		"synthetic-queryless-search.md:3: search invocation lacks query text (use --text <query> or positional query)",
+	)
+}
+
+func TestBackscrollSkillContractAcceptsSearchQueryText(t *testing.T) {
+	root := buildRootCmd(io.Discard, io.Discard)
+	content := strings.Join([]string{
+		`backscroll search "artifact literal" --source-path "*/session.jsonl" --all-projects --json`,
+		`backscroll search --text "$QUERY" --source-path "$SOURCE_PATH" --robot --fields full`,
+		`backscroll search --source-path "*/session.jsonl" --text "artifact literal" --limit 5`,
+		`backscroll search --text=2>out.txt --all-projects`,
+		`backscroll search "artifact literal">out.txt --all-projects`,
+		`backscroll search --help`,
+	}, "\n")
+
+	violations := validateSkillMarkdown(root, "synthetic-search-with-query.md", content)
+	if len(violations) > 0 {
+		t.Fatalf("expected search invocations with query text to pass, got violations:\n%s", formatSkillContractViolations(violations))
+	}
+}
+
+func TestBackscrollSkillContractAcceptsInlineValueFlagsBeforePositionalQuery(t *testing.T) {
+	root := buildRootCmd(io.Discard, io.Discard)
+	content := strings.Join([]string{
+		`backscroll search --source-path="*/session.jsonl" --all-projects "artifact literal"`,
+		`backscroll search --project=backscroll --limit=5 "migration plan" --json`,
+	}, "\n")
+
+	violations := validateSkillMarkdown(root, "synthetic-inline-flags-with-query.md", content)
+	if len(violations) > 0 {
+		t.Fatalf("expected inline-value flags with positional query to pass, got violations:\n%s", formatSkillContractViolations(violations))
+	}
+}
+
+func TestBackscrollSkillContractAcceptsQuotedMetacharSearchQueryText(t *testing.T) {
+	root := buildRootCmd(io.Discard, io.Discard)
+	content := strings.Join([]string{
+		`backscroll search ";" --all-projects`,
+		`backscroll search ">" --all-projects`,
+		`backscroll search "2>err" --all-projects`,
+		`backscroll search "\\" --all-projects`,
+	}, "\n")
+
+	violations := validateSkillMarkdown(root, "synthetic-search-quoted-metachar-query.md", content)
+	if len(violations) > 0 {
+		t.Fatalf("expected quoted shell metachar query tokens to pass, got violations:\n%s", formatSkillContractViolations(violations))
+	}
+}
+
+func TestBackscrollSkillContractRejectsSearchNonQueryTokens(t *testing.T) {
+	root := buildRootCmd(io.Discard, io.Discard)
+	content := strings.Join([]string{
+		`backscroll search --source-path "*/session.jsonl" ; echo no-query`,
+		`backscroll search --source-path "*/session.jsonl" > out.txt`,
+		`backscroll search --source-path "*/session.jsonl" >> out.txt`,
+		`backscroll search --source-path "*/session.jsonl" < in.txt`,
+		`backscroll search --source-path "*/session.jsonl" 2>err.txt`,
+		`backscroll search --source-path "*/session.jsonl" 2>&1`,
+		`backscroll search --source-path "*/session.jsonl" &`,
+		`backscroll search --source-path "*/session.jsonl" <<< marker`,
+		`backscroll search --source-path "*/session.jsonl" \`,
+		`backscroll search --source-path "*/session.jsonl" ''>out.txt`,
+		`backscroll search "" --all-projects`,
+		`backscroll search --text= --all-projects`,
+		`backscroll search --all-projects --limit 5`,
+		`backscroll search --source-path="*/session.jsonl" --all-projects`,
+	}, "\n")
+
+	violations := validateSkillMarkdown(root, "synthetic-search-non-query-tokens.md", content)
+	assertSkillContractViolations(t, violations,
+		"synthetic-search-non-query-tokens.md:1: search invocation lacks query text (use --text <query> or positional query)",
+		"synthetic-search-non-query-tokens.md:2: search invocation lacks query text (use --text <query> or positional query)",
+		"synthetic-search-non-query-tokens.md:3: search invocation lacks query text (use --text <query> or positional query)",
+		"synthetic-search-non-query-tokens.md:4: search invocation lacks query text (use --text <query> or positional query)",
+		"synthetic-search-non-query-tokens.md:5: search invocation lacks query text (use --text <query> or positional query)",
+		"synthetic-search-non-query-tokens.md:6: search invocation lacks query text (use --text <query> or positional query)",
+		"synthetic-search-non-query-tokens.md:7: search invocation lacks query text (use --text <query> or positional query)",
+		"synthetic-search-non-query-tokens.md:8: search invocation lacks query text (use --text <query> or positional query)",
+		"synthetic-search-non-query-tokens.md:9: search invocation lacks query text (use --text <query> or positional query)",
+		"synthetic-search-non-query-tokens.md:10: search invocation lacks query text (use --text <query> or positional query)",
+		"synthetic-search-non-query-tokens.md:11: search invocation lacks query text (use --text <query> or positional query)",
+		"synthetic-search-non-query-tokens.md:12: search invocation lacks query text (use --text <query> or positional query)",
+		"synthetic-search-non-query-tokens.md:13: search invocation lacks query text (use --text <query> or positional query)",
+		"synthetic-search-non-query-tokens.md:14: search invocation lacks query text (use --text <query> or positional query)",
+	)
+}
+
+func TestBackscrollSkillContractReadNarrativeLiteralPassesButInvocationsFail(t *testing.T) {
+	root := buildRootCmd(io.Discard, io.Discard)
+
+	narrative := "The literal `backscroll read` names the removed command in narrative prose."
+	violations := validateSkillMarkdown(root, "synthetic-read-narrative.md", narrative)
+	if len(violations) > 0 {
+		t.Fatalf("expected narrative inline literal to pass full validator, got violations:\n%s", formatSkillContractViolations(violations))
+	}
+
+	imperativeInline := strings.Join([]string{
+		"Run `backscroll read` now.",
+		"Use `backscroll read` for this file.",
+	}, "\n")
+	violations = validateSkillMarkdown(root, "synthetic-read-inline-imperative.md", imperativeInline)
+	assertSkillContractViolations(t, violations,
+		"synthetic-read-inline-imperative.md:1: unknown backscroll command \"read\"",
+		"synthetic-read-inline-imperative.md:2: unknown backscroll command \"read\"",
+	)
+
+	descriptorImperative := strings.Join([]string{
+		"Please run the literal `backscroll read` removed command.",
+		"You must use the removed command `backscroll read`.",
+		"Operators should execute the deprecated command `backscroll read`.",
+		"Try to invoke the literal `backscroll read` in the historical narrative.",
+		"Reference `backscroll read` when checking an old transcript.",
+		"You may mention `backscroll read` in migration notes.",
+		"Operators can cite `backscroll read` in examples.",
+		"The guide will include `backscroll read` as history.",
+		"Reviewers need `backscroll read` for this case.",
+	}, "\n")
+	violations = validateSkillMarkdown(root, "synthetic-read-descriptor-imperative.md", descriptorImperative)
+	assertSkillContractViolations(t, violations,
+		"synthetic-read-descriptor-imperative.md:1: unknown backscroll command \"read\"",
+		"synthetic-read-descriptor-imperative.md:2: unknown backscroll command \"read\"",
+		"synthetic-read-descriptor-imperative.md:3: unknown backscroll command \"read\"",
+		"synthetic-read-descriptor-imperative.md:4: unknown backscroll command \"read\"",
+		"synthetic-read-descriptor-imperative.md:5: unknown backscroll command \"read\"",
+		"synthetic-read-descriptor-imperative.md:6: unknown backscroll command \"read\"",
+		"synthetic-read-descriptor-imperative.md:7: unknown backscroll command \"read\"",
+		"synthetic-read-descriptor-imperative.md:8: unknown backscroll command \"read\"",
+		"synthetic-read-descriptor-imperative.md:9: unknown backscroll command \"read\"",
+	)
+
+	changedClause := strings.Join([]string{
+		"The literal `backscroll read` names the removed command in narrative prose, but keep it in mind.",
+		"The literal `backscroll read` names the removed command in historical prose.",
+		"The literal `backscroll read` names a removed command in narrative prose.",
+	}, "\n")
+	violations = validateSkillMarkdown(root, "synthetic-read-changed-clause.md", changedClause)
+	assertSkillContractViolations(t, violations,
+		"synthetic-read-changed-clause.md:1: unknown backscroll command \"read\"",
+		"synthetic-read-changed-clause.md:2: unknown backscroll command \"read\"",
+		"synthetic-read-changed-clause.md:3: unknown backscroll command \"read\"",
+	)
+
+	multipleSpans := "The literal `backscroll read` names the removed command in narrative prose, while `backscroll read` remains removed."
+	violations = validateSkillMarkdown(root, "synthetic-read-multiple-spans.md", multipleSpans)
+	assertSkillContractViolations(t, violations,
+		"synthetic-read-multiple-spans.md:1: unknown backscroll command \"read\"",
+	)
+
+	content := strings.Join([]string{
+		"backscroll read",
+		"backscroll read /tmp/session.jsonl",
+		"Run `backscroll read /tmp/session.jsonl` now.",
+	}, "\n")
+	violations = validateSkillMarkdown(root, "synthetic-read-invocations.md", content)
+	assertSkillContractViolations(t, violations,
+		"synthetic-read-invocations.md:1: unknown backscroll command \"read\"",
+		"synthetic-read-invocations.md:2: unknown backscroll command \"read\"",
+		"synthetic-read-invocations.md:3: unknown backscroll command \"read\"",
+	)
+
+	if !containsBackscrollReadInvocation(content) {
+		t.Fatal("expected actual backscroll read invocation with argument to be detected")
+	}
+	if containsBackscrollReadInvocation(narrative) {
+		t.Fatal("narrative literal backscroll read mention must not be treated as an invocation")
+	}
+	if !containsBackscrollReadInvocation(imperativeInline) {
+		t.Fatal("imperative inline backscroll read mention must be treated as a removed-command invocation")
+	}
+	if !containsBackscrollReadInvocation(descriptorImperative) {
+		t.Fatal("descriptor plus imperative backscroll read mention must be treated as a removed-command invocation")
+	}
 }
 
 func TestBackscrollSkillContractRejectsBareSubcommands(t *testing.T) {
@@ -150,8 +336,8 @@ func TestBackscrollSkillContainsSearchDiscipline(t *testing.T) {
 		"Two empty searches prove nothing",
 		"Raw-file boundary",
 		"--source-path",
-		"--indexed-only",
-		"backscroll validate --indexed-only",
+		"mandatory startup sync",
+		"backscroll validate",
 	}
 	for _, anchor := range anchors {
 		if !strings.Contains(content, anchor) {
@@ -159,11 +345,18 @@ func TestBackscrollSkillContainsSearchDiscipline(t *testing.T) {
 		}
 	}
 
+	if strings.Contains(content, "--indexed-only") {
+		t.Error("shipped skill must not document removed --indexed-only flag")
+	}
+	if containsBackscrollReadInvocation(content) {
+		t.Error("shipped skill must not invoke removed backscroll read command")
+	}
+
 	rawBoundaryAnchors := []string{
 		"cat",
 		"jq",
 		"Python",
-		"direct `backscroll read`",
+		"filesystem session hunting",
 		"not a normal retrieval fallback",
 	}
 	for _, anchor := range rawBoundaryAnchors {
@@ -190,6 +383,32 @@ func TestBackscrollContextModeCommandsMatchCLI(t *testing.T) {
 	if !strings.Contains(content, "main skill's search discipline") && !strings.Contains(content, "indexed boundary") {
 		t.Error("context mode must point to the main search discipline or preserve the indexed boundary")
 	}
+}
+
+func containsBackscrollReadInvocation(content string) bool {
+	for _, line := range strings.Split(strings.ReplaceAll(content, "\r\n", "\n"), "\n") {
+		if startsWithBackscrollRead(shellishFields(withoutInlineCodeSpans(line))) {
+			return true
+		}
+		for _, span := range inlineCodeSpans(line) {
+			if isNarrativeInlineLiteralBackscrollRead(line, span) {
+				continue
+			}
+			if startsWithBackscrollRead(shellishFields(span)) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func startsWithBackscrollRead(tokens []string) bool {
+	for i, token := range tokens {
+		if token == "backscroll" && i+1 < len(tokens) && tokens[i+1] == "read" && isInvocationStart(tokens, i) {
+			return true
+		}
+	}
+	return false
 }
 
 func assertSourceSessionOnlyOnSearch(t *testing.T, content string) {
@@ -282,6 +501,9 @@ func validateSkillMarkdown(root *cobra.Command, path, content string) []skillCon
 		violations = append(violations, validateBackscrollInvocations(root, path, lineNumber, prose)...)
 		violations = append(violations, validateBareSubcommand(path, lineNumber, prose, registeredSubcommands)...)
 		for _, span := range inlineCodeSpans(line) {
+			if isNarrativeInlineLiteralBackscrollRead(line, span) {
+				continue
+			}
 			violations = append(violations, validateBackscrollInvocations(root, path, lineNumber, span)...)
 			violations = append(violations, validateBareSubcommand(path, lineNumber, span, registeredSubcommands)...)
 		}
@@ -299,18 +521,33 @@ func validateSkillMarkdown(root *cobra.Command, path, content string) []skillCon
 	return uniqueSkillContractViolations(violations)
 }
 
+const normalizedHistoricalBackscrollReadNarrative = "the literal `backscroll read` names the removed command in narrative prose."
+
+func isNarrativeInlineLiteralBackscrollRead(line, span string) bool {
+	if strings.TrimSpace(span) != "backscroll read" {
+		return false
+	}
+	return normalizeHistoricalNarrativeLine(line) == normalizedHistoricalBackscrollReadNarrative
+}
+
+func normalizeHistoricalNarrativeLine(line string) string {
+	return strings.Join(strings.Fields(strings.ToLower(strings.TrimSpace(line))), " ")
+}
+
 func validateBackscrollInvocations(root *cobra.Command, path string, lineNumber int, text string) []skillContractViolation {
-	tokens := shellishFields(text)
+	lexedTokens := shellishTokens(text)
+	tokens := shellishTokenValues(lexedTokens)
 	var violations []skillContractViolation
 	for i, token := range tokens {
 		if token != "backscroll" || isURLToken(token) || isCommandVBackscroll(tokens, i) || !isInvocationStart(tokens, i) {
 			continue
 		}
 
-		args := invocationArgs(tokens[i+1:])
+		argsTokens := invocationArgsTokens(lexedTokens[i+1:])
+		args := shellishTokenValues(argsTokens)
 		cmd := root
 		cmdName := root.Name()
-		flagArgs := args
+		flagArgsTokens := argsTokens
 		if len(args) > 0 && !strings.HasPrefix(args[0], "-") {
 			child := findSubcommand(root, args[0])
 			if child == nil {
@@ -328,9 +565,10 @@ func validateBackscrollInvocations(root *cobra.Command, path string, lineNumber 
 			}
 			cmd = child
 			cmdName = root.Name() + " " + child.Name()
-			flagArgs = args[1:]
+			flagArgsTokens = argsTokens[1:]
 		}
 
+		flagArgs := shellishTokenValues(flagArgsTokens)
 		for _, flagName := range longFlags(flagArgs) {
 			if isSupportedFlag(cmd, flagName) {
 				continue
@@ -341,8 +579,120 @@ func validateBackscrollInvocations(root *cobra.Command, path string, lineNumber 
 				message: fmt.Sprintf("unknown flag --%s for %s", flagName, cmdName),
 			})
 		}
+		if cmd.Name() == "search" && !searchInvocationHasQuery(cmd, flagArgsTokens) {
+			violations = append(violations, skillContractViolation{
+				path:    path,
+				line:    lineNumber,
+				message: "search invocation lacks query text (use --text <query> or positional query)",
+			})
+		}
 	}
 	return violations
+}
+
+func searchInvocationHasQuery(cmd *cobra.Command, tokens []shellishToken) bool {
+	if hasUnsupportedLineContinuation(tokens) {
+		return false
+	}
+
+	for i := 0; i < len(tokens); i++ {
+		token := tokens[i]
+		tokenValue := token.value
+		if token.isOperator() && (isShellTerminator(tokenValue) || isRedirectOperator(tokenValue)) {
+			return false
+		}
+		if tokenValue == "--help" || tokenValue == "-h" {
+			return true
+		}
+		if tokenValue == "--" {
+			return firstQueryToken(tokens[i+1:]) != ""
+		}
+		if strings.HasPrefix(tokenValue, "--") {
+			name, value, hasValue := splitLongFlag(tokenValue)
+			if name == "text" && hasValue {
+				return isValidQueryToken(shellishToken{value: value, quoted: token.quoted})
+			}
+			if hasValue {
+				continue
+			}
+			if flagConsumesNext(cmd, name) {
+				if i+1 >= len(tokens) {
+					if name == "text" {
+						return false
+					}
+					continue
+				}
+				next := tokens[i+1]
+				if name == "text" {
+					if strings.HasPrefix(next.value, "--") && !next.quoted {
+						return false
+					}
+					return isValidQueryToken(next)
+				}
+				if next.isOperator() && (isShellTerminator(next.value) || isRedirectOperator(next.value)) {
+					return false
+				}
+				i++
+			}
+			continue
+		}
+		if strings.HasPrefix(tokenValue, "-") {
+			continue
+		}
+		return isValidQueryToken(token)
+	}
+	return false
+}
+
+func hasUnsupportedLineContinuation(tokens []shellishToken) bool {
+	for _, token := range tokens {
+		if token.isOperator() && token.value == `\` {
+			return true
+		}
+	}
+	return false
+}
+
+func firstQueryToken(tokens []shellishToken) string {
+	for _, token := range tokens {
+		if token.isOperator() && (isShellTerminator(token.value) || isRedirectOperator(token.value) || token.value == `\`) {
+			return ""
+		}
+		if isValidQueryToken(token) {
+			return token.value
+		}
+	}
+	return ""
+}
+
+func isValidQueryToken(token shellishToken) bool {
+	trimmed := strings.TrimSpace(token.value)
+	if trimmed == "" {
+		return false
+	}
+	if token.isOperator() && (isShellTerminator(trimmed) || isRedirectOperator(trimmed) || trimmed == `\`) {
+		return false
+	}
+	return true
+}
+
+func splitLongFlag(token string) (name, value string, hasValue bool) {
+	name = strings.TrimPrefix(token, "--")
+	if before, after, ok := strings.Cut(name, "="); ok {
+		return before, after, true
+	}
+	return name, "", false
+}
+
+func flagConsumesNext(cmd *cobra.Command, name string) bool {
+	flag := cmd.Flags().Lookup(name)
+	if flag == nil {
+		flag = cmd.InheritedFlags().Lookup(name)
+	}
+	if flag == nil {
+		flag = cmd.PersistentFlags().Lookup(name)
+	}
+	return flag != nil && flag.NoOptDefVal == ""
 }
 
 func validateBareSubcommand(path string, lineNumber int, text string, registeredSubcommands map[string]struct{}) []skillContractViolation {
@@ -384,22 +734,76 @@ func findSubcommand(root *cobra.Command, name string) *cobra.Command {
 	return nil
 }
 
-func invocationArgs(tokens []string) []string {
+type shellishTokenKind int
+
+const (
+	shellishWordToken shellishTokenKind = iota
+	shellishOperatorToken
+)
+
+type shellishToken struct {
+	value  string
+	quoted bool
+	kind   shellishTokenKind
+}
+
+func (token shellishToken) isOperator() bool {
+	return token.kind == shellishOperatorToken
+}
+
+func invocationArgsTokens(tokens []shellishToken) []shellishToken {
 	for i, token := range tokens {
-		if isShellTerminator(token) {
+		if token.isOperator() && isShellTerminator(token.value) {
 			return tokens[:i]
 		}
 	}
 	return tokens
 }
 
+func shellishTokenValues(tokens []shellishToken) []string {
+	values := make([]string, 0, len(tokens))
+	for _, token := range tokens {
+		values = append(values, token.value)
+	}
+	return values
+}
+
 func isShellTerminator(token string) bool {
 	switch token {
-	case "|", "||", "&&", ";", "#":
+	case "|", "||", "&", "&&", ";", "#":
 		return true
 	default:
 		return strings.HasPrefix(token, "#")
 	}
+}
+
+func isRedirectOperator(token string) bool {
+	trimmed := strings.TrimSpace(token)
+	if trimmed == "" {
+		return false
+	}
+	if strings.HasPrefix(trimmed, "<") && strings.HasSuffix(trimmed, ">") && len(trimmed) > 2 {
+		return false
+	}
+
+	rest := trimmed
+	for len(rest) > 0 && rest[0] >= '0' && rest[0] <= '9' {
+		rest = rest[1:]
+	}
+	if rest == "" {
+		return false
+	}
+
+	if strings.HasPrefix(rest, "&>>") || strings.HasPrefix(rest, "&>") {
+		return true
+	}
+	if strings.HasPrefix(rest, ">>") || strings.HasPrefix(rest, ">") || strings.HasPrefix(rest, "<<") || strings.HasPrefix(rest, "<<<") || strings.HasPrefix(rest, "<") || strings.HasPrefix(rest, "<>") {
+		return true
+	}
+	if strings.HasPrefix(rest, ">&") || strings.HasPrefix(rest, "<&") {
+		return true
+	}
+	return false
 }
 
 func isInvocationStart(tokens []string, index int) bool {
@@ -514,35 +918,157 @@ func inlineCodeSpans(line string) []string {
 }
 
 func shellishFields(text string) []string {
-	var fields []string
+	tokens := shellishTokens(text)
+	fields := make([]string, 0, len(tokens))
+	for _, token := range tokens {
+		fields = append(fields, token.value)
+	}
+	return fields
+}
+
+func shellishTokens(text string) []shellishToken {
+	var tokens []shellishToken
 	var current strings.Builder
 	var quote rune
-	for _, r := range text {
+	wordStarted := false
+	tokenQuoted := false
+
+	flushWord := func() {
+		if !wordStarted {
+			return
+		}
+		value := current.String()
+		if !tokenQuoted {
+			value = cleanUnquotedMarkdownToken(value)
+		}
+		tokens = append(tokens, shellishToken{
+			value:  value,
+			quoted: tokenQuoted,
+			kind:   shellishWordToken,
+		})
+		current.Reset()
+		wordStarted = false
+		tokenQuoted = false
+	}
+	appendOperator := func(value string) {
+		flushWord()
+		tokens = append(tokens, shellishToken{
+			value: value,
+			kind:  shellishOperatorToken,
+		})
+	}
+
+	runes := []rune(text)
+	for i := 0; i < len(runes); i++ {
+		r := runes[i]
 		switch {
 		case quote != 0:
 			if r == quote {
 				quote = 0
 				continue
 			}
+			wordStarted = true
 			current.WriteRune(r)
 		case r == '\'' || r == '"':
 			quote = r
+			wordStarted = true
+			tokenQuoted = true
 		case r == '\t' || r == ' ':
-			if current.Len() > 0 {
-				fields = append(fields, cleanShellToken(current.String()))
-				current.Reset()
+			flushWord()
+		case r == '\\':
+			appendOperator(`\`)
+		case isDigitRune(r) && wordStarted:
+			current.WriteRune(r)
+		case r == ';' || r == '|' || r == '&' || r == '#' || r == '<' || r == '>' || isDigitRune(r):
+			if operator, width := scanShellOperator(runes, i); width > 0 {
+				appendOperator(operator)
+				i += width - 1
+				continue
 			}
+			wordStarted = true
+			current.WriteRune(r)
 		default:
+			wordStarted = true
 			current.WriteRune(r)
 		}
 	}
-	if current.Len() > 0 {
-		fields = append(fields, cleanShellToken(current.String()))
-	}
-	return fields
+	flushWord()
+	return tokens
 }
 
-func cleanShellToken(token string) string {
+func scanShellOperator(runes []rune, index int) (string, int) {
+	if index >= len(runes) {
+		return "", 0
+	}
+	if width := scanControlOperator(runes, index); width > 0 {
+		return string(runes[index : index+width]), width
+	}
+
+	start := index
+	for index < len(runes) && isDigitRune(runes[index]) {
+		index++
+	}
+	redirect, width := scanRedirectOperator(runes, index)
+	if width == 0 {
+		return "", 0
+	}
+	operatorEnd := index + width
+	if redirect == ">&" || redirect == "<&" {
+		for operatorEnd < len(runes) && isDigitRune(runes[operatorEnd]) {
+			operatorEnd++
+		}
+	}
+	return string(runes[start:operatorEnd]), operatorEnd - start
+}
+
+func scanControlOperator(runes []rune, index int) int {
+	switch runes[index] {
+	case ';', '#':
+		return 1
+	case '|':
+		if hasRunePrefix(runes, index, "||") {
+			return 2
+		}
+		return 1
+	case '&':
+		if hasRunePrefix(runes, index, "&&") {
+			return 2
+		}
+		if hasRunePrefix(runes, index, "&>") || hasRunePrefix(runes, index, "&>>") {
+			return 0
+		}
+		return 1
+	}
+	return 0
+}
+
+func scanRedirectOperator(runes []rune, index int) (string, int) {
+	for _, operator := range []string{"<<<", "&>>", ">>", "<<", "<>", ">&", "<&", "&>", ">", "<"} {
+		if hasRunePrefix(runes, index, operator) {
+			return operator, len([]rune(operator))
+		}
+	}
+	return "", 0
+}
+
+func hasRunePrefix(runes []rune, index int, prefix string) bool {
+	prefixRunes := []rune(prefix)
+	if index+len(prefixRunes) > len(runes) {
+		return false
+	}
+	for i, r := range prefixRunes {
+		if runes[index+i] != r {
+			return false
+		}
+	}
+	return true
+}
+
+func isDigitRune(r rune) bool {
+	return r >= '0' && r <= '9'
+}
+
+func cleanUnquotedMarkdownToken(token string) string {
 	return strings.Trim(token, "`.,;:()[]{}")
 }
 

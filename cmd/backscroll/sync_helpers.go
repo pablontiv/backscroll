@@ -14,12 +14,11 @@ import (
 )
 
 var (
-	maybeAutoSyncOpen                         = storage.Open
-	maybeAutoSyncActiveInputs                 = input_config.ActiveInputs
-	maybeAutoSyncLoadGlobalRegistry           = projects.LoadGlobalRegistry
-	maybeAutoSyncNewRegistry                  = newDefaultAutoSyncRegistry
-	maybeAutoSyncSyncFiles                    = func(db *storage.Database, files []storage.IndexedFile) error { return db.SyncFiles(files) }
-	maybeAutoSyncProgress           io.Writer = io.Discard
+	maybeAutoSyncOpen               = storage.Open
+	maybeAutoSyncActiveInputs       = input_config.ActiveInputs
+	maybeAutoSyncLoadGlobalRegistry = projects.LoadGlobalRegistry
+	maybeAutoSyncNewRegistry        = newDefaultAutoSyncRegistry
+	maybeAutoSyncSyncFiles          = func(db *storage.Database, files []storage.IndexedFile) error { return db.SyncFiles(files) }
 )
 
 func newDefaultAutoSyncRegistry() *readers.Registry {
@@ -35,7 +34,7 @@ func newDefaultAutoSyncRegistry() *readers.Registry {
 // maybeAutoSync performs an incremental sync operation if the database exists.
 // It is intended to be called before query commands to ensure fresh index state.
 // If sync fails, it returns an error (caller decides whether to warn/ignore).
-func maybeAutoSync(cfg *config.Config) (retErr error) {
+func maybeAutoSync(cfg *config.Config, progress io.Writer) (retErr error) {
 	// Open database for reading to check if it exists
 	// (this will auto-create if missing)
 	db, err := maybeAutoSyncOpen(cfg.DatabasePath)
@@ -107,7 +106,7 @@ func maybeAutoSync(cfg *config.Config) (retErr error) {
 					continue
 				}
 				staleParsesDone++
-				_, _ = fmt.Fprintf(maybeAutoSyncProgress, "Re-parsing stale file %d/%d: %s\n", staleParsesDone, len(stalePaths), ref)
+				_, _ = fmt.Fprintf(progress, "Re-parsing stale file %d/%d: %s\n", staleParsesDone, len(stalePaths), ref)
 			}
 
 			pf, err := reader.Parse(ref, def)
@@ -187,7 +186,7 @@ func maybeAutoSync(cfg *config.Config) (retErr error) {
 				return fmt.Errorf("re-mine templates for %s: %w", sourcePath, err)
 			}
 			if deletedCount > 0 {
-				_, _ = fmt.Fprintf(maybeAutoSyncProgress, "Deleted %d stuck templates from %s\n", deletedCount, sourcePath)
+				_, _ = fmt.Fprintf(progress, "Deleted %d stuck templates from %s\n", deletedCount, sourcePath)
 			}
 		}
 	}

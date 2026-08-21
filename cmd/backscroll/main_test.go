@@ -2,8 +2,10 @@ package main
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -31,10 +33,15 @@ func testEnv(t *testing.T) (dbPath string, cleanup func()) {
 			t.Fatalf("mkdir isolated test env path %s: %v", path, err)
 		}
 	}
+	emptyInputs := filepath.Join(dir, "empty-inputs")
+	if err := os.MkdirAll(emptyInputs, 0o755); err != nil {
+		t.Fatalf("mkdir isolated empty input path %s: %v", emptyInputs, err)
+	}
 	dbPath = filepath.Join(dir, "test.db")
 	t.Setenv("HOME", homeDir)
 	t.Setenv("BACKSCROLL_CONFIG_DIR", configDir)
 	t.Setenv("BACKSCROLL_DATABASE_PATH", dbPath)
+	t.Setenv("BACKSCROLL_SESSION_DIRS", emptyInputs)
 	db, err := storage.Open(dbPath)
 	if err != nil {
 		t.Fatalf("create isolated test database: %v", err)
@@ -70,7 +77,7 @@ func syncForTest(t *testing.T, args ...string) (string, string, error) {
 			if err != nil {
 				return "", "", err
 			}
-			return "", "", maybeAutoSync(cfg)
+			return "", "", maybeAutoSync(cfg, io.Discard)
 		}
 	}
 	return "", "", nil
@@ -103,7 +110,7 @@ func TestHelp(t *testing.T) {
 	commandsSection := parts[1]
 
 	// v2 approved root commands that SHOULD be present
-	approvedV2 := []string{"list", "search", "read", "status", "validate", "rebuild", "purge", "config"}
+	approvedV2 := []string{"list", "search", "status", "validate", "rebuild", "purge", "config"}
 	for _, cmd := range approvedV2 {
 		if !strings.Contains(commandsSection, "\n  "+cmd+" ") && !strings.Contains(commandsSection, "\n  "+cmd+"\n") {
 			t.Errorf("--help missing approved v2 command %q", cmd)
@@ -117,6 +124,19 @@ func TestHelp(t *testing.T) {
 		if strings.Contains(commandsSection, "\n  "+cmd+" ") || strings.Contains(commandsSection, "\n  "+cmd+"\n") {
 			t.Errorf("--help should not contain removed v1 command %q as root command", cmd)
 		}
+	}
+}
+
+func TestValidateHelpDescribesStartupPreparedIndex(t *testing.T) {
+	out, _, err := runCmd("validate", "--help")
+	if err != nil {
+		t.Fatalf("validate --help error: %v", err)
+	}
+	if strings.Contains(out, "never auto-syncs") {
+		t.Fatalf("validate help contains stale no-sync claim: %s", out)
+	}
+	if !strings.Contains(out, "Command startup may synchronize active inputs") || !strings.Contains(out, "second sync") {
+		t.Fatalf("validate help does not describe startup-prepared validation: %s", out)
 	}
 }
 
@@ -195,211 +215,6 @@ func TestStatusJSON(t *testing.T) {
 	var result map[string]any
 	if err := json.Unmarshal([]byte(out), &result); err != nil {
 		t.Fatalf("status --json not valid JSON: %v\noutput: %s", err, out)
-	}
-}
-
-func TestRead(t *testing.T) {
-	_, cleanup := testEnv(t)
-	defer cleanup()
-
-	piFixture := filepath.Join(fixturesDir(), "pi-session.jsonl")
-	out, _, err := runCmd("read", piFixture)
-	if err != nil {
-		t.Fatalf("read error: %v", err)
-	}
-	if len(out) == 0 {
-		t.Error("read returned empty output")
-	}
-}
-
-func TestReadLargeJSONLLine(t *testing.T) {
-	_, cleanup := testEnv(t)
-	defer cleanup()
-
-	path := writeLargeJSONLFixture(t)
-	out, _, err := runCmd("read", path)
-	if err != nil {
-		t.Fatalf("read large JSONL error: %v", err)
-	}
-	if !strings.Contains(out, "Total messages: 47") {
-		t.Fatalf("read output missing message count; output prefix: %.200q", out)
-	}
-}
-
-func TestReadPathTailSemanticHandlesLargeJSONLLine(t *testing.T) {
-	_, cleanup := testEnv(t)
-	defer cleanup()
-
-	path := writeLargeJSONLFixture(t)
-	out, _, err := runCmd("read", "--path", path, "--tail", "45", "--semantic")
-	if err != nil {
-		t.Fatalf("read --path --tail --semantic error: %v", err)
-	}
-	if strings.Contains(out, "bufio.Scanner: token too long") {
-		t.Fatalf("semantic tail hit scanner token limit: %s", out)
-	}
-	if strings.Contains(out, "oversized-") {
-		t.Fatalf("semantic tail should not include the oversized first row: %.200q", out)
-	}
-	for _, want := range []string{"path=", "line=4", "line=48", "role=\"assistant\"", "content=\"final answer\""} {
-		if !strings.Contains(out, want) {
-			t.Fatalf("semantic tail output missing %q: %s", want, out)
-		}
-	}
-}
-
-func writeLargeJSONLFixture(t *testing.T) string {
-	t.Helper()
-
-	path := filepath.Join(t.TempDir(), "large.jsonl")
-	large := "oversized-" + strings.Repeat("x", 70*1024)
-	lines := []string{
-		fmt.Sprintf(`{"type":"message","timestamp":"2024-01-01T00:00:00Z","message":{"role":"user","content":%q}}`, large),
-		`{"type":"message","timestamp":"2024-01-01T00:00:01Z","message":{"role":"assistant","content":"middle answer"}}`,
-		`{"type":"message","timestamp":"2024-01-01T00:00:02Z","message":{"role":"user","content":[{"type":"tool_use","id":"tool-1","name":"bash","input":{"command":"echo hi"}}]}}`,
-	}
-	for i := 4; i < 48; i++ {
-		lines = append(lines, fmt.Sprintf(`{"type":"message","timestamp":"2024-01-01T00:00:%02dZ","message":{"role":"assistant","content":"tail item %d"}}`, i, i))
-	}
-	lines = append(lines, `{"type":"message","timestamp":"2024-01-01T00:00:48Z","message":{"role":"assistant","content":"final answer"}}`)
-	if err := os.WriteFile(path, []byte(strings.Join(lines, "\n")+"\n"), 0o644); err != nil {
-		t.Fatalf("write fixture: %v", err)
-	}
-	return path
-}
-
-func TestReadNonExistent(t *testing.T) {
-	_, cleanup := testEnv(t)
-	defer cleanup()
-
-	_, _, err := runCmd("read", "/nonexistent/path.jsonl")
-	if err == nil {
-		t.Error("expected error for nonexistent file, got nil")
-	}
-}
-
-func TestReadSemanticDefaultAgentReadable(t *testing.T) {
-	_, cleanup := testEnv(t)
-	defer cleanup()
-
-	path := writeLargeJSONLFixture(t)
-	out, stderr, err := runCmd("read", "--path", path, "--tail", "5", "--semantic")
-	if err != nil {
-		t.Fatalf("read --semantic error: %v", err)
-	}
-
-	// Default output should be agent-readable (key=value format)
-	// and should NOT go to stderr
-	if stderr != "" {
-		t.Errorf("stderr should be empty for data output, got: %s", stderr)
-	}
-
-	// Verify agent-readable format: tab-separated key=value rows
-	lines := strings.Split(strings.TrimSpace(out), "\n")
-	if len(lines) == 0 {
-		t.Error("no output generated")
-	}
-
-	// Each line should have key=value format (except the final total= line)
-	for i, line := range lines {
-		if line == "" {
-			continue
-		}
-		if !strings.Contains(line, "=") {
-			t.Errorf("line %d not in key=value format: %q", i, line)
-		}
-	}
-}
-
-func TestReadSemanticWithPretty(t *testing.T) {
-	_, cleanup := testEnv(t)
-	defer cleanup()
-
-	path := writeLargeJSONLFixture(t)
-	out, _, err := runCmd("read", "--path", path, "--tail", "3", "--semantic", "--pretty")
-	if err != nil {
-		t.Fatalf("read --semantic --pretty error: %v", err)
-	}
-
-	// Pretty output should be human-readable (different from default key=value)
-	// For now, we just verify it runs without error
-	// Real implementation may add table headers or aligned columns
-	if len(out) == 0 {
-		t.Error("--pretty output should not be empty")
-	}
-
-	// Pretty output should include human-readable elements
-	// For now just verify it exists and is different from raw key=value
-	if strings.Count(out, "=") > 3 {
-		t.Logf("pretty output still has key=value pairs: %s", out[:200])
-	}
-}
-
-func TestReadSemanticNoRobotFlag(t *testing.T) {
-	_, cleanup := testEnv(t)
-	defer cleanup()
-
-	path := writeLargeJSONLFixture(t)
-
-	// Verify that --robot flag is not recognized (removed from v2 UX)
-	// Expected: error about unknown flag
-	_, _, err := runCmd("read", "--path", path, "--semantic", "--robot")
-	if err == nil {
-		t.Error("--robot flag should not be recognized in v2 CLI (expected error)")
-	}
-}
-
-func TestReadSemanticPrettyIncludesHeaders(t *testing.T) {
-	_, cleanup := testEnv(t)
-	defer cleanup()
-
-	path := writeLargeJSONLFixture(t)
-	out, _, err := runCmd("read", "--path", path, "--tail", "2", "--semantic", "--pretty")
-	if err != nil {
-		t.Fatalf("read --semantic --pretty error: %v", err)
-	}
-
-	// Pretty output should include table headers
-	if !strings.Contains(out, "Path") || !strings.Contains(out, "Line") {
-		t.Errorf("pretty output should have headers; got: %s", out[:200])
-	}
-
-	// Pretty output should have content aligned in columns
-	if !strings.Contains(out, "Total rows:") {
-		t.Errorf("pretty output should have total rows summary; got: %s", out)
-	}
-}
-
-func TestReadSemanticAgentFormatIsTabSeparated(t *testing.T) {
-	_, cleanup := testEnv(t)
-	defer cleanup()
-
-	path := writeLargeJSONLFixture(t)
-	out, _, err := runCmd("read", "--path", path, "--tail", "1", "--semantic")
-	if err != nil {
-		t.Fatalf("read --semantic error: %v", err)
-	}
-
-	// Default agent format should use key=value pairs
-	lines := strings.Split(strings.TrimSpace(out), "\n")
-	if len(lines) < 2 {
-		t.Fatalf("expected at least 2 lines (data + total), got %d", len(lines))
-	}
-
-	// Each data line should have key=value pairs separated by spaces
-	dataLine := lines[0]
-
-	// Verify presence of expected keys in agent format
-	expectedKeys := []string{"path=", "line=", "ordinal=", "timestamp=", "role=", "kind=", "content="}
-	for _, key := range expectedKeys {
-		if !strings.Contains(dataLine, key) {
-			t.Errorf("agent format missing key %q in line: %q", key, dataLine)
-		}
-	}
-
-	// Verify it's NOT pretty format
-	if strings.Contains(dataLine, "---") || strings.Contains(dataLine, "Total rows:") {
-		t.Errorf("agent format should not include pretty formatting")
 	}
 }
 
@@ -867,7 +682,7 @@ func TestHelpListsAllCommands(t *testing.T) {
 
 	// v2 approved root commands
 	for _, cmd := range []string{
-		"search", "read", "list", "purge", "validate", "status",
+		"search", "list", "purge", "validate", "status",
 		"rebuild", "config",
 	} {
 		if !strings.Contains(commandsSection, "\n  "+cmd+" ") && !strings.Contains(commandsSection, "\n  "+cmd+"\n") {
@@ -937,30 +752,6 @@ func TestListRecentN(t *testing.T) {
 		t.Fatalf("list --recent 1 error: %v", err)
 	}
 	_ = out
-}
-
-func TestListIndexedOnly(t *testing.T) {
-	_, cleanup := testEnv(t)
-	defer cleanup()
-
-	out, _, err := runCmd("list", "--indexed-only")
-	if err != nil {
-		t.Fatalf("list --indexed-only error: %v", err)
-	}
-	_ = out
-}
-
-func TestStatusIndexedOnly(t *testing.T) {
-	_, cleanup := testEnv(t)
-	defer cleanup()
-
-	out, _, err := runCmd("status", "--indexed-only")
-	if err != nil {
-		t.Fatalf("status --indexed-only error: %v", err)
-	}
-	if !strings.Contains(out, "Backscroll Status") {
-		t.Errorf("status --indexed-only missing header: %s", out)
-	}
 }
 
 func TestStatusWithDeclarativeInputs(t *testing.T) {
@@ -1164,24 +955,28 @@ func TestStatusJSONIndexUsable(t *testing.T) {
 	defer cleanup()
 	t.Setenv("HOME", t.TempDir())
 
-	// No index yet: --indexed-only must report usable=false without creating the DB
-	out, _, err := runCmd("status", "--json", "--indexed-only")
+	// Mandatory startup prepares an empty usable index before status runs.
+	out, _, err := runCmd("status", "--json")
 	if err != nil {
-		t.Fatalf("status --json --indexed-only error: %v", err)
+		t.Fatalf("status --json error: %v", err)
 	}
 	var doc map[string]any
 	if err := json.Unmarshal([]byte(out), &doc); err != nil {
 		t.Fatalf("status JSON invalid: %v\noutput: %s", err, out)
 	}
+	database, ok := doc["database"].(map[string]any)
+	if !ok {
+		t.Fatalf("status JSON missing database object: %s", out)
+	}
+	if exists, _ := database["exists"].(bool); !exists {
+		t.Error("expected database.exists=true after mandatory startup prepares an empty index")
+	}
 	index, ok := doc["index"].(map[string]any)
 	if !ok {
 		t.Fatalf("status JSON missing index object: %s", out)
 	}
-	if usable, _ := index["usable"].(bool); usable {
-		t.Error("expected index.usable=false with no index")
-	}
 
-	// After syncing a session, usable must flip to true
+	// After syncing a session, usable must flip to true and include rows.
 	piDir := filepath.Dir(filepath.Join(fixturesDir(), "claude-tool-events.jsonl"))
 	_, _, _ = syncForTest(t, "sync", "--path", piDir)
 	// Status is read-only; the explicit sync above populated the index.
@@ -1281,8 +1076,8 @@ func TestListStructuredFlagsRemoved(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected error: --type flag should be removed from list")
 	}
-	if !strings.Contains(stderr, "unknown flag") {
-		t.Errorf("expected 'unknown flag', got: %q", stderr)
+	if !strings.Contains(err.Error(), "unknown flag") {
+		t.Errorf("expected unknown flag error, got err=%q stderr=%q", err.Error(), stderr)
 	}
 }
 
@@ -1294,8 +1089,8 @@ func TestStatsCommandRemoved(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected error: stats command should no longer exist")
 	}
-	if !strings.Contains(stderr, "unknown command") {
-		t.Errorf("expected 'unknown command' on stderr, got: %q", stderr)
+	if !strings.Contains(err.Error(), "unknown command") {
+		t.Errorf("expected unknown command error, got err=%q stderr=%q", err.Error(), stderr)
 	}
 }
 
@@ -1342,28 +1137,6 @@ func TestRebuildCommand(t *testing.T) {
 	}
 }
 
-// TestValidateWithIndexedOnly verifies that validate respects --indexed-only flag.
-func TestValidateWithIndexedOnly(t *testing.T) {
-	_, cleanup := testEnv(t)
-	defer cleanup()
-
-	// validate --indexed-only should work on empty DB without erroring
-	out, _, err := runCmd("validate", "--indexed-only")
-	if err != nil {
-		// validate may fail on empty DB (expected), but the flag should be recognized
-		if strings.Contains(err.Error(), "unknown flag: --indexed-only") {
-			t.Fatalf("validate does not support --indexed-only flag")
-		}
-		// Otherwise, error is acceptable for empty DB
-		t.Logf("validate --indexed-only error (may be expected on empty DB): %v", err)
-		return
-	}
-	// Success: validate --indexed-only worked
-	if len(strings.TrimSpace(out)) == 0 {
-		t.Logf("validate --indexed-only produced empty output")
-	}
-}
-
 // TestConfigCommand verifies that config command exists and shows input manifest info.
 func TestConfigCommand(t *testing.T) {
 	_, cleanup := testEnv(t)
@@ -1396,19 +1169,19 @@ func TestStatusAndValidateAreMaintenanceV2(t *testing.T) {
 		t.Fatalf("sync error: %v", err)
 	}
 
-	// status --indexed-only should succeed and show agent-readable output by default
-	out, _, err := runCmd("status", "--indexed-only")
+	// status should succeed and show agent-readable output by default
+	out, _, err := runCmd("status")
 	if err != nil {
-		t.Fatalf("status --indexed-only error: %v", err)
+		t.Fatalf("status error: %v", err)
 	}
 	if len(strings.TrimSpace(out)) == 0 {
 		t.Errorf("status produced empty output")
 	}
 
 	// validate should succeed
-	out, _, err = runCmd("validate", "--indexed-only")
+	out, _, err = runCmd("validate")
 	if err != nil {
-		t.Fatalf("validate --indexed-only error: %v", err)
+		t.Fatalf("validate error: %v", err)
 	}
 	if !strings.Contains(out, "passed") && !strings.Contains(out, "✓") {
 		t.Logf("validate output may not clearly indicate success: %s", out)
@@ -1564,7 +1337,7 @@ roots = ["/home/shared/myproject"]
 	t.Setenv("BACKSCROLL_CONFIG_DIR", cfgDir)
 	t.Setenv("HOME", home)
 
-	// Status is read-only; search below is responsible for auto-syncing content.
+	// Status participates in mandatory startup sync and should prepare indexed content.
 	out, stderr, err := runCmd("status")
 	if err != nil {
 		t.Fatalf("status failed: %v; stderr: %s", err, stderr)
@@ -2165,7 +1938,7 @@ func TestAutoSyncReParsesStalePaths(t *testing.T) {
 		DatabasePath: dbPath,
 		SessionDirs:  []string{sessionDir},
 	}
-	if err := maybeAutoSync(cfg); err != nil {
+	if err := maybeAutoSync(cfg, io.Discard); err != nil {
 		t.Logf("sync warning (acceptable): %v", err)
 	}
 
@@ -2218,7 +1991,7 @@ func TestAutoSyncCapsStaleParsesPerRun(t *testing.T) {
 		DatabasePath: dbPath,
 		SessionDirs:  []string{sessionDir},
 	}
-	_ = maybeAutoSync(cfg)
+	_ = maybeAutoSync(cfg, io.Discard)
 
 	// Count how many were re-parsed (uuid not NULL)
 	db, _ = storage.Open(dbPath)
@@ -2262,7 +2035,7 @@ func TestRebuildProjectResolution(t *testing.T) {
 
 	// Run rebuild (this should re-resolve projects)
 	var stdout, stderr bytes.Buffer
-	err = runRebuild(&stdout, &stderr)
+	err = runRebuild(context.Background(), &stdout, &stderr, &config.Config{DatabasePath: dbPath})
 	if err != nil {
 		t.Fatalf("rebuild: %v", err)
 	}
@@ -2319,7 +2092,7 @@ func TestRebuildMultipleProjects(t *testing.T) {
 
 	// Run rebuild
 	var stdout, stderr bytes.Buffer
-	err = runRebuild(&stdout, &stderr)
+	err = runRebuild(context.Background(), &stdout, &stderr, &config.Config{DatabasePath: dbPath})
 	if err != nil {
 		t.Fatalf("rebuild: %v", err)
 	}
@@ -2449,7 +2222,7 @@ func TestQ3AutoSyncUpgradesStaleTemplates(t *testing.T) {
 
 	// Auto-sync alone must re-mine the stale path — no rebuild.
 	cfg := &config.Config{DatabasePath: dbPath, SessionDirs: []string{sessionDir}}
-	if err := maybeAutoSync(cfg); err != nil {
+	if err := maybeAutoSync(cfg, io.Discard); err != nil {
 		t.Fatalf("maybeAutoSync: %v", err)
 	}
 
@@ -2480,7 +2253,7 @@ func TestQ3AutoSyncUpgradesStaleTemplates(t *testing.T) {
 	}
 
 	// Idempotence: another sync must not double-count or duplicate matches.
-	if err := maybeAutoSync(cfg); err != nil {
+	if err := maybeAutoSync(cfg, io.Discard); err != nil {
 		t.Fatalf("second maybeAutoSync: %v", err)
 	}
 	var occAfter, matchesAfter int
@@ -2584,7 +2357,7 @@ func TestQ5AutoSyncClearsSupersededSignalsWithoutRebuild(t *testing.T) {
 	_ = db.Close()
 
 	cfg := &config.Config{DatabasePath: dbPath, SessionDirs: []string{sessionDir}}
-	if err := maybeAutoSync(cfg); err != nil {
+	if err := maybeAutoSync(cfg, io.Discard); err != nil {
 		t.Fatalf("maybeAutoSync: %v", err)
 	}
 

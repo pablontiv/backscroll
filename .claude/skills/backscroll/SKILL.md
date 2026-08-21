@@ -10,6 +10,11 @@ allowed-tools:
 
 Backscroll is the primary local episodic index for coding-agent work. Run it before starting feature, bug, test, refactor, or decision work that may have history. A hit is evidence from indexed rows. An empty result is only query/index uncertainty: it does not prove the event, file, or decision never existed.
 
+Every operational command validates active manifests and attempts one incremental
+sync before executing. Session, plan, and Markdown files are ingestion inputs;
+SQLite is the perennial record used by search, list, patterns, status, and validate.
+Use `--source-path` on search as a filter, paired with query text, for database-backed retrieval scoped to a known input path.
+
 ## 1) Preflight (required)
 
 ```bash
@@ -36,7 +41,7 @@ Invoke `/skill:backscroll` automatically for:
 - Writing tests: query the test subject and related module.
 - Refactoring: query the module, interface, or previous pattern.
 - Decision questions: query the decision topic and alternatives.
-- Debugging execution: query command names, paths, flags, exit codes, and use `backscroll search` with `--content-type tool`.
+- Debugging execution: query command names, paths, flags, exit codes, and use the search command with `--content-type tool` and query text.
 
 Spanish trigger equivalents include "ya lo hicimos", "qué hicimos con", "qué error dio", "dónde corrí", and "qué decidimos". Do not wait for explicit recall requests; missed lookup cost is rework and duplicate decisions.
 
@@ -54,7 +59,7 @@ where `<config_dir>` is the OS config directory, or `BACKSCROLL_CONFIG_DIR`. The
 
 Use machine-readable, budgeted output:
 
-- `--robot`: emits `result_N_field=value` lines.
+- Robot mode on search emits `result_N_field=value` lines; search string values escape backslash as `\\`, carriage return as `\r`, and newline as `\n`.
 - `--fields minimal`: returns `source_path`, `snippet`, `score`, `role`, and `timestamp`.
 - `--fields full`: use only for a selected source-path drill.
 - `--max-tokens <budget>`: declare and enforce the output budget.
@@ -128,7 +133,7 @@ backscroll search "go test" --all-projects --content-type tool --robot --fields 
 
 ```bash
 SOURCE_PATH="<result_N_source_path>"
-backscroll search "" --all-projects --indexed-only --source-path "$SOURCE_PATH" --robot --fields full --max-tokens 4000
+backscroll search --text "$QUERY" --all-projects --source-path "$SOURCE_PATH" --robot --fields full --max-tokens 4000
 ```
 
 2. **Use the artifact's vocabulary.** For transcripts, logs, reports, and pasted artifacts, query literal speaker names, boilerplate, IDs, exact errors, paths, and the artifact language. A translated or paraphrased query is secondary evidence only.
@@ -140,20 +145,20 @@ backscroll search --help
 backscroll list --help
 ```
 
-4. **Two empty searches prove nothing.** Before concluding content is absent from the index: retry with artifact-literal terms; broaden to `--all-projects`; if a path or UUID is known, probe existing indexed rows; run one normal search without `--indexed-only` so normal search autosync can run; repeat the indexed-only probe; then collect diagnostics and report the gap.
+4. **Two empty searches prove nothing.** Before concluding content is absent from the index: retry with artifact-literal terms; broaden to `--all-projects`; if a path or UUID is known, drill down with search `--source-path` plus query text; rely on mandatory startup sync to refresh active manifests; then collect diagnostics and report the gap.
 
 ```bash
-backscroll search "literal speaker or error" --all-projects --indexed-only --robot --fields minimal --max-tokens 2000
-backscroll search "" --all-projects --indexed-only --source-path "*SESSION-UUID*" --json --fields minimal --limit 1
 backscroll search "literal speaker or error" --all-projects --robot --fields minimal --max-tokens 2000
-backscroll search "" --all-projects --indexed-only --source-path "*SESSION-UUID*" --json --fields minimal --limit 1
+backscroll search --text "artifact literal" --all-projects --source-path "*SESSION-UUID*" --json --fields minimal --limit 1
+backscroll search "literal speaker or error" --all-projects --content-type tool --robot --fields minimal --max-tokens 2000
+backscroll search --text "$QUERY" --all-projects --source-path "*SESSION-UUID*" --json --fields full --max-tokens 4000
 backscroll status
-backscroll validate --indexed-only
+backscroll validate
 ```
 
 Report the source path or UUID, literal probes, scopes used, and full diagnostic output as an indexing gap when the probe remains absent.
 
-5. **Raw-file boundary.** `cat`, `jq`, Python, or direct `backscroll read` is not a normal retrieval fallback. Do not use raw JSONL parsing, directory listings for session hunting, or direct file reads unless the user explicitly authorizes indexing-bug diagnosis after you report the gap and the indexed commands attempted.
+5. **Raw-file boundary.** `cat`, `jq`, Python, or filesystem session hunting is not a normal retrieval fallback. Do not use raw JSONL parsing, directory listings for session hunting, or direct file inspection unless the user explicitly authorizes indexing-bug diagnosis after you report the gap and the indexed commands attempted. Database-backed search with `--source-path` and query text is the supported drill-down path.
 
 ## 6) Degradation and troubleshooting
 
@@ -161,12 +166,12 @@ Report the source path or UUID, literal probes, scopes used, and full diagnostic
 
 ```bash
 backscroll status
-backscroll validate --indexed-only
+backscroll validate
 ```
 
 If a search warns about scope, content type, or compatibility, follow the hint and rerun a corrected current command once.
 
-**No results:** follow the hard rules: literal artifact vocabulary, all-projects scope, source-path/UUID probe, one normal search for autosync, repeated indexed-only probe, then status and validate. Report uncertainty; do not convert empty rows into proof of absence.
+**No results:** follow the hard rules: literal artifact vocabulary, all-projects scope, source-path/UUID probe through mandatory startup sync, then status and validate. Report uncertainty; do not convert empty rows into proof of absence.
 
 **Tool-query tokenizer limits:** the tool index uses a trigram tokenizer. Prefer exact flags, paths, command names, and error fragments of at least three characters, for example `"--content-type tool"`, `"go test"`, or `"BUSY"`.
 
@@ -209,7 +214,7 @@ backscroll search "query" --all-projects --robot --fields minimal --max-tokens 2
 
 ## Pattern discovery: census, not retrieval
 
-`backscroll search` answers “find what I can already name.” For discovery — “what recurs that nobody named?” — use census commands. BM25 pattern queries usually yield anecdotes, not counts.
+Search answers “find what I can already name.” For discovery — “what recurs that nobody named?” — use census commands. BM25 pattern queries usually yield anecdotes, not counts.
 
 | Question | Command |
 |---|---|
@@ -223,7 +228,7 @@ Agent-grade census output:
 
 ```bash
 backscroll patterns --kind corrections --pending --batch 50 --robot
-backscroll patterns --kind commands --all-projects --indexed-only --robot
+backscroll patterns --kind commands --all-projects --robot
 ```
 
 Interpret the complete table returned. The census did the counting; the agent's job is judgment, not sampling.

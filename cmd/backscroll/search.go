@@ -35,7 +35,6 @@ func newSearchCmd(stdout, stderr io.Writer) *cobra.Command {
 		lexicalOnly         bool
 		similarityThreshold float64
 		text                string
-		indexedOnly         bool
 	)
 
 	cmd := &cobra.Command{
@@ -56,21 +55,22 @@ Use --tag to filter sessions by auto-detected tags.
 Use --source-path to filter by indexed source path (exact, SQL LIKE pattern, or * glob).
 Use --json to output as JSON.
 Use --fields to choose JSON detail: minimal (default) or full.
-Use --max-tokens to limit output size (approximate token count).
-Use --indexed-only to skip auto-sync (read existing index only).`,
-		Args: cobra.MaximumNArgs(1),
+Use --max-tokens to limit output size (approximate token count).`,
+		Args: func(cmd *cobra.Command, args []string) error {
+			return validateCommandBeforeStartup(cmd, args, cobra.MaximumNArgs(1), func() error {
+				_, _, err := validateAndParseSearchRequest(searchQuery(text, args), fields, contentType, after, before)
+				return err
+			})
+		},
 		RunE: func(cmd *cobra.Command, args []string) error {
-			query := text
-			if query == "" && len(args) > 0 {
-				query = args[0]
+			query := searchQuery(text, args)
+			startup := startupResultFrom(cmd)
+			if startup.Config == nil {
+				return fmt.Errorf("startup configuration unavailable")
 			}
-			if query == "" {
-				return fmt.Errorf("search query required (use --text <query> or positional argument)")
-			}
-			return runSearch(stdout, stderr, query,
-				project, allProjects, jsonFormat, robotFormat,
+			return runSearch(cmd.Context(), stdout, stderr, startup.Config, query, project, allProjects, jsonFormat, robotFormat,
 				source, sourcePath, after, before, role, limit, offset, contentType, tag,
-				fields, maxTokens, lexicalOnly, similarityThreshold, indexedOnly)
+				fields, maxTokens, lexicalOnly, similarityThreshold)
 		},
 	}
 
@@ -92,22 +92,23 @@ Use --indexed-only to skip auto-sync (read existing index only).`,
 	cmd.Flags().BoolVar(&lexicalOnly, "lexical-only", false, "Use BM25 only, skip vector search")
 	cmd.Flags().Float64Var(&similarityThreshold, "similarity-threshold", 0.3, "Minimum cosine similarity for vector results (0=no threshold)")
 	cmd.Flags().StringVar(&text, "text", "", "Search text (v2 preferred grammar)")
-	cmd.Flags().BoolVar(&indexedOnly, "indexed-only", false, "Read existing index without auto-sync")
 
 	return cmd
 }
 
-func runSearch(stdout, stderr io.Writer,
-	query string,
-	project string, allProjects bool, jsonFormat, robotFormat bool,
-	source, sourcePath, after, before, role string,
-	limit, offset int, contentType, tag string,
-	fields string, maxTokens int,
-	lexicalOnly bool, similarityThreshold float64, indexedOnly bool) (retErr error) {
+func searchQuery(text string, args []string) string {
+	if text == "" && len(args) > 0 {
+		return args[0]
+	}
+	return text
+}
 
-	// Validate flag values before opening the database
+func validateAndParseSearchRequest(query, fields, contentType, after, before string) (*time.Time, *time.Time, error) {
+	if query == "" {
+		return nil, nil, fmt.Errorf("search query required (use --text <query> or positional argument)")
+	}
 	if fields != "minimal" && fields != "full" {
-		return fmt.Errorf("invalid --fields value %q: must be minimal or full", fields)
+		return nil, nil, fmt.Errorf("invalid --fields value %q: must be minimal or full", fields)
 	}
 
 	validContentTypes := map[string]bool{
@@ -116,17 +117,42 @@ func runSearch(stdout, stderr io.Writer,
 		"tool":      true,
 		"reasoning": true,
 	}
-
 	if contentType != "" && !validContentTypes[contentType] {
-		return fmt.Errorf("invalid --content-type %q; must be one of: text, code, tool, reasoning", contentType)
+		return nil, nil, fmt.Errorf("invalid --content-type %q; must be one of: text, code, tool, reasoning", contentType)
 	}
 
-	cfg, err := config.Load()
+	var afterTime, beforeTime *time.Time
+	if after != "" {
+		parsed, err := time.Parse("2006-01-02", after)
+		if err != nil {
+			return nil, nil, fmt.Errorf("parse --after date: %w", err)
+		}
+		afterTime = &parsed
+	}
+	if before != "" {
+		parsed, err := time.Parse("2006-01-02", before)
+		if err != nil {
+			return nil, nil, fmt.Errorf("parse --before date: %w", err)
+		}
+		beforeTime = &parsed
+	}
+	return afterTime, beforeTime, nil
+}
+
+func runSearch(ctx context.Context, stdout, stderr io.Writer, cfg *config.Config,
+	query string,
+	project string, allProjects bool, jsonFormat, robotFormat bool,
+	source, sourcePath, after, before, role string,
+	limit, offset int, contentType, tag string,
+	fields string, maxTokens int,
+	lexicalOnly bool, similarityThreshold float64) (retErr error) {
+
+	afterTime, beforeTime, err := validateAndParseSearchRequest(query, fields, contentType, after, before)
 	if err != nil {
-		return fmt.Errorf("load config: %w", err)
+		return err
 	}
 
-	db, diag, err := prepareIndex(context.Background(), cfg, indexDataRead, !indexedOnly)
+	db, diag, err := prepareIndex(ctx, cfg, indexDataRead)
 	if diag != nil {
 		return refuseIndex(stdout, stderr, *diag, jsonFormat, robotFormat)
 	}
@@ -139,23 +165,6 @@ func runSearch(stdout, stderr io.Writer,
 
 	// Derive effective project from cwd if not explicitly set
 	project = effectiveProject(project, allProjects)
-
-	// Parse dates
-	var afterTime, beforeTime *time.Time
-	if after != "" {
-		t, err := time.Parse("2006-01-02", after)
-		if err != nil {
-			return fmt.Errorf("parse --after date: %w", err)
-		}
-		afterTime = &t
-	}
-	if before != "" {
-		t, err := time.Parse("2006-01-02", before)
-		if err != nil {
-			return fmt.Errorf("parse --before date: %w", err)
-		}
-		beforeTime = &t
-	}
 
 	// Build search options
 	opts := models.SearchOptions{
@@ -267,21 +276,22 @@ func resultsToLines(results []models.SearchResult, format picokitoutput.Format) 
 	for i, result := range results {
 		if format == picokitoutput.FormatRobot {
 			// Robot format: result_N_field=value
+			// String values are escaped to keep each field on a single deterministic line.
 			lines = append(lines,
-				fmt.Sprintf("result_%d_source=%s", i, result.Source),
-				fmt.Sprintf("result_%d_role=%s", i, result.Role),
-				fmt.Sprintf("result_%d_filepath=%s", i, result.FilePath),
-				fmt.Sprintf("result_%d_content=%s", i, result.Content),
+				fmt.Sprintf("result_%d_source=%s", i, escapeRobotValue(result.Source)),
+				fmt.Sprintf("result_%d_role=%s", i, escapeRobotValue(result.Role)),
+				fmt.Sprintf("result_%d_filepath=%s", i, escapeRobotValue(result.FilePath)),
+				fmt.Sprintf("result_%d_content=%s", i, escapeRobotValue(result.Content)),
 			)
 			if result.SessionID != "" {
-				lines = append(lines, fmt.Sprintf("result_%d_session_id=%s", i, result.SessionID))
+				lines = append(lines, fmt.Sprintf("result_%d_session_id=%s", i, escapeRobotValue(result.SessionID)))
 			}
 			if result.ProjectPath != "" {
-				lines = append(lines, fmt.Sprintf("result_%d_project=%s", i, result.ProjectPath))
+				lines = append(lines, fmt.Sprintf("result_%d_project=%s", i, escapeRobotValue(result.ProjectPath)))
 			}
 			lines = append(lines, fmt.Sprintf("result_%d_score=%.2f", i, result.Score))
 			if len(result.Tags) > 0 {
-				lines = append(lines, fmt.Sprintf("result_%d_tags=%s", i, strings.Join(result.Tags, ",")))
+				lines = append(lines, fmt.Sprintf("result_%d_tags=%s", i, escapeRobotValue(strings.Join(result.Tags, ","))))
 			}
 			lines = append(lines, fmt.Sprintf("result_%d_rank=%d", i, result.Rank))
 		} else {
@@ -306,4 +316,11 @@ func resultsToLines(results []models.SearchResult, format picokitoutput.Format) 
 	}
 
 	return lines
+}
+
+func escapeRobotValue(value string) string {
+	escaped := strings.ReplaceAll(value, `\`, `\\`)
+	escaped = strings.ReplaceAll(escaped, "\r", `\r`)
+	escaped = strings.ReplaceAll(escaped, "\n", `\n`)
+	return escaped
 }

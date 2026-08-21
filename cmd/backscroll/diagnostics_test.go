@@ -41,13 +41,13 @@ func TestSearchZeroResultHintsToStderr(t *testing.T) {
 	defer cleanup()
 
 	// Initialize the database by running validate
-	_, _, err := runCmd("validate", "--indexed-only")
+	_, _, err := runCmd("validate")
 	if err != nil {
 		// validate may fail if no sessions exist, which is fine
 	}
 
 	// A query that cannot match anything; --json keeps stdout a clean empty array.
-	out, stderr, err := runCmd("search", "zzqqxx_no_such_token_zzqqxx", "--json", "--indexed-only")
+	out, stderr, err := runCmd("search", "zzqqxx_no_such_token_zzqqxx", "--json")
 	if err != nil {
 		t.Fatalf("search error: %v\nstderr: %s", err, stderr)
 	}
@@ -88,12 +88,12 @@ func TestSearchShortToolQueryWarnsToStderr(t *testing.T) {
 	defer cleanup()
 
 	// Initialize the database by running validate
-	_, _, err := runCmd("validate", "--indexed-only")
+	_, _, err := runCmd("validate")
 	if err != nil {
 		// validate may fail if no sessions exist, which is fine
 	}
 
-	out, stderr, err := runCmd("search", "go", "--content-type", "tool", "--json", "--indexed-only")
+	out, stderr, err := runCmd("search", "go", "--content-type", "tool", "--json")
 	if err != nil {
 		t.Fatalf("search error: %v\nstderr: %s", err, stderr)
 	}

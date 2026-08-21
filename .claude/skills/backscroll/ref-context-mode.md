@@ -2,11 +2,13 @@
 
 Use this only for `/skill:backscroll --context`. Produce a recovery brief with: Backscroll evidence, optional Rootline live state, and gaps.
 
+Backscroll retrieval uses active manifests, mandatory startup sync, perennial SQLite, and database-backed query. Raw `cat`, `jq`, Python, or filesystem session hunting is not a normal retrieval fallback; drill into known paths with search `--source-path` plus query text.
+
 ## Required Backscroll Retrieval
 
 ```bash
-backscroll validate --indexed-only
-backscroll status --indexed-only
+backscroll validate
+backscroll status
 backscroll list --limit 10 --all-projects --json
 ```
 
@@ -21,6 +23,13 @@ If this returns no useful results, run one broader session search:
 
 ```bash
 backscroll search "$PROJECT_SLUG" --source session --all-projects --max-tokens 4000
+```
+
+If a result includes a useful `source_path`, drill into it before leaving the indexed boundary:
+
+```bash
+SOURCE_PATH="<result_N_source_path>"
+backscroll search --text "$QUERY" --source-path "$SOURCE_PATH" --all-projects --max-tokens 4000
 ```
 
 For empty results or suspected gaps, follow the main skill's search discipline rather than raw-file fallback.

@@ -21,11 +21,9 @@ type indexCommandClass uint8
 const (
 	indexDataRead indexCommandClass = iota
 	indexMutation
-	indexDiagnostic
-	indexRemediation
 )
 
-func prepareIndex(ctx context.Context, cfg *config.Config, class indexCommandClass, autoSync bool) (*storage.Database, *compat.Diagnostic, error) {
+func prepareIndex(ctx context.Context, cfg *config.Config, class indexCommandClass) (*storage.Database, *compat.Diagnostic, error) {
 	if cfg == nil {
 		return nil, &compat.Diagnostic{Code: compat.CodeIndexStale, Summary: "index configuration is unavailable"}, fmt.Errorf("index configuration is unavailable")
 	}
@@ -35,31 +33,14 @@ func prepareIndex(ctx context.Context, cfg *config.Config, class indexCommandCla
 		return nil, &d, err
 	}
 
-	if class == indexDataRead && !autoSync {
-		if _, statErr := os.Stat(cfg.DatabasePath); os.IsNotExist(statErr) {
-			return nil, nil, fmt.Errorf("backscroll database not found: %s: %w", cfg.DatabasePath, statErr)
-		} else if statErr != nil {
-			return nil, nil, fmt.Errorf("stat database: %w", statErr)
-		}
+	var db *storage.Database
+	var diag *compat.Diagnostic
+	switch class {
+	case indexDataRead, indexMutation:
+		db, diag, err = storage.OpenCompatible(ctx, cfg.DatabasePath)
+	default:
+		return nil, nil, fmt.Errorf("unknown index command class %d", class)
 	}
-
-	openPrepared := func() (*storage.Database, *compat.Diagnostic, error) {
-		switch class {
-		case indexDataRead:
-			if !autoSync {
-				return openReadOnlyCurrentIndex(ctx, cfg.DatabasePath)
-			}
-			return storage.OpenCompatible(ctx, cfg.DatabasePath)
-		case indexMutation:
-			return storage.OpenCompatible(ctx, cfg.DatabasePath)
-		case indexDiagnostic, indexRemediation:
-			return openImmutableCurrentIndex(ctx, cfg.DatabasePath)
-		default:
-			return nil, nil, fmt.Errorf("unknown index command class %d", class)
-		}
-	}
-
-	db, diag, err := openPrepared()
 	if diag != nil {
 		d := continuationFor(*diag, activePath)
 		return nil, &d, nil
@@ -76,68 +57,6 @@ func prepareIndex(ctx context.Context, cfg *config.Config, class indexCommandCla
 		return nil, &d, err
 	}
 
-	if autoSync {
-		if closeErr := db.Close(); closeErr != nil {
-			d := continuationFor(compat.Diagnostic{Code: compat.CodeIndexStale, Summary: fmt.Sprintf("close prepared index before sync: %v", closeErr)}, activePath)
-			return nil, &d, closeErr
-		}
-		if err := maybeAutoSync(cfg); err != nil {
-			d := continuationFor(compat.Diagnostic{Code: compat.CodeIndexStale, Summary: fmt.Sprintf("index sync failed: %v", err)}, activePath)
-			return nil, &d, err
-		}
-		db, diag, err = openPrepared()
-		if diag != nil {
-			d := continuationFor(*diag, activePath)
-			return nil, &d, nil
-		}
-		if err != nil {
-			if errors.Is(err, storage.ErrImmutableReadOnlyWALUnsafe) {
-				d := compat.Diagnostic{
-					Code:    compat.CodeIndexStale,
-					Summary: fmt.Sprintf("current index snapshot cannot be inspected without side effects while its WAL has uncheckpointed frames; close the writer or checkpoint the database, then retry: %v", err),
-				}
-				return nil, &d, err
-			}
-			d := continuationFor(compat.Diagnostic{Code: compat.CodeMigrationFailed, Summary: fmt.Sprintf("prepare index after sync failed: %v", err)}, activePath)
-			return nil, &d, err
-		}
-	}
-
-	return db, nil, nil
-}
-
-func openReadOnlyCurrentIndex(ctx context.Context, path string) (*storage.Database, *compat.Diagnostic, error) {
-	return openCurrentIndexWith(ctx, path, storage.OpenReadOnly)
-}
-
-func openImmutableCurrentIndex(ctx context.Context, path string) (*storage.Database, *compat.Diagnostic, error) {
-	return openCurrentIndexWith(ctx, path, storage.OpenImmutableReadOnly)
-}
-
-func openCurrentIndexWith(ctx context.Context, path string, open func(string) (*storage.Database, error)) (*storage.Database, *compat.Diagnostic, error) {
-	db, err := open(path)
-	if err != nil {
-		return nil, nil, err
-	}
-	plan, diag, inspectErr := compat.InspectIndex(ctx, db.DB())
-	if inspectErr != nil || diag != nil {
-		closeErr := closeIndexDB(db, inspectErr)
-		if diag != nil && closeErr != nil {
-			diag.Summary = strings.TrimSpace(diag.Summary) + "; " + closeErr.Error()
-		}
-		return nil, diag, closeErr
-	}
-	if len(plan.Steps) > 0 {
-		diag := &compat.Diagnostic{
-			Code:    compat.CodeIndexStale,
-			Summary: fmt.Sprintf("index schema %s has %d pending migration step(s)", plan.From.Signature, len(plan.Steps)),
-		}
-		if closeErr := closeIndexDB(db, nil); closeErr != nil {
-			diag.Summary += "; " + closeErr.Error()
-			return nil, diag, closeErr
-		}
-		return nil, diag, nil
-	}
 	return db, nil, nil
 }
 
@@ -187,21 +106,36 @@ func writeDiagnostic(stdout, stderr io.Writer, d compat.Diagnostic, jsonMode boo
 }
 
 func writeRobotDiagnostic(stdout io.Writer, d compat.Diagnostic) error {
-	if _, err := fmt.Fprintf(stdout, "diagnostic_code=%s\n", d.Code); err != nil {
+	if _, err := fmt.Fprintf(stdout, "diagnostic_code=%s\n", robotEscape(string(d.Code))); err != nil {
 		return err
 	}
-	if _, err := fmt.Fprintf(stdout, "diagnostic_summary=%s\n", strings.TrimSpace(d.Summary)); err != nil {
+	if _, err := fmt.Fprintf(stdout, "diagnostic_summary=%s\n", robotEscape(strings.TrimSpace(d.Summary))); err != nil {
 		return err
 	}
 	if len(d.Continuation) > 0 {
-		if _, err := fmt.Fprintf(stdout, "diagnostic_continuation_argv=%s\n", strings.Join(d.Continuation, " ")); err != nil {
+		encoded, err := json.Marshal(d.Continuation)
+		if err != nil {
+			return fmt.Errorf("encode diagnostic continuation argv: %w", err)
+		}
+		if _, err := fmt.Fprintf(stdout, "diagnostic_continuation_argv=%s\n", robotEscape(string(encoded))); err != nil {
 			return err
 		}
 	}
 	return nil
 }
 
+func robotEscape(value string) string {
+	value = strings.ReplaceAll(value, `\`, `\\`)
+	value = strings.ReplaceAll(value, "\r", `\r`)
+	value = strings.ReplaceAll(value, "\n", `\n`)
+	return value
+}
+
 func refuseIndex(stdout, stderr io.Writer, d compat.Diagnostic, jsonMode, robotMode bool) error {
+	return refuseIndexWithCause(stdout, stderr, d, nil, jsonMode, robotMode)
+}
+
+func refuseIndexWithCause(stdout, stderr io.Writer, d compat.Diagnostic, cause error, jsonMode, robotMode bool) error {
 	var err error
 	if robotMode {
 		err = writeRobotDiagnostic(stdout, d)
@@ -211,15 +145,20 @@ func refuseIndex(stdout, stderr io.Writer, d compat.Diagnostic, jsonMode, robotM
 	if err != nil {
 		return err
 	}
-	return indexDiagnosticError{diagnostic: d}
+	return indexDiagnosticError{diagnostic: d, cause: cause}
 }
 
 type indexDiagnosticError struct {
 	diagnostic compat.Diagnostic
+	cause      error
 }
 
 func (e indexDiagnosticError) Error() string {
 	return fmt.Sprintf("%s: %s", e.diagnostic.Code, strings.TrimSpace(e.diagnostic.Summary))
+}
+
+func (e indexDiagnosticError) Unwrap() error {
+	return e.cause
 }
 
 func indexPolicyMachineArgs(args []string) bool {
