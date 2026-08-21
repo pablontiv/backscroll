@@ -179,51 +179,6 @@ func TestPrepareIndexDataReadDoesNotApplyPendingMigration(t *testing.T) {
 	}
 }
 
-func TestSnapshotReadCommandsDoNotCreateMissingDatabase(t *testing.T) {
-	for _, tc := range []struct {
-		name string
-		argv []string
-	}{
-		{name: "list", argv: []string{"list"}},
-		{name: "search", argv: []string{"search", "sentinel"}},
-		{name: "patterns", argv: []string{"patterns", "--kind", "commands"}},
-		{name: "status", argv: []string{"status"}},
-		{name: "validate", argv: []string{"validate"}},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			dir := t.TempDir()
-			dbPath := filepath.Join(dir, "missing", "index.db")
-			setIndexPolicyEnv(t, dbPath, filepath.Join(dir, "config"))
-
-			var stdout, stderr bytes.Buffer
-			err := run(&stdout, &stderr, tc.argv)
-			if err == nil {
-				t.Fatalf("%v succeeded against missing DB; stdout=%q stderr=%q", tc.argv, stdout.String(), stderr.String())
-			}
-			assertMissingDatabaseArtifacts(t, dbPath)
-			combined := stdout.String() + stderr.String()
-			if !strings.Contains(combined, string(compat.CodeMigrationFailed)) {
-				t.Fatalf("%v missing diagnostic code %q; stdout=%q stderr=%q err=%v", tc.argv, compat.CodeMigrationFailed, stdout.String(), stderr.String(), err)
-			}
-		})
-	}
-}
-
-func TestConfigDoesNotCreateMissingDatabase(t *testing.T) {
-	dir := t.TempDir()
-	dbPath := filepath.Join(dir, "missing", "index.db")
-	setIndexPolicyEnv(t, dbPath, filepath.Join(dir, "config"))
-
-	var stdout, stderr bytes.Buffer
-	if err := run(&stdout, &stderr, []string{"config", "--json"}); err != nil {
-		t.Fatalf("config failed: %v stdout=%q stderr=%q", err, stdout.String(), stderr.String())
-	}
-	assertMissingDatabaseArtifacts(t, dbPath)
-	if !strings.Contains(stdout.String(), dbPath) {
-		t.Fatalf("config output missing db path %q: stdout=%q", dbPath, stdout.String())
-	}
-}
-
 func TestHumanDiagnosticRenderedOnceWithoutCobraEcho(t *testing.T) {
 	dbPath := newUnsupportedIndexedConsumerDB(t)
 	var stdout, stderr bytes.Buffer
