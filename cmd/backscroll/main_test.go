@@ -33,10 +33,15 @@ func testEnv(t *testing.T) (dbPath string, cleanup func()) {
 			t.Fatalf("mkdir isolated test env path %s: %v", path, err)
 		}
 	}
+	emptyInputs := filepath.Join(dir, "empty-inputs")
+	if err := os.MkdirAll(emptyInputs, 0o755); err != nil {
+		t.Fatalf("mkdir isolated empty input path %s: %v", emptyInputs, err)
+	}
 	dbPath = filepath.Join(dir, "test.db")
 	t.Setenv("HOME", homeDir)
 	t.Setenv("BACKSCROLL_CONFIG_DIR", configDir)
 	t.Setenv("BACKSCROLL_DATABASE_PATH", dbPath)
+	t.Setenv("BACKSCROLL_SESSION_DIRS", emptyInputs)
 	db, err := storage.Open(dbPath)
 	if err != nil {
 		t.Fatalf("create isolated test database: %v", err)
@@ -937,7 +942,7 @@ func TestStatusJSONIndexUsable(t *testing.T) {
 	defer cleanup()
 	t.Setenv("HOME", t.TempDir())
 
-	// No index yet: status must report usable=false without creating the DB
+	// Mandatory startup prepares an empty usable index before status runs.
 	out, _, err := runCmd("status", "--json")
 	if err != nil {
 		t.Fatalf("status --json error: %v", err)
@@ -946,15 +951,19 @@ func TestStatusJSONIndexUsable(t *testing.T) {
 	if err := json.Unmarshal([]byte(out), &doc); err != nil {
 		t.Fatalf("status JSON invalid: %v\noutput: %s", err, out)
 	}
+	database, ok := doc["database"].(map[string]any)
+	if !ok {
+		t.Fatalf("status JSON missing database object: %s", out)
+	}
+	if exists, _ := database["exists"].(bool); !exists {
+		t.Error("expected database.exists=true after mandatory startup prepares an empty index")
+	}
 	index, ok := doc["index"].(map[string]any)
 	if !ok {
 		t.Fatalf("status JSON missing index object: %s", out)
 	}
-	if usable, _ := index["usable"].(bool); usable {
-		t.Error("expected index.usable=false with no index")
-	}
 
-	// After syncing a session, usable must flip to true
+	// After syncing a session, usable must flip to true and include rows.
 	piDir := filepath.Dir(filepath.Join(fixturesDir(), "claude-tool-events.jsonl"))
 	_, _, _ = syncForTest(t, "sync", "--path", piDir)
 	// Status is read-only; the explicit sync above populated the index.
@@ -1054,8 +1063,8 @@ func TestListStructuredFlagsRemoved(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected error: --type flag should be removed from list")
 	}
-	if !strings.Contains(stderr, "unknown flag") {
-		t.Errorf("expected 'unknown flag', got: %q", stderr)
+	if !strings.Contains(err.Error(), "unknown flag") {
+		t.Errorf("expected unknown flag error, got err=%q stderr=%q", err.Error(), stderr)
 	}
 }
 
@@ -1067,8 +1076,8 @@ func TestStatsCommandRemoved(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected error: stats command should no longer exist")
 	}
-	if !strings.Contains(stderr, "unknown command") {
-		t.Errorf("expected 'unknown command' on stderr, got: %q", stderr)
+	if !strings.Contains(err.Error(), "unknown command") {
+		t.Errorf("expected unknown command error, got err=%q stderr=%q", err.Error(), stderr)
 	}
 }
 

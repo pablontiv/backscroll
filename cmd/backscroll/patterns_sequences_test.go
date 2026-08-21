@@ -27,7 +27,6 @@ func TestPatternsSequencesCommandBasic(t *testing.T) {
 	err := run(stdout, stderr, []string{
 		"patterns",
 		"--kind", "sequences",
-		"--indexed-only",
 		"--json",
 	})
 
@@ -51,7 +50,6 @@ func TestPatternsSequencesCommandText(t *testing.T) {
 	err := run(stdout, stderr, []string{
 		"patterns",
 		"--kind", "sequences",
-		"--indexed-only",
 	})
 
 	// Should succeed without crash
@@ -75,7 +73,6 @@ func TestPatternsSequencesJSON(t *testing.T) {
 	err := run(stdout, stderr, []string{
 		"patterns",
 		"--kind", "sequences",
-		"--indexed-only",
 		"--json",
 	})
 
@@ -108,7 +105,6 @@ func TestPatternsSequencesRobotFormat(t *testing.T) {
 	err := run(stdout, stderr, []string{
 		"patterns",
 		"--kind", "sequences",
-		"--indexed-only",
 		"--robot",
 	})
 
@@ -133,7 +129,6 @@ func TestPatternsSequencesWithFlags(t *testing.T) {
 	err := run(stdout, stderr, []string{
 		"patterns",
 		"--kind", "sequences",
-		"--indexed-only",
 		"--min-support", "5",
 		"--min-length", "3",
 		"--max-length", "8",
@@ -213,7 +208,6 @@ func TestPatternsSequencesProjectFilter(t *testing.T) {
 	err := run(stdout, stderr, []string{
 		"patterns",
 		"--kind", "sequences",
-		"--indexed-only",
 		"--project", "myproject",
 		"--json",
 	})
@@ -237,7 +231,6 @@ func TestPatternsSequencesAllProjects(t *testing.T) {
 	err := run(stdout, stderr, []string{
 		"patterns",
 		"--kind", "sequences",
-		"--indexed-only",
 		"--all-projects",
 		"--json",
 	})
@@ -261,7 +254,6 @@ func TestPatternsSequencesInvalidMinSupport(t *testing.T) {
 	err := run(stdout, stderr, []string{
 		"patterns",
 		"--kind", "sequences",
-		"--indexed-only",
 		"--min-support", "-1",
 		"--json",
 	})
@@ -283,7 +275,6 @@ func TestPatternsSequencesEmptyDBGuidance(t *testing.T) {
 	_ = run(stdout, stderr, []string{
 		"patterns",
 		"--kind", "sequences",
-		"--indexed-only",
 	})
 
 	stderrStr := stderr.String()
@@ -356,29 +347,29 @@ func TestPatternsSequencesDefaultMinSupport(t *testing.T) {
 	_ = run(stdout, stderr, []string{
 		"patterns",
 		"--kind", "sequences",
-		"--indexed-only",
 		"--min-support", "0",
 		"--json",
 	})
 }
 
-// TestPatternsSequencesMalformedCategoriesFails asserts a categories config
-// load failure fails the command (non-nil error) instead of masquerading as
-// an empty result — scripts rely on the exit code to distinguish the two.
-func TestPatternsSequencesMalformedCategoriesFails(t *testing.T) {
+// TestPatternsSequencesMalformedCategoriesFallsBackToBuiltin asserts malformed
+// categories TOML does not break the command path; loader falls back to the
+// embedded defaults and sequence output still executes.
+func TestPatternsSequencesMalformedCategoriesFallsBackToBuiltin(t *testing.T) {
 	tempDir := t.TempDir()
-	t.Setenv("HOME", tempDir)
-	t.Setenv("BACKSCROLL_CONFIG_DIR", tempDir)
-	t.Setenv("BACKSCROLL_DATABASE_PATH", tempDir+"/t.db")
-	if err := os.MkdirAll(tempDir+"/backscroll", 0o755); err != nil {
+	dbPath := filepath.Join(tempDir, "t.db")
+	setIndexPolicyEnv(t, dbPath, tempDir)
+
+	categoriesDir := filepath.Join(tempDir, "backscroll", "inputs")
+	if err := os.MkdirAll(categoriesDir, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(tempDir+"/backscroll/categories.toml", []byte("version = [broken"), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(categoriesDir, "categories.toml"), []byte("version = [broken"), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	var stdout, stderr bytes.Buffer
-	err := run(&stdout, &stderr, []string{"patterns", "--kind", "sequences", "--indexed-only"})
-	if err == nil {
-		t.Fatal("malformed categories config must fail the command, got nil error")
+	err := run(&stdout, &stderr, []string{"patterns", "--kind", "sequences"})
+	if err != nil {
+		t.Fatalf("malformed categories should fall back to defaults: %v stdout=%q stderr=%q", err, stdout.String(), stderr.String())
 	}
 }

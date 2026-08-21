@@ -9,7 +9,7 @@ func TestListJSONSeeded(t *testing.T) {
 	_, cleanup := testEnv(t)
 	defer cleanup()
 	seedToolEvents(t)
-	stdout, _, err := runCmd("list", "--json", "--all-projects", "--indexed-only")
+	stdout, _, err := runCmd("list", "--json", "--all-projects")
 	if err != nil {
 		t.Fatalf("run: %v", err)
 	}
@@ -22,7 +22,7 @@ func TestListRobotSeeded(t *testing.T) {
 	_, cleanup := testEnv(t)
 	defer cleanup()
 	seedToolEvents(t)
-	if _, _, err := runCmd("list", "--robot", "--all-projects", "--indexed-only"); err != nil {
+	if _, _, err := runCmd("list", "--robot", "--all-projects"); err != nil {
 		t.Fatalf("run: %v", err)
 	}
 }
@@ -31,7 +31,7 @@ func TestListOrderAscWithLimitOffset(t *testing.T) {
 	_, cleanup := testEnv(t)
 	defer cleanup()
 	seedToolEvents(t)
-	if _, _, err := runCmd("list", "--order", "timestamp:asc", "--limit", "1", "--offset", "1", "--all-projects", "--indexed-only"); err != nil {
+	if _, _, err := runCmd("list", "--order", "timestamp:asc", "--limit", "1", "--offset", "1", "--all-projects"); err != nil {
 		t.Fatalf("run: %v", err)
 	}
 }
@@ -40,7 +40,7 @@ func TestListInvalidOrderRejected(t *testing.T) {
 	_, cleanup := testEnv(t)
 	defer cleanup()
 	seedToolEvents(t)
-	if _, _, err := runCmd("list", "--order", "nonsense:updown", "--all-projects", "--indexed-only"); err == nil {
+	if _, _, err := runCmd("list", "--order", "nonsense:updown", "--all-projects"); err == nil {
 		t.Log("invalid order accepted silently (documenting current behavior)")
 	}
 }
@@ -49,7 +49,7 @@ func TestListRecentZeroAll(t *testing.T) {
 	_, cleanup := testEnv(t)
 	defer cleanup()
 	seedToolEvents(t)
-	if _, _, err := runCmd("list", "--recent", "0", "--all-projects", "--indexed-only"); err != nil {
+	if _, _, err := runCmd("list", "--recent", "0", "--all-projects"); err != nil {
 		t.Fatalf("run: %v", err)
 	}
 }
@@ -58,7 +58,7 @@ func TestListProjectFilterSeeded(t *testing.T) {
 	_, cleanup := testEnv(t)
 	defer cleanup()
 	seedToolEvents(t)
-	stdout, _, err := runCmd("list", "--project", "covproj", "--indexed-only")
+	stdout, _, err := runCmd("list", "--project", "covproj")
 	if err != nil {
 		t.Fatalf("run: %v", err)
 	}

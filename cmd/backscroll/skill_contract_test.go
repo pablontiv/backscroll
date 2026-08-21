@@ -150,7 +150,6 @@ func TestBackscrollSkillContainsSearchDiscipline(t *testing.T) {
 		"Two empty searches prove nothing",
 		"Raw-file boundary",
 		"--source-path",
-		"--indexed-only",
 		"backscroll validate --indexed-only",
 	}
 	for _, anchor := range anchors {

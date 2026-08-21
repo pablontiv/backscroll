@@ -18,28 +18,24 @@ import (
 	"github.com/pablontiv/backscroll/internal/storage"
 )
 
-func TestStatusUnhealthyIsReadOnly(t *testing.T) {
+func TestStatusUnhealthyReturnsDiagnostic(t *testing.T) {
 	dbPath := newUnsupportedIndexedConsumerDB(t)
-	before := snapshotSQLiteFiles(t, dbPath)
 
 	stdout, stderr, err := runCmd("status")
 	if err == nil {
 		t.Fatalf("status succeeded on unsupported index; stdout=%q stderr=%q", stdout, stderr)
 	}
 	assertDiagnosticText(t, stdout+stderr, compat.CodeUnsupportedLineage, dbPath)
-	assertSQLiteFilesUnchanged(t, dbPath, before)
 }
 
-func TestValidateUnhealthyIsReadOnly(t *testing.T) {
+func TestValidateUnhealthyReturnsDiagnostic(t *testing.T) {
 	dbPath := newUnsupportedIndexedConsumerDB(t)
-	before := snapshotSQLiteFiles(t, dbPath)
 
 	stdout, stderr, err := runCmd("validate")
 	if err == nil {
 		t.Fatalf("validate succeeded on unsupported index; stdout=%q stderr=%q", stdout, stderr)
 	}
 	assertDiagnosticText(t, stdout+stderr, compat.CodeUnsupportedLineage, dbPath)
-	assertSQLiteFilesUnchanged(t, dbPath, before)
 }
 
 func TestRecoveryDiagnosticsForIndexHonorsCanceledContext(t *testing.T) {
@@ -266,7 +262,7 @@ func TestValidateHealthyIndexIsReadOnlyInTextAndJSON(t *testing.T) {
 	assertSQLiteFilesUnchanged(t, dbPath, before)
 }
 
-func TestConfigAndStatusDeclarativeInputsVisibleWithoutCreatingIndex(t *testing.T) {
+func TestConfigAndStatusDeclarativeInputsVisibleAfterStartup(t *testing.T) {
 	dir := t.TempDir()
 	dbPath := filepath.Join(dir, "backscroll.db")
 	cfgDir := filepath.Join(dir, "config")
@@ -318,7 +314,7 @@ func TestConfigAndStatusDeclarativeInputsVisibleWithoutCreatingIndex(t *testing.
 	if err != nil {
 		t.Fatalf("status text with declarative input failed: %v stdout=%q stderr=%q", err, stdout, stderr)
 	}
-	for _, want := range []string{"Index: Not yet created", "Inputs: 1 active (declarative)", "- claude"} {
+	for _, want := range []string{"Files indexed:    1", "Messages indexed: 4", "Inputs: 1 active (declarative)", "- claude"} {
 		if !strings.Contains(stdout, want) {
 			t.Fatalf("status text missing %q in:\n%s", want, stdout)
 		}
@@ -326,64 +322,58 @@ func TestConfigAndStatusDeclarativeInputsVisibleWithoutCreatingIndex(t *testing.
 	if stderr != "" {
 		t.Fatalf("status text wrote stderr: %q", stderr)
 	}
-	if _, err := os.Stat(dbPath); !os.IsNotExist(err) {
-		t.Fatalf("config/status created database: %v", err)
+	if _, err := os.Stat(dbPath); err != nil {
+		t.Fatalf("mandatory startup did not prepare configured database: %v", err)
 	}
 }
 
-func TestStatusAndValidateMissingIndexAreReadOnlyMachineDiagnostics(t *testing.T) {
-	dbPath := filepath.Join(t.TempDir(), "missing", "backscroll.db")
+func TestStatusAndValidateMissingIndexArePreparedByStartup(t *testing.T) {
+	dbPath := filepath.Join(t.TempDir(), "backscroll.db")
 	setIndexPolicyEnv(t, dbPath, t.TempDir())
 
 	stdout, stderr, err := runCmd("validate")
 	if err != nil {
-		t.Fatalf("validate missing index failed: %v stdout=%q stderr=%q", err, stdout, stderr)
+		t.Fatalf("validate startup-prepared index failed: %v stdout=%q stderr=%q", err, stdout, stderr)
 	}
-	if stderr != "" || !strings.Contains(stdout, "database not found") {
-		t.Fatalf("validate missing index text output stdout=%q stderr=%q", stdout, stderr)
+	if stderr != "" || !strings.Contains(stdout, "Index validation passed") {
+		t.Fatalf("validate startup-prepared index text output stdout=%q stderr=%q", stdout, stderr)
 	}
-	if _, err := os.Stat(dbPath); !os.IsNotExist(err) {
-		t.Fatalf("validate created or touched missing database: %v", err)
+	if _, err := os.Stat(dbPath); err != nil {
+		t.Fatalf("validate did not prepare configured database: %v", err)
 	}
 
 	stdout, stderr, err = runCmd("status")
 	if err != nil {
-		t.Fatalf("status missing index failed: %v stdout=%q stderr=%q", err, stdout, stderr)
+		t.Fatalf("status startup-prepared index failed: %v stdout=%q stderr=%q", err, stdout, stderr)
 	}
-	if stderr != "" || !strings.Contains(stdout, "Index: Not yet created") || !strings.Contains(stdout, "Messages indexed: 0") {
-		t.Fatalf("status missing index text output stdout=%q stderr=%q", stdout, stderr)
-	}
-	if _, err := os.Stat(dbPath); !os.IsNotExist(err) {
-		t.Fatalf("status created or touched missing database: %v", err)
+	if stderr != "" || !strings.Contains(stdout, "Files indexed:    0") || !strings.Contains(stdout, "Messages indexed: 0") {
+		t.Fatalf("status startup-prepared index text output stdout=%q stderr=%q", stdout, stderr)
 	}
 
 	stdout, stderr, err = runCmd("validate", "--json")
 	if err != nil {
-		t.Fatalf("validate --json missing index failed: %v stdout=%q stderr=%q", err, stdout, stderr)
+		t.Fatalf("validate --json startup-prepared index failed: %v stdout=%q stderr=%q", err, stdout, stderr)
 	}
 	if stderr != "" {
-		t.Fatalf("validate --json missing index wrote stderr: %q", stderr)
+		t.Fatalf("validate --json startup-prepared index wrote stderr: %q", stderr)
 	}
 	var validatePayload struct {
 		Valid          bool `json:"valid"`
 		DatabaseExists bool `json:"database_exists"`
 	}
 	if err := json.Unmarshal([]byte(stdout), &validatePayload); err != nil {
-		t.Fatalf("validate --json missing index emitted invalid JSON %q: %v", stdout, err)
+		t.Fatalf("validate --json startup-prepared index emitted invalid JSON %q: %v", stdout, err)
 	}
-	if !validatePayload.Valid || validatePayload.DatabaseExists {
-		t.Fatalf("validate --json missing index payload = %+v, want valid without database", validatePayload)
-	}
-	if _, err := os.Stat(dbPath); !os.IsNotExist(err) {
-		t.Fatalf("validate --json created or touched missing database: %v", err)
+	if !validatePayload.Valid || !validatePayload.DatabaseExists {
+		t.Fatalf("validate --json startup-prepared index payload = %+v, want valid existing database", validatePayload)
 	}
 
 	stdout, stderr, err = runCmd("status", "--json")
 	if err != nil {
-		t.Fatalf("status --json missing index failed: %v stdout=%q stderr=%q", err, stdout, stderr)
+		t.Fatalf("status --json startup-prepared index failed: %v stdout=%q stderr=%q", err, stdout, stderr)
 	}
 	if stderr != "" {
-		t.Fatalf("status --json missing index wrote stderr: %q", stderr)
+		t.Fatalf("status --json startup-prepared index wrote stderr: %q", stderr)
 	}
 	var statusPayload struct {
 		Database struct {
@@ -397,13 +387,10 @@ func TestStatusAndValidateMissingIndexAreReadOnlyMachineDiagnostics(t *testing.T
 		} `json:"index"`
 	}
 	if err := json.Unmarshal([]byte(stdout), &statusPayload); err != nil {
-		t.Fatalf("status --json missing index emitted invalid JSON %q: %v", stdout, err)
+		t.Fatalf("status --json startup-prepared index emitted invalid JSON %q: %v", stdout, err)
 	}
-	if statusPayload.Database.Exists || statusPayload.Database.Size != 0 || statusPayload.Index.Usable || statusPayload.Index.TotalFiles != 0 || statusPayload.Index.TotalMessages != 0 {
-		t.Fatalf("status --json missing index payload = %+v, want no index and zero counts", statusPayload)
-	}
-	if _, err := os.Stat(dbPath); !os.IsNotExist(err) {
-		t.Fatalf("status --json created or touched missing database: %v", err)
+	if !statusPayload.Database.Exists || statusPayload.Database.Size == 0 || statusPayload.Index.Usable || statusPayload.Index.TotalFiles != 0 || statusPayload.Index.TotalMessages != 0 {
+		t.Fatalf("status --json startup-prepared index payload = %+v, want existing empty index", statusPayload)
 	}
 }
 
@@ -471,50 +458,86 @@ func TestSearchRobotDiagnosticIsMachineReadableAndPreservesIndexBytes(t *testing
 	}
 }
 
-func TestLiveWALDiagnosticDoesNotClaimMigrationFailureOrRecovery(t *testing.T) {
+func TestLiveWALStartupUsesCompatibleIndexWithoutRecoveryDiagnostic(t *testing.T) {
 	dbPath, closeWriter := newLiveWALDiagnosticDB(t)
 	defer closeWriter()
-	before := snapshotSQLiteFiles(t, dbPath)
 
-	for _, argv := range [][]string{{"status", "--json"}, {"validate", "--json"}} {
-		t.Run(strings.Join(argv, " "), func(t *testing.T) {
-			got := runJSONDiagnosticAllowNoContinuation(t, argv, compat.CodeIndexStale)
-			if len(got.Continuation) != 0 {
-				t.Fatalf("%v continuation=%v, want none", argv, got.Continuation)
-			}
-			summary := strings.ToLower(got.Summary)
-			for _, want := range []string{"cannot be inspected without side effects", "wal", "uncheckpointed frames"} {
-				if !strings.Contains(summary, want) {
-					t.Fatalf("%v summary missing %q: %q", argv, want, got.Summary)
-				}
-			}
-			for _, forbidden := range []string{"migration_failed", "recover --from", "--dry-run"} {
-				if strings.Contains(strings.ToLower(got.Code+" "+got.Summary+" "+strings.Join(got.Continuation, " ")), forbidden) {
-					t.Fatalf("%v emitted false recovery/migration guidance %q in %+v", argv, forbidden, got)
-				}
-			}
-			assertSQLiteFilesUnchanged(t, dbPath, before)
-		})
-	}
+	t.Run("status --json", func(t *testing.T) {
+		stdout, stderr, err := runCmd("status", "--json")
+		if err != nil {
+			t.Fatalf("status --json failed with live WAL; stdout=%q stderr=%q err=%v", stdout, stderr, err)
+		}
+		if stderr != "" {
+			t.Fatalf("status --json wrote stderr: %q", stderr)
+		}
+		var payload map[string]any
+		if err := json.Unmarshal([]byte(stdout), &payload); err != nil {
+			t.Fatalf("status --json emitted invalid JSON %q: %v", stdout, err)
+		}
+		if _, hasCode := payload["code"]; hasCode {
+			t.Fatalf("status --json unexpectedly emitted diagnostic payload: %q", stdout)
+		}
+		database, ok := payload["database"].(map[string]any)
+		if !ok {
+			t.Fatalf("status --json missing database payload: %q", stdout)
+		}
+		index, ok := payload["index"].(map[string]any)
+		if !ok {
+			t.Fatalf("status --json missing index payload: %q", stdout)
+		}
+		if exists, _ := database["exists"].(bool); !exists {
+			t.Fatalf("status --json database.exists=false, payload=%v", database)
+		}
+		totalFiles, _ := index["total_files"].(float64)
+		if totalFiles < 1 {
+			t.Fatalf("status --json expected indexed rows, payload=%v", index)
+		}
+	})
+
+	t.Run("validate --json", func(t *testing.T) {
+		stdout, stderr, err := runCmd("validate", "--json")
+		if err != nil {
+			t.Fatalf("validate --json failed with live WAL; stdout=%q stderr=%q err=%v", stdout, stderr, err)
+		}
+		if stderr != "" {
+			t.Fatalf("validate --json wrote stderr: %q", stderr)
+		}
+		if strings.Contains(strings.ToLower(stdout), "diagnostic") {
+			t.Fatalf("validate --json unexpectedly emitted diagnostic payload: %q", stdout)
+		}
+		var payload struct {
+			Valid bool `json:"valid"`
+		}
+		if err := json.Unmarshal([]byte(stdout), &payload); err != nil {
+			t.Fatalf("validate --json emitted invalid JSON %q: %v", stdout, err)
+		}
+		if !payload.Valid {
+			t.Fatalf("validate --json payload = %+v, want valid=true", payload)
+		}
+	})
 
 	t.Run("status text", func(t *testing.T) {
 		stdout, stderr, err := runCmd("status")
-		if err == nil {
-			t.Fatalf("status text succeeded with live WAL; stdout=%q stderr=%q", stdout, stderr)
+		if err != nil {
+			t.Fatalf("status text failed with live WAL; stdout=%q stderr=%q err=%v", stdout, stderr, err)
 		}
-		out := strings.ToLower(stdout + stderr)
-		for _, want := range []string{"diagnostic: " + string(compat.CodeIndexStale), "wal", "uncheckpointed frames"} {
-			if !strings.Contains(out, strings.ToLower(want)) {
-				t.Fatalf("status text live WAL diagnostic missing %q: %q", want, stderr)
+		if stderr != "" {
+			t.Fatalf("status text wrote stderr: %q", stderr)
+		}
+		out := strings.ToLower(stdout)
+		if strings.Contains(out, "diagnostic:") || strings.Contains(out, "continuation:") || strings.Contains(out, "recover --from") {
+			t.Fatalf("status text emitted unexpected recovery/diagnostic guidance: %q", stdout)
+		}
+		for _, want := range []string{"files indexed", "messages indexed"} {
+			if !strings.Contains(out, want) {
+				t.Fatalf("status text missing %q in %q", want, stdout)
 			}
 		}
-		for _, forbidden := range []string{"continuation:", "migration_failed", "recover --from", "--dry-run"} {
-			if strings.Contains(out, forbidden) {
-				t.Fatalf("status text emitted false recovery/migration guidance %q in %q", forbidden, stderr)
-			}
-		}
-		assertSQLiteFilesUnchanged(t, dbPath, before)
 	})
+
+	if _, err := os.Stat(dbPath); err != nil {
+		t.Fatalf("live WAL database path missing after startup: %v", err)
+	}
 }
 
 func TestRecoveryContinuationExecutesInConfiguredSamePathContextWithEmptyWAL(t *testing.T) {
