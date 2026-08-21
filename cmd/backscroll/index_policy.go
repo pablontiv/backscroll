@@ -36,7 +36,9 @@ func prepareIndex(ctx context.Context, cfg *config.Config, class indexCommandCla
 	var db *storage.Database
 	var diag *compat.Diagnostic
 	switch class {
-	case indexDataRead, indexMutation:
+	case indexDataRead:
+		db, diag, err = prepareReadOnlyIndex(ctx, cfg.DatabasePath)
+	case indexMutation:
 		db, diag, err = storage.OpenCompatible(ctx, cfg.DatabasePath)
 	default:
 		return nil, nil, fmt.Errorf("unknown index command class %d", class)
@@ -57,6 +59,22 @@ func prepareIndex(ctx context.Context, cfg *config.Config, class indexCommandCla
 		return nil, &d, err
 	}
 
+	return db, nil, nil
+}
+
+func prepareReadOnlyIndex(ctx context.Context, path string) (*storage.Database, *compat.Diagnostic, error) {
+	db, err := storage.OpenReadOnly(path)
+	if err != nil {
+		return nil, nil, err
+	}
+	plan, diag, err := compat.InspectIndex(ctx, db.DB())
+	if err != nil || diag != nil {
+		return nil, diag, closeIndexDB(db, err)
+	}
+	if len(plan.Steps) > 0 {
+		err := fmt.Errorf("index requires %d migration steps", len(plan.Steps))
+		return nil, &compat.Diagnostic{Code: compat.CodeIndexStale, Summary: err.Error()}, closeIndexDB(db, err)
+	}
 	return db, nil, nil
 }
 

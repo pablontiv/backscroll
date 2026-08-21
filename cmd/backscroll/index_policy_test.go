@@ -5,6 +5,7 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -119,6 +120,107 @@ func TestMachineModesCarryDiagnosticCodeAndContinuation(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+func TestPrepareIndexDataReadReturnsReadOnlyConnection(t *testing.T) {
+	dbPath := filepath.Join(t.TempDir(), "index.db")
+	writer, err := storage.Open(dbPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := writer.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	db, diag, err := prepareIndex(context.Background(), &config.Config{DatabasePath: dbPath}, indexDataRead)
+	if err != nil || diag != nil {
+		t.Fatalf("prepare read db=%v diag=%+v err=%v", db, diag, err)
+	}
+	defer db.Close()
+	if _, err := db.DB().Exec(`CREATE TABLE must_not_exist (id INTEGER)`); err == nil {
+		t.Fatal("indexDataRead returned a write-capable connection")
+	}
+}
+
+func TestPrepareIndexDataReadDoesNotApplyPendingMigration(t *testing.T) {
+	dbPath := filepath.Join(t.TempDir(), "index.db")
+	writer, err := storage.Open(dbPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := writer.DB().Exec(`DELETE FROM schema_migrations WHERE version = 13`); err != nil {
+		t.Fatal(err)
+	}
+	if err := writer.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	db, diag, err := prepareIndex(context.Background(), &config.Config{DatabasePath: dbPath}, indexDataRead)
+	if db != nil {
+		_ = db.Close()
+		t.Fatal("read preparation returned DB requiring migration")
+	}
+	if err == nil && diag == nil {
+		t.Fatal("read preparation accepted pending migration")
+	}
+
+	inspect, err := storage.OpenReadOnly(dbPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer inspect.Close()
+	var count int
+	if err := inspect.DB().QueryRow(`SELECT COUNT(*) FROM schema_migrations WHERE version = 13`).Scan(&count); err != nil {
+		t.Fatal(err)
+	}
+	if count != 0 {
+		t.Fatalf("read path applied migration 13 count=%d", count)
+	}
+}
+
+func TestSnapshotReadCommandsDoNotCreateMissingDatabase(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		argv []string
+	}{
+		{name: "list", argv: []string{"list"}},
+		{name: "search", argv: []string{"search", "sentinel"}},
+		{name: "patterns", argv: []string{"patterns", "--kind", "commands"}},
+		{name: "status", argv: []string{"status"}},
+		{name: "validate", argv: []string{"validate"}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			dir := t.TempDir()
+			dbPath := filepath.Join(dir, "missing", "index.db")
+			setIndexPolicyEnv(t, dbPath, filepath.Join(dir, "config"))
+
+			var stdout, stderr bytes.Buffer
+			err := run(&stdout, &stderr, tc.argv)
+			if err == nil {
+				t.Fatalf("%v succeeded against missing DB; stdout=%q stderr=%q", tc.argv, stdout.String(), stderr.String())
+			}
+			assertMissingDatabaseArtifacts(t, dbPath)
+			combined := stdout.String() + stderr.String()
+			if !strings.Contains(combined, string(compat.CodeMigrationFailed)) {
+				t.Fatalf("%v missing diagnostic code %q; stdout=%q stderr=%q err=%v", tc.argv, compat.CodeMigrationFailed, stdout.String(), stderr.String(), err)
+			}
+		})
+	}
+}
+
+func TestConfigDoesNotCreateMissingDatabase(t *testing.T) {
+	dir := t.TempDir()
+	dbPath := filepath.Join(dir, "missing", "index.db")
+	setIndexPolicyEnv(t, dbPath, filepath.Join(dir, "config"))
+
+	var stdout, stderr bytes.Buffer
+	if err := run(&stdout, &stderr, []string{"config", "--json"}); err != nil {
+		t.Fatalf("config failed: %v stdout=%q stderr=%q", err, stdout.String(), stderr.String())
+	}
+	assertMissingDatabaseArtifacts(t, dbPath)
+	if !strings.Contains(stdout.String(), dbPath) {
+		t.Fatalf("config output missing db path %q: stdout=%q", dbPath, stdout.String())
 	}
 }
 
@@ -717,6 +819,15 @@ func newUnsupportedIndexedConsumerDB(t *testing.T) string {
 		t.Fatalf("resolve db path: %v", err)
 	}
 	return resolved
+}
+
+func assertMissingDatabaseArtifacts(t *testing.T, path string) {
+	t.Helper()
+	for _, artifact := range []string{path, path + "-wal", path + "-shm"} {
+		if _, err := os.Stat(artifact); !errors.Is(err, os.ErrNotExist) {
+			t.Fatalf("artifact %s stat err=%v, want not-exist", artifact, err)
+		}
+	}
 }
 
 func readDBBytes(t *testing.T, path string) []byte {
