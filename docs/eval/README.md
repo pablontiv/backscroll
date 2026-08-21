@@ -60,8 +60,8 @@ scripts/eval.sh --limit 5
 ### Output
 
 ```
-Backscroll Evaluation — Recall@5 Metric
-========================================
+Backscroll Evaluation — Recall@5 Metric with Ground-Truth Matching
+====================================================================
 Index: 1719 files, 192507 messages
 Eval-set: docs/eval/queries.toml
 

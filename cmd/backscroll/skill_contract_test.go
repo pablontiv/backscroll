@@ -120,11 +120,28 @@ func TestBackscrollSkillContractAcceptsInlineValueFlagsBeforePositionalQuery(t *
 	}
 }
 
+func TestBackscrollSkillContractAcceptsQuotedMetacharSearchQueryText(t *testing.T) {
+	root := buildRootCmd(io.Discard, io.Discard)
+	content := strings.Join([]string{
+		`backscroll search ">" --all-projects`,
+		`backscroll search "2>err" --all-projects`,
+		`backscroll search "\\" --all-projects`,
+	}, "\n")
+
+	violations := validateSkillMarkdown(root, "synthetic-search-quoted-metachar-query.md", content)
+	if len(violations) > 0 {
+		t.Fatalf("expected quoted shell metachar query tokens to pass, got violations:\n%s", formatSkillContractViolations(violations))
+	}
+}
+
 func TestBackscrollSkillContractRejectsSearchNonQueryTokens(t *testing.T) {
 	root := buildRootCmd(io.Discard, io.Discard)
 	content := strings.Join([]string{
 		`backscroll search --source-path "*/session.jsonl" > out.txt`,
-		`backscroll search --source-path "*/session.jsonl" 2>err.log`,
+		`backscroll search --source-path "*/session.jsonl" >> out.txt`,
+		`backscroll search --source-path "*/session.jsonl" < in.txt`,
+		`backscroll search --source-path "*/session.jsonl" 2>&1`,
+		`backscroll search --source-path "*/session.jsonl" <<< marker`,
 		`backscroll search --source-path "*/session.jsonl" \`,
 		`backscroll search --text= --all-projects`,
 		`backscroll search --all-projects --limit 5`,
@@ -139,6 +156,9 @@ func TestBackscrollSkillContractRejectsSearchNonQueryTokens(t *testing.T) {
 		"synthetic-search-non-query-tokens.md:4: search invocation lacks query text (use --text <query> or positional query)",
 		"synthetic-search-non-query-tokens.md:5: search invocation lacks query text (use --text <query> or positional query)",
 		"synthetic-search-non-query-tokens.md:6: search invocation lacks query text (use --text <query> or positional query)",
+		"synthetic-search-non-query-tokens.md:7: search invocation lacks query text (use --text <query> or positional query)",
+		"synthetic-search-non-query-tokens.md:8: search invocation lacks query text (use --text <query> or positional query)",
+		"synthetic-search-non-query-tokens.md:9: search invocation lacks query text (use --text <query> or positional query)",
 	)
 }
 
@@ -151,14 +171,26 @@ func TestBackscrollSkillContractReadNarrativeLiteralPassesButInvocationsFail(t *
 		t.Fatalf("expected narrative inline literal to pass full validator, got violations:\n%s", formatSkillContractViolations(violations))
 	}
 
+	imperativeInline := strings.Join([]string{
+		"Run `backscroll read` now.",
+		"Use `backscroll read` for this file.",
+	}, "\n")
+	violations = validateSkillMarkdown(root, "synthetic-read-inline-imperative.md", imperativeInline)
+	assertSkillContractViolations(t, violations,
+		"synthetic-read-inline-imperative.md:1: unknown backscroll command \"read\"",
+		"synthetic-read-inline-imperative.md:2: unknown backscroll command \"read\"",
+	)
+
 	content := strings.Join([]string{
 		"backscroll read",
 		"backscroll read /tmp/session.jsonl",
+		"Run `backscroll read /tmp/session.jsonl` now.",
 	}, "\n")
 	violations = validateSkillMarkdown(root, "synthetic-read-invocations.md", content)
 	assertSkillContractViolations(t, violations,
 		"synthetic-read-invocations.md:1: unknown backscroll command \"read\"",
 		"synthetic-read-invocations.md:2: unknown backscroll command \"read\"",
+		"synthetic-read-invocations.md:3: unknown backscroll command \"read\"",
 	)
 
 	if !containsBackscrollReadInvocation(content) {
@@ -166,6 +198,9 @@ func TestBackscrollSkillContractReadNarrativeLiteralPassesButInvocationsFail(t *
 	}
 	if containsBackscrollReadInvocation(narrative) {
 		t.Fatal("narrative literal backscroll read mention must not be treated as an invocation")
+	}
+	if !containsBackscrollReadInvocation(imperativeInline) {
+		t.Fatal("imperative inline backscroll read mention must be treated as a removed-command invocation")
 	}
 }
 
@@ -298,6 +333,9 @@ func containsBackscrollReadInvocation(content string) bool {
 			return true
 		}
 		for _, span := range inlineCodeSpans(line) {
+			if isNarrativeInlineLiteralBackscrollRead(line, span) {
+				continue
+			}
 			if startsWithBackscrollRead(shellishFields(span)) {
 				return true
 			}
@@ -308,7 +346,7 @@ func containsBackscrollReadInvocation(content string) bool {
 
 func startsWithBackscrollRead(tokens []string) bool {
 	for i, token := range tokens {
-		if token == "backscroll" && i+2 < len(tokens) && tokens[i+1] == "read" && isInvocationStart(tokens, i) {
+		if token == "backscroll" && i+1 < len(tokens) && tokens[i+1] == "read" && isInvocationStart(tokens, i) {
 			return true
 		}
 	}
@@ -429,21 +467,49 @@ func isNarrativeInlineLiteralBackscrollRead(line, span string) bool {
 	if strings.TrimSpace(span) != "backscroll read" {
 		return false
 	}
-	return strings.TrimSpace(withoutInlineCodeSpans(line)) != ""
+
+	prose := strings.TrimSpace(withoutInlineCodeSpans(line))
+	if prose == "" {
+		return false
+	}
+
+	normalized := strings.ToLower(prose)
+	if hasReadImperativeCue(normalized) {
+		return false
+	}
+	return hasReadNarrativeDescriptor(normalized)
+}
+
+func hasReadNarrativeDescriptor(normalizedLine string) bool {
+	if strings.Contains(normalizedLine, "literal") || strings.Contains(normalizedLine, "verbatim") {
+		return true
+	}
+	if strings.Contains(normalizedLine, "removed command") || strings.Contains(normalizedLine, "deprecated command") || strings.Contains(normalizedLine, "legacy command") {
+		return true
+	}
+	return strings.Contains(normalizedLine, "removed") && strings.Contains(normalizedLine, "command")
+}
+
+func hasReadImperativeCue(normalizedLine string) bool {
+	trimmed := strings.TrimSpace(normalizedLine)
+	trimmed = strings.TrimLeft(trimmed, "-* ")
+	return strings.HasPrefix(trimmed, "run ") || strings.HasPrefix(trimmed, "use ")
 }
 
 func validateBackscrollInvocations(root *cobra.Command, path string, lineNumber int, text string) []skillContractViolation {
-	tokens := shellishFields(text)
+	lexedTokens := shellishTokens(text)
+	tokens := shellishTokenValues(lexedTokens)
 	var violations []skillContractViolation
 	for i, token := range tokens {
 		if token != "backscroll" || isURLToken(token) || isCommandVBackscroll(tokens, i) || !isInvocationStart(tokens, i) {
 			continue
 		}
 
-		args := invocationArgs(tokens[i+1:])
+		argsTokens := invocationArgsTokens(lexedTokens[i+1:])
+		args := shellishTokenValues(argsTokens)
 		cmd := root
 		cmdName := root.Name()
-		flagArgs := args
+		flagArgsTokens := argsTokens
 		if len(args) > 0 && !strings.HasPrefix(args[0], "-") {
 			child := findSubcommand(root, args[0])
 			if child == nil {
@@ -461,9 +527,10 @@ func validateBackscrollInvocations(root *cobra.Command, path string, lineNumber 
 			}
 			cmd = child
 			cmdName = root.Name() + " " + child.Name()
-			flagArgs = args[1:]
+			flagArgsTokens = argsTokens[1:]
 		}
 
+		flagArgs := shellishTokenValues(flagArgsTokens)
 		for _, flagName := range longFlags(flagArgs) {
 			if isSupportedFlag(cmd, flagName) {
 				continue
@@ -474,7 +541,7 @@ func validateBackscrollInvocations(root *cobra.Command, path string, lineNumber 
 				message: fmt.Sprintf("unknown flag --%s for %s", flagName, cmdName),
 			})
 		}
-		if cmd.Name() == "search" && !searchInvocationHasQuery(cmd, flagArgs) {
+		if cmd.Name() == "search" && !searchInvocationHasQuery(cmd, flagArgsTokens) {
 			violations = append(violations, skillContractViolation{
 				path:    path,
 				line:    lineNumber,
@@ -485,26 +552,27 @@ func validateBackscrollInvocations(root *cobra.Command, path string, lineNumber 
 	return violations
 }
 
-func searchInvocationHasQuery(cmd *cobra.Command, tokens []string) bool {
+func searchInvocationHasQuery(cmd *cobra.Command, tokens []shellishToken) bool {
 	if hasUnsupportedLineContinuation(tokens) {
 		return false
 	}
 
 	for i := 0; i < len(tokens); i++ {
 		token := tokens[i]
-		if isShellTerminator(token) || isRedirectOperator(token) {
+		tokenValue := token.value
+		if !token.quoted && (isShellTerminator(tokenValue) || isRedirectOperator(tokenValue)) {
 			return false
 		}
-		if token == "--help" || token == "-h" {
+		if tokenValue == "--help" || tokenValue == "-h" {
 			return true
 		}
-		if token == "--" {
+		if tokenValue == "--" {
 			return firstQueryToken(tokens[i+1:]) != ""
 		}
-		if strings.HasPrefix(token, "--") {
-			name, value, hasValue := splitLongFlag(token)
+		if strings.HasPrefix(tokenValue, "--") {
+			name, value, hasValue := splitLongFlag(tokenValue)
 			if name == "text" && hasValue {
-				return isValidQueryToken(value)
+				return isValidQueryToken(shellishToken{value: value, quoted: token.quoted})
 			}
 			if hasValue {
 				continue
@@ -518,19 +586,19 @@ func searchInvocationHasQuery(cmd *cobra.Command, tokens []string) bool {
 				}
 				next := tokens[i+1]
 				if name == "text" {
-					if strings.HasPrefix(next, "--") {
+					if strings.HasPrefix(next.value, "--") && !next.quoted {
 						return false
 					}
 					return isValidQueryToken(next)
 				}
-				if isShellTerminator(next) || isRedirectOperator(next) {
+				if !next.quoted && (isShellTerminator(next.value) || isRedirectOperator(next.value)) {
 					return false
 				}
 				i++
 			}
 			continue
 		}
-		if strings.HasPrefix(token, "-") {
+		if strings.HasPrefix(tokenValue, "-") {
 			continue
 		}
 		return isValidQueryToken(token)
@@ -538,33 +606,33 @@ func searchInvocationHasQuery(cmd *cobra.Command, tokens []string) bool {
 	return false
 }
 
-func hasUnsupportedLineContinuation(tokens []string) bool {
+func hasUnsupportedLineContinuation(tokens []shellishToken) bool {
 	for _, token := range tokens {
-		if token == `\` {
+		if token.value == `\` && !token.quoted {
 			return true
 		}
 	}
 	return false
 }
 
-func firstQueryToken(tokens []string) string {
+func firstQueryToken(tokens []shellishToken) string {
 	for _, token := range tokens {
-		if isShellTerminator(token) || isRedirectOperator(token) || token == `\` {
+		if !token.quoted && (isShellTerminator(token.value) || isRedirectOperator(token.value) || token.value == `\`) {
 			return ""
 		}
 		if isValidQueryToken(token) {
-			return token
+			return token.value
 		}
 	}
 	return ""
 }
 
-func isValidQueryToken(token string) bool {
-	trimmed := strings.TrimSpace(token)
+func isValidQueryToken(token shellishToken) bool {
+	trimmed := strings.TrimSpace(token.value)
 	if trimmed == "" {
 		return false
 	}
-	if isShellTerminator(trimmed) || isRedirectOperator(trimmed) || trimmed == `\` {
+	if !token.quoted && (isShellTerminator(trimmed) || isRedirectOperator(trimmed) || trimmed == `\`) {
 		return false
 	}
 	return true
@@ -628,13 +696,26 @@ func findSubcommand(root *cobra.Command, name string) *cobra.Command {
 	return nil
 }
 
-func invocationArgs(tokens []string) []string {
+type shellishToken struct {
+	value  string
+	quoted bool
+}
+
+func invocationArgsTokens(tokens []shellishToken) []shellishToken {
 	for i, token := range tokens {
-		if isShellTerminator(token) {
+		if !token.quoted && isShellTerminator(token.value) {
 			return tokens[:i]
 		}
 	}
 	return tokens
+}
+
+func shellishTokenValues(tokens []shellishToken) []string {
+	values := make([]string, 0, len(tokens))
+	for _, token := range tokens {
+		values = append(values, token.value)
+	}
+	return values
 }
 
 func isShellTerminator(token string) bool {
@@ -787,9 +868,31 @@ func inlineCodeSpans(line string) []string {
 }
 
 func shellishFields(text string) []string {
-	var fields []string
+	tokens := shellishTokens(text)
+	fields := make([]string, 0, len(tokens))
+	for _, token := range tokens {
+		fields = append(fields, token.value)
+	}
+	return fields
+}
+
+func shellishTokens(text string) []shellishToken {
+	var tokens []shellishToken
 	var current strings.Builder
 	var quote rune
+	tokenQuoted := false
+	flush := func() {
+		if current.Len() == 0 {
+			return
+		}
+		tokens = append(tokens, shellishToken{
+			value:  cleanShellToken(current.String()),
+			quoted: tokenQuoted,
+		})
+		current.Reset()
+		tokenQuoted = false
+	}
+
 	for _, r := range text {
 		switch {
 		case quote != 0:
@@ -800,19 +903,15 @@ func shellishFields(text string) []string {
 			current.WriteRune(r)
 		case r == '\'' || r == '"':
 			quote = r
+			tokenQuoted = true
 		case r == '\t' || r == ' ':
-			if current.Len() > 0 {
-				fields = append(fields, cleanShellToken(current.String()))
-				current.Reset()
-			}
+			flush()
 		default:
 			current.WriteRune(r)
 		}
 	}
-	if current.Len() > 0 {
-		fields = append(fields, cleanShellToken(current.String()))
-	}
-	return fields
+	flush()
+	return tokens
 }
 
 func cleanShellToken(token string) string {

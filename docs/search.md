@@ -31,11 +31,12 @@ backscroll search "artifact literal" --source-path "*/session.jsonl" --robot
 
 ### Text (default)
 
-Human-readable output with terminal bold for match highlights. Each result shows the session path, relevance score, and a snippet:
+Human-readable output with terminal bold for match highlights. Each result uses the exact text-layout envelope emitted by the CLI:
 
 ```
----
-[SESSION] ~/.claude/projects/abc/sessions/session.jsonl (Score: 12.34)
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+Rank: 1 | Source: session | Role: assistant | Score: 12.34
+Path: /home/user/.claude/projects/backscroll/sessions/abc123/session.jsonl
 ...the migration plan involves three phases...
 ```
 
@@ -62,7 +63,7 @@ With `--fields full`, the array encodes `models.SearchResult` without JSON tags,
     "FilePath": "~/.claude/.../session.jsonl",
     "Timestamp": "2026-08-20T12:34:56Z",
     "SessionID": "",
-    "ProjectPath": "/Users/Shared/harness/backscroll",
+    "ProjectPath": "backscroll",
     "Score": 12.34,
     "Tags": null,
     "ContentType": "text",
@@ -71,7 +72,7 @@ With `--fields full`, the array encodes `models.SearchResult` without JSON tags,
 ]
 ```
 
-Current full-mode fields are exactly: `Source`, `Role`, `Content`, `FilePath`, `Timestamp`, `SessionID`, `ProjectPath`, `Score`, `Tags`, `ContentType`, and `Rank`. Only `--fields minimal` uses the snake_case payload (`source_path`, `snippet`, `score`, `role`, `timestamp`).
+Current full-mode fields are exactly: `Source`, `Role`, `Content`, `FilePath`, `Timestamp`, `SessionID`, `ProjectPath`, `Score`, `Tags`, `ContentType`, and `Rank`. `ProjectPath` is a legacy field name; its value is the project identifier (for example `backscroll` or `myproj`), not a filesystem path. Only `--fields minimal` uses the snake_case payload (`source_path`, `snippet`, `score`, `role`, `timestamp`).
 
 ### Robot
 
