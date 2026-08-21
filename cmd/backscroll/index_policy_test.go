@@ -5,7 +5,6 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -774,15 +773,6 @@ func newUnsupportedIndexedConsumerDB(t *testing.T) string {
 		t.Fatalf("resolve db path: %v", err)
 	}
 	return resolved
-}
-
-func assertMissingDatabaseArtifacts(t *testing.T, path string) {
-	t.Helper()
-	for _, artifact := range []string{path, path + "-wal", path + "-shm"} {
-		if _, err := os.Stat(artifact); !errors.Is(err, os.ErrNotExist) {
-			t.Fatalf("artifact %s stat err=%v, want not-exist", artifact, err)
-		}
-	}
 }
 
 func readDBBytes(t *testing.T, path string) []byte {
