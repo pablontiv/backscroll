@@ -113,8 +113,9 @@ func TestMachineModesCarryDiagnosticCodeAndContinuation(t *testing.T) {
 				if !strings.Contains(out, "diagnostic_code="+string(compat.CodeUnsupportedLineage)) {
 					t.Fatalf("robot diagnostic missing code: %q", out)
 				}
-				if !strings.Contains(out, "diagnostic_continuation_argv=recover --from "+dbPath+" --dry-run") {
-					t.Fatalf("robot diagnostic missing exact continuation: %q", out)
+				wantContinuation := fmt.Sprintf(`diagnostic_continuation_argv=["recover","--from","%s","--dry-run"]`, dbPath)
+				if !strings.Contains(out, wantContinuation) {
+					t.Fatalf("robot diagnostic missing encoded continuation %q: %q", wantContinuation, out)
 				}
 			}
 		})

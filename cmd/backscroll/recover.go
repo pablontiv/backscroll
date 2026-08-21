@@ -26,11 +26,12 @@ func newRecoverCmd(stdout, stderr io.Writer) *cobra.Command {
 		Args:         cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			startup := startupResultFrom(cmd)
+			startupFailure := startup.startupFailure()
 			cfg := startup.Config
 			if cfg == nil {
 				loaded, err := config.Load()
 				if err != nil {
-					return errors.Join(startup.Err, fmt.Errorf("load config for recovery: %w", err))
+					return errors.Join(startupFailure, fmt.Errorf("load config for recovery: %w", err))
 				}
 				cfg = loaded
 			}
@@ -43,11 +44,11 @@ func newRecoverCmd(stdout, stderr io.Writer) *cobra.Command {
 				if backupPath, ok := recovery.RestorableBackupPath(err); ok {
 					_, _ = fmt.Fprintf(stderr, "manual recovery backup path: %s\n", backupPath)
 				}
-				return errors.Join(startup.Err, fmt.Errorf("recovery failed: %w", err))
+				return errors.Join(startupFailure, fmt.Errorf("recovery failed: %w", err))
 			}
 			if !dryRun {
 				if err := recoverPostInstallSync(cfg, stderr); err != nil {
-					return errors.Join(startup.Err, fmt.Errorf("post-recovery sync: %w", err))
+					return errors.Join(startupFailure, fmt.Errorf("post-recovery sync: %w", err))
 				}
 			}
 			printRecoveryReport(stdout, report, dryRun)

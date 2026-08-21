@@ -186,7 +186,12 @@ func TestRecoverPostInstallSyncFailurePreservesStartupCause(t *testing.T) {
 
 	var stdout, stderr bytes.Buffer
 	root := buildRootCmdWithStartup(&stdout, &stderr, func(context.Context, io.Writer) startupResult {
-		return startupResult{Config: cfg, Err: startupErr}
+		return startupResult{Config: cfg, Failure: &startupFailure{
+			Stage:       startupStageStartupSync,
+			Cause:       startupErr,
+			Diagnostic:  continuationFor(compat.Diagnostic{Code: compat.CodeIndexStale, Summary: startupErr.Error()}, cfg.DatabasePath),
+			Recoverable: true,
+		}}
 	})
 	root.SetArgs([]string{"recover", "--from", "stranded.db"})
 	err := root.Execute()
@@ -217,7 +222,12 @@ func TestRecoverSuccessfulContinuationRemediatesStartupFailure(t *testing.T) {
 
 	var stdout, stderr bytes.Buffer
 	root := buildRootCmdWithStartup(&stdout, &stderr, func(context.Context, io.Writer) startupResult {
-		return startupResult{Config: cfg, Err: startupErr}
+		return startupResult{Config: cfg, Failure: &startupFailure{
+			Stage:       startupStageStartupSync,
+			Cause:       startupErr,
+			Diagnostic:  continuationFor(compat.Diagnostic{Code: compat.CodeIndexStale, Summary: startupErr.Error()}, cfg.DatabasePath),
+			Recoverable: true,
+		}}
 	})
 	root.SetArgs([]string{"recover", "--from", "stranded.db"})
 	if err := root.Execute(); err != nil {

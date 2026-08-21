@@ -1,7 +1,6 @@
 package main
 
 import (
-	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -14,12 +13,16 @@ var version = "dev"
 
 func main() {
 	if err := run(os.Stdout, os.Stderr, os.Args[1:]); err != nil {
-		var indexErr indexDiagnosticError
-		if !errors.As(err, &indexErr) {
+		if !diagnosticAlreadyRendered(err) {
 			_, _ = fmt.Fprintln(os.Stderr, err)
 		}
 		os.Exit(1)
 	}
+}
+
+func diagnosticAlreadyRendered(err error) bool {
+	_, ok := err.(indexDiagnosticError)
+	return ok
 }
 
 // newUpdater is the single wiring point for autoupdate. It is called with no

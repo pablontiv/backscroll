@@ -106,21 +106,36 @@ func writeDiagnostic(stdout, stderr io.Writer, d compat.Diagnostic, jsonMode boo
 }
 
 func writeRobotDiagnostic(stdout io.Writer, d compat.Diagnostic) error {
-	if _, err := fmt.Fprintf(stdout, "diagnostic_code=%s\n", d.Code); err != nil {
+	if _, err := fmt.Fprintf(stdout, "diagnostic_code=%s\n", robotEscape(string(d.Code))); err != nil {
 		return err
 	}
-	if _, err := fmt.Fprintf(stdout, "diagnostic_summary=%s\n", strings.TrimSpace(d.Summary)); err != nil {
+	if _, err := fmt.Fprintf(stdout, "diagnostic_summary=%s\n", robotEscape(strings.TrimSpace(d.Summary))); err != nil {
 		return err
 	}
 	if len(d.Continuation) > 0 {
-		if _, err := fmt.Fprintf(stdout, "diagnostic_continuation_argv=%s\n", strings.Join(d.Continuation, " ")); err != nil {
+		encoded, err := json.Marshal(d.Continuation)
+		if err != nil {
+			return fmt.Errorf("encode diagnostic continuation argv: %w", err)
+		}
+		if _, err := fmt.Fprintf(stdout, "diagnostic_continuation_argv=%s\n", robotEscape(string(encoded))); err != nil {
 			return err
 		}
 	}
 	return nil
 }
 
+func robotEscape(value string) string {
+	value = strings.ReplaceAll(value, `\`, `\\`)
+	value = strings.ReplaceAll(value, "\r", `\r`)
+	value = strings.ReplaceAll(value, "\n", `\n`)
+	return value
+}
+
 func refuseIndex(stdout, stderr io.Writer, d compat.Diagnostic, jsonMode, robotMode bool) error {
+	return refuseIndexWithCause(stdout, stderr, d, nil, jsonMode, robotMode)
+}
+
+func refuseIndexWithCause(stdout, stderr io.Writer, d compat.Diagnostic, cause error, jsonMode, robotMode bool) error {
 	var err error
 	if robotMode {
 		err = writeRobotDiagnostic(stdout, d)
@@ -130,15 +145,20 @@ func refuseIndex(stdout, stderr io.Writer, d compat.Diagnostic, jsonMode, robotM
 	if err != nil {
 		return err
 	}
-	return indexDiagnosticError{diagnostic: d}
+	return indexDiagnosticError{diagnostic: d, cause: cause}
 }
 
 type indexDiagnosticError struct {
 	diagnostic compat.Diagnostic
+	cause      error
 }
 
 func (e indexDiagnosticError) Error() string {
 	return fmt.Sprintf("%s: %s", e.diagnostic.Code, strings.TrimSpace(e.diagnostic.Summary))
+}
+
+func (e indexDiagnosticError) Unwrap() error {
+	return e.cause
 }
 
 func indexPolicyMachineArgs(args []string) bool {
