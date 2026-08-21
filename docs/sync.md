@@ -10,6 +10,19 @@ sync before executing. Session, plan, and Markdown files are ingestion inputs;
 SQLite is the perennial record used by search, list, patterns, status, and validate.
 Use `--source-path` on search as a filter, paired with query text, for database-backed retrieval scoped to a known input path.
 
+## Coordinated startup pipeline
+
+```text
+validated invocation
+  -> try <canonical-db>.startup-sync.lock
+     -> owner: prepare/migrate -> incremental sync -> command
+     -> busy snapshot read: compatible OpenReadOnly -> stderr warning -> query WAL snapshot
+     -> busy config: stderr warning -> print validated config
+     -> busy mutation: wait <=5s -> owner or retryable sync_in_progress
+```
+
+The lock sidecar is an empty file that persists with mode `0600`; it is never deleted, and only the OS advisory lock on that file represents ownership. Startup coordination is local-host only and assumes a trusted local filesystem.
+
 ## Normal workflow
 
 ```bash
@@ -24,7 +37,7 @@ backscroll status --json
 backscroll validate --json
 ```
 
-Human startup sync writes progress and warnings to stderr. JSON/robot startup progress is discarded so stdout remains machine-readable, and invalid active manifests fail during preflight instead of being silently ignored.
+Human startup sync writes progress and warnings to stderr. JSON/robot startup progress is discarded so stdout remains machine-readable, and invalid active manifests fail during preflight instead of being silently ignored. Busy followers emit `sync_in_progress` warnings to stderr; read-safe followers use the last committed WAL snapshot, config followers print validated configuration without opening the database, and mutation followers wait up to five seconds before returning a retryable failure.
 
 A search scoped to a known input path stays database-backed:
 
@@ -84,6 +97,8 @@ Plans and external Markdown documents are also declared as inputs. Use `decode.f
 ## Incremental and perennial behavior
 
 Backscroll stores a SHA-256 hash for each indexed input. Unchanged files are skipped on later startup syncs. Files with stable message UUIDs are updated append-only; legacy or UUID-less inputs retain wipe-and-reload behavior while the source exists.
+
+Startup coordination uses owner/follower branches: an owner acquires the canonical lock and performs prepare/migrate/sync before the handler runs; a read-safe follower validates the existing database read-only and continues on a compatible snapshot; a mutation follower waits up to five seconds for ownership or fails retryably with `sync_in_progress`. WAL snapshot followers remain compatible only on the same local host.
 
 The SQLite database is the perennial event store, not a disposable cache. When a source file expires, its indexed rows remain available. Only `purge` removes retained data explicitly.
 
