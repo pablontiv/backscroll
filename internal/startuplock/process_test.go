@@ -6,13 +6,14 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"runtime"
 	"strings"
 	"testing"
 	"time"
 )
 
 func init() {
+	// The helper is env-gated so the same test binary can act as either the
+	// parent test or the child process that owns/contends for the lock.
 	mode := os.Getenv("BACKSCROLL_LOCK_HELPER")
 	if mode != "hold" && mode != "try" {
 		return
@@ -25,6 +26,8 @@ func init() {
 		os.Exit(2)
 	}
 	if mode == "try" {
+		// The decoy process exits immediately after reporting contention so the
+		// parent can prove cross-process busy handling without waiting forever.
 		if locked {
 			_ = lease.Release()
 			fmt.Fprintln(os.Stdout, "acquired")
@@ -39,12 +42,11 @@ func init() {
 	}
 	fmt.Fprintln(os.Stdout, "locked")
 	_ = os.Stdout.Sync()
-	go func() {
-		for {
-			runtime.Gosched()
-		}
-	}()
-	select {}
+	// Keep the helper alive without spinning so the test process stays parked
+	// until the parent kills it.
+	select {
+	case <-time.After(24 * time.Hour):
+	}
 }
 
 func TestLockHelperProcess(t *testing.T) {}
@@ -66,10 +68,25 @@ func TestProcessDeathReleasesLock(t *testing.T) {
 	}
 	defer func() { _ = cmd.Process.Kill(); _ = cmd.Wait() }()
 
-	reader := bufio.NewReader(stdout)
-	line, err := reader.ReadString('\n')
-	if err != nil || strings.TrimSpace(line) != "locked" {
-		t.Fatalf("helper readiness line=%q err=%v", line, err)
+	lineCh := make(chan string, 1)
+	errCh := make(chan error, 1)
+	go func() {
+		line, err := bufio.NewReader(stdout).ReadString('\n')
+		if err != nil {
+			errCh <- err
+			return
+		}
+		lineCh <- line
+	}()
+	select {
+	case line := <-lineCh:
+		if strings.TrimSpace(line) != "locked" {
+			t.Fatalf("helper readiness line=%q err=<nil>", line)
+		}
+	case err := <-errCh:
+		t.Fatalf("helper readiness line=<nil> err=%v", err)
+	case <-time.After(time.Second):
+		t.Fatal("timeout waiting for helper readiness")
 	}
 
 	if lease, locked, err := TryAcquire(dbPath); err != nil || locked || lease != nil {
@@ -125,11 +142,24 @@ func TestProcessTryReportsBusyFromSecondProcess(t *testing.T) {
 		"BACKSCROLL_LOCK_HELPER=try",
 		"BACKSCROLL_LOCK_DB="+dbPath,
 	)
-	out, err := tryCmd.Output()
-	if err != nil {
+	outCh := make(chan []byte, 1)
+	errCh2 := make(chan error, 1)
+	go func() {
+		out, err := tryCmd.Output()
+		if err != nil {
+			errCh2 <- err
+			return
+		}
+		outCh <- out
+	}()
+	select {
+	case out := <-outCh:
+		if got := string(out); got != "busy\n" {
+			t.Fatalf("output=%q want busy\\n", got)
+		}
+	case err := <-errCh2:
 		t.Fatalf("try helper failed: %v", err)
-	}
-	if got := string(out); got != "busy\n" {
-		t.Fatalf("output=%q want busy\\n", got)
+	case <-time.After(time.Second):
+		t.Fatal("timeout waiting for try helper")
 	}
 }
