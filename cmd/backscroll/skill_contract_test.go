@@ -123,6 +123,7 @@ func TestBackscrollSkillContractAcceptsInlineValueFlagsBeforePositionalQuery(t *
 func TestBackscrollSkillContractAcceptsQuotedMetacharSearchQueryText(t *testing.T) {
 	root := buildRootCmd(io.Discard, io.Discard)
 	content := strings.Join([]string{
+		`backscroll search ";" --all-projects`,
 		`backscroll search ">" --all-projects`,
 		`backscroll search "2>err" --all-projects`,
 		`backscroll search "\\" --all-projects`,
@@ -137,12 +138,16 @@ func TestBackscrollSkillContractAcceptsQuotedMetacharSearchQueryText(t *testing.
 func TestBackscrollSkillContractRejectsSearchNonQueryTokens(t *testing.T) {
 	root := buildRootCmd(io.Discard, io.Discard)
 	content := strings.Join([]string{
+		`backscroll search --source-path "*/session.jsonl" ; echo no-query`,
 		`backscroll search --source-path "*/session.jsonl" > out.txt`,
 		`backscroll search --source-path "*/session.jsonl" >> out.txt`,
 		`backscroll search --source-path "*/session.jsonl" < in.txt`,
+		`backscroll search --source-path "*/session.jsonl" 2>err.txt`,
 		`backscroll search --source-path "*/session.jsonl" 2>&1`,
 		`backscroll search --source-path "*/session.jsonl" <<< marker`,
 		`backscroll search --source-path "*/session.jsonl" \`,
+		`backscroll search --source-path "*/session.jsonl" ''>out.txt`,
+		`backscroll search "" --all-projects`,
 		`backscroll search --text= --all-projects`,
 		`backscroll search --all-projects --limit 5`,
 		`backscroll search --source-path="*/session.jsonl" --all-projects`,
@@ -159,6 +164,10 @@ func TestBackscrollSkillContractRejectsSearchNonQueryTokens(t *testing.T) {
 		"synthetic-search-non-query-tokens.md:7: search invocation lacks query text (use --text <query> or positional query)",
 		"synthetic-search-non-query-tokens.md:8: search invocation lacks query text (use --text <query> or positional query)",
 		"synthetic-search-non-query-tokens.md:9: search invocation lacks query text (use --text <query> or positional query)",
+		"synthetic-search-non-query-tokens.md:10: search invocation lacks query text (use --text <query> or positional query)",
+		"synthetic-search-non-query-tokens.md:11: search invocation lacks query text (use --text <query> or positional query)",
+		"synthetic-search-non-query-tokens.md:12: search invocation lacks query text (use --text <query> or positional query)",
+		"synthetic-search-non-query-tokens.md:13: search invocation lacks query text (use --text <query> or positional query)",
 	)
 }
 
@@ -181,6 +190,26 @@ func TestBackscrollSkillContractReadNarrativeLiteralPassesButInvocationsFail(t *
 		"synthetic-read-inline-imperative.md:2: unknown backscroll command \"read\"",
 	)
 
+	descriptorImperative := strings.Join([]string{
+		"Please run the literal `backscroll read` removed command.",
+		"You must use the removed command `backscroll read`.",
+		"Operators should execute the deprecated command `backscroll read`.",
+		"Try to invoke the literal `backscroll read` in the historical narrative.",
+	}, "\n")
+	violations = validateSkillMarkdown(root, "synthetic-read-descriptor-imperative.md", descriptorImperative)
+	assertSkillContractViolations(t, violations,
+		"synthetic-read-descriptor-imperative.md:1: unknown backscroll command \"read\"",
+		"synthetic-read-descriptor-imperative.md:2: unknown backscroll command \"read\"",
+		"synthetic-read-descriptor-imperative.md:3: unknown backscroll command \"read\"",
+		"synthetic-read-descriptor-imperative.md:4: unknown backscroll command \"read\"",
+	)
+
+	multipleSpans := "The literal `backscroll read` names the removed command in narrative prose, while `backscroll read` remains removed."
+	violations = validateSkillMarkdown(root, "synthetic-read-multiple-spans.md", multipleSpans)
+	assertSkillContractViolations(t, violations,
+		"synthetic-read-multiple-spans.md:1: unknown backscroll command \"read\"",
+	)
+
 	content := strings.Join([]string{
 		"backscroll read",
 		"backscroll read /tmp/session.jsonl",
@@ -201,6 +230,9 @@ func TestBackscrollSkillContractReadNarrativeLiteralPassesButInvocationsFail(t *
 	}
 	if !containsBackscrollReadInvocation(imperativeInline) {
 		t.Fatal("imperative inline backscroll read mention must be treated as a removed-command invocation")
+	}
+	if !containsBackscrollReadInvocation(descriptorImperative) {
+		t.Fatal("descriptor plus imperative backscroll read mention must be treated as a removed-command invocation")
 	}
 }
 
@@ -467,6 +499,9 @@ func isNarrativeInlineLiteralBackscrollRead(line, span string) bool {
 	if strings.TrimSpace(span) != "backscroll read" {
 		return false
 	}
+	if len(inlineCodeSpans(line)) != 1 {
+		return false
+	}
 
 	prose := strings.TrimSpace(withoutInlineCodeSpans(line))
 	if prose == "" {
@@ -477,23 +512,49 @@ func isNarrativeInlineLiteralBackscrollRead(line, span string) bool {
 	if hasReadImperativeCue(normalized) {
 		return false
 	}
-	return hasReadNarrativeDescriptor(normalized)
+	return hasReadLiteralNameCue(normalized) && hasReadRemovedCommandCue(normalized) && hasReadNarrativeContextCue(normalized)
 }
 
-func hasReadNarrativeDescriptor(normalizedLine string) bool {
-	if strings.Contains(normalizedLine, "literal") || strings.Contains(normalizedLine, "verbatim") {
-		return true
-	}
-	if strings.Contains(normalizedLine, "removed command") || strings.Contains(normalizedLine, "deprecated command") || strings.Contains(normalizedLine, "legacy command") {
-		return true
-	}
-	return strings.Contains(normalizedLine, "removed") && strings.Contains(normalizedLine, "command")
+func hasReadLiteralNameCue(normalizedLine string) bool {
+	return containsAnyWord(normalizedLine, "literal", "verbatim", "name", "names", "named", "mention", "mentions", "reference", "references")
+}
+
+func hasReadRemovedCommandCue(normalizedLine string) bool {
+	return containsAnyWord(normalizedLine, "command") && containsAnyWord(normalizedLine, "removed", "deprecated", "legacy")
+}
+
+func hasReadNarrativeContextCue(normalizedLine string) bool {
+	return containsAnyWord(normalizedLine, "narrative", "descriptive", "description", "prose", "historical", "history", "migration", "documentation", "reference")
 }
 
 func hasReadImperativeCue(normalizedLine string) bool {
-	trimmed := strings.TrimSpace(normalizedLine)
-	trimmed = strings.TrimLeft(trimmed, "-* ")
-	return strings.HasPrefix(trimmed, "run ") || strings.HasPrefix(trimmed, "use ")
+	return containsAnyWord(normalizedLine,
+		"run",
+		"use",
+		"execute",
+		"invoke",
+		"try",
+		"must",
+		"should",
+		"please",
+		"rerun",
+		"retry",
+	)
+}
+
+func containsAnyWord(text string, words ...string) bool {
+	wanted := make(map[string]struct{}, len(words))
+	for _, word := range words {
+		wanted[word] = struct{}{}
+	}
+	for _, word := range strings.FieldsFunc(text, func(r rune) bool {
+		return !(r == '_' || r >= '0' && r <= '9' || r >= 'a' && r <= 'z')
+	}) {
+		if _, ok := wanted[word]; ok {
+			return true
+		}
+	}
+	return false
 }
 
 func validateBackscrollInvocations(root *cobra.Command, path string, lineNumber int, text string) []skillContractViolation {
@@ -560,7 +621,7 @@ func searchInvocationHasQuery(cmd *cobra.Command, tokens []shellishToken) bool {
 	for i := 0; i < len(tokens); i++ {
 		token := tokens[i]
 		tokenValue := token.value
-		if !token.quoted && (isShellTerminator(tokenValue) || isRedirectOperator(tokenValue)) {
+		if token.isOperator() && (isShellTerminator(tokenValue) || isRedirectOperator(tokenValue)) {
 			return false
 		}
 		if tokenValue == "--help" || tokenValue == "-h" {
@@ -591,7 +652,7 @@ func searchInvocationHasQuery(cmd *cobra.Command, tokens []shellishToken) bool {
 					}
 					return isValidQueryToken(next)
 				}
-				if !next.quoted && (isShellTerminator(next.value) || isRedirectOperator(next.value)) {
+				if next.isOperator() && (isShellTerminator(next.value) || isRedirectOperator(next.value)) {
 					return false
 				}
 				i++
@@ -608,7 +669,7 @@ func searchInvocationHasQuery(cmd *cobra.Command, tokens []shellishToken) bool {
 
 func hasUnsupportedLineContinuation(tokens []shellishToken) bool {
 	for _, token := range tokens {
-		if token.value == `\` && !token.quoted {
+		if token.isOperator() && token.value == `\` {
 			return true
 		}
 	}
@@ -617,7 +678,7 @@ func hasUnsupportedLineContinuation(tokens []shellishToken) bool {
 
 func firstQueryToken(tokens []shellishToken) string {
 	for _, token := range tokens {
-		if !token.quoted && (isShellTerminator(token.value) || isRedirectOperator(token.value) || token.value == `\`) {
+		if token.isOperator() && (isShellTerminator(token.value) || isRedirectOperator(token.value) || token.value == `\`) {
 			return ""
 		}
 		if isValidQueryToken(token) {
@@ -632,7 +693,7 @@ func isValidQueryToken(token shellishToken) bool {
 	if trimmed == "" {
 		return false
 	}
-	if !token.quoted && (isShellTerminator(trimmed) || isRedirectOperator(trimmed) || trimmed == `\`) {
+	if token.isOperator() && (isShellTerminator(trimmed) || isRedirectOperator(trimmed) || trimmed == `\`) {
 		return false
 	}
 	return true
@@ -696,14 +757,26 @@ func findSubcommand(root *cobra.Command, name string) *cobra.Command {
 	return nil
 }
 
+type shellishTokenKind int
+
+const (
+	shellishWordToken shellishTokenKind = iota
+	shellishOperatorToken
+)
+
 type shellishToken struct {
 	value  string
 	quoted bool
+	kind   shellishTokenKind
+}
+
+func (token shellishToken) isOperator() bool {
+	return token.kind == shellishOperatorToken
 }
 
 func invocationArgsTokens(tokens []shellishToken) []shellishToken {
 	for i, token := range tokens {
-		if !token.quoted && isShellTerminator(token.value) {
+		if token.isOperator() && isShellTerminator(token.value) {
 			return tokens[:i]
 		}
 	}
@@ -880,41 +953,139 @@ func shellishTokens(text string) []shellishToken {
 	var tokens []shellishToken
 	var current strings.Builder
 	var quote rune
+	wordStarted := false
 	tokenQuoted := false
-	flush := func() {
-		if current.Len() == 0 {
+
+	flushWord := func() {
+		if !wordStarted {
 			return
 		}
+		value := current.String()
+		if !tokenQuoted {
+			value = cleanUnquotedMarkdownToken(value)
+		}
 		tokens = append(tokens, shellishToken{
-			value:  cleanShellToken(current.String()),
+			value:  value,
 			quoted: tokenQuoted,
+			kind:   shellishWordToken,
 		})
 		current.Reset()
+		wordStarted = false
 		tokenQuoted = false
 	}
+	appendOperator := func(value string) {
+		flushWord()
+		tokens = append(tokens, shellishToken{
+			value: value,
+			kind:  shellishOperatorToken,
+		})
+	}
 
-	for _, r := range text {
+	runes := []rune(text)
+	for i := 0; i < len(runes); i++ {
+		r := runes[i]
 		switch {
 		case quote != 0:
 			if r == quote {
 				quote = 0
 				continue
 			}
+			wordStarted = true
 			current.WriteRune(r)
 		case r == '\'' || r == '"':
 			quote = r
+			wordStarted = true
 			tokenQuoted = true
 		case r == '\t' || r == ' ':
-			flush()
+			flushWord()
+		case r == '\\':
+			appendOperator(`\`)
+		case r == ';' || r == '|' || r == '&' || r == '#' || r == '<' || r == '>' || isDigitRune(r):
+			if operator, width := scanShellOperator(runes, i); width > 0 {
+				appendOperator(operator)
+				i += width - 1
+				continue
+			}
+			wordStarted = true
+			current.WriteRune(r)
 		default:
+			wordStarted = true
 			current.WriteRune(r)
 		}
 	}
-	flush()
+	flushWord()
 	return tokens
 }
 
-func cleanShellToken(token string) string {
+func scanShellOperator(runes []rune, index int) (string, int) {
+	if index >= len(runes) {
+		return "", 0
+	}
+	if width := scanControlOperator(runes, index); width > 0 {
+		return string(runes[index : index+width]), width
+	}
+
+	start := index
+	for index < len(runes) && isDigitRune(runes[index]) {
+		index++
+	}
+	redirect, width := scanRedirectOperator(runes, index)
+	if width == 0 {
+		return "", 0
+	}
+	operatorEnd := index + width
+	if redirect == ">&" || redirect == "<&" {
+		for operatorEnd < len(runes) && isDigitRune(runes[operatorEnd]) {
+			operatorEnd++
+		}
+	}
+	return string(runes[start:operatorEnd]), operatorEnd - start
+}
+
+func scanControlOperator(runes []rune, index int) int {
+	switch runes[index] {
+	case ';', '#':
+		return 1
+	case '|':
+		if hasRunePrefix(runes, index, "||") {
+			return 2
+		}
+		return 1
+	case '&':
+		if hasRunePrefix(runes, index, "&&") {
+			return 2
+		}
+	}
+	return 0
+}
+
+func scanRedirectOperator(runes []rune, index int) (string, int) {
+	for _, operator := range []string{"<<<", "&>>", ">>", "<<", "<>", ">&", "<&", "&>", ">", "<"} {
+		if hasRunePrefix(runes, index, operator) {
+			return operator, len([]rune(operator))
+		}
+	}
+	return "", 0
+}
+
+func hasRunePrefix(runes []rune, index int, prefix string) bool {
+	prefixRunes := []rune(prefix)
+	if index+len(prefixRunes) > len(runes) {
+		return false
+	}
+	for i, r := range prefixRunes {
+		if runes[index+i] != r {
+			return false
+		}
+	}
+	return true
+}
+
+func isDigitRune(r rune) bool {
+	return r >= '0' && r <= '9'
+}
+
+func cleanUnquotedMarkdownToken(token string) string {
 	return strings.Trim(token, "`.,;:()[]{}")
 }
 
