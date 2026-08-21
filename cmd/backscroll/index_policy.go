@@ -21,8 +21,6 @@ type indexCommandClass uint8
 const (
 	indexDataRead indexCommandClass = iota
 	indexMutation
-	indexDiagnostic
-	indexRemediation
 )
 
 func prepareIndex(ctx context.Context, cfg *config.Config, class indexCommandClass) (*storage.Database, *compat.Diagnostic, error) {
@@ -40,8 +38,6 @@ func prepareIndex(ctx context.Context, cfg *config.Config, class indexCommandCla
 	switch class {
 	case indexDataRead, indexMutation:
 		db, diag, err = storage.OpenCompatible(ctx, cfg.DatabasePath)
-	case indexDiagnostic, indexRemediation:
-		db, diag, err = openImmutableCurrentIndex(ctx, cfg.DatabasePath)
 	default:
 		return nil, nil, fmt.Errorf("unknown index command class %d", class)
 	}
@@ -61,41 +57,6 @@ func prepareIndex(ctx context.Context, cfg *config.Config, class indexCommandCla
 		return nil, &d, err
 	}
 
-	return db, nil, nil
-}
-
-func openReadOnlyCurrentIndex(ctx context.Context, path string) (*storage.Database, *compat.Diagnostic, error) {
-	return openCurrentIndexWith(ctx, path, storage.OpenReadOnly)
-}
-
-func openImmutableCurrentIndex(ctx context.Context, path string) (*storage.Database, *compat.Diagnostic, error) {
-	return openCurrentIndexWith(ctx, path, storage.OpenImmutableReadOnly)
-}
-
-func openCurrentIndexWith(ctx context.Context, path string, open func(string) (*storage.Database, error)) (*storage.Database, *compat.Diagnostic, error) {
-	db, err := open(path)
-	if err != nil {
-		return nil, nil, err
-	}
-	plan, diag, inspectErr := compat.InspectIndex(ctx, db.DB())
-	if inspectErr != nil || diag != nil {
-		closeErr := closeIndexDB(db, inspectErr)
-		if diag != nil && closeErr != nil {
-			diag.Summary = strings.TrimSpace(diag.Summary) + "; " + closeErr.Error()
-		}
-		return nil, diag, closeErr
-	}
-	if len(plan.Steps) > 0 {
-		diag := &compat.Diagnostic{
-			Code:    compat.CodeIndexStale,
-			Summary: fmt.Sprintf("index schema %s has %d pending migration step(s)", plan.From.Signature, len(plan.Steps)),
-		}
-		if closeErr := closeIndexDB(db, nil); closeErr != nil {
-			diag.Summary += "; " + closeErr.Error()
-			return nil, diag, closeErr
-		}
-		return nil, diag, nil
-	}
 	return db, nil, nil
 }
 
