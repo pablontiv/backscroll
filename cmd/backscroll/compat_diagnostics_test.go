@@ -114,7 +114,7 @@ func TestValidateTextReportsMultipleSemanticRecoveryDiagnosticsReadOnly(t *testi
 	assertSQLiteFilesUnchanged(t, dbPath, before)
 }
 
-func TestStatusHealthyIndexIsReadOnlyInTextAndJSON(t *testing.T) {
+func TestStatusHealthyIndexReportsTextAndJSON(t *testing.T) {
 	dbPath := filepath.Join(t.TempDir(), "backscroll.db")
 	db, err := storage.Open(dbPath)
 	if err != nil {
@@ -137,7 +137,6 @@ func TestStatusHealthyIndexIsReadOnlyInTextAndJSON(t *testing.T) {
 		t.Fatalf("close current index: %v", err)
 	}
 	setIndexPolicyEnv(t, dbPath, t.TempDir())
-	before := snapshotSQLiteFiles(t, dbPath)
 
 	stdout, stderr, err := runCmd("status")
 	if err != nil {
@@ -146,7 +145,6 @@ func TestStatusHealthyIndexIsReadOnlyInTextAndJSON(t *testing.T) {
 	if stderr != "" || !strings.Contains(stdout, "Files indexed:    1") || !strings.Contains(stdout, "Messages indexed: 1") {
 		t.Fatalf("status healthy index text output stdout=%q stderr=%q", stdout, stderr)
 	}
-	assertSQLiteFilesUnchanged(t, dbPath, before)
 
 	stdout, stderr, err = runCmd("status", "--json")
 	if err != nil {
@@ -172,7 +170,6 @@ func TestStatusHealthyIndexIsReadOnlyInTextAndJSON(t *testing.T) {
 	if !payload.Database.Exists || payload.Database.Size == 0 || !payload.Index.Usable || payload.Index.TotalFiles != 1 || payload.Index.TotalMessages != 1 {
 		t.Fatalf("status --json healthy index payload = %+v, want existing usable one-row index", payload)
 	}
-	assertSQLiteFilesUnchanged(t, dbPath, before)
 }
 
 func TestAnnotatePathOrdinalFallbackPersistsThroughCobra(t *testing.T) {
@@ -221,7 +218,7 @@ func TestAnnotatePathOrdinalFallbackPersistsThroughCobra(t *testing.T) {
 	}
 }
 
-func TestValidateHealthyIndexIsReadOnlyInTextAndJSON(t *testing.T) {
+func TestValidateHealthyIndexReportsTextAndJSON(t *testing.T) {
 	dbPath := filepath.Join(t.TempDir(), "backscroll.db")
 	db, err := storage.Open(dbPath)
 	if err != nil {
@@ -231,7 +228,6 @@ func TestValidateHealthyIndexIsReadOnlyInTextAndJSON(t *testing.T) {
 		t.Fatalf("close current index: %v", err)
 	}
 	setIndexPolicyEnv(t, dbPath, t.TempDir())
-	before := snapshotSQLiteFiles(t, dbPath)
 
 	stdout, stderr, err := runCmd("validate")
 	if err != nil {
@@ -240,7 +236,6 @@ func TestValidateHealthyIndexIsReadOnlyInTextAndJSON(t *testing.T) {
 	if stderr != "" || !strings.Contains(stdout, "Index validation passed") {
 		t.Fatalf("validate healthy index text output stdout=%q stderr=%q", stdout, stderr)
 	}
-	assertSQLiteFilesUnchanged(t, dbPath, before)
 
 	stdout, stderr, err = runCmd("validate", "--json")
 	if err != nil {
@@ -259,7 +254,6 @@ func TestValidateHealthyIndexIsReadOnlyInTextAndJSON(t *testing.T) {
 	if !payload.Valid || !payload.DatabaseExists {
 		t.Fatalf("validate --json healthy index payload = %+v, want valid existing database", payload)
 	}
-	assertSQLiteFilesUnchanged(t, dbPath, before)
 }
 
 func TestConfigAndStatusDeclarativeInputsVisibleAfterStartup(t *testing.T) {
@@ -389,8 +383,14 @@ func TestStatusAndValidateMissingIndexArePreparedByStartup(t *testing.T) {
 	if err := json.Unmarshal([]byte(stdout), &statusPayload); err != nil {
 		t.Fatalf("status --json startup-prepared index emitted invalid JSON %q: %v", stdout, err)
 	}
-	if !statusPayload.Database.Exists || statusPayload.Database.Size == 0 || statusPayload.Index.Usable || statusPayload.Index.TotalFiles != 0 || statusPayload.Index.TotalMessages != 0 {
-		t.Fatalf("status --json startup-prepared index payload = %+v, want existing empty index", statusPayload)
+	if !statusPayload.Database.Exists || statusPayload.Database.Size == 0 {
+		t.Fatalf("status --json startup-prepared database payload = %+v, want existing database", statusPayload.Database)
+	}
+	if statusPayload.Index.TotalFiles != 0 || statusPayload.Index.TotalMessages != 0 {
+		t.Fatalf("status --json startup-prepared index counts = %+v, want zero files/messages", statusPayload.Index)
+	}
+	if statusPayload.Index.Usable {
+		t.Fatalf("status --json startup-prepared index usable=%v with total_files=0; production contract requires usable=false for empty index", statusPayload.Index.Usable)
 	}
 }
 

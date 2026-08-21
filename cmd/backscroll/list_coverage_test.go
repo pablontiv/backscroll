@@ -1,7 +1,7 @@
 package main
 
 import (
-	"strings"
+	"encoding/json"
 	"testing"
 )
 
@@ -13,8 +13,29 @@ func TestListJSONSeeded(t *testing.T) {
 	if err != nil {
 		t.Fatalf("run: %v", err)
 	}
-	if !strings.Contains(stdout, "cov/s.jsonl") && !strings.Contains(stdout, "[]") {
-		t.Errorf("unexpected list json: %q", stdout)
+
+	var payload struct {
+		Count    int `json:"count"`
+		Sessions []struct {
+			Path    string `json:"Path"`
+			Project string `json:"Project"`
+		} `json:"sessions"`
+	}
+	if err := json.Unmarshal([]byte(stdout), &payload); err != nil {
+		t.Fatalf("list --json emitted invalid JSON %q: %v", stdout, err)
+	}
+	if payload.Count == 0 || len(payload.Sessions) == 0 {
+		t.Fatalf("list --json returned empty sessions after seeded startup: %+v", payload)
+	}
+	foundSeed := false
+	for _, s := range payload.Sessions {
+		if s.Path == "/cov/s.jsonl" && s.Project == "covproj" {
+			foundSeed = true
+			break
+		}
+	}
+	if !foundSeed {
+		t.Fatalf("list --json missing seeded /cov/s.jsonl@covproj session: %+v", payload.Sessions)
 	}
 }
 
