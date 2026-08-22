@@ -489,6 +489,141 @@ func TestMetadataPrefilterHandlesNullMetadata(t *testing.T) {
 	_ = progress2
 }
 
+// TestRacyCleanEditsAreDetected validates that files edited with identical byte count
+// within the same timestamp tick are re-hashed (racy-clean guard).
+// This is a critical regression test for the vulnerability where same-length edits
+// could be silently missed by the metadata prefilter.
+func TestRacyCleanEditsAreDetected(t *testing.T) {
+	tmpDir := t.TempDir()
+	homeDir := filepath.Join(tmpDir, "home")
+	configDir := filepath.Join(tmpDir, "config")
+	sessionDir := filepath.Join(tmpDir, "sessions")
+
+	for _, d := range []string{homeDir, configDir, sessionDir} {
+		if err := os.MkdirAll(d, 0755); err != nil {
+			t.Fatalf("mkdir %s: %v", d, err)
+		}
+	}
+
+	dbPath := filepath.Join(tmpDir, "test.db")
+	t.Setenv("HOME", homeDir)
+	t.Setenv("BACKSCROLL_CONFIG_DIR", configDir)
+	t.Setenv("BACKSCROLL_DATABASE_PATH", dbPath)
+	t.Setenv("BACKSCROLL_SESSION_DIRS", sessionDir)
+
+	// Create a test JSONL file with specific content
+	sessionFile := filepath.Join(sessionDir, "test-session.jsonl")
+	// Content1: 100 bytes, contains "AAAAAAAAAA" repeated
+	content1 := `{"type":"claude-session","version":"2024-01-01","cwd":"/test","messages":[{"uuid":"msg-1","role":"user","content":"AAAAAAAAAA"}]}`
+	if err := os.WriteFile(sessionFile, []byte(content1), 0644); err != nil {
+		t.Fatalf("write test session: %v", err)
+	}
+
+	// Record the mtime for later use
+	stat1, err := os.Stat(sessionFile)
+	if err != nil {
+		t.Fatalf("stat file: %v", err)
+	}
+	initialMtime := stat1.ModTime()
+	initialSize := stat1.Size()
+
+	cfg := config.Config{
+		DatabasePath: dbPath,
+		SessionDirs:  []string{sessionDir},
+	}
+
+	// First sync - index the file
+	progress := &bytes.Buffer{}
+	err = maybeAutoSync(&cfg, progress)
+	if err != nil {
+		t.Fatalf("first maybeAutoSync failed: %v", err)
+	}
+
+	// Get the initial hash from database
+	db, err := storage.Open(dbPath)
+	if err != nil {
+		t.Fatalf("open database: %v", err)
+	}
+
+	hashes1, err := db.GetFileHashes()
+	if err != nil {
+		t.Fatalf("get file hashes: %v", err)
+	}
+	hash1 := hashes1[sessionFile]
+	if hash1 == "" {
+		t.Fatalf("file not indexed after first sync")
+	}
+
+	db.Close()
+
+	// Now: Overwrite file with SAME-LENGTH different content
+	// Content2: also 100 bytes, but with "BBBBBBBBBB" instead of "AAAAAAAAAA"
+	content2 := `{"type":"claude-session","version":"2024-01-01","cwd":"/test","messages":[{"uuid":"msg-1","role":"user","content":"BBBBBBBBBB"}]}`
+	if len(content2) != len(content1) {
+		t.Fatalf("content2 length (%d) != content1 length (%d) - test setup error", len(content2), len(content1))
+	}
+
+	if err := os.WriteFile(sessionFile, []byte(content2), 0644); err != nil {
+		t.Fatalf("write modified content: %v", err)
+	}
+
+	// Force mtime to the same value using os.Chtimes
+	// This simulates the racy-clean scenario: edit within the same timestamp tick
+	if err := os.Chtimes(sessionFile, initialMtime, initialMtime); err != nil {
+		t.Fatalf("chtimes to restore mtime: %v", err)
+	}
+
+	// Verify preconditions: size and mtime match, but content differs
+	stat2, err := os.Stat(sessionFile)
+	if err != nil {
+		t.Fatalf("stat file after edit: %v", err)
+	}
+	if stat2.Size() != initialSize {
+		t.Fatalf("file size changed (precondition violated): %d -> %d", initialSize, stat2.Size())
+	}
+	if stat2.ModTime() != initialMtime {
+		t.Skipf("filesystem doesn't preserve mtime (chtimes failed): mtime changed %v -> %v", initialMtime, stat2.ModTime())
+	}
+
+	// Read the file to verify content really is different
+	newBytes, err := os.ReadFile(sessionFile)
+	if err != nil {
+		t.Fatalf("read file after edit: %v", err)
+	}
+	if string(newBytes) == content1 {
+		t.Fatalf("file content was not modified (test setup error)")
+	}
+
+	// Second sync: the racy-clean guard should detect this is a racy-clean file
+	// and re-hash it despite matching size+mtime
+	progress2 := &bytes.Buffer{}
+	err = maybeAutoSync(&cfg, progress2)
+	if err != nil {
+		t.Fatalf("second maybeAutoSync failed: %v", err)
+	}
+
+	// Verify the hash changed (file WAS re-indexed with new content)
+	db, err = storage.Open(dbPath)
+	if err != nil {
+		t.Fatalf("open database after second sync: %v", err)
+	}
+	defer db.Close()
+
+	hashes2, err := db.GetFileHashes()
+	if err != nil {
+		t.Fatalf("get file hashes after second sync: %v", err)
+	}
+	hash2 := hashes2[sessionFile]
+
+	// CRITICAL: The hash MUST be different because the content changed
+	// If this fails, the racy-clean vulnerability is not fixed
+	if hash1 == hash2 {
+		t.Errorf("CRITICAL: hash did not change for same-length edited file: both %q\n"+
+			"This is a data loss bug—content changed but was not re-indexed.\n"+
+			"Same-length edits within the same timestamp tick were missed.", hash1)
+	}
+}
+
 // BenchmarkMetadataPrefilter measures the impact of the metadata prefilter
 // on startup sync performance with a corpus of many unchanged files.
 func BenchmarkMetadataPrefilter(b *testing.B) {

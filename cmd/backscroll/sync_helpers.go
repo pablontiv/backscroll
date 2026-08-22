@@ -49,6 +49,28 @@ func getFileMetadata(path string) (*int64, *string, error) {
 	return &size, &mtime, nil
 }
 
+// isRacyCleanFile reports whether a file's mtime suggests it could be racy clean.
+// A file is racy clean if its mtime is not strictly older than the recorded
+// last_indexed time (within a 2-second granularity margin). Such files could have
+// been edited in the same timestamp tick as the indexing, leaving size and mtime
+// unchanged but content different. See git's racy-git documentation.
+func isRacyCleanFile(fileMtime string, lastIndexed string) bool {
+	// Parse both timestamps (RFC3339 format)
+	fileMt, err := time.Parse(time.RFC3339, fileMtime)
+	if err != nil {
+		return true // On parse error, assume racy (conservative)
+	}
+	indexTime, err := time.Parse(time.RFC3339, lastIndexed)
+	if err != nil {
+		return true // On parse error, assume racy (conservative)
+	}
+
+	// File is racy if its mtime is not strictly older than last_indexed.
+	// Allow 2 seconds margin to account for filesystem granularity (1-2 second typical).
+	const racyMarginSeconds = 2
+	return fileMt.After(indexTime.Add(-time.Duration(racyMarginSeconds) * time.Second))
+}
+
 // maybeAutoSync performs an incremental sync operation if the database exists.
 // It is intended to be called before query commands to ensure fresh index state.
 // If sync fails, it returns an error (caller decides whether to warn/ignore).
@@ -112,21 +134,32 @@ func maybeAutoSync(cfg *config.Config, progress io.Writer) (retErr error) {
 		}
 
 		for _, ref := range refs {
-			// v14 metadata prefilter: skip hashing if file size and mtime match
+			// v14 metadata prefilter with racy-clean guard:
+			// Files modified within the same timestamp tick as indexing could have matching
+			// size+mtime but different content. Git calls these "racy clean" files.
+			// We use last_indexed as the reference point: if file.mtime >= last_indexed,
+			// do not trust the metadata (could be racy). Otherwise, skip hashing if both match.
 			var hash string
 			var shouldParse bool
 
 			existingMeta, exists := existingMetadata[ref]
-			if exists && existingMeta.Size != nil && existingMeta.Mtime != nil {
-				// Both metadata fields must be non-NULL to use the prefilter
+			if exists && existingMeta.Size != nil && existingMeta.Mtime != nil &&
+				existingMeta.LastIndexed != nil {
+				// All metadata fields must be non-NULL to use the prefilter
 				// Check if current file matches recorded metadata
 				if fileSize, fileMtime, err := maybeAutoSyncGetFileMetadata(ref); err == nil {
 					if fileSize != nil && fileMtime != nil &&
 						*fileSize == *existingMeta.Size &&
 						*fileMtime == *existingMeta.Mtime {
-						// File metadata unchanged: use cached hash and skip re-hashing
-						hash = existingMeta.Hash
-						shouldParse = staleSet[ref] && staleParsesDone < staleParsesCap
+						// Metadata matches; check if file is racy-clean
+						// (mtime within ~2s of last_indexed means could be in same tick)
+						isRacyClean := isRacyCleanFile(*fileMtime, *existingMeta.LastIndexed)
+						if !isRacyClean {
+							// File metadata unchanged and not racy: use cached hash, skip re-hashing
+							hash = existingMeta.Hash
+							shouldParse = staleSet[ref] && staleParsesDone < staleParsesCap
+						}
+						// else: racy-clean file falls through to hash anyway
 					}
 				}
 			}

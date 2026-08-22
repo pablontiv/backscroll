@@ -351,17 +351,18 @@ func (d *Database) GetFileHashes() (map[string]string, error) {
 
 // FileMetadata represents the persisted metadata for a file.
 type FileMetadata struct {
-	Path  string
-	Hash  string
-	Size  *int64  // NULL for pre-v14 rows
-	Mtime *string // NULL for pre-v14 rows
+	Path        string
+	Hash        string
+	Size        *int64  // NULL for pre-v14 rows
+	Mtime       *string // NULL for pre-v14 rows
+	LastIndexed *string // timestamp of the indexing, used for racy-clean detection
 }
 
-// GetFileMetadata returns all indexed file metadata (path, hash, size, mtime).
-// Pre-v14 rows have NULL size and mtime.
+// GetFileMetadata returns all indexed file metadata (path, hash, size, mtime, last_indexed).
+// Pre-v14 rows have NULL size and mtime. LastIndexed is populated from indexed_files.last_indexed.
 func (d *Database) GetFileMetadata() (map[string]FileMetadata, error) {
 	rows, err := d.db.Query(`
-		SELECT path, hash, file_size, file_mtime
+		SELECT path, hash, file_size, file_mtime, last_indexed
 		FROM indexed_files
 		WHERE hash <> ?
 	`, recoveredSourceHash)
@@ -375,14 +376,16 @@ func (d *Database) GetFileMetadata() (map[string]FileMetadata, error) {
 		var path, hash string
 		var size *int64
 		var mtime *string
-		if err := rows.Scan(&path, &hash, &size, &mtime); err != nil {
+		var lastIndexed *string
+		if err := rows.Scan(&path, &hash, &size, &mtime, &lastIndexed); err != nil {
 			return nil, fmt.Errorf("scan file metadata: %w", err)
 		}
 		metadata[path] = FileMetadata{
-			Path:  path,
-			Hash:  hash,
-			Size:  size,
-			Mtime: mtime,
+			Path:        path,
+			Hash:        hash,
+			Size:        size,
+			Mtime:       mtime,
+			LastIndexed: lastIndexed,
 		}
 	}
 
