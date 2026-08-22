@@ -412,41 +412,167 @@ func isFTSShadowObject(name string, virtualTables map[string]bool) bool {
 }
 
 func normalizeSQL(sqlText string) string {
-	// Collapse runs of whitespace outside string literals, but preserve whitespace
-	// within single-quoted SQL strings (including '' escapes).
+	// Collapse runs of whitespace outside SQL lexical constructs (comments, string literals, identifiers),
+	// preserving whitespace within:
+	// - Single-quoted string literals (including '' escapes)
+	// - Double-quoted identifiers (including "" escapes)
+	// - Backtick-quoted identifiers
+	// - Bracket-quoted identifiers [...]
+	// - Line comments (-- until end-of-line)
+	// - Block comments (/* ... */ non-nesting)
+	//
+	// Defect fix #1: Apostrophes and quotes within comments do not affect lexer state.
+	// Defect fix #2: Double-quoted identifiers preserve inner whitespace (e.g., "my  table" != "my table").
+
 	var result strings.Builder
-	inQuote := false
 	lastWasSpace := false
 
 	for i := 0; i < len(sqlText); i++ {
 		ch := sqlText[i]
 
-		// Check for single quote (start or end of string literal, or '' escape)
-		if ch == '\'' {
-			// Check if this is a '' escape (two consecutive single quotes)
-			if inQuote && i+1 < len(sqlText) && sqlText[i+1] == '\'' {
-				// Write both quotes and skip the next one
-				result.WriteByte(ch)
-				result.WriteByte(ch)
-				i++ // skip the next quote
-				lastWasSpace = false
-				continue
+		// Handle line comments (-- until end-of-line)
+		if ch == '-' && i+1 < len(sqlText) && sqlText[i+1] == '-' {
+			// Write the comment as-is, preserving spaces/newlines until EOL
+			result.WriteByte(ch)
+			i++
+			result.WriteByte(sqlText[i])
+			lastWasSpace = false
+			i++
+			// Copy everything until end of line (newline or EOF)
+			for i < len(sqlText) && sqlText[i] != '\n' {
+				result.WriteByte(sqlText[i])
+				i++
 			}
-			// Toggle quote state
-			inQuote = !inQuote
-			result.WriteByte(ch)
-			lastWasSpace = false
+			// If we found a newline, write it as a space (for collapsing purposes)
+			if i < len(sqlText) && sqlText[i] == '\n' {
+				result.WriteByte(' ')
+				lastWasSpace = true
+				i++
+			}
+			i-- // Adjust for the outer loop's i++
 			continue
 		}
 
-		// If inside quotes, preserve character as-is
-		if inQuote {
+		// Handle block comments (/* ... */ non-nesting)
+		if ch == '/' && i+1 < len(sqlText) && sqlText[i+1] == '*' {
+			// Write the comment marker and everything until */
 			result.WriteByte(ch)
+			i++
+			result.WriteByte(sqlText[i]) // '*'
 			lastWasSpace = false
+			i++
+			// Copy everything until we find */
+			for i < len(sqlText) {
+				if sqlText[i] == '*' && i+1 < len(sqlText) && sqlText[i+1] == '/' {
+					result.WriteByte('*')
+					i++
+					result.WriteByte('/')
+					i++
+					lastWasSpace = false
+					break
+				}
+				result.WriteByte(sqlText[i])
+				i++
+			}
+			i-- // Adjust for the outer loop's i++
 			continue
 		}
 
-		// Outside quotes: collapse whitespace
+		// Handle single-quoted string literals (preserve whitespace inside)
+		if ch == '\'' {
+			result.WriteByte(ch)
+			lastWasSpace = false
+			i++
+			// Copy everything until closing single quote, handling '' escape
+			for i < len(sqlText) {
+				if sqlText[i] == '\'' {
+					result.WriteByte('\'')
+					// Check if this is an escape (followed by another single quote)
+					if i+1 < len(sqlText) && sqlText[i+1] == '\'' {
+						result.WriteByte('\'')
+						i += 2
+					} else {
+						// End of string literal
+						i++
+						lastWasSpace = false
+						break
+					}
+				} else {
+					result.WriteByte(sqlText[i])
+					i++
+				}
+			}
+			i-- // Adjust for the outer loop's i++
+			continue
+		}
+
+		// Handle double-quoted identifiers (preserve whitespace inside)
+		if ch == '"' {
+			result.WriteByte(ch)
+			lastWasSpace = false
+			i++
+			// Copy everything until closing double quote, handling "" escape
+			for i < len(sqlText) {
+				if sqlText[i] == '"' {
+					result.WriteByte('"')
+					// Check if this is an escape (followed by another double quote)
+					if i+1 < len(sqlText) && sqlText[i+1] == '"' {
+						result.WriteByte('"')
+						i += 2
+					} else {
+						// End of identifier
+						i++
+						lastWasSpace = false
+						break
+					}
+				} else {
+					result.WriteByte(sqlText[i])
+					i++
+				}
+			}
+			i-- // Adjust for the outer loop's i++
+			continue
+		}
+
+		// Handle backtick-quoted identifiers (preserve whitespace inside)
+		if ch == '`' {
+			result.WriteByte(ch)
+			lastWasSpace = false
+			i++
+			// Copy everything until closing backtick
+			for i < len(sqlText) && sqlText[i] != '`' {
+				result.WriteByte(sqlText[i])
+				i++
+			}
+			if i < len(sqlText) && sqlText[i] == '`' {
+				result.WriteByte('`')
+				i++
+				lastWasSpace = false
+			}
+			i-- // Adjust for the outer loop's i++
+			continue
+		}
+
+		// Handle bracket-quoted identifiers [...] (preserve whitespace inside)
+		if ch == '[' {
+			result.WriteByte(ch)
+			lastWasSpace = false
+			i++
+			// Copy everything until closing bracket
+			for i < len(sqlText) && sqlText[i] != ']' {
+				result.WriteByte(sqlText[i])
+				i++
+			}
+			if i < len(sqlText) && sqlText[i] == ']' {
+				result.WriteByte(']')
+				i++
+				lastWasSpace = false
+			}
+			i-- // Adjust for the outer loop's i++
+			continue
+		}
+
+		// Outside all special contexts: collapse whitespace
 		if ch == ' ' || ch == '\t' || ch == '\n' || ch == '\r' {
 			if !lastWasSpace {
 				result.WriteByte(' ')
