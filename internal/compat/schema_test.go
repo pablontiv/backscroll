@@ -589,6 +589,11 @@ func TestNormalizeSQLAdversarialCases(t *testing.T) {
 			sql:  "CREATE TABLE t ( a INTEGER -- the -- marker )",
 			want: "CREATE TABLE t ( a INTEGER -- the -- marker )",
 		},
+		{
+			name: "CRLF after line comment",
+			sql:  "CREATE TABLE t ( a INTEGER -- comment\r\nb INTEGER )",
+			want: "CREATE TABLE t ( a INTEGER -- comment b INTEGER )",
+		},
 	}
 
 	for _, tt := range tests {

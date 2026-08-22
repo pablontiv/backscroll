@@ -438,9 +438,11 @@ func normalizeSQL(sqlText string) string {
 			result.WriteByte(sqlText[i])
 			lastWasSpace = false
 			i++
-			// Copy everything until end of line (newline or EOF)
+			// Copy everything until end of line (newline or EOF), skipping CR (normalize CRLF to LF)
 			for i < len(sqlText) && sqlText[i] != '\n' {
-				result.WriteByte(sqlText[i])
+				if sqlText[i] != '\r' {
+					result.WriteByte(sqlText[i])
+				}
 				i++
 			}
 			// If we found a newline, write it as a space (for collapsing purposes)
