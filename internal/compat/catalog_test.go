@@ -6,6 +6,7 @@ import (
 	"database/sql"
 	"fmt"
 	"io/fs"
+	"os"
 	"path/filepath"
 	"reflect"
 	"sort"
@@ -372,4 +373,18 @@ func loadFixtureMigrationRows(t *testing.T, fixtureSQL []byte) []migrationRow {
 		t.Fatal(err)
 	}
 	return result
+}
+
+// TestRegenerateManifestOnNormalizationChange is an optional helper test that
+// regenerates manifest.json after normalizeSQL changes. Run with:
+// go test -run TestRegenerateManifestOnNormalizationChange ./internal/compat -v
+func TestRegenerateManifestOnNormalizationChange(t *testing.T) {
+	if os.Getenv("REGEN_MANIFEST") == "" {
+		t.Skip("Set REGEN_MANIFEST=1 to regenerate manifest.json")
+	}
+
+	manifestPath := filepath.Join("testdata", "release-schemas", "manifest.json")
+	if err := RegenerateManifestJSON(manifestPath); err != nil {
+		t.Fatalf("regenerate manifest: %v", err)
+	}
 }

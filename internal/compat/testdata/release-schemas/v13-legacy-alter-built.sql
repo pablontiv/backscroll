@@ -86,10 +86,7 @@ CREATE TABLE search_items (
     timestamp TEXT,
     uuid TEXT UNIQUE,
     project TEXT,
-    content_type TEXT NOT NULL DEFAULT 'text',
-    extraction_version INTEGER,
-    was_interrupted INTEGER
-);
+    content_type TEXT NOT NULL DEFAULT 'text', extraction_version INTEGER, was_interrupted INTEGER);
 
 CREATE TABLE session_tags (
     source_path TEXT NOT NULL,
