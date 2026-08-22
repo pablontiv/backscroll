@@ -605,3 +605,49 @@ func TestNormalizeSQLAdversarialCases(t *testing.T) {
 		})
 	}
 }
+
+func TestNormalizeSQLCollapsesWhitespaceInsideComments(t *testing.T) {
+	// Comments are cosmetic — internal whitespace differences should not create
+	// different signatures. Two CREATE statements differing only in comment
+	// formatting should normalize identically (fix for latent defect #3).
+	tests := []struct {
+		name string
+		sql  string
+		want string
+	}{
+		{
+			name: "line comment with double space normalizes to single space",
+			sql:  "CREATE TABLE t ( -- note  double\na INTEGER )",
+			want: "CREATE TABLE t ( -- note double a INTEGER )",
+		},
+		{
+			name: "line comment with multiple spaces",
+			sql:  "CREATE TABLE t (   --   spaces   everywhere  \na INTEGER )",
+			want: "CREATE TABLE t ( -- spaces everywhere a INTEGER )",
+		},
+		{
+			name: "block comment with double space normalizes to single space",
+			sql:  "CREATE TABLE t ( /* note  double */ a INTEGER )",
+			want: "CREATE TABLE t ( /* note double */ a INTEGER )",
+		},
+		{
+			name: "block comment with mixed whitespace",
+			sql:  "CREATE TABLE t ( /*  multi  space  comment  */ a INTEGER )",
+			want: "CREATE TABLE t ( /* multi space comment */ a INTEGER )",
+		},
+		{
+			name: "inline comment inside CREATE with extra spaces",
+			sql:  "CREATE TABLE t (\n  --  inline   comment\n  a INTEGER\n)",
+			want: "CREATE TABLE t ( -- inline comment a INTEGER )",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			norm := normalizeSQL(tt.sql)
+			if norm != tt.want {
+				t.Fatalf("normalizeSQL(%q) =\n  %q\nwant\n  %q", tt.sql, norm, tt.want)
+			}
+		})
+	}
+}

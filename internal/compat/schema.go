@@ -432,19 +432,36 @@ func normalizeSQL(sqlText string) string {
 
 		// Handle line comments (-- until end-of-line)
 		if ch == '-' && i+1 < len(sqlText) && sqlText[i+1] == '-' {
-			// Write the comment as-is, preserving spaces/newlines until EOL
+			// Write the comment delimiter
 			result.WriteByte(ch)
 			i++
 			result.WriteByte(sqlText[i])
 			lastWasSpace = false
 			i++
-			// Copy everything until end of line (newline or EOF), skipping CR (normalize CRLF to LF)
+			// Collect comment content until EOL, collapsing internal whitespace
+			var commentBuf strings.Builder
+			commentLastWasSpace := false
 			for i < len(sqlText) && sqlText[i] != '\n' {
-				if sqlText[i] != '\r' {
-					result.WriteByte(sqlText[i])
+				if sqlText[i] == '\r' {
+					// Skip CR; will be normalized by outer whitespace logic
+					i++
+					continue
 				}
-				i++
+				if sqlText[i] == ' ' || sqlText[i] == '\t' {
+					if !commentLastWasSpace {
+						commentBuf.WriteByte(' ')
+						commentLastWasSpace = true
+					}
+					i++
+				} else {
+					commentBuf.WriteByte(sqlText[i])
+					commentLastWasSpace = false
+					i++
+				}
 			}
+			// Write comment content, trimmed of trailing whitespace
+			commentContent := strings.TrimRight(commentBuf.String(), " \t")
+			result.WriteString(commentContent)
 			// If we found a newline, write it as a space (for collapsing purposes)
 			if i < len(sqlText) && sqlText[i] == '\n' {
 				result.WriteByte(' ')
@@ -457,24 +474,49 @@ func normalizeSQL(sqlText string) string {
 
 		// Handle block comments (/* ... */ non-nesting)
 		if ch == '/' && i+1 < len(sqlText) && sqlText[i+1] == '*' {
-			// Write the comment marker and everything until */
+			// Write the comment opener
 			result.WriteByte(ch)
 			i++
 			result.WriteByte(sqlText[i]) // '*'
 			lastWasSpace = false
 			i++
-			// Copy everything until we find */
+			// Collect comment content until */, collapsing internal whitespace
+			var commentBuf strings.Builder
+			commentLastWasSpace := false
 			for i < len(sqlText) {
 				if sqlText[i] == '*' && i+1 < len(sqlText) && sqlText[i+1] == '/' {
-					result.WriteByte('*')
-					i++
-					result.WriteByte('/')
-					i++
-					lastWasSpace = false
+					// End of comment found
 					break
 				}
-				result.WriteByte(sqlText[i])
+				if sqlText[i] == ' ' || sqlText[i] == '\t' || sqlText[i] == '\n' || sqlText[i] == '\r' {
+					if !commentLastWasSpace {
+						commentBuf.WriteByte(' ')
+						commentLastWasSpace = true
+					}
+					i++
+				} else {
+					commentBuf.WriteByte(sqlText[i])
+					commentLastWasSpace = false
+					i++
+				}
+			}
+			// Write comment content, preserving structure (trim only leading/trailing multiples)
+			commentContent := strings.TrimSpace(commentBuf.String())
+			if commentContent != "" {
+				result.WriteByte(' ')
+				result.WriteString(commentContent)
+				result.WriteByte(' ')
+			} else {
+				// Empty comment
+				result.WriteByte(' ')
+			}
+			// Write comment closer if found
+			if i < len(sqlText) && sqlText[i] == '*' && i+1 < len(sqlText) && sqlText[i+1] == '/' {
+				result.WriteByte('*')
 				i++
+				result.WriteByte('/')
+				i++
+				lastWasSpace = false
 			}
 			i-- // Adjust for the outer loop's i++
 			continue
