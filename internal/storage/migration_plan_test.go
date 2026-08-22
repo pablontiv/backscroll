@@ -1528,3 +1528,44 @@ func onlySnapshot(t *testing.T, dbPath string) string {
 	}
 	return matches[0]
 }
+
+// TestMigratedFixtureSignatureIsInCatalog is a regression test for issue #52.
+// It verifies that when a V1 fixture is migrated forward through the real
+// SetupSchema() code, the resulting database schema signature is recognized by
+// the catalog. This prevents cosmetic DDL formatting differences from silently
+// ejecting valid schemas from the lineage catalog.
+//
+// Before the fix to normalizeSQL() (making it whitespace-insensitive), databases
+// that were created at V1 and then migrated V8→V13 by published releases would
+// produce a signature not in the catalog, causing every operational command to
+// reject the database as "unsupported_lineage". This test would have caught that
+// regression during development.
+func TestMigratedFixtureSignatureIsInCatalog(t *testing.T) {
+	// Load v1.sql, the earliest released version fixture
+	dbPath := createFixtureDatabase(t, "v1.sql")
+
+	// Open the fixture and trigger SetupSchema to migrate it all the way to V13
+	db, diag, err := OpenCompatible(context.Background(), dbPath)
+	if err != nil || diag != nil {
+		t.Fatalf("open compatible error=%v diagnostic=%+v", err, diag)
+	}
+	defer func() { _ = db.Close() }()
+
+	// Inspect the resulting schema to get its signature
+	plan, diag, err := compat.InspectIndex(context.Background(), db.DB())
+	if err != nil || diag != nil {
+		t.Fatalf("inspect index error=%v diagnostic=%+v", err, diag)
+	}
+
+	// Load the lineage catalog
+	catalog, err := compat.LoadCatalog()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Assert that the migrated database signature is in the catalog
+	if !catalog.IsKnownSignature(plan.From.Signature) {
+		t.Errorf("migrated V1→V13 database has signature %s not in catalog; this was the bug in issue #52",
+			plan.From.Signature)
+	}
+}
