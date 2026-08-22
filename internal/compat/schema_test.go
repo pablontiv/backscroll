@@ -444,3 +444,159 @@ func TestNormalizeSQLPreservesWhitespaceInStringLiterals(t *testing.T) {
 		t.Fatalf("whitespace in second literal not preserved: %q", norm)
 	}
 }
+
+func TestNormalizeSQLHandlesApostropheInLineComment(t *testing.T) {
+	// Defect 1: apostrophe in line comment should not flip parser into quote mode
+	tests := []struct {
+		name string
+		sql  string
+		want string
+	}{
+		{
+			name: "apostrophe in line comment",
+			sql:  "CREATE TABLE t ( -- don't\n  a   INTEGER,\n  b   TEXT\n)",
+			want: "CREATE TABLE t ( -- don't a INTEGER, b TEXT )",
+		},
+		{
+			name: "apostrophe in line comment with real literal",
+			sql:  "CREATE TABLE t ( -- don't do this\n  body TEXT DEFAULT 'x  y'\n)",
+			want: "CREATE TABLE t ( -- don't do this body TEXT DEFAULT 'x  y' )",
+		},
+		{
+			name: "the row's id in comment",
+			sql:  "CREATE TABLE t ( a INTEGER -- the row's id\n)",
+			want: "CREATE TABLE t ( a INTEGER -- the row's id )",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			norm := normalizeSQL(tt.sql)
+			if norm != tt.want {
+				t.Fatalf("normalizeSQL(%q) =\n  %q\nwant\n  %q", tt.sql, norm, tt.want)
+			}
+		})
+	}
+}
+
+func TestNormalizeSQLHandlesApostropheInBlockComment(t *testing.T) {
+	// Apostrophe in block comment should not flip parser into quote mode
+	tests := []struct {
+		name string
+		sql  string
+		want string
+	}{
+		{
+			name: "apostrophe in block comment",
+			sql:  "CREATE TABLE t ( /* don't */ a   INTEGER )",
+			want: "CREATE TABLE t ( /* don't */ a INTEGER )",
+		},
+		{
+			name: "quote in block comment",
+			sql:  "CREATE TABLE t ( /* use 'single quotes' inside */ a INTEGER )",
+			want: "CREATE TABLE t ( /* use 'single quotes' inside */ a INTEGER )",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			norm := normalizeSQL(tt.sql)
+			if norm != tt.want {
+				t.Fatalf("normalizeSQL(%q) =\n  %q\nwant\n  %q", tt.sql, norm, tt.want)
+			}
+		})
+	}
+}
+
+func TestNormalizeSQLPreservesWhitespaceInDoubleQuotedIdentifiers(t *testing.T) {
+	// Defect 2: double-quoted identifiers must preserve inner whitespace
+	tests := []struct {
+		name string
+		sql  string
+		want string
+	}{
+		{
+			name: "double-quoted identifier with multiple spaces",
+			sql:  `CREATE TABLE "my  table" ( a   INTEGER )`,
+			want: `CREATE TABLE "my  table" ( a INTEGER )`,
+		},
+		{
+			name: "double-quoted column name with spaces",
+			sql:  `CREATE TABLE t ( "col  name" INTEGER )`,
+			want: `CREATE TABLE t ( "col  name" INTEGER )`,
+		},
+		{
+			name: "double-quote escape in identifier",
+			sql:  `CREATE TABLE "my""table" ( a INTEGER )`,
+			want: `CREATE TABLE "my""table" ( a INTEGER )`,
+		},
+		{
+			name: "both single and double quoted identifiers",
+			sql:  `CREATE TABLE "my  table" ( id INTEGER, body TEXT DEFAULT 'x  y' )`,
+			want: `CREATE TABLE "my  table" ( id INTEGER, body TEXT DEFAULT 'x  y' )`,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			norm := normalizeSQL(tt.sql)
+			if norm != tt.want {
+				t.Fatalf("normalizeSQL(%q) =\n  %q\nwant\n  %q", tt.sql, norm, tt.want)
+			}
+		})
+	}
+}
+
+func TestNormalizeSQLAdversarialCases(t *testing.T) {
+	// Various edge cases and adversarial inputs
+	tests := []struct {
+		name string
+		sql  string
+		want string
+	}{
+		{
+			name: "unterminated single quote",
+			sql:  "CREATE TABLE t ( a TEXT DEFAULT 'x )",
+			want: "CREATE TABLE t ( a TEXT DEFAULT 'x )",
+		},
+		{
+			name: "unterminated block comment",
+			sql:  "CREATE TABLE t ( a INTEGER /* comment",
+			want: "CREATE TABLE t ( a INTEGER /* comment",
+		},
+		{
+			name: "adjacent string literals",
+			sql:  "CREATE TABLE t ( a TEXT DEFAULT 'x' 'y' )",
+			want: "CREATE TABLE t ( a TEXT DEFAULT 'x' 'y' )",
+		},
+		{
+			name: "literal containing -- (line comment marker)",
+			sql:  "CREATE TABLE t ( a TEXT DEFAULT 'foo -- bar' )",
+			want: "CREATE TABLE t ( a TEXT DEFAULT 'foo -- bar' )",
+		},
+		{
+			name: "literal containing /* and */ (block comment markers)",
+			sql:  "CREATE TABLE t ( a TEXT DEFAULT 'foo /* bar */ baz' )",
+			want: "CREATE TABLE t ( a TEXT DEFAULT 'foo /* bar */ baz' )",
+		},
+		{
+			name: "empty string literal",
+			sql:  "CREATE TABLE t ( a TEXT DEFAULT '' )",
+			want: "CREATE TABLE t ( a TEXT DEFAULT '' )",
+		},
+		{
+			name: "comment containing -- marker",
+			sql:  "CREATE TABLE t ( a INTEGER -- the -- marker )",
+			want: "CREATE TABLE t ( a INTEGER -- the -- marker )",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			norm := normalizeSQL(tt.sql)
+			if norm != tt.want {
+				t.Fatalf("normalizeSQL(%q) =\n  %q\nwant\n  %q", tt.sql, norm, tt.want)
+			}
+		})
+	}
+}
