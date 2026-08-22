@@ -40,6 +40,9 @@ type IndexedFile struct {
 	Project    string
 	Messages   []IndexedMessage
 	Tags       []string // only used for sessions
+	// Metadata for v14 prefilter
+	FileSize  *int64  // populated by sync_helpers.go if available
+	FileMtime *string // populated by sync_helpers.go if available; RFC3339 format
 }
 
 // SyncFiles syncs a batch of files into the database.
@@ -192,11 +195,13 @@ func (d *Database) SyncFiles(files []IndexedFile) error {
 
 		// Insert or replace in indexed_files
 		_, err = tx.Exec(`
-			INSERT OR REPLACE INTO indexed_files (path, hash, last_indexed)
-			VALUES (?, ?, CURRENT_TIMESTAMP)
+			INSERT OR REPLACE INTO indexed_files (path, hash, last_indexed, file_size, file_mtime)
+			VALUES (?, ?, CURRENT_TIMESTAMP, ?, ?)
 		`,
 			file.SourcePath,
 			file.Hash,
+			file.FileSize,
+			file.FileMtime,
 		)
 		if err != nil {
 			return fmt.Errorf("upsert indexed_files for %s: %w", file.SourcePath, err)
@@ -342,4 +347,51 @@ func (d *Database) GetFileHashes() (map[string]string, error) {
 	}
 
 	return hashes, nil
+}
+
+// FileMetadata represents the persisted metadata for a file.
+type FileMetadata struct {
+	Path        string
+	Hash        string
+	Size        *int64  // NULL for pre-v14 rows
+	Mtime       *string // NULL for pre-v14 rows
+	LastIndexed *string // timestamp of the indexing, used for racy-clean detection
+}
+
+// GetFileMetadata returns all indexed file metadata (path, hash, size, mtime, last_indexed).
+// Pre-v14 rows have NULL size and mtime. LastIndexed is populated from indexed_files.last_indexed.
+func (d *Database) GetFileMetadata() (map[string]FileMetadata, error) {
+	rows, err := d.db.Query(`
+		SELECT path, hash, file_size, file_mtime, last_indexed
+		FROM indexed_files
+		WHERE hash <> ?
+	`, recoveredSourceHash)
+	if err != nil {
+		return nil, fmt.Errorf("query file metadata: %w", err)
+	}
+	defer func() { _ = rows.Close() }()
+
+	metadata := make(map[string]FileMetadata)
+	for rows.Next() {
+		var path, hash string
+		var size *int64
+		var mtime *string
+		var lastIndexed *string
+		if err := rows.Scan(&path, &hash, &size, &mtime, &lastIndexed); err != nil {
+			return nil, fmt.Errorf("scan file metadata: %w", err)
+		}
+		metadata[path] = FileMetadata{
+			Path:        path,
+			Hash:        hash,
+			Size:        size,
+			Mtime:       mtime,
+			LastIndexed: lastIndexed,
+		}
+	}
+
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate file metadata: %w", err)
+	}
+
+	return metadata, nil
 }

@@ -3,6 +3,8 @@ package main
 import (
 	"fmt"
 	"io"
+	"os"
+	"time"
 
 	"github.com/pablontiv/backscroll/internal/config"
 	"github.com/pablontiv/backscroll/internal/input_config"
@@ -19,6 +21,7 @@ var (
 	maybeAutoSyncLoadGlobalRegistry = projects.LoadGlobalRegistry
 	maybeAutoSyncNewRegistry        = newDefaultAutoSyncRegistry
 	maybeAutoSyncSyncFiles          = func(db *storage.Database, files []storage.IndexedFile) error { return db.SyncFiles(files) }
+	maybeAutoSyncGetFileMetadata    = getFileMetadata // for testability
 )
 
 func newDefaultAutoSyncRegistry() *readers.Registry {
@@ -29,6 +32,57 @@ func newDefaultAutoSyncRegistry() *readers.Registry {
 	reg.Register(&readers.MarkdownDocumentReader{})
 	reg.Register(&readers.MarkdownSectionsReader{})
 	return reg
+}
+
+// getFileMetadata returns the size and mtime of a file in RFC3339 format.
+// Returns (size, mtime, error). On error, all values are nil/empty.
+// This is used by the v14 metadata prefilter to skip hashing unchanged files.
+func getFileMetadata(path string) (*int64, *string, error) {
+	stat, err := os.Stat(path)
+	if err != nil {
+		return nil, nil, fmt.Errorf("stat: %w", err)
+	}
+
+	size := stat.Size()
+	mtime := stat.ModTime().Format(time.RFC3339)
+
+	return &size, &mtime, nil
+}
+
+// isRacyCleanFile reports whether a file's mtime suggests it could be racy clean.
+// A file is racy clean if its mtime is not strictly older than the recorded
+// last_indexed time (within a 2-second granularity margin). Such files could have
+// been edited in the same timestamp tick as the indexing, leaving size and mtime
+// unchanged but content different. See git's racy-git documentation.
+func isRacyCleanFile(fileMtime string, lastIndexed string) bool {
+	// Parse fileMtime as RFC3339 (written by Go in sync_helpers.go:47)
+	fileMt, err := time.Parse(time.RFC3339, fileMtime)
+	if err != nil {
+		return true // On parse error, assume racy (conservative)
+	}
+
+	// Parse lastIndexed. The indexed_files.last_indexed column is DATETIME type,
+	// declared as "DEFAULT CURRENT_TIMESTAMP". SQLite stores it as "2006-01-02 15:04:05"
+	// in raw text, but the modernc.org/sqlite driver converts DATETIME columns on read,
+	// so Go receives RFC3339 format "2026-05-15T15:59:25Z". Inspecting with the sqlite3
+	// CLI shows raw format and misleadingly suggests a SQLite-layout parse is required.
+	// Verify through the driver (Go), not the CLI. Accept both formats for robustness.
+	var indexTime time.Time
+
+	const sqliteTimestampLayout = "2006-01-02 15:04:05"
+	if indexTime, err = time.ParseInLocation(sqliteTimestampLayout, lastIndexed, time.UTC); err != nil {
+		// Fall back to RFC3339 (actual driver behavior)
+		if indexTime, err = time.Parse(time.RFC3339, lastIndexed); err != nil {
+			return true // On parse error, assume racy (conservative)
+		}
+	}
+
+	// File is racy if its mtime is not strictly older than last_indexed.
+	// Allow 2 seconds margin to account for filesystem granularity (1-2 second typical).
+	// Both times are now proper time.Time values; .After() compares instants correctly
+	// across any timezone differences.
+	const racyMarginSeconds = 2
+	return fileMt.After(indexTime.Add(-time.Duration(racyMarginSeconds) * time.Second))
 }
 
 // maybeAutoSync performs an incremental sync operation if the database exists.
@@ -43,10 +97,10 @@ func maybeAutoSync(cfg *config.Config, progress io.Writer) (retErr error) {
 	}
 	defer func() { retErr = closeIndexDB(db, retErr) }()
 
-	// Get existing file hashes
-	existingHashes, err := db.GetFileHashes()
+	// Get existing file metadata for prefiltering
+	existingMetadata, err := db.GetFileMetadata()
 	if err != nil {
-		return fmt.Errorf("get file hashes: %w", err)
+		return fmt.Errorf("get file metadata: %w", err)
 	}
 
 	// Build stale-set once per run (files needing re-parse for rich metadata backfill)
@@ -94,19 +148,56 @@ func maybeAutoSync(cfg *config.Config, progress io.Writer) (retErr error) {
 		}
 
 		for _, ref := range refs {
-			hash, err := reader.Hash(ref)
-			if err != nil {
-				return fmt.Errorf("hash %s: %w", ref, err)
+			// v14 metadata prefilter with racy-clean guard:
+			// Files modified within the same timestamp tick as indexing could have matching
+			// size+mtime but different content. Git calls these "racy clean" files.
+			// We use last_indexed as the reference point: if file.mtime >= last_indexed,
+			// do not trust the metadata (could be racy). Otherwise, skip hashing if both match.
+			var hash string
+			var shouldParse bool
+
+			existingMeta, exists := existingMetadata[ref]
+			if exists && existingMeta.Size != nil && existingMeta.Mtime != nil &&
+				existingMeta.LastIndexed != nil {
+				// All metadata fields must be non-NULL to use the prefilter
+				// Check if current file matches recorded metadata
+				if fileSize, fileMtime, err := maybeAutoSyncGetFileMetadata(ref); err == nil {
+					if fileSize != nil && fileMtime != nil &&
+						*fileSize == *existingMeta.Size &&
+						*fileMtime == *existingMeta.Mtime {
+						// Metadata matches; check if file is racy-clean
+						// (mtime within ~2s of last_indexed means could be in same tick)
+						isRacyClean := isRacyCleanFile(*fileMtime, *existingMeta.LastIndexed)
+						if !isRacyClean {
+							// File metadata unchanged and not racy: use cached hash, skip re-hashing
+							hash = existingMeta.Hash
+							shouldParse = staleSet[ref] && staleParsesDone < staleParsesCap
+						}
+						// else: racy-clean file falls through to hash anyway
+					}
+				}
 			}
 
-			// Skip unchanged files UNLESS they are in the stale-set and cap allows.
-			// Stale files need re-parsing for extraction_version backfill (perennity).
-			if existingHashes[ref] == hash {
-				if !staleSet[ref] || staleParsesDone >= staleParsesCap {
-					continue
+			// If prefilter didn't match or wasn't available, compute the hash
+			if hash == "" {
+				var err error
+				hash, err = reader.Hash(ref)
+				if err != nil {
+					return fmt.Errorf("hash %s: %w", ref, err)
 				}
-				staleParsesDone++
-				_, _ = fmt.Fprintf(progress, "Re-parsing stale file %d/%d: %s\n", staleParsesDone, len(stalePaths), ref)
+				shouldParse = true
+			}
+
+			// Skip unchanged files UNLESS they are in the stale-set and cap allows
+			if shouldParse || (exists && existingMeta.Hash != hash) {
+				if !shouldParse && staleSet[ref] && staleParsesDone < staleParsesCap {
+					staleParsesDone++
+					_, _ = fmt.Fprintf(progress, "Re-parsing stale file %d/%d: %s\n", staleParsesDone, len(stalePaths), ref)
+				}
+				// Will parse below
+			} else {
+				// File unchanged and not stale: skip
+				continue
 			}
 
 			pf, err := reader.Parse(ref, def)
@@ -141,6 +232,9 @@ func maybeAutoSync(cfg *config.Config, progress io.Writer) (retErr error) {
 				})
 			}
 
+			// Get file metadata for v14 prefilter
+			fileSize, fileMtime, _ := maybeAutoSyncGetFileMetadata(ref)
+
 			indexedFiles = append(indexedFiles, storage.IndexedFile{
 				SourcePath: ref,
 				Source:     def.Source,
@@ -148,6 +242,8 @@ func maybeAutoSync(cfg *config.Config, progress io.Writer) (retErr error) {
 				Project:    ident.ProjectID,
 				Messages:   indexedMsgs,
 				Tags:       sessionTags.Tags(),
+				FileSize:   fileSize,
+				FileMtime:  fileMtime,
 			})
 		}
 	}

@@ -175,6 +175,18 @@ func (d *Database) SetupSchema() error {
 		}
 	}
 
+	// Check if version 14 is already applied
+	err = d.db.QueryRow("SELECT COUNT(*) FROM schema_migrations WHERE version = 14").Scan(&count)
+	if err != nil {
+		return fmt.Errorf("check migration version 14: %w", err)
+	}
+
+	if count == 0 {
+		if err := d.applyV14Migration(); err != nil {
+			return err
+		}
+	}
+
 	return nil
 }
 
@@ -554,4 +566,11 @@ func (d *Database) applyV12Migration() error {
 // on source_path; indexes reduce from O(N·M) table scans to O(N·log M) index lookups.
 func (d *Database) applyV13Migration() error {
 	return d.applySingleMigration(applyV13)
+}
+
+// applyV14Migration adds file_size and file_mtime columns to indexed_files
+// for metadata-based prefiltering during startup sync. Existing rows get NULL values
+// and are conservatively re-hashed (metadata prefilter requires BOTH columns to be non-NULL).
+func (d *Database) applyV14Migration() error {
+	return d.applySingleMigration(applyV14)
 }
