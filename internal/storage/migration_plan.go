@@ -155,6 +155,7 @@ var migrationPlanDispatch = map[compat.MigrationStep]migrationApplier{
 	{Version: 11, Name: "V11 correction detection: correction_signals"}:                  applyV11,
 	{Version: 12, Name: "V12 agent classification: annotations"}:                         applyV12,
 	{Version: 13, Name: "V13 backfill discovery indexes"}:                                applyV13,
+	{Version: 14, Name: "V14 file metadata prefilter"}:                                   applyV14,
 }
 
 func isDestructiveMigration(step compat.MigrationStep) bool {
@@ -421,6 +422,14 @@ func applyV13(ctx context.Context, tx *sql.Tx, from compat.SchemaShape) error {
 	return recordMigration(ctx, tx, 13, "V13 backfill discovery indexes", sqlV13, "record migration v13")
 }
 
+func applyV14(ctx context.Context, tx *sql.Tx, from compat.SchemaShape) error {
+	_ = from
+	if _, err := tx.ExecContext(ctx, sqlV14); err != nil {
+		return fmt.Errorf("apply v14 metadata prefilter columns: %w", err)
+	}
+	return recordMigration(ctx, tx, 14, "V14 file metadata prefilter", sqlV14, "record migration v14")
+}
+
 func recordMigration(ctx context.Context, tx *sql.Tx, version int, name string, body string, errorPrefix string) error {
 	checksum := sha256.Sum256([]byte(body))
 	checksumHex := fmt.Sprintf("%x", checksum)
@@ -554,4 +563,9 @@ CREATE INDEX IF NOT EXISTS idx_annotations_kind ON annotations(kind);
 const sqlV13 = `
 CREATE INDEX IF NOT EXISTS idx_template_matches_source ON template_matches(source_path);
 CREATE INDEX IF NOT EXISTS idx_correction_signals_source ON correction_signals(source_path);
+`
+
+const sqlV14 = `
+ALTER TABLE indexed_files ADD COLUMN file_size INTEGER;
+ALTER TABLE indexed_files ADD COLUMN file_mtime TEXT;
 `

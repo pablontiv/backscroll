@@ -3,6 +3,8 @@ package main
 import (
 	"fmt"
 	"io"
+	"os"
+	"time"
 
 	"github.com/pablontiv/backscroll/internal/config"
 	"github.com/pablontiv/backscroll/internal/input_config"
@@ -19,6 +21,7 @@ var (
 	maybeAutoSyncLoadGlobalRegistry = projects.LoadGlobalRegistry
 	maybeAutoSyncNewRegistry        = newDefaultAutoSyncRegistry
 	maybeAutoSyncSyncFiles          = func(db *storage.Database, files []storage.IndexedFile) error { return db.SyncFiles(files) }
+	maybeAutoSyncGetFileMetadata    = getFileMetadata // for testability
 )
 
 func newDefaultAutoSyncRegistry() *readers.Registry {
@@ -29,6 +32,21 @@ func newDefaultAutoSyncRegistry() *readers.Registry {
 	reg.Register(&readers.MarkdownDocumentReader{})
 	reg.Register(&readers.MarkdownSectionsReader{})
 	return reg
+}
+
+// getFileMetadata returns the size and mtime of a file in RFC3339 format.
+// Returns (size, mtime, error). On error, all values are nil/empty.
+// This is used by the v14 metadata prefilter to skip hashing unchanged files.
+func getFileMetadata(path string) (*int64, *string, error) {
+	stat, err := os.Stat(path)
+	if err != nil {
+		return nil, nil, fmt.Errorf("stat: %w", err)
+	}
+
+	size := stat.Size()
+	mtime := stat.ModTime().Format(time.RFC3339)
+
+	return &size, &mtime, nil
 }
 
 // maybeAutoSync performs an incremental sync operation if the database exists.
@@ -43,10 +61,10 @@ func maybeAutoSync(cfg *config.Config, progress io.Writer) (retErr error) {
 	}
 	defer func() { retErr = closeIndexDB(db, retErr) }()
 
-	// Get existing file hashes
-	existingHashes, err := db.GetFileHashes()
+	// Get existing file metadata for prefiltering
+	existingMetadata, err := db.GetFileMetadata()
 	if err != nil {
-		return fmt.Errorf("get file hashes: %w", err)
+		return fmt.Errorf("get file metadata: %w", err)
 	}
 
 	// Build stale-set once per run (files needing re-parse for rich metadata backfill)
@@ -94,19 +112,45 @@ func maybeAutoSync(cfg *config.Config, progress io.Writer) (retErr error) {
 		}
 
 		for _, ref := range refs {
-			hash, err := reader.Hash(ref)
-			if err != nil {
-				return fmt.Errorf("hash %s: %w", ref, err)
+			// v14 metadata prefilter: skip hashing if file size and mtime match
+			var hash string
+			var shouldParse bool
+
+			existingMeta, exists := existingMetadata[ref]
+			if exists && existingMeta.Size != nil && existingMeta.Mtime != nil {
+				// Both metadata fields must be non-NULL to use the prefilter
+				// Check if current file matches recorded metadata
+				if fileSize, fileMtime, err := maybeAutoSyncGetFileMetadata(ref); err == nil {
+					if fileSize != nil && fileMtime != nil &&
+						*fileSize == *existingMeta.Size &&
+						*fileMtime == *existingMeta.Mtime {
+						// File metadata unchanged: use cached hash and skip re-hashing
+						hash = existingMeta.Hash
+						shouldParse = staleSet[ref] && staleParsesDone < staleParsesCap
+					}
+				}
 			}
 
-			// Skip unchanged files UNLESS they are in the stale-set and cap allows.
-			// Stale files need re-parsing for extraction_version backfill (perennity).
-			if existingHashes[ref] == hash {
-				if !staleSet[ref] || staleParsesDone >= staleParsesCap {
-					continue
+			// If prefilter didn't match or wasn't available, compute the hash
+			if hash == "" {
+				var err error
+				hash, err = reader.Hash(ref)
+				if err != nil {
+					return fmt.Errorf("hash %s: %w", ref, err)
 				}
-				staleParsesDone++
-				_, _ = fmt.Fprintf(progress, "Re-parsing stale file %d/%d: %s\n", staleParsesDone, len(stalePaths), ref)
+				shouldParse = true
+			}
+
+			// Skip unchanged files UNLESS they are in the stale-set and cap allows
+			if shouldParse || (exists && existingMeta.Hash != hash) {
+				if !shouldParse && staleSet[ref] && staleParsesDone < staleParsesCap {
+					staleParsesDone++
+					_, _ = fmt.Fprintf(progress, "Re-parsing stale file %d/%d: %s\n", staleParsesDone, len(stalePaths), ref)
+				}
+				// Will parse below
+			} else {
+				// File unchanged and not stale: skip
+				continue
 			}
 
 			pf, err := reader.Parse(ref, def)
@@ -141,6 +185,9 @@ func maybeAutoSync(cfg *config.Config, progress io.Writer) (retErr error) {
 				})
 			}
 
+			// Get file metadata for v14 prefilter
+			fileSize, fileMtime, _ := maybeAutoSyncGetFileMetadata(ref)
+
 			indexedFiles = append(indexedFiles, storage.IndexedFile{
 				SourcePath: ref,
 				Source:     def.Source,
@@ -148,6 +195,8 @@ func maybeAutoSync(cfg *config.Config, progress io.Writer) (retErr error) {
 				Project:    ident.ProjectID,
 				Messages:   indexedMsgs,
 				Tags:       sessionTags.Tags(),
+				FileSize:   fileSize,
+				FileMtime:  fileMtime,
 			})
 		}
 	}
