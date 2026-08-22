@@ -53,15 +53,15 @@ func TestInspectIndexRecognizesPartialV6LineageAndPlansV7(t *testing.T) {
 }
 
 func TestInspectIndexCurrentShapeIsIdempotent(t *testing.T) {
-	db := openFixtureCopy(t, "v13.sql")
+	db := openFixtureCopy(t, "v14.sql")
 	defer db.Close()
 
 	plan, diag, err := InspectIndex(context.Background(), db)
 	if err != nil || diag != nil {
 		t.Fatalf("plan error=%v diagnostic=%+v", err, diag)
 	}
-	if plan.From.AppliedVersion != 13 {
-		t.Fatalf("applied version = %d, want 13", plan.From.AppliedVersion)
+	if plan.From.AppliedVersion != 14 {
+		t.Fatalf("applied version = %d, want 14", plan.From.AppliedVersion)
 	}
 	if len(plan.Steps) != 0 {
 		t.Fatalf("current shape has pending steps: %+v", plan.Steps)
@@ -291,8 +291,8 @@ func TestInspectIndexRecognizesObservedDevelopmentV13Shape(t *testing.T) {
 	if err != nil || diag != nil {
 		t.Fatalf("inspect error=%v diagnostic=%+v", err, diag)
 	}
-	if plan.From.AppliedVersion != 13 || len(plan.Steps) != 0 {
-		t.Fatalf("development V13 plan = %+v, want current with no steps", plan)
+	if plan.From.AppliedVersion != 13 || len(plan.Steps) != 1 || plan.Steps[0].Version != 14 {
+		t.Fatalf("development V13 plan = %+v, want v13 with v14 migration step", plan)
 	}
 }
 
@@ -325,8 +325,8 @@ func TestInspectIndexRecognizesCanonicalAndExplicitLegacyV13Shapes(t *testing.T)
 			if plan.From.AppliedVersion != 13 {
 				t.Fatalf("applied version = %d, want 13", plan.From.AppliedVersion)
 			}
-			if len(plan.Steps) != 0 {
-				t.Fatalf("V13-compatible shape has pending steps: %+v", plan.Steps)
+			if len(plan.Steps) != 1 || plan.Steps[0].Version != 14 {
+				t.Fatalf("V13-compatible shape has pending steps: %+v, want v14 migration", plan.Steps)
 			}
 		})
 	}
