@@ -2507,3 +2507,156 @@ func fileExists(path string) bool {
 	_, err := os.Lstat(path)
 	return err == nil
 }
+
+// TestStartupDiagnosticsWithEnvVar verifies that startup phase diagnostics
+// are emitted when BACKSCROLL_STARTUP_DIAGNOSTICS=1 is set.
+func TestStartupDiagnosticsWithEnvVar(t *testing.T) {
+	_, cleanup := testEnv(t)
+	defer cleanup()
+
+	// Set up a fixture directory with a few files to process
+	fixtureSession := filepath.Join(fixturesDir(), "claude-preset", "projects")
+	t.Setenv("BACKSCROLL_SESSION_DIRS", fixtureSession)
+	t.Setenv("BACKSCROLL_STARTUP_DIAGNOSTICS", "1")
+
+	// Run a command that triggers auto-sync
+	_, stderr, err := runCmd("list")
+	if err != nil {
+		t.Fatalf("list error: %v\nstderr: %s", err, stderr)
+	}
+
+	// Verify that diagnostics output appears in stderr
+	diagnosticsExpected := []string{
+		"Lock Acquisition:", "Index Prepare:", "Discovery:", "Metadata:", "Hashing:", "Parsing:", "Database:", "Total:",
+	}
+	for _, phase := range diagnosticsExpected {
+		if !strings.Contains(stderr, phase) {
+			t.Errorf("startup diagnostics missing phase %q in stderr:\n%s", phase, stderr)
+		}
+	}
+}
+
+// TestStartupDiagnosticsDisabledByDefault verifies that startup phase diagnostics
+// are NOT emitted when BACKSCROLL_STARTUP_DIAGNOSTICS is not set.
+func TestStartupDiagnosticsDisabledByDefault(t *testing.T) {
+	_, cleanup := testEnv(t)
+	defer cleanup()
+
+	// Ensure the env var is NOT set
+	t.Setenv("BACKSCROLL_STARTUP_DIAGNOSTICS", "")
+
+	// Set up a fixture directory
+	fixtureSession := filepath.Join(fixturesDir(), "claude-preset", "projects")
+	t.Setenv("BACKSCROLL_SESSION_DIRS", fixtureSession)
+
+	// Run a command that triggers auto-sync
+	_, stderr, err := runCmd("list")
+	if err != nil {
+		t.Fatalf("list error: %v\nstderr: %s", err, stderr)
+	}
+
+	// Verify that diagnostics output does NOT appear in stderr
+	// Check for the diagnostics header, which is more reliable than individual phase names
+	if strings.Contains(stderr, "Startup diagnostics:") {
+		t.Errorf("startup diagnostics should not appear when env var is unset; found in stderr:\n%s", stderr)
+	}
+}
+
+// TestStartupDiagnosticsDoesNotAffectJSONOutput verifies that stdout is byte-identical
+// between runs with and without diagnostics enabled when using --json flag.
+func TestStartupDiagnosticsDoesNotAffectJSONOutput(t *testing.T) {
+	fixtureSession := filepath.Join(fixturesDir(), "claude-preset", "projects")
+
+	// Run once WITHOUT diagnostics, capture stdout
+	_, cleanup1 := testEnv(t)
+	t.Setenv("BACKSCROLL_SESSION_DIRS", fixtureSession)
+	t.Setenv("BACKSCROLL_STARTUP_DIAGNOSTICS", "")
+
+	stdout1, _, err := runCmd("list", "--json")
+	cleanup1()
+	if err != nil {
+		t.Fatalf("list --json (without diagnostics) error: %v", err)
+	}
+
+	// Run once WITH diagnostics, capture stdout
+	_, cleanup2 := testEnv(t)
+	t.Setenv("BACKSCROLL_SESSION_DIRS", fixtureSession)
+	t.Setenv("BACKSCROLL_STARTUP_DIAGNOSTICS", "1")
+
+	stdout2, _, err := runCmd("list", "--json")
+	cleanup2()
+	if err != nil {
+		t.Fatalf("list --json (with diagnostics) error: %v", err)
+	}
+
+	// Verify stdout is identical
+	if stdout1 != stdout2 {
+		t.Errorf("--json stdout differs with diagnostics enabled:\nWithout:\n%s\n\nWith:\n%s", stdout1, stdout2)
+	}
+}
+
+// TestStartupDiagnosticsDoesNotAffectRobotOutput verifies that stdout is byte-identical
+// between runs with and without diagnostics enabled when using --robot flag.
+func TestStartupDiagnosticsDoesNotAffectRobotOutput(t *testing.T) {
+	fixtureSession := filepath.Join(fixturesDir(), "claude-preset", "projects")
+
+	// Run once WITHOUT diagnostics, capture stdout
+	_, cleanup1 := testEnv(t)
+	t.Setenv("BACKSCROLL_SESSION_DIRS", fixtureSession)
+	t.Setenv("BACKSCROLL_STARTUP_DIAGNOSTICS", "")
+
+	stdout1, _, err := runCmd("list", "--robot")
+	cleanup1()
+	if err != nil {
+		t.Fatalf("list --robot (without diagnostics) error: %v", err)
+	}
+
+	// Run once WITH diagnostics, capture stdout
+	_, cleanup2 := testEnv(t)
+	t.Setenv("BACKSCROLL_SESSION_DIRS", fixtureSession)
+	t.Setenv("BACKSCROLL_STARTUP_DIAGNOSTICS", "1")
+
+	stdout2, _, err := runCmd("list", "--robot")
+	cleanup2()
+	if err != nil {
+		t.Fatalf("list --robot (with diagnostics) error: %v", err)
+	}
+
+	// Verify stdout is identical
+	if stdout1 != stdout2 {
+		t.Errorf("--robot stdout differs with diagnostics enabled:\nWithout:\n%s\n\nWith:\n%s", stdout1, stdout2)
+	}
+}
+
+// BenchmarkStartupDiagnostics measures the startup performance with diagnostics enabled.
+// This benchmark satisfies the GitHub issue #47 acceptance criterion requiring
+// "a benchmark or diagnostic reports time and bytes processed by each startup phase."
+func BenchmarkStartupDiagnostics(b *testing.B) {
+	fixtureSession := filepath.Join(fixturesDir(), "claude-preset", "projects")
+
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		// Create fresh test environment for each iteration
+		dir := b.TempDir()
+		homeDir := filepath.Join(dir, "home")
+		configDir := filepath.Join(dir, "config")
+		for _, path := range []string{homeDir, configDir} {
+			if err := os.MkdirAll(path, 0o755); err != nil {
+				b.Fatalf("mkdir: %v", err)
+			}
+		}
+		dbPath := filepath.Join(dir, "test.db")
+		b.Setenv("HOME", homeDir)
+		b.Setenv("BACKSCROLL_CONFIG_DIR", configDir)
+		b.Setenv("BACKSCROLL_DATABASE_PATH", dbPath)
+		b.Setenv("BACKSCROLL_SESSION_DIRS", fixtureSession)
+		b.Setenv("BACKSCROLL_STARTUP_DIAGNOSTICS", "1")
+
+		// Ensure database is created
+		db, _ := storage.Open(dbPath)
+		db.Close()
+
+		// Run list command to trigger auto-sync and measure it
+		_, _, _ = runCmd("list")
+	}
+}

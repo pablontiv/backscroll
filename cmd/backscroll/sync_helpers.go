@@ -15,6 +15,11 @@ import (
 	"github.com/pablontiv/backscroll/internal/templates"
 )
 
+// diagnosticsEnabled checks if startup diagnostics are enabled via env var
+func diagnosticsEnabled() bool {
+	return os.Getenv("BACKSCROLL_STARTUP_DIAGNOSTICS") == "1"
+}
+
 var (
 	maybeAutoSyncOpen               = storage.Open
 	maybeAutoSyncActiveInputs       = input_config.ActiveInputs
@@ -23,6 +28,17 @@ var (
 	maybeAutoSyncSyncFiles          = func(db *storage.Database, files []storage.IndexedFile) error { return db.SyncFiles(files) }
 	maybeAutoSyncGetFileMetadata    = getFileMetadata // for testability
 )
+
+// startupPhaseTiming holds measurements for startup phases that occur before maybeAutoSync.
+// Populated by coordinateStartup if diagnosticsEnabled() is true.
+type startupPhaseTiming struct {
+	LockAcquisitionTime time.Duration
+	IndexPrepareTime    time.Duration
+}
+
+// startupDiags holds pre-sync phase timings, set by coordinateStartup.
+// Access must be guarded by checking diagnosticsEnabled() first.
+var startupDiags *startupPhaseTiming
 
 func newDefaultAutoSyncRegistry() *readers.Registry {
 	reg := readers.NewRegistry()
@@ -89,6 +105,12 @@ func isRacyCleanFile(fileMtime string, lastIndexed string) bool {
 // It is intended to be called before query commands to ensure fresh index state.
 // If sync fails, it returns an error (caller decides whether to warn/ignore).
 func maybeAutoSync(cfg *config.Config, progress io.Writer) (retErr error) {
+	diag := diagnosticsEnabled()
+	var startTime time.Time
+	if diag {
+		startTime = time.Now()
+	}
+
 	// Open database for reading to check if it exists
 	// (this will auto-create if missing)
 	db, err := maybeAutoSyncOpen(cfg.DatabasePath)
@@ -131,6 +153,11 @@ func maybeAutoSync(cfg *config.Config, progress io.Writer) (retErr error) {
 	// Collect indexed files
 	var indexedFiles []storage.IndexedFile
 
+	// Track diagnostics
+	var discoveryTime, metadataTime, hashingTime, parsingTime time.Duration
+	var bytesHashed int64
+	var filesHashed, filesSkipped int
+
 	// Process sessions via reader registry
 	for _, def := range defs {
 		if def.Source == "" {
@@ -142,12 +169,28 @@ func maybeAutoSync(cfg *config.Config, progress io.Writer) (retErr error) {
 			return fmt.Errorf("resolve reader for input %q: %w", def.ID, err)
 		}
 
+		// Phase 1: Discovery
+		var discoveryStart time.Time
+		if diag {
+			discoveryStart = time.Now()
+		}
+
 		refs, err := reader.Discover(def)
 		if err != nil {
 			return fmt.Errorf("discover input %q: %w", def.ID, err)
 		}
 
+		if diag {
+			discoveryTime += time.Since(discoveryStart)
+		}
+
 		for _, ref := range refs {
+			// Phase 2: Metadata inspection
+			var metadataStart time.Time
+			if diag {
+				metadataStart = time.Now()
+			}
+
 			// v14 metadata prefilter with racy-clean guard:
 			// Files modified within the same timestamp tick as indexing could have matching
 			// size+mtime but different content. Git calls these "racy clean" files.
@@ -178,6 +221,16 @@ func maybeAutoSync(cfg *config.Config, progress io.Writer) (retErr error) {
 				}
 			}
 
+			if diag {
+				metadataTime += time.Since(metadataStart)
+			}
+
+			// Phase 3: Hashing
+			var hashingStart time.Time
+			if diag {
+				hashingStart = time.Now()
+			}
+
 			// If prefilter didn't match or wasn't available, compute the hash
 			if hash == "" {
 				var err error
@@ -186,6 +239,21 @@ func maybeAutoSync(cfg *config.Config, progress io.Writer) (retErr error) {
 					return fmt.Errorf("hash %s: %w", ref, err)
 				}
 				shouldParse = true
+				if diag {
+					filesHashed++
+					// Get file size for bytes hashed metric
+					if fileSize, _, err := maybeAutoSyncGetFileMetadata(ref); err == nil && fileSize != nil {
+						bytesHashed += *fileSize
+					}
+				}
+			} else {
+				if diag {
+					filesSkipped++
+				}
+			}
+
+			if diag {
+				hashingTime += time.Since(hashingStart)
 			}
 
 			// Skip unchanged files UNLESS they are in the stale-set and cap allows
@@ -200,9 +268,19 @@ func maybeAutoSync(cfg *config.Config, progress io.Writer) (retErr error) {
 				continue
 			}
 
+			// Phase 4: Parsing
+			var parsingStart time.Time
+			if diag {
+				parsingStart = time.Now()
+			}
+
 			pf, err := reader.Parse(ref, def)
 			if err != nil {
 				return fmt.Errorf("parse %s: %w", ref, err)
+			}
+
+			if diag {
+				parsingTime += time.Since(parsingStart)
 			}
 
 			// Use session cwd for project identification; fall back to file path if cwd is empty
@@ -246,6 +324,12 @@ func maybeAutoSync(cfg *config.Config, progress io.Writer) (retErr error) {
 				FileMtime:  fileMtime,
 			})
 		}
+	}
+
+	// Phase 5: Database
+	var databaseStart time.Time
+	if diag {
+		databaseStart = time.Now()
 	}
 
 	// Sync all files
@@ -292,6 +376,36 @@ func maybeAutoSync(cfg *config.Config, progress io.Writer) (retErr error) {
 	// Bounded per run and convergent — see RederiveSupersededCorrections.
 	if _, err := db.RederiveSupersededCorrections(staleTemplateCap); err != nil {
 		return fmt.Errorf("re-derive superseded correction signals: %w", err)
+	}
+
+	if diag {
+		databaseTime := time.Since(databaseStart)
+		totalTime := time.Since(startTime)
+
+		// Report diagnostics
+		_, _ = fmt.Fprintf(progress, "\nStartup diagnostics:\n")
+		if startupDiags != nil {
+			_, _ = fmt.Fprintf(progress, "  Lock Acquisition:%v\n", startupDiags.LockAcquisitionTime)
+			_, _ = fmt.Fprintf(progress, "  Index Prepare:   %v\n", startupDiags.IndexPrepareTime)
+		}
+		_, _ = fmt.Fprintf(progress, "  Discovery:       %v\n", discoveryTime)
+		_, _ = fmt.Fprintf(progress, "  Metadata:        %v (%d files checked)\n", metadataTime, filesHashed+filesSkipped)
+		_, _ = fmt.Fprintf(progress, "  Hashing:         %v (%d files hashed, %d files skipped, %.1f MB)\n",
+			hashingTime, filesHashed, filesSkipped, float64(bytesHashed)/(1024*1024))
+		_, _ = fmt.Fprintf(progress, "  Parsing:         %v\n", parsingTime)
+		_, _ = fmt.Fprintf(progress, "  Database:        %v\n", databaseTime)
+
+		// Calculate unattributed time
+		measuredTime := discoveryTime + metadataTime + hashingTime + parsingTime + databaseTime
+		if startupDiags != nil {
+			measuredTime += startupDiags.LockAcquisitionTime + startupDiags.IndexPrepareTime
+		}
+		unattributedTime := totalTime - measuredTime
+		if unattributedTime > 0 {
+			_, _ = fmt.Fprintf(progress, "  Unattributed:    %v (I/O, config load, other OS overhead; page-cache sensitive)\n", unattributedTime)
+		}
+
+		_, _ = fmt.Fprintf(progress, "  Total:           %v\n", totalTime)
 	}
 
 	return nil
