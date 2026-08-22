@@ -55,18 +55,29 @@ func getFileMetadata(path string) (*int64, *string, error) {
 // been edited in the same timestamp tick as the indexing, leaving size and mtime
 // unchanged but content different. See git's racy-git documentation.
 func isRacyCleanFile(fileMtime string, lastIndexed string) bool {
-	// Parse both timestamps (RFC3339 format)
+	// Parse fileMtime as RFC3339 (written by Go in sync_helpers.go:47)
 	fileMt, err := time.Parse(time.RFC3339, fileMtime)
 	if err != nil {
 		return true // On parse error, assume racy (conservative)
 	}
-	indexTime, err := time.Parse(time.RFC3339, lastIndexed)
-	if err != nil {
-		return true // On parse error, assume racy (conservative)
+
+	// Parse lastIndexed. Try both possible formats:
+	// - SQLite CURRENT_TIMESTAMP: "2026-05-15 15:59:25" (space-separated, UTC)
+	// - RFC3339: "2026-05-15T15:59:25Z" (also UTC)
+	var indexTime time.Time
+
+	const sqliteTimestampLayout = "2006-01-02 15:04:05"
+	if indexTime, err = time.ParseInLocation(sqliteTimestampLayout, lastIndexed, time.UTC); err != nil {
+		// Fall back to RFC3339
+		if indexTime, err = time.Parse(time.RFC3339, lastIndexed); err != nil {
+			return true // On parse error, assume racy (conservative)
+		}
 	}
 
 	// File is racy if its mtime is not strictly older than last_indexed.
 	// Allow 2 seconds margin to account for filesystem granularity (1-2 second typical).
+	// Both times are now proper time.Time values; .After() compares instants correctly
+	// across any timezone differences.
 	const racyMarginSeconds = 2
 	return fileMt.After(indexTime.Add(-time.Duration(racyMarginSeconds) * time.Second))
 }
