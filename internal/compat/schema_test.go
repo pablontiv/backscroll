@@ -281,7 +281,8 @@ func TestInspectIndexRecognizesObservedDevelopmentV13Shape(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	const observedSignature = "sha256:952e517fe590b0c75a02996b6035ac6bb22143b9a707b6448ad05a592bf015b4"
+	// Signature recomputed after normalizeSQL made whitespace-insensitive (issue #52)
+	const observedSignature = "sha256:4d04377754986f0da2f61f2ab73889168f596eb84e1f02df96e23072072e9375"
 	if shape.Signature != observedSignature {
 		t.Fatalf("development V13 signature = %s, want %s", shape.Signature, observedSignature)
 	}
@@ -386,4 +387,60 @@ func openSchema(t *testing.T, schemaSQL string) *sql.DB {
 		t.Fatal(err)
 	}
 	return db
+}
+
+func TestNormalizeSQLIsWhitespaceInsensitiveOutsideStringLiterals(t *testing.T) {
+	tests := []struct {
+		name string
+		sql1 string
+		sql2 string
+	}{
+		{
+			name: "multiple spaces collapsed to single space",
+			sql1: "CREATE   TABLE  foo  (id  INTEGER)",
+			sql2: "CREATE TABLE foo (id INTEGER)",
+		},
+		{
+			name: "newlines and tabs collapsed to single space",
+			sql1: "CREATE\n  TABLE\tfoo\n(\nid\nINTEGER\n)",
+			sql2: "CREATE TABLE foo ( id INTEGER )",
+		},
+		{
+			name: "alter-built schema: inline vs multiline columns normalize the same",
+			sql1: "CREATE TABLE search_items (\n  content_type TEXT DEFAULT 'text',\n  extraction_version INTEGER,\n  was_interrupted INTEGER\n);",
+			sql2: "CREATE TABLE search_items ( content_type TEXT DEFAULT 'text', extraction_version INTEGER, was_interrupted INTEGER );",
+		},
+		{
+			name: "preserve space inside single-quoted literal",
+			sql1: "CREATE TABLE foo (body TEXT DEFAULT 'alpha  beta')",
+			sql2: "CREATE TABLE foo (body TEXT DEFAULT 'alpha  beta')",
+		},
+		{
+			name: "double-single-quote escape inside literal",
+			sql1: "CREATE TABLE foo (body TEXT DEFAULT 'O''Brien')",
+			sql2: "CREATE TABLE foo (body TEXT DEFAULT 'O''Brien')",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			norm1 := normalizeSQL(tt.sql1)
+			norm2 := normalizeSQL(tt.sql2)
+			if norm1 != norm2 {
+				t.Fatalf("normalization differs: %q != %q", norm1, norm2)
+			}
+		})
+	}
+}
+
+func TestNormalizeSQLPreservesWhitespaceInStringLiterals(t *testing.T) {
+	// This is critical: whitespace inside string literals must be preserved exactly
+	sql := "CREATE TABLE foo (body TEXT DEFAULT 'alpha  beta', CHECK (body <> 'gamma  delta'))"
+	norm := normalizeSQL(sql)
+	if !strings.Contains(norm, "'alpha  beta'") {
+		t.Fatalf("whitespace in first literal not preserved: %q", norm)
+	}
+	if !strings.Contains(norm, "'gamma  delta'") {
+		t.Fatalf("whitespace in second literal not preserved: %q", norm)
+	}
 }

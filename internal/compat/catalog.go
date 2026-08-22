@@ -52,6 +52,14 @@ func (c Catalog) BySignature(signature string) (Lineage, bool) {
 	return lineage, ok
 }
 
+// IsKnownSignature returns true if the signature is in the lineage catalog.
+// Use this to check if a schema is recognized, independent of its migration
+// status or other semantic properties.
+func (c Catalog) IsKnownSignature(signature string) bool {
+	_, ok := c.lineages[signature]
+	return ok
+}
+
 func (c Catalog) CurrentSignature() string {
 	return c.currentSignature
 }

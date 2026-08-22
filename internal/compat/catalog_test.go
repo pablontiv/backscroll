@@ -6,6 +6,7 @@ import (
 	"database/sql"
 	"fmt"
 	"io/fs"
+	"os"
 	"path/filepath"
 	"reflect"
 	"sort"
@@ -372,4 +373,77 @@ func loadFixtureMigrationRows(t *testing.T, fixtureSQL []byte) []migrationRow {
 		t.Fatal(err)
 	}
 	return result
+}
+
+// TestCollisionConsistencyGuardsAgainstSignatureAmbiguity verifies that when
+// whitespace normalization collapses multiple fixtures into the same signature,
+// all colliding entries agree on AppliedVersion and HasSourceMetadata. If any
+// collision group disagrees, the Catalog.BySignature map's winner is arbitrary
+// and recovery could plan the wrong migration steps — a real bug.
+func TestCollisionConsistencyGuardsAgainstSignatureAmbiguity(t *testing.T) {
+	catalog, err := LoadCatalog()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Build collision groups: signature -> list of (AppliedVersion, HasSourceMetadata)
+	collisions := make(map[string][]struct {
+		source      string
+		version     int
+		hasMetaData bool
+	})
+
+	for _, release := range catalog.Releases {
+		collisions[release.Signature] = append(collisions[release.Signature], struct {
+			source      string
+			version     int
+			hasMetaData bool
+		}{fmt.Sprintf("release %s", release.Tag), release.AppliedVersion, release.HasSourceMetadata})
+	}
+
+	for _, fixture := range catalog.UnmanifestedFixtures {
+		collisions[fixture.Signature] = append(collisions[fixture.Signature], struct {
+			source      string
+			version     int
+			hasMetaData bool
+		}{fmt.Sprintf("unmanifested %s", fixture.Fixture), fixture.AppliedVersion, fixture.HasSourceMetadata})
+	}
+
+	// Check each collision group for consistency
+	for sig, entries := range collisions {
+		if len(entries) <= 1 {
+			// No collision; skip
+			continue
+		}
+
+		// All entries in this collision must agree on AppliedVersion and HasSourceMetadata
+		first := entries[0]
+		for i, entry := range entries[1:] {
+			if entry.version != first.version {
+				t.Errorf("signature %s has inconsistent AppliedVersion: %s says %d, %s says %d",
+					sig, first.source, first.version, entry.source, entry.version)
+			}
+			if entry.hasMetaData != first.hasMetaData {
+				t.Errorf("signature %s has inconsistent HasSourceMetadata: %s says %v, %s says %v",
+					sig, first.source, first.hasMetaData, entry.source, entry.hasMetaData)
+			}
+			if i == 0 {
+				t.Logf("collision group %s: %s, %s agree", sig[:16], first.source, entry.source)
+			}
+		}
+	}
+}
+
+// TestRegenerateManifestOnNormalizationChange is an optional helper test that
+// regenerates manifest.json after normalizeSQL changes. Run with:
+// go test -run TestRegenerateManifestOnNormalizationChange ./internal/compat -v
+func TestRegenerateManifestOnNormalizationChange(t *testing.T) {
+	if os.Getenv("REGEN_MANIFEST") == "" {
+		t.Skip("Set REGEN_MANIFEST=1 to regenerate manifest.json")
+	}
+
+	manifestPath := filepath.Join("testdata", "release-schemas", "manifest.json")
+	if err := RegenerateManifestJSON(manifestPath); err != nil {
+		t.Fatalf("regenerate manifest: %v", err)
+	}
 }

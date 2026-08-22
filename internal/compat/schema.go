@@ -412,7 +412,53 @@ func isFTSShadowObject(name string, virtualTables map[string]bool) bool {
 }
 
 func normalizeSQL(sqlText string) string {
-	return strings.TrimSpace(sqlText)
+	// Collapse runs of whitespace outside string literals, but preserve whitespace
+	// within single-quoted SQL strings (including '' escapes).
+	var result strings.Builder
+	inQuote := false
+	lastWasSpace := false
+
+	for i := 0; i < len(sqlText); i++ {
+		ch := sqlText[i]
+
+		// Check for single quote (start or end of string literal, or '' escape)
+		if ch == '\'' {
+			// Check if this is a '' escape (two consecutive single quotes)
+			if inQuote && i+1 < len(sqlText) && sqlText[i+1] == '\'' {
+				// Write both quotes and skip the next one
+				result.WriteByte(ch)
+				result.WriteByte(ch)
+				i++ // skip the next quote
+				lastWasSpace = false
+				continue
+			}
+			// Toggle quote state
+			inQuote = !inQuote
+			result.WriteByte(ch)
+			lastWasSpace = false
+			continue
+		}
+
+		// If inside quotes, preserve character as-is
+		if inQuote {
+			result.WriteByte(ch)
+			lastWasSpace = false
+			continue
+		}
+
+		// Outside quotes: collapse whitespace
+		if ch == ' ' || ch == '\t' || ch == '\n' || ch == '\r' {
+			if !lastWasSpace {
+				result.WriteByte(' ')
+				lastWasSpace = true
+			}
+		} else {
+			result.WriteByte(ch)
+			lastWasSpace = false
+		}
+	}
+
+	return strings.TrimSpace(result.String())
 }
 
 func schemaRecord(kind, table, name, columns, sqlText string) string {
