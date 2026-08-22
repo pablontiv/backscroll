@@ -61,14 +61,17 @@ func isRacyCleanFile(fileMtime string, lastIndexed string) bool {
 		return true // On parse error, assume racy (conservative)
 	}
 
-	// Parse lastIndexed. Try both possible formats:
-	// - SQLite CURRENT_TIMESTAMP: "2026-05-15 15:59:25" (space-separated, UTC)
-	// - RFC3339: "2026-05-15T15:59:25Z" (also UTC)
+	// Parse lastIndexed. The indexed_files.last_indexed column is DATETIME type,
+	// declared as "DEFAULT CURRENT_TIMESTAMP". SQLite stores it as "2006-01-02 15:04:05"
+	// in raw text, but the modernc.org/sqlite driver converts DATETIME columns on read,
+	// so Go receives RFC3339 format "2026-05-15T15:59:25Z". Inspecting with the sqlite3
+	// CLI shows raw format and misleadingly suggests a SQLite-layout parse is required.
+	// Verify through the driver (Go), not the CLI. Accept both formats for robustness.
 	var indexTime time.Time
 
 	const sqliteTimestampLayout = "2006-01-02 15:04:05"
 	if indexTime, err = time.ParseInLocation(sqliteTimestampLayout, lastIndexed, time.UTC); err != nil {
-		// Fall back to RFC3339
+		// Fall back to RFC3339 (actual driver behavior)
 		if indexTime, err = time.Parse(time.RFC3339, lastIndexed); err != nil {
 			return true // On parse error, assume racy (conservative)
 		}
