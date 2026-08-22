@@ -33,7 +33,22 @@ var (
 )
 
 func coordinateStartup(ctx context.Context, cfg *config.Config, progress io.Writer, class startupCommandClass) startupResult {
+	// Measure lock acquisition time
+	var lockStart time.Time
+	if diagnosticsEnabled() {
+		lockStart = time.Now()
+	}
+
 	lease, acquired, err := startupTryAcquire(cfg.DatabasePath)
+
+	// Record lock acquisition timing for successful immediate acquisition
+	if diagnosticsEnabled() && acquired && lockStart != (time.Time{}) {
+		if startupDiags == nil {
+			startupDiags = &startupPhaseTiming{}
+		}
+		startupDiags.LockAcquisitionTime = time.Since(lockStart)
+	}
+
 	if err != nil {
 		return startupLockFailure(cfg, err)
 	}
@@ -55,7 +70,22 @@ func coordinateStartup(ctx context.Context, cfg *config.Config, progress io.Writ
 	default:
 		waitCtx, cancel := context.WithTimeout(ctx, startupMutationWait)
 		defer cancel()
+
+		// Measure waiting for lock
+		if diagnosticsEnabled() {
+			lockStart = time.Now()
+		}
+
 		lease, err := startupAcquire(waitCtx, cfg.DatabasePath, startupLockRetry)
+
+		// Record lock wait timing
+		if diagnosticsEnabled() && lockStart != (time.Time{}) {
+			if startupDiags == nil {
+				startupDiags = &startupPhaseTiming{}
+			}
+			startupDiags.LockAcquisitionTime = time.Since(lockStart)
+		}
+
 		if err != nil {
 			if errors.Is(err, context.DeadlineExceeded) && ctx.Err() == nil {
 				return startupResult{Config: cfg, Failure: syncInProgressFailure(
@@ -74,10 +104,25 @@ func coordinateStartup(ctx context.Context, cfg *config.Config, progress io.Writ
 }
 
 func runOwnedStartup(ctx context.Context, cfg *config.Config, progress io.Writer, class startupCommandClass, lease startupLease) startupResult {
+	// Measure index preparation time
+	var indexPrepareStart time.Time
+	if diagnosticsEnabled() {
+		indexPrepareStart = time.Now()
+	}
+
 	db, diag, err := startupPrepareIndex(ctx, cfg, indexMutation)
 	if db != nil {
 		err = closeIndexDB(db, err)
 	}
+
+	// Record index prepare timing
+	if diagnosticsEnabled() && indexPrepareStart != (time.Time{}) {
+		if startupDiags == nil {
+			startupDiags = &startupPhaseTiming{}
+		}
+		startupDiags.IndexPrepareTime = time.Since(indexPrepareStart)
+	}
+
 	if diag != nil || err != nil {
 		d := compat.Diagnostic{Code: compat.CodeMigrationFailed, Summary: "prepare index failed"}
 		if diag != nil {

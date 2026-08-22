@@ -29,6 +29,17 @@ var (
 	maybeAutoSyncGetFileMetadata    = getFileMetadata // for testability
 )
 
+// startupPhaseTiming holds measurements for startup phases that occur before maybeAutoSync.
+// Populated by coordinateStartup if diagnosticsEnabled() is true.
+type startupPhaseTiming struct {
+	LockAcquisitionTime time.Duration
+	IndexPrepareTime    time.Duration
+}
+
+// startupDiags holds pre-sync phase timings, set by coordinateStartup.
+// Access must be guarded by checking diagnosticsEnabled() first.
+var startupDiags *startupPhaseTiming
+
 func newDefaultAutoSyncRegistry() *readers.Registry {
 	reg := readers.NewRegistry()
 	reg.Register(&readers.OpenCodeReader{})
@@ -373,12 +384,27 @@ func maybeAutoSync(cfg *config.Config, progress io.Writer) (retErr error) {
 
 		// Report diagnostics
 		_, _ = fmt.Fprintf(progress, "\nStartup diagnostics:\n")
+		if startupDiags != nil {
+			_, _ = fmt.Fprintf(progress, "  Lock Acquisition:%v\n", startupDiags.LockAcquisitionTime)
+			_, _ = fmt.Fprintf(progress, "  Index Prepare:   %v\n", startupDiags.IndexPrepareTime)
+		}
 		_, _ = fmt.Fprintf(progress, "  Discovery:       %v\n", discoveryTime)
 		_, _ = fmt.Fprintf(progress, "  Metadata:        %v (%d files checked)\n", metadataTime, filesHashed+filesSkipped)
 		_, _ = fmt.Fprintf(progress, "  Hashing:         %v (%d files hashed, %d files skipped, %.1f MB)\n",
 			hashingTime, filesHashed, filesSkipped, float64(bytesHashed)/(1024*1024))
 		_, _ = fmt.Fprintf(progress, "  Parsing:         %v\n", parsingTime)
 		_, _ = fmt.Fprintf(progress, "  Database:        %v\n", databaseTime)
+
+		// Calculate unattributed time
+		measuredTime := discoveryTime + metadataTime + hashingTime + parsingTime + databaseTime
+		if startupDiags != nil {
+			measuredTime += startupDiags.LockAcquisitionTime + startupDiags.IndexPrepareTime
+		}
+		unattributedTime := totalTime - measuredTime
+		if unattributedTime > 0 {
+			_, _ = fmt.Fprintf(progress, "  Unattributed:    %v (I/O, config load, other OS overhead; page-cache sensitive)\n", unattributedTime)
+		}
+
 		_, _ = fmt.Fprintf(progress, "  Total:           %v\n", totalTime)
 	}
 

@@ -2527,7 +2527,7 @@ func TestStartupDiagnosticsWithEnvVar(t *testing.T) {
 
 	// Verify that diagnostics output appears in stderr
 	diagnosticsExpected := []string{
-		"Discovery:", "Metadata:", "Hashing:", "Parsing:", "Database:", "Total:",
+		"Lock Acquisition:", "Index Prepare:", "Discovery:", "Metadata:", "Hashing:", "Parsing:", "Database:", "Total:",
 	}
 	for _, phase := range diagnosticsExpected {
 		if !strings.Contains(stderr, phase) {
