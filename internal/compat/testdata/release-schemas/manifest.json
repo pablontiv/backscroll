@@ -611,6 +611,14 @@
       "AppliedVersion": 13,
       "HasSourceMetadata": false,
       "Provenance": "Explicit known legacy V13 shape produced when compatibility migrations start from a database whose schema_migrations table predated the current SetupSchema formatting; supported despite conservative full-DDL signing."
+    },
+    {
+      "Fixture": "v14.sql",
+      "ProvenanceSHA256": "b5a419a6bd8c11cf134ea151c01dd8949d6d79f77fe2cb8785cf00eafe9ebf2a",
+      "Signature": "sha256:36a75e77ccd7da6118a3daa354ab97b2d03e21fda6cb3e3b1fe9108517fe9547",
+      "AppliedVersion": 14,
+      "HasSourceMetadata": false,
+      "Provenance": "Migration v14 adds file_size and file_mtime columns to indexed_files for startup prefilter optimization."
     }
   ]
 }

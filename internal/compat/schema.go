@@ -378,6 +378,7 @@ var allMigrationSteps = []MigrationStep{
 	{Version: 11, Name: "V11 correction detection: correction_signals"},
 	{Version: 12, Name: "V12 agent classification: annotations"},
 	{Version: 13, Name: "V13 backfill discovery indexes"},
+	{Version: 14, Name: "V14 file metadata prefilter"},
 }
 
 func hasObject(objects []sqliteObject, typ, name string) bool {

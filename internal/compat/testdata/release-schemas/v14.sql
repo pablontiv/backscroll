@@ -200,5 +200,5 @@ INSERT INTO schema_migrations (version, name, applied_on, checksum) VALUES (10, 
 INSERT INTO schema_migrations (version, name, applied_on, checksum) VALUES (11, 'V11 correction detection: correction_signals', '1970-01-01 00:00:00', '5a7180f901c5feacb67cd104a61e7b7ba9cec69aaeab1d2b5d723459dc590456');
 INSERT INTO schema_migrations (version, name, applied_on, checksum) VALUES (12, 'V12 agent classification: annotations (free-form labels; enum freeze deferred)', '1970-01-01 00:00:00', 'b3fb66fd2924a9f07a3e4ec0ba253fc1d6965664615a795be6b22d01ab292108');
 INSERT INTO schema_migrations (version, name, applied_on, checksum) VALUES (13, 'V13 backfill discovery indexes', '1970-01-01 00:00:00', '2172ce531c670806933ffe3005fdc0a2ebb8eb3f84d2bd0d8fa608dddb5d136e');
-INSERT INTO schema_migrations (version, name, applied_on, checksum) VALUES (14, 'V14 file metadata prefilter', '1970-01-01 00:00:00', 'e7b5c9c3f5dc11e4b5a6f8c9d2e3f4g5h6i7j8k9l0m1n2o3p4q5r6s7t8u9v0');
+INSERT INTO schema_migrations (version, name, applied_on, checksum) VALUES (14, 'V14 file metadata prefilter', '1970-01-01 00:00:00', '1f276c51041635b661890341d5de7b3f19b2aa0ed6056ec00179e8406a62da7f');
 COMMIT;
