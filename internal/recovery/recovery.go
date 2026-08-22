@@ -934,6 +934,11 @@ func restoreBackup(activePath, backupPath string, backupSidecars []string, plann
 }
 
 func ensureSourceSidecarsSafe(dbPath string) error {
+	// Check WAL file status first to determine if -shm is safe
+	walPath := dbPath + "-wal"
+	walInfo, walErr := os.Lstat(walPath)
+	walIsSafe := walErr != nil || (walInfo != nil && walInfo.Mode().IsRegular() && walInfo.Size() == 0)
+
 	for _, suffix := range sqliteSidecarSuffixes() {
 		path := dbPath + suffix
 		info, err := os.Lstat(path)
@@ -943,6 +948,11 @@ func ensureSourceSidecarsSafe(dbPath string) error {
 					continue
 				}
 				return fmt.Errorf("%w: unexpected SQLite sidecar namespace entry %s", storage.ErrImmutableReadOnlyWALUnsafe, path)
+			}
+			// For -shm and -journal files, tolerate them if the WAL is safe (zero bytes or absent)
+			// This matches the safety property: no active writer modifies the database if WAL has no pending changes
+			if suffix == "-shm" && walIsSafe {
+				continue
 			}
 			return fmt.Errorf("unexpected SQLite sidecar namespace entry %s", path)
 		} else if !os.IsNotExist(err) {

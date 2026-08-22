@@ -1409,19 +1409,27 @@ func TestRecoverSQLiteSidecarPolicy(t *testing.T) {
 		}
 	})
 
-	t.Run("empty active shm rejected before replacement", func(t *testing.T) {
+	t.Run("empty active shm tolerated before replacement (issue #51 fix)", func(t *testing.T) {
 		dir := t.TempDir()
 		activePath := filepath.Join(dir, "active.db")
 		fromPath := filepath.Join(dir, "stranded.db")
 		createRecoveryDB(t, activePath, []storage.IndexedMessage{{Ordinal: 0, Role: "user", Text: "active with stale shm", UUID: "66666666-6666-4666-8666-666666666666", ContentType: "text"}})
 		createRecoveryDB(t, fromPath, []storage.IndexedMessage{{Ordinal: 0, Role: "assistant", Text: "stranded install", UUID: "77777777-7777-4777-8777-777777777777", ContentType: "text"}})
+		// Create empty -shm and -wal files (simulating a WAL-mode database with no pending changes)
 		if err := os.WriteFile(activePath+"-shm", nil, 0o600); err != nil {
 			t.Fatalf("write empty stale shm: %v", err)
 		}
+		if err := os.WriteFile(activePath+"-wal", nil, 0o600); err != nil {
+			t.Fatalf("write empty wal: %v", err)
+		}
 
-		_, err := Execute(context.Background(), Options{ActivePath: activePath, FromPath: fromPath})
-		if err == nil || !strings.Contains(err.Error(), "-shm") || !strings.Contains(err.Error(), "sidecar namespace") {
-			t.Fatalf("Execute error = %v, want empty shm namespace rejection", err)
+		// With the fix for issue #51, empty -shm is tolerated when -wal is zero bytes (no active writer)
+		report, err := Execute(context.Background(), Options{ActivePath: activePath, FromPath: fromPath, DryRun: true})
+		if err != nil {
+			t.Fatalf("Execute error = %v, want success when -shm has no pending changes", err)
+		}
+		if !reflect.DeepEqual(report.InputCounts, []int{1, 1}) || report.FinalCount != 2 {
+			t.Fatalf("report = %+v, want two inputs and two final rows", report)
 		}
 	})
 
@@ -1720,6 +1728,104 @@ func TestResolvePathAllowsMissingPathForOpenError(t *testing.T) {
 	}
 	if resolved.path == "" || resolved.info != nil {
 		t.Fatalf("resolvePath missing = %+v, want path with nil info", resolved)
+	}
+}
+
+// TestEnsureSourceSidecarsToleratesZeroByteWAL verifies that ensureSourceSidecarsSafe
+// tolerates a zero-byte -wal file (which indicates no pending changes).
+func TestEnsureSourceSidecarsToleratesZeroByteWAL(t *testing.T) {
+	dir := t.TempDir()
+	dbPath := filepath.Join(dir, "test.db")
+
+	// Create a zero-byte -wal file
+	walPath := dbPath + "-wal"
+	if f, err := os.Create(walPath); err != nil {
+		t.Fatalf("create -wal: %v", err)
+	} else {
+		f.Close()
+	}
+
+	// ensureSourceSidecarsSafe should tolerate the zero-byte -wal
+	if err := ensureSourceSidecarsSafe(dbPath); err != nil {
+		t.Fatalf("ensureSourceSidecarsSafe with zero-byte -wal: %v", err)
+	}
+}
+
+// TestEnsureSourceSidecarsToleratesSHMWithZeroWAL verifies that ensureSourceSidecarsSafe
+// tolerates a -shm file when the -wal is zero bytes (issue #51 fix).
+// The safety property is: if WAL has no pending changes, the database is not being actively written to.
+func TestEnsureSourceSidecarsToleratesSHMWithZeroWAL(t *testing.T) {
+	dir := t.TempDir()
+	dbPath := filepath.Join(dir, "test.db")
+
+	// Create a -shm file (and zero-byte -wal for safety)
+	shamPath := dbPath + "-shm"
+	walPath := dbPath + "-wal"
+
+	if f, err := os.Create(shamPath); err != nil {
+		t.Fatalf("create -shm: %v", err)
+	} else {
+		f.Close()
+	}
+	if f, err := os.Create(walPath); err != nil {
+		t.Fatalf("create -wal: %v", err)
+	} else {
+		f.Close()
+	}
+
+	// After the fix, this should succeed because -wal is zero bytes
+	if err := ensureSourceSidecarsSafe(dbPath); err != nil {
+		t.Fatalf("ensureSourceSidecarsSafe with -shm and zero-byte -wal: %v", err)
+	}
+}
+
+// TestEnsureSourceSidecarsRejectsSHMWithoutWAL verifies that ensureSourceSidecarsSafe
+// tolerates a -shm file when the -wal is absent (issue #51 fix).
+func TestEnsureSourceSidecarsToleratesSHMWithoutWAL(t *testing.T) {
+	dir := t.TempDir()
+	dbPath := filepath.Join(dir, "test.db")
+
+	// Create only a -shm file (no -wal)
+	shamPath := dbPath + "-shm"
+
+	if f, err := os.Create(shamPath); err != nil {
+		t.Fatalf("create -shm: %v", err)
+	} else {
+		f.Close()
+	}
+
+	// After the fix, this should succeed because -wal is absent
+	if err := ensureSourceSidecarsSafe(dbPath); err != nil {
+		t.Fatalf("ensureSourceSidecarsSafe with -shm and no -wal: %v", err)
+	}
+}
+
+// TestEnsureSourceSidecarsRejectsSHMWithNonZeroWAL verifies that ensureSourceSidecarsSafe
+// rejects a -shm file when the -wal has pending changes (is non-zero).
+func TestEnsureSourceSidecarsRejectsSHMWithNonZeroWAL(t *testing.T) {
+	dir := t.TempDir()
+	dbPath := filepath.Join(dir, "test.db")
+
+	// Create a -shm file and a non-zero -wal file
+	shamPath := dbPath + "-shm"
+	walPath := dbPath + "-wal"
+
+	if f, err := os.Create(shamPath); err != nil {
+		t.Fatalf("create -shm: %v", err)
+	} else {
+		f.Close()
+	}
+	if err := os.WriteFile(walPath, []byte("pending changes"), 0o644); err != nil {
+		t.Fatalf("create non-zero -wal: %v", err)
+	}
+
+	// This should fail because -wal has pending changes
+	err := ensureSourceSidecarsSafe(dbPath)
+	if err == nil {
+		t.Fatal("ensureSourceSidecarsSafe with -shm and non-zero -wal should fail")
+	}
+	if !strings.Contains(err.Error(), "unexpected SQLite sidecar namespace entry") {
+		t.Fatalf("unexpected error message: %v", err)
 	}
 }
 

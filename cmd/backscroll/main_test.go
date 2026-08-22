@@ -2438,3 +2438,72 @@ func TestSyncReportsDeletedTemplateCount(t *testing.T) {
 		t.Errorf("expected 0 templates after sync (stuck template should be deleted), got %d", countAfter)
 	}
 }
+
+// TestRecoverDryRunWithWALSidecars verifies that recover --dry-run succeeds
+// when the active database has WAL-mode sidecars (issue #51).
+// This is a regression test for the chicken-and-egg bug where startup
+// index_prepare creates the -shm sidecar, then recovery rejects it.
+func TestRecoverDryRunWithWALSidecars(t *testing.T) {
+	activePath, _ := testEnv(t)
+
+	// Create database in WAL mode with persistent sidecars
+	activeDB, err := storage.Open(activePath)
+	if err != nil {
+		t.Fatalf("create active database: %v", err)
+	}
+
+	// Verify database is in WAL mode
+	var journalMode string
+	if err := activeDB.DB().QueryRow("PRAGMA journal_mode").Scan(&journalMode); err != nil {
+		t.Fatalf("query journal mode: %v", err)
+	}
+	if journalMode != "wal" {
+		t.Fatalf("database not in WAL mode, got %s", journalMode)
+	}
+	activeDB.Close()
+
+	// Manually create WAL sidecars that persist
+	// Create empty -wal file (zero bytes means no pending changes)
+	walPath := activePath + "-wal"
+	if f, err := os.Create(walPath); err != nil {
+		t.Fatalf("create -wal sidecar: %v", err)
+	} else {
+		f.Close()
+	}
+
+	// Create -shm file (SQLite will create this when opening, but we create it manually
+	// to simulate a database that was previously opened)
+	shamPath := activePath + "-shm"
+	if f, err := os.Create(shamPath); err != nil {
+		t.Fatalf("create -shm sidecar: %v", err)
+	} else {
+		f.Close()
+	}
+
+	if !fileExists(shamPath) {
+		t.Fatalf("-shm sidecar was not created")
+	}
+	if !fileExists(walPath) {
+		t.Fatalf("-wal sidecar was not created")
+	}
+
+	// Now run recover --from <active-db> --dry-run
+	// This simulates issue #51: database has persistent WAL sidecars,
+	// startup index_prepare opens the DB (creating more sidecars),
+	// then recovery tries to check the same database and should NOT fail on the sidecar
+	// when the -wal file is zero bytes (no pending changes).
+	stdout, stderr, err := runCmd("recover", "--from", activePath, "--dry-run")
+	if err != nil {
+		t.Fatalf("recover --dry-run failed: %v\nstdout: %s\nstderr: %s", err, stdout, stderr)
+	}
+
+	// Verify the dry-run succeeded
+	if !strings.Contains(stdout, "recovery dry run") {
+		t.Errorf("recover --dry-run output missing 'recovery dry run': %s", stdout)
+	}
+}
+
+func fileExists(path string) bool {
+	_, err := os.Lstat(path)
+	return err == nil
+}
