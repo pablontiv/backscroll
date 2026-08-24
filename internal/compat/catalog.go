@@ -184,10 +184,18 @@ func (c *Catalog) attachLineages() error {
 	lineages := map[lineageKey]Lineage{}
 	for _, fixture := range c.schemaFixtures() {
 		shape := SchemaShape{AppliedVersion: fixture.AppliedVersion, Signature: fixture.Signature}
-		lineages[keyForShape(shape)] = Lineage{
+		lineage := Lineage{
 			shape:          shape,
 			remainingSteps: remainingStepsFor(fixture.AppliedVersion, fixture.HasSourceMetadata),
 		}
+		key := keyForShape(shape)
+		if existing, ok := lineages[key]; ok {
+			if !sameMigrationSteps(existing.remainingSteps, lineage.remainingSteps) {
+				return fmt.Errorf("ambiguous semantic collision version=%d signature=%s: fixtures disagree on remaining migration plan", shape.AppliedVersion, shape.Signature)
+			}
+			continue
+		}
+		lineages[key] = lineage
 	}
 	for _, release := range c.Releases {
 		if release.Tag == c.LatestGoRelease {
@@ -200,6 +208,18 @@ func (c *Catalog) attachLineages() error {
 	}
 	c.lineages = lineages
 	return nil
+}
+
+func sameMigrationSteps(left, right []MigrationStep) bool {
+	if len(left) != len(right) {
+		return false
+	}
+	for i := range left {
+		if left[i] != right[i] {
+			return false
+		}
+	}
+	return true
 }
 
 func compareSemver(left, right string) int {

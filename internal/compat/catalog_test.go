@@ -375,48 +375,71 @@ func loadFixtureMigrationRows(t *testing.T, fixtureSQL []byte) []migrationRow {
 	return result
 }
 
-// TestCollisionConsistencyDocumentsSharedSemanticSignatures verifies that when
-// canonicalization collapses multiple fixtures into the same signature, catalog
-// lookup remains unambiguous because AppliedVersion participates in the key.
-func TestCollisionConsistencyDocumentsSharedSemanticSignatures(t *testing.T) {
-	catalog, err := LoadCatalog()
+func TestAttachLineagesAcceptsEquivalentPhysicalHistories(t *testing.T) {
+	catalog := Catalog{
+		UnmanifestedFixtures: []catalogFixture{
+			{Fixture: "fresh.sql", Signature: "sha256:same", AppliedVersion: 13, HasSourceMetadata: false, Provenance: "fresh"},
+			{Fixture: "alter.sql", Signature: "sha256:same", AppliedVersion: 13, HasSourceMetadata: false, Provenance: "alter"},
+		},
+		LatestGoRelease: "v3.2.5",
+		Releases: []catalogRelease{
+			{Tag: "v3.2.5", Fixture: "fresh.sql", Signature: "sha256:same", AppliedVersion: 13},
+		},
+	}
+	if err := catalog.attachLineages(); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestAttachLineagesRejectsAmbiguousSemanticCollision(t *testing.T) {
+	catalog := Catalog{
+		UnmanifestedFixtures: []catalogFixture{
+			{Fixture: "with.sql", Signature: "sha256:same", AppliedVersion: 5, HasSourceMetadata: true, Provenance: "with"},
+			{Fixture: "without.sql", Signature: "sha256:same", AppliedVersion: 5, HasSourceMetadata: false, Provenance: "without"},
+		},
+	}
+	if err := catalog.attachLineages(); err == nil || !strings.Contains(err.Error(), "ambiguous semantic collision") {
+		t.Fatalf("collision error = %v", err)
+	}
+}
+
+func TestRegenerateManifestRetainsConvergedPhysicalFixtures(t *testing.T) {
+	dir := t.TempDir()
+	manifestPath := filepath.Join(dir, "manifest.json")
+	base := `CREATE TABLE schema_migrations (version INTEGER PRIMARY KEY, name TEXT NOT NULL, applied_on TEXT NOT NULL, checksum TEXT NOT NULL);`
+	fresh := base + `INSERT INTO schema_migrations VALUES (1,'v1','clock','published'); CREATE TABLE items (id INTEGER, body TEXT);`
+	altered := base + `INSERT INTO schema_migrations VALUES (1,'v1','clock','development'); CREATE TABLE items(id INTEGER,body TEXT);`
+	if err := os.WriteFile(filepath.Join(dir, "fresh.sql"), []byte(fresh), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "altered.sql"), []byte(altered), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	manifest := `{
+	  "FirstGoRelease":"v0.3.7","LatestGoRelease":"v3.2.5",
+	  "Releases":[
+	    {"Tag":"v0.3.7","Fixture":"fresh.sql","ProvenanceSHA256":"old","Signature":"sha256:old-a","AppliedVersion":1},
+	    {"Tag":"v3.2.5","Fixture":"altered.sql","ProvenanceSHA256":"old","Signature":"sha256:old-b","AppliedVersion":1}
+	  ]
+	}`
+	if err := os.WriteFile(manifestPath, []byte(manifest), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := RegenerateManifestJSON(manifestPath); err != nil {
+		t.Fatal(err)
+	}
+	regenerated, err := loadCatalogFromPath(manifestPath)
 	if err != nil {
 		t.Fatal(err)
 	}
-
-	// Build collision groups: signature -> list of (AppliedVersion, HasSourceMetadata)
-	collisions := make(map[string][]struct {
-		source      string
-		version     int
-		hasMetaData bool
-	})
-
-	for _, release := range catalog.Releases {
-		collisions[release.Signature] = append(collisions[release.Signature], struct {
-			source      string
-			version     int
-			hasMetaData bool
-		}{fmt.Sprintf("release %s", release.Tag), release.AppliedVersion, release.HasSourceMetadata})
+	if len(regenerated.Releases) != 2 {
+		t.Fatalf("release mappings=%d want 2", len(regenerated.Releases))
 	}
-
-	for _, fixture := range catalog.UnmanifestedFixtures {
-		collisions[fixture.Signature] = append(collisions[fixture.Signature], struct {
-			source      string
-			version     int
-			hasMetaData bool
-		}{fmt.Sprintf("unmanifested %s", fixture.Fixture), fixture.AppliedVersion, fixture.HasSourceMetadata})
+	if regenerated.Releases[0].Fixture == regenerated.Releases[1].Fixture {
+		t.Fatalf("physical histories collapsed: %+v", regenerated.Releases)
 	}
-
-	for sig, entries := range collisions {
-		if len(entries) <= 1 {
-			continue
-		}
-		for _, entry := range entries {
-			shape := SchemaShape{AppliedVersion: entry.version, Signature: sig}
-			if _, ok := catalog.ByShape(shape); !ok {
-				t.Errorf("collision member %s with shape %+v is not addressable by full shape", entry.source, shape)
-			}
-		}
+	if regenerated.Releases[0].Signature != regenerated.Releases[1].Signature {
+		t.Fatalf("equivalent semantic signatures differ: %+v", regenerated.Releases)
 	}
 }
 
