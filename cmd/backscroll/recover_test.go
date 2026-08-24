@@ -167,8 +167,7 @@ func TestRecoverDryRunSkipsPostInstallSync(t *testing.T) {
 	}
 }
 
-func TestRecoverPostInstallSyncFailurePreservesStartupCause(t *testing.T) {
-	startupErr := errors.New("injected startup failure")
+func TestRecoverPostInstallSyncFailurePreservesSyncCause(t *testing.T) {
 	syncErr := errors.New("injected post-sync failure")
 	cfg := &config.Config{DatabasePath: filepath.Join(t.TempDir(), "active.db")}
 	installedPath := cfg.DatabasePath + ".installed"
@@ -188,20 +187,16 @@ func TestRecoverPostInstallSyncFailurePreservesStartupCause(t *testing.T) {
 
 	var stdout, stderr bytes.Buffer
 	root := buildRootCmdWithStartup(&stdout, &stderr, func(context.Context, io.Writer, startupCommandClass) startupResult {
-		return startupResult{Config: cfg, Failure: &startupFailure{
-			Stage:       startupStageStartupSync,
-			Cause:       startupErr,
-			Diagnostic:  continuationFor(compat.Diagnostic{Code: compat.CodeIndexStale, Summary: startupErr.Error()}, cfg.DatabasePath),
-			Recoverable: true,
-		}}
+		return startupResult{Config: cfg}
 	})
 	root.SetArgs([]string{"recover", "--from", "stranded.db"})
 	err := root.Execute()
-	if !errors.Is(err, startupErr) {
-		t.Fatalf("error=%v does not preserve startup failure", err)
-	}
 	if !errors.Is(err, syncErr) {
 		t.Fatalf("error=%v does not preserve post-sync failure", err)
+	}
+	var failure *startupFailure
+	if errors.As(err, &failure) {
+		t.Fatalf("error=%v unexpectedly matches startupFailure target %#v", err, failure)
 	}
 	if stdout.Len() != 0 {
 		t.Fatalf("report printed before failed post-sync: %q", stdout.String())
@@ -213,35 +208,6 @@ func TestRecoverPostInstallSyncFailurePreservesStartupCause(t *testing.T) {
 		if !strings.Contains(stderr.String(), want) {
 			t.Fatalf("stderr=%q, want failure diagnostic %q", stderr.String(), want)
 		}
-	}
-}
-
-func TestRecoverSuccessfulContinuationRemediatesStartupFailure(t *testing.T) {
-	startupErr := errors.New("injected startup failure")
-	cfg := &config.Config{DatabasePath: filepath.Join(t.TempDir(), "active.db")}
-
-	originalExecute := recoverExecute
-	recoverExecute = func(context.Context, recovery.Options) (recovery.Report, error) {
-		return recovery.Report{ActivePath: cfg.DatabasePath}, nil
-	}
-	t.Cleanup(func() { recoverExecute = originalExecute })
-
-	originalPostInstallSync := recoverPostInstallSync
-	recoverPostInstallSync = func(*config.Config, io.Writer) error { return nil }
-	t.Cleanup(func() { recoverPostInstallSync = originalPostInstallSync })
-
-	var stdout, stderr bytes.Buffer
-	root := buildRootCmdWithStartup(&stdout, &stderr, func(context.Context, io.Writer, startupCommandClass) startupResult {
-		return startupResult{Config: cfg, Failure: &startupFailure{
-			Stage:       startupStageStartupSync,
-			Cause:       startupErr,
-			Diagnostic:  continuationFor(compat.Diagnostic{Code: compat.CodeIndexStale, Summary: startupErr.Error()}, cfg.DatabasePath),
-			Recoverable: true,
-		}}
-	})
-	root.SetArgs([]string{"recover", "--from", "stranded.db"})
-	if err := root.Execute(); err != nil {
-		t.Fatalf("recover returned startup failure after successful remediation: %v", err)
 	}
 }
 

@@ -104,13 +104,6 @@ func (r startupResult) release(retErr error) error {
 	return retErr
 }
 
-func optionalStartupFailureError(f *startupFailure) error {
-	if f == nil {
-		return nil
-	}
-	return f
-}
-
 type startupContextKey struct{}
 
 var startupSync = maybeAutoSync
@@ -199,9 +192,6 @@ query merges both by rank position (RRF).`,
 			}
 			failure := result.startupFailure()
 			if failure == nil {
-				return nil
-			}
-			if cmd.Name() == "recover" && failure.Recoverable && startupClassRetainsLease(class) {
 				return nil
 			}
 			failureErr := result.release(failure)
