@@ -99,11 +99,15 @@ func coordinateStartup(ctx context.Context, cfg *config.Config, progress io.Writ
 			}
 			return startupLockFailure(cfg, err)
 		}
-		return runOwnedStartup(ctx, cfg, progress, startupMutation, lease)
+		return runOwnedStartup(ctx, cfg, progress, class, lease)
 	}
 }
 
 func runOwnedStartup(ctx context.Context, cfg *config.Config, progress io.Writer, class startupCommandClass, lease startupLease) startupResult {
+	if class == startupRemediation {
+		return startupResult{Config: cfg, Lease: lease}
+	}
+
 	// Measure index preparation time
 	var indexPrepareStart time.Time
 	if diagnosticsEnabled() {
@@ -138,7 +142,7 @@ func runOwnedStartup(ctx context.Context, cfg *config.Config, progress io.Writer
 		return ownedStartupFailureResult(cfg, class, lease, &startupFailure{Stage: startupStageStartupSync, Cause: err, Diagnostic: d, Recoverable: true})
 	}
 	result := startupResult{Config: cfg}
-	if class == startupMutation {
+	if startupClassRetainsLease(class) {
 		result.Lease = lease
 		return result
 	}
@@ -147,7 +151,7 @@ func runOwnedStartup(ctx context.Context, cfg *config.Config, progress io.Writer
 
 func ownedStartupFailureResult(cfg *config.Config, class startupCommandClass, lease startupLease, failure *startupFailure) startupResult {
 	result := startupResult{Config: cfg, Failure: failure}
-	if class == startupMutation {
+	if startupClassRetainsLease(class) {
 		result.Lease = lease
 		return result
 	}

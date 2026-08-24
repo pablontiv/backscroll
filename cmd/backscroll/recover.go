@@ -1,7 +1,6 @@
 package main
 
 import (
-	"errors"
 	"fmt"
 	"io"
 	"strings"
@@ -33,12 +32,11 @@ func newRecoverCmd(stdout, stderr io.Writer) *cobra.Command {
 		},
 		RunE: func(cmd *cobra.Command, args []string) error {
 			startup := startupResultFrom(cmd)
-			startupFailure := optionalStartupFailureError(startup.startupFailure())
 			cfg := startup.Config
 			if cfg == nil {
 				loaded, err := config.Load()
 				if err != nil {
-					return errors.Join(startupFailure, fmt.Errorf("load config for recovery: %w", err))
+					return fmt.Errorf("load config for recovery: %w", err)
 				}
 				cfg = loaded
 			}
@@ -51,7 +49,7 @@ func newRecoverCmd(stdout, stderr io.Writer) *cobra.Command {
 				if backupPath, ok := recovery.RestorableBackupPath(err); ok {
 					_, _ = fmt.Fprintf(stderr, "manual recovery backup path: %s\n", backupPath)
 				}
-				return errors.Join(startupFailure, fmt.Errorf("recovery failed: %w", err))
+				return fmt.Errorf("recovery failed: %w", err)
 			}
 			if !dryRun {
 				if err := recoverPostInstallSync(cfg, stderr); err != nil {
@@ -63,7 +61,7 @@ func newRecoverCmd(stdout, stderr io.Writer) *cobra.Command {
 					if report.BackupPath != "" {
 						_, _ = fmt.Fprintf(stderr, "manual recovery backup path: %s\n", report.BackupPath)
 					}
-					return errors.Join(startupFailure, fmt.Errorf("post-recovery sync: %w", err))
+					return fmt.Errorf("post-recovery sync: %w", err)
 				}
 			}
 			printRecoveryReport(stdout, report, dryRun)

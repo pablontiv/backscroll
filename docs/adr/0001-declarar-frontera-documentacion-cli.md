@@ -1,7 +1,7 @@
 ---
 tipo: adr
 estado: accepted
-fecha: 2026-08-20
+fecha: "2026-08-20"
 contexto: Las guías operativas vigentes conservaron comandos y flags eliminados porque el contrato Cobra solo validaba el skill de Backscroll.
 decision: Mantener una lista explícita de documentación CLI vigente y validarla estáticamente contra buildRootCmd, excluyendo registros históricos declarados.
 consecuencias: La CI detectará deriva en ejemplos ejecutables con archivo y línea; al agregar una guía operativa deberá incorporarse a la frontera, mientras documentos históricos conservarán su contexto original.

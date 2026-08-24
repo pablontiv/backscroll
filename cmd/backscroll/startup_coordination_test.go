@@ -86,6 +86,32 @@ func TestCoordinateStartupImmediateOwnerMutationSyncsAndRetainsLease(t *testing.
 	}
 }
 
+func TestCoordinateStartupImmediateRemediationRetainsLeaseWithoutPrepareOrSync(t *testing.T) {
+	restoreStartupCoordinatorGlobals(t)
+	lease := &fakeStartupLease{}
+	startupTryAcquire = func(string) (startupLease, bool, error) { return lease, true, nil }
+	startupPrepareIndex = func(context.Context, *config.Config, indexCommandClass) (*storage.Database, *compat.Diagnostic, error) {
+		t.Fatal("remediation must not prepare the index")
+		return nil, nil, nil
+	}
+	startupSync = func(*config.Config, io.Writer) error {
+		t.Fatal("remediation must not run pre-handler sync")
+		return nil
+	}
+
+	cfg := &config.Config{DatabasePath: filepath.Join(t.TempDir(), "index.db")}
+	result := coordinateStartup(context.Background(), cfg, io.Discard, startupRemediation)
+	if result.Failure != nil {
+		t.Fatalf("failure=%+v", result.Failure)
+	}
+	if result.Config != cfg || result.Lease != lease {
+		t.Fatalf("result=%+v want cfg and retained lease", result)
+	}
+	if lease.releases != 0 {
+		t.Fatalf("lease releases=%d want 0", lease.releases)
+	}
+}
+
 func TestCoordinateStartupBusySnapshotUsesCompatibleReadOnlySnapshot(t *testing.T) {
 	restoreStartupCoordinatorGlobals(t)
 	dbPath := seedCompatibleStartupDB(t)
@@ -164,32 +190,65 @@ func TestCoordinateStartupBusyMutationAcquiresWithinWaitAndBecomesOwner(t *testi
 	}
 }
 
-func TestCoordinateStartupBusyMutationDeadlineReturnsSyncInProgressWithoutContinuation(t *testing.T) {
+func TestCoordinateStartupBusyRemediationAcquiresAndBypassesPrepareSync(t *testing.T) {
 	restoreStartupCoordinatorGlobals(t)
-	startupMutationWait = time.Millisecond
+	lease := &fakeStartupLease{}
 	startupTryAcquire = func(string) (startupLease, bool, error) { return nil, false, nil }
-	startupAcquire = func(ctx context.Context, path string, delay time.Duration) (startupLease, error) {
-		<-ctx.Done()
-		return nil, ctx.Err()
+	startupAcquire = func(ctx context.Context, _ string, delay time.Duration) (startupLease, error) {
+		if delay != startupLockRetry {
+			t.Fatalf("delay=%v", delay)
+		}
+		if _, ok := ctx.Deadline(); !ok {
+			t.Fatal("missing deadline")
+		}
+		return lease, nil
+	}
+	startupPrepareIndex = func(context.Context, *config.Config, indexCommandClass) (*storage.Database, *compat.Diagnostic, error) {
+		t.Fatal("remediation must not prepare")
+		return nil, nil, nil
 	}
 	startupSync = func(*config.Config, io.Writer) error {
-		t.Fatal("sync should not run after mutation lock deadline")
+		t.Fatal("remediation must not sync")
 		return nil
 	}
 
-	result := coordinateStartup(context.Background(), &config.Config{DatabasePath: filepath.Join(t.TempDir(), "index.db")}, io.Discard, startupMutation)
-	failure := result.startupFailure()
-	if failure == nil {
-		t.Fatal("busy mutation unexpectedly succeeded")
+	result := coordinateStartup(context.Background(), &config.Config{DatabasePath: filepath.Join(t.TempDir(), "index.db")}, io.Discard, startupRemediation)
+	if result.Failure != nil || result.Lease != lease {
+		t.Fatalf("result=%+v", result)
 	}
-	if failure.Stage != startupStageSyncLock || failure.Diagnostic.Code != compat.CodeSyncInProgress {
-		t.Fatalf("failure=%+v want sync lock sync_in_progress", failure)
+	if lease.releases != 0 {
+		t.Fatalf("lease releases=%d want 0", lease.releases)
 	}
-	if len(failure.Diagnostic.Continuation) != 0 {
-		t.Fatalf("continuation=%v want none", failure.Diagnostic.Continuation)
-	}
-	if result.Lease != nil {
-		t.Fatalf("deadline result retained lease %+v", result.Lease)
+}
+
+func TestCoordinateStartupBusyMutationDeadlineReturnsSyncInProgressWithoutContinuation(t *testing.T) {
+	for _, class := range []startupCommandClass{startupMutation, startupRemediation} {
+		t.Run(string(class), func(t *testing.T) {
+			restoreStartupCoordinatorGlobals(t)
+			startupMutationWait = time.Millisecond
+			startupTryAcquire = func(string) (startupLease, bool, error) { return nil, false, nil }
+			startupAcquire = func(ctx context.Context, _ string, _ time.Duration) (startupLease, error) {
+				<-ctx.Done()
+				return nil, ctx.Err()
+			}
+			startupPrepareIndex = func(context.Context, *config.Config, indexCommandClass) (*storage.Database, *compat.Diagnostic, error) {
+				t.Fatal("prepare after timeout")
+				return nil, nil, nil
+			}
+			startupSync = func(*config.Config, io.Writer) error {
+				t.Fatal("sync after timeout")
+				return nil
+			}
+
+			result := coordinateStartup(context.Background(), &config.Config{DatabasePath: filepath.Join(t.TempDir(), "index.db")}, io.Discard, class)
+			failure := result.startupFailure()
+			if failure == nil || failure.Stage != startupStageSyncLock || failure.Diagnostic.Code != compat.CodeSyncInProgress || !strings.Contains(failure.Diagnostic.Summary, "retry the command") {
+				t.Fatalf("failure=%+v", failure)
+			}
+			if len(failure.Diagnostic.Continuation) != 0 || result.Lease != nil {
+				t.Fatalf("result=%+v", result)
+			}
+		})
 	}
 }
 

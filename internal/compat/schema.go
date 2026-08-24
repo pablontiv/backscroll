@@ -28,11 +28,11 @@ func InspectIndex(ctx context.Context, q Queryer) (MigrationPlan, *Diagnostic, e
 	if defaultCatalogErr != nil {
 		return plan, nil, fmt.Errorf("load schema catalog: %w", defaultCatalogErr)
 	}
-	lineage, ok := defaultCatalog.BySignature(shape.Signature)
+	lineage, ok := defaultCatalog.ByShape(shape.SchemaShape)
 	if !ok {
 		return plan, &Diagnostic{
 			Code:    CodeUnsupportedLineage,
-			Summary: fmt.Sprintf("unsupported index schema %s", shape.Signature),
+			Summary: fmt.Sprintf("unsupported index schema version %d signature %s", shape.AppliedVersion, shape.Signature),
 		}, nil
 	}
 	plan.Steps = lineage.RemainingSteps()
@@ -55,7 +55,8 @@ func VerifyCurrentShape(ctx context.Context, q Queryer) error {
 
 type inspectedShape struct {
 	SchemaShape
-	columnsByTable map[string]map[string]bool
+	columnsByTable      map[string]map[string]bool
+	migrationProvenance []migrationProvenance
 }
 
 func inspectShape(ctx context.Context, q Queryer) (inspectedShape, error) {
@@ -66,15 +67,14 @@ func inspectShape(ctx context.Context, q Queryer) (inspectedShape, error) {
 
 	columnsByTable := map[string]map[string]bool{}
 	var records []string
+	var provenance []migrationProvenance
 	appliedVersion := 0
 
 	if hasObject(objects, "table", "schema_migrations") {
-		migrationRows, maxVersion, err := loadSchemaMigrationRecords(ctx, q)
+		provenance, appliedVersion, err = loadMigrationProvenance(ctx, q)
 		if err != nil {
 			return inspectedShape{}, err
 		}
-		records = append(records, migrationRows...)
-		appliedVersion = maxVersion
 	}
 
 	virtualTables := map[string]bool{}
@@ -102,7 +102,7 @@ func inspectShape(ctx context.Context, q Queryer) (inspectedShape, error) {
 			}
 			continue
 		}
-		records = append(records, schemaRecord(object.typ, object.table, object.name, "", normalizeSQL(object.sql)))
+		records = append(records, schemaRecord(object.typ, canonicalStructuralName(object.table), canonicalStructuralName(object.name), "", canonicalSQL(object.sql)))
 		if object.typ != "table" {
 			continue
 		}
@@ -111,7 +111,7 @@ func inspectShape(ctx context.Context, q Queryer) (inspectedShape, error) {
 			return inspectedShape{}, err
 		}
 		for _, column := range columns {
-			records = append(records, schemaRecord("column", object.name, column.name, column.signature(), ""))
+			records = append(records, schemaRecord("column", canonicalStructuralName(object.name), canonicalStructuralName(column.name), column.signature(), ""))
 			if columnsByTable[object.name] == nil {
 				columnsByTable[object.name] = map[string]bool{}
 			}
@@ -131,7 +131,8 @@ func inspectShape(ctx context.Context, q Queryer) (inspectedShape, error) {
 			AppliedVersion: appliedVersion,
 			Signature:      fmt.Sprintf("sha256:%x", signatureBytes),
 		},
-		columnsByTable: columnsByTable,
+		columnsByTable:      columnsByTable,
+		migrationProvenance: provenance,
 	}, nil
 }
 
@@ -192,9 +193,9 @@ func loadRegularTableRecords(ctx context.Context, q Queryer, object sqliteObject
 	// collision because PRAGMA-derived fields omit DDL semantics such as
 	// AUTOINCREMENT, COLLATE, ON CONFLICT, and DEFERRABLE. The only non-canonical
 	// altered shape we support is an explicit checked-in fixture/signature.
-	records := []string{schemaRecord("table", object.table, object.name, "", normalizeSQL(object.sql))}
+	records := []string{schemaRecord("table", canonicalStructuralName(object.table), canonicalStructuralName(object.name), "", canonicalSQL(object.sql))}
 	for _, column := range columns {
-		records = append(records, schemaRecord("column", object.name, column.name, column.signature(), ""))
+		records = append(records, schemaRecord("column", canonicalStructuralName(object.name), canonicalStructuralName(column.name), column.signature(), ""))
 	}
 	indexRecords, err := loadIndexRecords(ctx, q, object.name)
 	if err != nil {
@@ -204,8 +205,14 @@ func loadRegularTableRecords(ctx context.Context, q Queryer, object sqliteObject
 	return records, columns, nil
 }
 
-func loadSchemaMigrationRecords(ctx context.Context, q Queryer) (records []string, maxVersion int, err error) {
-	rows, err := q.QueryContext(ctx, `
+type migrationProvenance struct {
+	version  int
+	name     string
+	checksum string
+}
+
+func loadMigrationProvenance(ctx context.Context, q Queryer) (rows []migrationProvenance, appliedVersion int, err error) {
+	sqlRows, err := q.QueryContext(ctx, `
 		SELECT version, name, checksum
 		FROM schema_migrations
 		ORDER BY version
@@ -213,25 +220,40 @@ func loadSchemaMigrationRecords(ctx context.Context, q Queryer) (records []strin
 	if err != nil {
 		return nil, 0, fmt.Errorf("query schema_migrations: %w", err)
 	}
-	defer joinRowsCloseError(rows, &err)
+	defer joinRowsCloseError(sqlRows, &err)
 
-	for rows.Next() {
-		var version int
-		var name, checksum string
-		if scanErr := rows.Scan(&version, &name, &checksum); scanErr != nil {
+	previousVersion := 0
+	for sqlRows.Next() {
+		var row migrationProvenance
+		if scanErr := sqlRows.Scan(&row.version, &row.name, &row.checksum); scanErr != nil {
 			err = fmt.Errorf("scan schema_migrations: %w", scanErr)
 			return nil, 0, err
 		}
-		if version > maxVersion {
-			maxVersion = version
+		if row.version <= 0 {
+			err = fmt.Errorf("schema_migrations version must be positive: %d", row.version)
+			return nil, 0, err
 		}
-		records = append(records, schemaRecord("migration", "schema_migrations", fmt.Sprintf("%013d", version), name+"|"+checksum, ""))
+		if row.version <= previousVersion {
+			err = fmt.Errorf("schema_migrations versions must increase strictly: %d after %d", row.version, previousVersion)
+			return nil, 0, err
+		}
+		if row.name == "" {
+			err = fmt.Errorf("schema_migrations version %d has empty name", row.version)
+			return nil, 0, err
+		}
+		if row.checksum == "" {
+			err = fmt.Errorf("schema_migrations version %d has empty checksum", row.version)
+			return nil, 0, err
+		}
+		previousVersion = row.version
+		appliedVersion = row.version
+		rows = append(rows, row)
 	}
-	if rowsErr := rows.Err(); rowsErr != nil {
+	if rowsErr := sqlRows.Err(); rowsErr != nil {
 		err = fmt.Errorf("read schema_migrations: %w", rowsErr)
 		return nil, 0, err
 	}
-	return records, maxVersion, nil
+	return rows, appliedVersion, nil
 }
 
 type tableColumn struct {
@@ -247,9 +269,9 @@ type tableColumn struct {
 func (c tableColumn) signature() string {
 	defaultValue := "<null>"
 	if c.defaultTo.Valid {
-		defaultValue = normalizeSQL(c.defaultTo.String)
+		defaultValue = canonicalSQL(c.defaultTo.String)
 	}
-	return fmt.Sprintf("%013d:%s:%d:%s:%d:%d", c.cid, c.typ, c.notNull, defaultValue, c.pk, c.hidden)
+	return fmt.Sprintf("%013d:%s:%d:%s:%d:%d", c.cid, strings.ToLower(strings.TrimSpace(c.typ)), c.notNull, defaultValue, c.pk, c.hidden)
 }
 
 func loadTableColumns(ctx context.Context, q Queryer, table string) (columns []tableColumn, err error) {
@@ -294,7 +316,7 @@ func loadIndexRecords(ctx context.Context, q Queryer, table string) ([]string, e
 			return nil, err
 		}
 		metadata := fmt.Sprintf("unique=%d origin=%s partial=%d columns=%s", index.unique, index.origin, index.partial, strings.Join(columns, ","))
-		records = append(records, schemaRecord("index", table, index.name, metadata, ""))
+		records = append(records, schemaRecord("index", canonicalStructuralName(table), canonicalStructuralName(index.name), metadata, ""))
 	}
 	return records, nil
 }
@@ -338,7 +360,7 @@ func loadIndexColumns(ctx context.Context, q Queryer, index string) (columns []s
 		}
 		columnName := "<expr>"
 		if name.Valid {
-			columnName = name.String
+			columnName = canonicalStructuralName(name.String)
 		}
 		columns = append(columns, fmt.Sprintf("%013d:%013d:%s", seqno, cid, columnName))
 	}
@@ -349,6 +371,8 @@ func loadIndexColumns(ctx context.Context, q Queryer, index string) (columns []s
 	sort.Strings(columns)
 	return columns, nil
 }
+
+func canonicalStructuralName(name string) string { return strings.ToLower(name) }
 
 func remainingStepsFor(appliedVersion int, hasSourceMetadata bool) []MigrationStep {
 	var steps []MigrationStep
@@ -410,226 +434,6 @@ func isFTSShadowObject(name string, virtualTables map[string]bool) bool {
 		}
 	}
 	return false
-}
-
-func normalizeSQL(sqlText string) string {
-	// Collapse runs of whitespace outside SQL lexical constructs (comments, string literals, identifiers),
-	// preserving whitespace within:
-	// - Single-quoted string literals (including '' escapes)
-	// - Double-quoted identifiers (including "" escapes)
-	// - Backtick-quoted identifiers
-	// - Bracket-quoted identifiers [...]
-	// - Line comments (-- until end-of-line)
-	// - Block comments (/* ... */ non-nesting)
-	//
-	// Defect fix #1: Apostrophes and quotes within comments do not affect lexer state.
-	// Defect fix #2: Double-quoted identifiers preserve inner whitespace (e.g., "my  table" != "my table").
-
-	var result strings.Builder
-	lastWasSpace := false
-
-	for i := 0; i < len(sqlText); i++ {
-		ch := sqlText[i]
-
-		// Handle line comments (-- until end-of-line)
-		if ch == '-' && i+1 < len(sqlText) && sqlText[i+1] == '-' {
-			// Write the comment delimiter
-			result.WriteByte(ch)
-			i++
-			result.WriteByte(sqlText[i])
-			lastWasSpace = false
-			i++
-			// Collect comment content until EOL, collapsing internal whitespace
-			var commentBuf strings.Builder
-			commentLastWasSpace := false
-			for i < len(sqlText) && sqlText[i] != '\n' {
-				if sqlText[i] == '\r' {
-					// Skip CR; will be normalized by outer whitespace logic
-					i++
-					continue
-				}
-				if sqlText[i] == ' ' || sqlText[i] == '\t' {
-					if !commentLastWasSpace {
-						commentBuf.WriteByte(' ')
-						commentLastWasSpace = true
-					}
-					i++
-				} else {
-					commentBuf.WriteByte(sqlText[i])
-					commentLastWasSpace = false
-					i++
-				}
-			}
-			// Write comment content, trimmed of trailing whitespace
-			commentContent := strings.TrimRight(commentBuf.String(), " \t")
-			result.WriteString(commentContent)
-			// If we found a newline, write it as a space (for collapsing purposes)
-			if i < len(sqlText) && sqlText[i] == '\n' {
-				result.WriteByte(' ')
-				lastWasSpace = true
-				i++
-			}
-			i-- // Adjust for the outer loop's i++
-			continue
-		}
-
-		// Handle block comments (/* ... */ non-nesting)
-		if ch == '/' && i+1 < len(sqlText) && sqlText[i+1] == '*' {
-			// Write the comment opener
-			result.WriteByte(ch)
-			i++
-			result.WriteByte(sqlText[i]) // '*'
-			lastWasSpace = false
-			i++
-			// Collect comment content until */, collapsing internal whitespace
-			var commentBuf strings.Builder
-			commentLastWasSpace := false
-			for i < len(sqlText) {
-				if sqlText[i] == '*' && i+1 < len(sqlText) && sqlText[i+1] == '/' {
-					// End of comment found
-					break
-				}
-				if sqlText[i] == ' ' || sqlText[i] == '\t' || sqlText[i] == '\n' || sqlText[i] == '\r' {
-					if !commentLastWasSpace {
-						commentBuf.WriteByte(' ')
-						commentLastWasSpace = true
-					}
-					i++
-				} else {
-					commentBuf.WriteByte(sqlText[i])
-					commentLastWasSpace = false
-					i++
-				}
-			}
-			// Write comment content, preserving structure (trim only leading/trailing multiples)
-			commentContent := strings.TrimSpace(commentBuf.String())
-			if commentContent != "" {
-				result.WriteByte(' ')
-				result.WriteString(commentContent)
-				result.WriteByte(' ')
-			} else {
-				// Empty comment
-				result.WriteByte(' ')
-			}
-			// Write comment closer if found
-			if i < len(sqlText) && sqlText[i] == '*' && i+1 < len(sqlText) && sqlText[i+1] == '/' {
-				result.WriteByte('*')
-				i++
-				result.WriteByte('/')
-				i++
-				lastWasSpace = false
-			}
-			i-- // Adjust for the outer loop's i++
-			continue
-		}
-
-		// Handle single-quoted string literals (preserve whitespace inside)
-		if ch == '\'' {
-			result.WriteByte(ch)
-			lastWasSpace = false
-			i++
-			// Copy everything until closing single quote, handling '' escape
-			for i < len(sqlText) {
-				if sqlText[i] == '\'' {
-					result.WriteByte('\'')
-					// Check if this is an escape (followed by another single quote)
-					if i+1 < len(sqlText) && sqlText[i+1] == '\'' {
-						result.WriteByte('\'')
-						i += 2
-					} else {
-						// End of string literal
-						i++
-						lastWasSpace = false
-						break
-					}
-				} else {
-					result.WriteByte(sqlText[i])
-					i++
-				}
-			}
-			i-- // Adjust for the outer loop's i++
-			continue
-		}
-
-		// Handle double-quoted identifiers (preserve whitespace inside)
-		if ch == '"' {
-			result.WriteByte(ch)
-			lastWasSpace = false
-			i++
-			// Copy everything until closing double quote, handling "" escape
-			for i < len(sqlText) {
-				if sqlText[i] == '"' {
-					result.WriteByte('"')
-					// Check if this is an escape (followed by another double quote)
-					if i+1 < len(sqlText) && sqlText[i+1] == '"' {
-						result.WriteByte('"')
-						i += 2
-					} else {
-						// End of identifier
-						i++
-						lastWasSpace = false
-						break
-					}
-				} else {
-					result.WriteByte(sqlText[i])
-					i++
-				}
-			}
-			i-- // Adjust for the outer loop's i++
-			continue
-		}
-
-		// Handle backtick-quoted identifiers (preserve whitespace inside)
-		if ch == '`' {
-			result.WriteByte(ch)
-			lastWasSpace = false
-			i++
-			// Copy everything until closing backtick
-			for i < len(sqlText) && sqlText[i] != '`' {
-				result.WriteByte(sqlText[i])
-				i++
-			}
-			if i < len(sqlText) && sqlText[i] == '`' {
-				result.WriteByte('`')
-				i++
-				lastWasSpace = false
-			}
-			i-- // Adjust for the outer loop's i++
-			continue
-		}
-
-		// Handle bracket-quoted identifiers [...] (preserve whitespace inside)
-		if ch == '[' {
-			result.WriteByte(ch)
-			lastWasSpace = false
-			i++
-			// Copy everything until closing bracket
-			for i < len(sqlText) && sqlText[i] != ']' {
-				result.WriteByte(sqlText[i])
-				i++
-			}
-			if i < len(sqlText) && sqlText[i] == ']' {
-				result.WriteByte(']')
-				i++
-				lastWasSpace = false
-			}
-			i-- // Adjust for the outer loop's i++
-			continue
-		}
-
-		// Outside all special contexts: collapse whitespace
-		if ch == ' ' || ch == '\t' || ch == '\n' || ch == '\r' {
-			if !lastWasSpace {
-				result.WriteByte(' ')
-				lastWasSpace = true
-			}
-		} else {
-			result.WriteByte(ch)
-			lastWasSpace = false
-		}
-	}
-
-	return strings.TrimSpace(result.String())
 }
 
 func schemaRecord(kind, table, name, columns, sqlText string) string {

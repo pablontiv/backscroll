@@ -11,9 +11,9 @@ import (
 	"strings"
 )
 
-// RegenerateManifestJSON reads all fixtures and regenerates the manifest.json with
-// new signatures computed using the current normalizeSQL implementation.
-// This is called after changing normalizeSQL to ensure all signatures remain valid.
+// RegenerateManifestJSON reads all fixtures and regenerates manifest.json with
+// signatures computed using the current schema inspection canonicalization.
+// This is called after changing canonicalization to ensure all signatures remain valid.
 func RegenerateManifestJSON(manifestPath string) error {
 	// Load the old manifest to preserve the release mappings and unmapped fixtures
 	oldCatalog, err := loadCatalogFromPath(manifestPath)

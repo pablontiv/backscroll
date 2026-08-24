@@ -104,13 +104,6 @@ func (r startupResult) release(retErr error) error {
 	return retErr
 }
 
-func optionalStartupFailureError(f *startupFailure) error {
-	if f == nil {
-		return nil
-	}
-	return f
-}
-
 type startupContextKey struct{}
 
 var startupSync = maybeAutoSync
@@ -201,9 +194,6 @@ query merges both by rank position (RRF).`,
 			if failure == nil {
 				return nil
 			}
-			if cmd.Name() == "recover" && failure.Recoverable && class == startupMutation {
-				return nil
-			}
 			failureErr := result.release(failure)
 			if failure.Diagnostic.Code != "" || strings.TrimSpace(failure.Diagnostic.Summary) != "" {
 				return refuseIndexWithCause(stdout, stderr, failure.renderedDiagnostic(), failureErr, commandBoolFlag(cmd, "json"), commandBoolFlag(cmd, "robot"))
@@ -223,7 +213,7 @@ query merges both by rank position (RRF).`,
 	registerStartupCommand(root, startupSnapshotRead, newStatusCmd(stdout, stderr))
 	registerStartupCommand(root, startupMetadataRead, newConfigCmd(stdout, stderr))
 	registerStartupCommand(root, startupMutation, newAnnotateCmd(stdout, stderr))
-	registerStartupCommand(root, startupMutation, newRecoverCmd(stdout, stderr))
+	registerStartupCommand(root, startupRemediation, newRecoverCmd(stdout, stderr))
 
 	return root
 }

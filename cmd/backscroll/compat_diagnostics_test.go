@@ -7,14 +7,12 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 
 	"github.com/pablontiv/backscroll/internal/compat"
-	"github.com/pablontiv/backscroll/internal/config"
 	"github.com/pablontiv/backscroll/internal/storage"
 )
 
@@ -540,7 +538,7 @@ func TestLiveWALStartupUsesCompatibleIndexWithoutRecoveryDiagnostic(t *testing.T
 	}
 }
 
-func TestRecoveryContinuationExecutesInConfiguredSamePathContextWithEmptyWAL(t *testing.T) {
+func TestRecoverDryRunBypassesPreparationForAlterBuiltLineage(t *testing.T) {
 	dbPath := newFixtureIndexDB(t, "v13-development-alter-built.sql")
 	setIndexPolicyEnv(t, dbPath, t.TempDir())
 	walPath := dbPath + "-wal"
@@ -550,40 +548,25 @@ func TestRecoveryContinuationExecutesInConfiguredSamePathContextWithEmptyWAL(t *
 	before := snapshotSQLiteFiles(t, dbPath)
 	walBefore, err := os.Stat(walPath)
 	if err != nil {
-		t.Fatalf("stat empty WAL before continuation: %v", err)
+		t.Fatalf("stat empty WAL before dry-run: %v", err)
 	}
 
-	emptyInputs := filepath.Join(t.TempDir(), "empty-inputs")
-	if err := os.MkdirAll(emptyInputs, 0o755); err != nil {
-		t.Fatalf("mkdir empty recovery inputs: %v", err)
+	stdout, stderr, err := runCmd("recover", "--from", dbPath, "--dry-run")
+	if err != nil {
+		t.Fatalf("recover dry-run failed: %v\nstdout=%q stderr=%q", err, stdout, stderr)
 	}
-	cfg := &config.Config{DatabasePath: dbPath, SessionDirs: []string{emptyInputs}}
-	startupDiagnostic := continuationFor(compat.Diagnostic{Code: compat.CodeUnsupportedLineage, Summary: "fixture diagnostic"}, dbPath)
-	startupErr := indexDiagnosticError{diagnostic: startupDiagnostic}
-
-	var stdout, stderr bytes.Buffer
-	root := buildRootCmdWithStartup(&stdout, &stderr, func(context.Context, io.Writer, startupCommandClass) startupResult {
-		return startupResult{Config: cfg, Failure: &startupFailure{
-			Stage:       startupStageIndexPrepare,
-			Cause:       startupErr,
-			Diagnostic:  startupDiagnostic,
-			Recoverable: true,
-		}}
-	})
-	root.SetArgs(startupDiagnostic.Continuation)
-	if err := root.Execute(); err != nil {
-		t.Fatalf("execute continuation %v after startup diagnostic %s: %v\nstdout=%q stderr=%q", startupDiagnostic.Continuation, startupDiagnostic.Code, err, stdout.String(), stderr.String())
+	if !strings.Contains(stdout, "recovery dry run") {
+		t.Fatalf("stdout=%q", stdout)
 	}
-	if !strings.Contains(stdout.String(), "recovery dry run") {
-		t.Fatalf("continuation output = %q, want recovery dry run", stdout.String())
-	}
-	if stderr.Len() != 0 {
-		t.Fatalf("continuation stderr = %q, want empty", stderr.String())
+	for _, forbidden := range []string{"migration_failed", "unsupported_lineage", "f6a081b9", "50016 diagnostic"} {
+		if strings.Contains(stdout+stderr, forbidden) {
+			t.Fatalf("output retained %q: stdout=%q stderr=%q", forbidden, stdout, stderr)
+		}
 	}
 	assertSQLiteFilesUnchanged(t, dbPath, before)
 	walAfter, err := os.Stat(walPath)
 	if err != nil {
-		t.Fatalf("stat empty WAL after continuation: %v", err)
+		t.Fatalf("stat WAL after dry-run: %v", err)
 	}
 	if walAfter.Size() != 0 || walAfter.Mode() != walBefore.Mode() || !walAfter.ModTime().Equal(walBefore.ModTime()) {
 		t.Fatalf("empty WAL metadata changed: before=%+v after=%+v", walBefore, walAfter)

@@ -85,23 +85,25 @@ func TestLoadCatalogUsesCheckedInSignaturesWithoutExecutingFixtureSQL(t *testing
 	if err != nil {
 		t.Fatalf("load catalog executed fixture SQL or rejected checked-in signature data: %v", err)
 	}
-	if got := catalog.CurrentSignature(); got != "sha256:poisoned" {
-		t.Fatalf("current signature = %q, want checked-in signature", got)
+	if got := catalog.CurrentShape(); got != (SchemaShape{AppliedVersion: 13, Signature: "sha256:poisoned"}) {
+		t.Fatalf("current shape = %+v, want checked-in shape", got)
 	}
 }
 
-func TestCurrentSignatureFollowsLatestReleaseMapping(t *testing.T) {
+func TestCurrentShapeFollowsMaxAppliedVersionNotLatestRelease(t *testing.T) {
 	fixtureSQL := []byte("CREATE TABLE schema_migrations (version INTEGER PRIMARY KEY, name TEXT NOT NULL, applied_on TEXT NOT NULL, checksum TEXT NOT NULL);")
 	fixtureSHA := fmt.Sprintf("%x", sha256.Sum256(fixtureSQL))
 
 	withReleaseSchemaFS(t, fstest.MapFS{
 		"testdata/release-schemas/manifest.json": {Data: []byte(fmt.Sprintf(`{
 			"FirstGoRelease": "v0.3.7",
-			"LatestGoRelease": "v3.2.6",
+			"LatestGoRelease": "v3.2.5",
 			"Releases": [
-				{"Tag": "v0.3.7", "Fixture": "v13.sql", "ProvenanceSHA256": %q, "Signature": "sha256:old-latest", "AppliedVersion": 13},
-				{"Tag": "v3.2.5", "Fixture": "v13.sql", "ProvenanceSHA256": %q, "Signature": "sha256:old-latest", "AppliedVersion": 13},
-				{"Tag": "v3.2.6", "Fixture": "v14.sql", "ProvenanceSHA256": %q, "Signature": "sha256:new-latest", "AppliedVersion": 14}
+				{"Tag": "v0.3.7", "Fixture": "v13.sql", "ProvenanceSHA256": %q, "Signature": "sha256:latest-release", "AppliedVersion": 13},
+				{"Tag": "v3.2.5", "Fixture": "v13.sql", "ProvenanceSHA256": %q, "Signature": "sha256:latest-release", "AppliedVersion": 13}
+			],
+			"UnmanifestedFixtures": [
+				{"Fixture": "v14.sql", "ProvenanceSHA256": %q, "Signature": "sha256:unmanifested-head", "AppliedVersion": 14, "Provenance": "local current fixture"}
 			]
 		}`, fixtureSHA, fixtureSHA, fixtureSHA))},
 		"testdata/release-schemas/v13.sql": {Data: fixtureSQL},
@@ -112,8 +114,8 @@ func TestCurrentSignatureFollowsLatestReleaseMapping(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got := catalog.CurrentSignature(); got != "sha256:new-latest" {
-		t.Fatalf("current signature = %q, want latest release mapping signature", got)
+	if got := catalog.CurrentShape(); got != (SchemaShape{AppliedVersion: 14, Signature: "sha256:unmanifested-head"}) {
+		t.Fatalf("current shape = %+v, want max applied version shape", got)
 	}
 }
 
@@ -375,67 +377,113 @@ func loadFixtureMigrationRows(t *testing.T, fixtureSQL []byte) []migrationRow {
 	return result
 }
 
-// TestCollisionConsistencyGuardsAgainstSignatureAmbiguity verifies that when
-// whitespace normalization collapses multiple fixtures into the same signature,
-// all colliding entries agree on AppliedVersion and HasSourceMetadata. If any
-// collision group disagrees, the Catalog.BySignature map's winner is arbitrary
-// and recovery could plan the wrong migration steps — a real bug.
-func TestCollisionConsistencyGuardsAgainstSignatureAmbiguity(t *testing.T) {
-	catalog, err := LoadCatalog()
-	if err != nil {
+func TestAttachLineagesAcceptsEquivalentPhysicalHistories(t *testing.T) {
+	catalog := Catalog{
+		UnmanifestedFixtures: []catalogFixture{
+			{Fixture: "fresh.sql", Signature: "sha256:same", AppliedVersion: 13, HasSourceMetadata: false, Provenance: "fresh"},
+			{Fixture: "alter.sql", Signature: "sha256:same", AppliedVersion: 13, HasSourceMetadata: false, Provenance: "alter"},
+		},
+		LatestGoRelease: "v3.2.5",
+		Releases: []catalogRelease{
+			{Tag: "v3.2.5", Fixture: "fresh.sql", Signature: "sha256:same", AppliedVersion: 13},
+		},
+	}
+	if err := catalog.attachLineages(); err != nil {
 		t.Fatal(err)
 	}
+}
 
-	// Build collision groups: signature -> list of (AppliedVersion, HasSourceMetadata)
-	collisions := make(map[string][]struct {
-		source      string
-		version     int
-		hasMetaData bool
-	})
-
-	for _, release := range catalog.Releases {
-		collisions[release.Signature] = append(collisions[release.Signature], struct {
-			source      string
-			version     int
-			hasMetaData bool
-		}{fmt.Sprintf("release %s", release.Tag), release.AppliedVersion, release.HasSourceMetadata})
-	}
-
-	for _, fixture := range catalog.UnmanifestedFixtures {
-		collisions[fixture.Signature] = append(collisions[fixture.Signature], struct {
-			source      string
-			version     int
-			hasMetaData bool
-		}{fmt.Sprintf("unmanifested %s", fixture.Fixture), fixture.AppliedVersion, fixture.HasSourceMetadata})
-	}
-
-	// Check each collision group for consistency
-	for sig, entries := range collisions {
-		if len(entries) <= 1 {
-			// No collision; skip
-			continue
+func TestAttachLineagesAcceptsMultipleSignaturesBelowCurrentHead(t *testing.T) {
+	for i := 0; i < 200; i++ {
+		catalog := Catalog{
+			Releases: []catalogRelease{
+				{Tag: "v0.3.7", Fixture: "v3.sql", Signature: "sha256:v3-with-source", AppliedVersion: 3, HasSourceMetadata: true},
+				{Tag: "v3.2.5", Fixture: "v13.sql", Signature: "sha256:v13", AppliedVersion: 13, HasSourceMetadata: false},
+			},
+			UnmanifestedFixtures: []catalogFixture{
+				{Fixture: "v3-no-source-metadata.sql", Signature: "sha256:v3-without-source", AppliedVersion: 3, HasSourceMetadata: false, Provenance: "historical V3 without source_metadata"},
+				{Fixture: "v5-with-source-metadata.sql", Signature: "sha256:v5-with-source", AppliedVersion: 5, HasSourceMetadata: true, Provenance: "historical V5 with source_metadata"},
+				{Fixture: "v5-without-source-metadata.sql", Signature: "sha256:v5-without-source", AppliedVersion: 5, HasSourceMetadata: false, Provenance: "historical V5 without source_metadata"},
+				{Fixture: "v14.sql", Signature: "sha256:v14", AppliedVersion: 14, HasSourceMetadata: false, Provenance: "semantic head"},
+			},
 		}
-
-		// All entries in this collision must agree on AppliedVersion and HasSourceMetadata
-		first := entries[0]
-		for i, entry := range entries[1:] {
-			if entry.version != first.version {
-				t.Errorf("signature %s has inconsistent AppliedVersion: %s says %d, %s says %d",
-					sig, first.source, first.version, entry.source, entry.version)
-			}
-			if entry.hasMetaData != first.hasMetaData {
-				t.Errorf("signature %s has inconsistent HasSourceMetadata: %s says %v, %s says %v",
-					sig, first.source, first.hasMetaData, entry.source, entry.hasMetaData)
-			}
-			if i == 0 {
-				t.Logf("collision group %s: %s, %s agree", sig[:16], first.source, entry.source)
-			}
+		if err := catalog.attachLineages(); err != nil {
+			t.Fatalf("iteration %d: attach lineages rejected non-head signatures: %v", i, err)
+		}
+		if got := catalog.CurrentShape(); got != (SchemaShape{AppliedVersion: 14, Signature: "sha256:v14"}) {
+			t.Fatalf("iteration %d: current shape = %+v, want V14 head", i, got)
 		}
 	}
 }
 
+func TestAttachLineagesRejectsAmbiguousCurrentHead(t *testing.T) {
+	catalog := Catalog{
+		Releases: []catalogRelease{
+			{Tag: "v3.2.5", Fixture: "fresh.sql", Signature: "sha256:head-a", AppliedVersion: 14},
+		},
+		UnmanifestedFixtures: []catalogFixture{
+			{Fixture: "alter.sql", Signature: "sha256:head-b", AppliedVersion: 14, Provenance: "competing head"},
+		},
+	}
+	if err := catalog.attachLineages(); err == nil || !strings.Contains(err.Error(), "ambiguous current head version=14") {
+		t.Fatalf("current head ambiguity error = %v", err)
+	}
+}
+
+func TestAttachLineagesRejectsAmbiguousSemanticCollision(t *testing.T) {
+	catalog := Catalog{
+		UnmanifestedFixtures: []catalogFixture{
+			{Fixture: "with.sql", Signature: "sha256:same", AppliedVersion: 5, HasSourceMetadata: true, Provenance: "with"},
+			{Fixture: "without.sql", Signature: "sha256:same", AppliedVersion: 5, HasSourceMetadata: false, Provenance: "without"},
+		},
+	}
+	if err := catalog.attachLineages(); err == nil || !strings.Contains(err.Error(), "ambiguous semantic collision") {
+		t.Fatalf("collision error = %v", err)
+	}
+}
+
+func TestRegenerateManifestRetainsConvergedPhysicalFixtures(t *testing.T) {
+	dir := t.TempDir()
+	manifestPath := filepath.Join(dir, "manifest.json")
+	base := `CREATE TABLE schema_migrations (version INTEGER PRIMARY KEY, name TEXT NOT NULL, applied_on TEXT NOT NULL, checksum TEXT NOT NULL);`
+	fresh := base + `INSERT INTO schema_migrations VALUES (1,'v1','clock','published'); CREATE TABLE items (id INTEGER, body TEXT);`
+	altered := base + `INSERT INTO schema_migrations VALUES (1,'v1','clock','development'); CREATE TABLE items(id INTEGER,body TEXT);`
+	if err := os.WriteFile(filepath.Join(dir, "fresh.sql"), []byte(fresh), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "altered.sql"), []byte(altered), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	manifest := `{
+	  "FirstGoRelease":"v0.3.7","LatestGoRelease":"v3.2.5",
+	  "Releases":[
+	    {"Tag":"v0.3.7","Fixture":"fresh.sql","ProvenanceSHA256":"old","Signature":"sha256:old-a","AppliedVersion":1},
+	    {"Tag":"v3.2.5","Fixture":"altered.sql","ProvenanceSHA256":"old","Signature":"sha256:old-b","AppliedVersion":1}
+	  ]
+	}`
+	if err := os.WriteFile(manifestPath, []byte(manifest), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := RegenerateManifestJSON(manifestPath); err != nil {
+		t.Fatal(err)
+	}
+	regenerated, err := loadCatalogFromPath(manifestPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(regenerated.Releases) != 2 {
+		t.Fatalf("release mappings=%d want 2", len(regenerated.Releases))
+	}
+	if regenerated.Releases[0].Fixture == regenerated.Releases[1].Fixture {
+		t.Fatalf("physical histories collapsed: %+v", regenerated.Releases)
+	}
+	if regenerated.Releases[0].Signature != regenerated.Releases[1].Signature {
+		t.Fatalf("equivalent semantic signatures differ: %+v", regenerated.Releases)
+	}
+}
+
 // TestRegenerateManifestOnNormalizationChange is an optional helper test that
-// regenerates manifest.json after normalizeSQL changes. Run with:
+// regenerates manifest.json after canonical SQL changes. Run with:
 // go test -run TestRegenerateManifestOnNormalizationChange ./internal/compat -v
 func TestRegenerateManifestOnNormalizationChange(t *testing.T) {
 	if os.Getenv("REGEN_MANIFEST") == "" {

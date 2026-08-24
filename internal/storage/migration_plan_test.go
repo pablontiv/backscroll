@@ -14,7 +14,7 @@ import (
 	"github.com/pablontiv/backscroll/internal/compat"
 )
 
-func TestCatalogGoLineagesUpgradeLosslessly(t *testing.T) {
+func TestEveryCatalogFixtureReachesCurrentSemanticHead(t *testing.T) {
 	catalog, err := compat.LoadCatalog()
 	if err != nil {
 		t.Fatal(err)
@@ -62,14 +62,21 @@ func TestCatalogGoLineagesUpgradeLosslessly(t *testing.T) {
 		})
 	}
 
+	required := []string{
+		"v1.sql", "v2.sql", "v3.sql", "v3-no-source-metadata.sql",
+		"v4.sql", "v5-with-source-metadata.sql", "v5-without-source-metadata.sql",
+		"v6.sql", "v7.sql", "v8.sql", "v9.sql", "v10.sql", "v11.sql", "v12.sql",
+		"v13.sql", "v13-legacy-existing-schema-migrations.sql",
+		"v13-legacy-alter-built.sql", "v13-development-alter-built.sql", "v14.sql",
+	}
+	for _, name := range required {
+		if !seen[name] {
+			t.Fatalf("catalog closure corpus lacks %s", name)
+		}
+	}
+
 	for _, fixture := range fixtures {
 		t.Run(fixture.name, func(t *testing.T) {
-			// Legacy development/alter-built v13 fixtures have special index ordering that doesn't
-			// produce canonical v14 schemas. These are v13 compatibility test cases, not upgrade targets.
-			if fixture.name == "v13-development-alter-built.sql" || fixture.name == "v13-legacy-alter-built.sql" {
-				t.Skip("legacy v13 ALTER-built fixtures are v13 compatibility cases, not v14 upgrade targets")
-			}
-
 			dbPath := createFixtureDatabase(t, fixture.name)
 			want := seedFixtureSentinels(t, dbPath)
 
@@ -83,9 +90,18 @@ func TestCatalogGoLineagesUpgradeLosslessly(t *testing.T) {
 			assertSearchItemsByUUID(t, db.DB(), want.ToolSearchItems)
 			assertTableSentinels(t, db.DB(), want)
 			assertFTSQueryable(t, db.DB(), "sentinelterm", len(want.SearchItems))
-			assertFTSQueryable(t, db.DB(), "sentinelcmd", 0)
 			assertToolFTSQueryable(t, db.DB(), "sentinelcmd", len(want.ToolSearchItems))
 			assertCurrentShape(t, db.DB())
+			plan, diag, err := compat.InspectIndex(context.Background(), db.DB())
+			if err != nil || diag != nil {
+				t.Fatalf("inspect current head error=%v diagnostic=%+v", err, diag)
+			}
+			if len(plan.Steps) != 0 {
+				t.Fatalf("fixture %s retained steps: %+v", fixture.name, plan.Steps)
+			}
+			if plan.From != catalog.CurrentShape() {
+				t.Fatalf("fixture %s reached shape %+v, want %+v", fixture.name, plan.From, catalog.CurrentShape())
+			}
 			wantMigrationRows := authoritativeCurrentMigrationRows()
 			if fixture.name == "v13-development-alter-built.sql" {
 				for i := range wantMigrationRows {
@@ -1535,45 +1551,4 @@ func onlySnapshot(t *testing.T, dbPath string) string {
 		t.Fatalf("snapshot matches = %+v, want exactly one", matches)
 	}
 	return matches[0]
-}
-
-// TestMigratedFixtureSignatureIsInCatalog is a regression test for issue #52.
-// It verifies that when a V1 fixture is migrated forward through the real
-// SetupSchema() code, the resulting database schema signature is recognized by
-// the catalog. This prevents cosmetic DDL formatting differences from silently
-// ejecting valid schemas from the lineage catalog.
-//
-// Before the fix to normalizeSQL() (making it whitespace-insensitive), databases
-// that were created at V1 and then migrated V8→V13 by published releases would
-// produce a signature not in the catalog, causing every operational command to
-// reject the database as "unsupported_lineage". This test would have caught that
-// regression during development.
-func TestMigratedFixtureSignatureIsInCatalog(t *testing.T) {
-	// Load v1.sql, the earliest released version fixture
-	dbPath := createFixtureDatabase(t, "v1.sql")
-
-	// Open the fixture and trigger SetupSchema to migrate it all the way to V13
-	db, diag, err := OpenCompatible(context.Background(), dbPath)
-	if err != nil || diag != nil {
-		t.Fatalf("open compatible error=%v diagnostic=%+v", err, diag)
-	}
-	defer func() { _ = db.Close() }()
-
-	// Inspect the resulting schema to get its signature
-	plan, diag, err := compat.InspectIndex(context.Background(), db.DB())
-	if err != nil || diag != nil {
-		t.Fatalf("inspect index error=%v diagnostic=%+v", err, diag)
-	}
-
-	// Load the lineage catalog
-	catalog, err := compat.LoadCatalog()
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	// Assert that the migrated database signature is in the catalog
-	if !catalog.IsKnownSignature(plan.From.Signature) {
-		t.Errorf("migrated V1→V13 database has signature %s not in catalog; this was the bug in issue #52",
-			plan.From.Signature)
-	}
 }

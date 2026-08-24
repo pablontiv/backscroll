@@ -156,6 +156,68 @@ func TestInspectIndexMalformedMigrationMetadataReturnsError(t *testing.T) {
 	}
 }
 
+func TestSemanticSignatureIgnoresMigrationChecksumHistory(t *testing.T) {
+	const schema = `
+		CREATE TABLE schema_migrations (
+			version INTEGER PRIMARY KEY,
+			name TEXT NOT NULL,
+			applied_on TEXT NOT NULL,
+			checksum TEXT NOT NULL
+		);
+		CREATE TABLE items (id INTEGER PRIMARY KEY, body TEXT NOT NULL);
+	`
+	left := openSchema(t, schema+`INSERT INTO schema_migrations VALUES (1, 'v1', 'clock-a', 'published');`)
+	defer left.Close()
+	right := openSchema(t, schema+`INSERT INTO schema_migrations VALUES (1, 'v1', 'clock-b', 'development');`)
+	defer right.Close()
+
+	leftShape, err := inspectShape(context.Background(), left)
+	if err != nil {
+		t.Fatal(err)
+	}
+	rightShape, err := inspectShape(context.Background(), right)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if leftShape.AppliedVersion != rightShape.AppliedVersion || leftShape.Signature != rightShape.Signature {
+		t.Fatalf("equivalent current shapes differ: left=%+v right=%+v", leftShape.SchemaShape, rightShape.SchemaShape)
+	}
+}
+
+func TestSemanticSignatureNormalizesUnquotedStructuralNames(t *testing.T) {
+	left := openSchema(t, `CREATE TABLE Items (Body TEXT); CREATE INDEX ItemIndex ON Items(Body);`)
+	defer left.Close()
+	right := openSchema(t, `create table items (body text); create index itemindex on items(body);`)
+	defer right.Close()
+	leftShape, err := inspectShape(context.Background(), left)
+	if err != nil {
+		t.Fatal(err)
+	}
+	rightShape, err := inspectShape(context.Background(), right)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if leftShape.Signature != rightShape.Signature {
+		t.Fatalf("unquoted case changed semantic signature: left=%s right=%s", leftShape.Signature, rightShape.Signature)
+	}
+}
+
+func TestCatalogIdentityIncludesAppliedVersion(t *testing.T) {
+	catalog := Catalog{lineages: map[lineageKey]Lineage{
+		{appliedVersion: 1, signature: "sha256:same"}: {shape: SchemaShape{AppliedVersion: 1, Signature: "sha256:same"}},
+		{appliedVersion: 2, signature: "sha256:same"}: {shape: SchemaShape{AppliedVersion: 2, Signature: "sha256:same"}},
+	}}
+	if _, ok := catalog.ByShape(SchemaShape{AppliedVersion: 1, Signature: "sha256:same"}); !ok {
+		t.Fatal("v1 missing")
+	}
+	if _, ok := catalog.ByShape(SchemaShape{AppliedVersion: 2, Signature: "sha256:same"}); !ok {
+		t.Fatal("v2 missing")
+	}
+	if _, ok := catalog.ByShape(SchemaShape{AppliedVersion: 3, Signature: "sha256:same"}); ok {
+		t.Fatal("unknown v3 accepted")
+	}
+}
+
 func TestRegularTableSignatureIsConservativeForUnsupportedDDL(t *testing.T) {
 	for _, tt := range []struct {
 		name  string
@@ -281,8 +343,8 @@ func TestInspectIndexRecognizesObservedDevelopmentV13Shape(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	// Signature recomputed after normalizeSQL made whitespace-insensitive (issue #52)
-	const observedSignature = "sha256:4d04377754986f0da2f61f2ab73889168f596eb84e1f02df96e23072072e9375"
+	// Signature recomputed after canonical SQL and provenance separation changed semantic lineage.
+	const observedSignature = "sha256:bc02e80bddf32a68341c7bb5f28d6b1b95b3a6877436478743ae260541494b3e"
 	if shape.Signature != observedSignature {
 		t.Fatalf("development V13 signature = %s, want %s", shape.Signature, observedSignature)
 	}
@@ -387,267 +449,4 @@ func openSchema(t *testing.T, schemaSQL string) *sql.DB {
 		t.Fatal(err)
 	}
 	return db
-}
-
-func TestNormalizeSQLIsWhitespaceInsensitiveOutsideStringLiterals(t *testing.T) {
-	tests := []struct {
-		name string
-		sql1 string
-		sql2 string
-	}{
-		{
-			name: "multiple spaces collapsed to single space",
-			sql1: "CREATE   TABLE  foo  (id  INTEGER)",
-			sql2: "CREATE TABLE foo (id INTEGER)",
-		},
-		{
-			name: "newlines and tabs collapsed to single space",
-			sql1: "CREATE\n  TABLE\tfoo\n(\nid\nINTEGER\n)",
-			sql2: "CREATE TABLE foo ( id INTEGER )",
-		},
-		{
-			name: "alter-built schema: inline vs multiline columns normalize the same",
-			sql1: "CREATE TABLE search_items (\n  content_type TEXT DEFAULT 'text',\n  extraction_version INTEGER,\n  was_interrupted INTEGER\n);",
-			sql2: "CREATE TABLE search_items ( content_type TEXT DEFAULT 'text', extraction_version INTEGER, was_interrupted INTEGER );",
-		},
-		{
-			name: "preserve space inside single-quoted literal",
-			sql1: "CREATE TABLE foo (body TEXT DEFAULT 'alpha  beta')",
-			sql2: "CREATE TABLE foo (body TEXT DEFAULT 'alpha  beta')",
-		},
-		{
-			name: "double-single-quote escape inside literal",
-			sql1: "CREATE TABLE foo (body TEXT DEFAULT 'O''Brien')",
-			sql2: "CREATE TABLE foo (body TEXT DEFAULT 'O''Brien')",
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			norm1 := normalizeSQL(tt.sql1)
-			norm2 := normalizeSQL(tt.sql2)
-			if norm1 != norm2 {
-				t.Fatalf("normalization differs: %q != %q", norm1, norm2)
-			}
-		})
-	}
-}
-
-func TestNormalizeSQLPreservesWhitespaceInStringLiterals(t *testing.T) {
-	// This is critical: whitespace inside string literals must be preserved exactly
-	sql := "CREATE TABLE foo (body TEXT DEFAULT 'alpha  beta', CHECK (body <> 'gamma  delta'))"
-	norm := normalizeSQL(sql)
-	if !strings.Contains(norm, "'alpha  beta'") {
-		t.Fatalf("whitespace in first literal not preserved: %q", norm)
-	}
-	if !strings.Contains(norm, "'gamma  delta'") {
-		t.Fatalf("whitespace in second literal not preserved: %q", norm)
-	}
-}
-
-func TestNormalizeSQLHandlesApostropheInLineComment(t *testing.T) {
-	// Defect 1: apostrophe in line comment should not flip parser into quote mode
-	tests := []struct {
-		name string
-		sql  string
-		want string
-	}{
-		{
-			name: "apostrophe in line comment",
-			sql:  "CREATE TABLE t ( -- don't\n  a   INTEGER,\n  b   TEXT\n)",
-			want: "CREATE TABLE t ( -- don't a INTEGER, b TEXT )",
-		},
-		{
-			name: "apostrophe in line comment with real literal",
-			sql:  "CREATE TABLE t ( -- don't do this\n  body TEXT DEFAULT 'x  y'\n)",
-			want: "CREATE TABLE t ( -- don't do this body TEXT DEFAULT 'x  y' )",
-		},
-		{
-			name: "the row's id in comment",
-			sql:  "CREATE TABLE t ( a INTEGER -- the row's id\n)",
-			want: "CREATE TABLE t ( a INTEGER -- the row's id )",
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			norm := normalizeSQL(tt.sql)
-			if norm != tt.want {
-				t.Fatalf("normalizeSQL(%q) =\n  %q\nwant\n  %q", tt.sql, norm, tt.want)
-			}
-		})
-	}
-}
-
-func TestNormalizeSQLHandlesApostropheInBlockComment(t *testing.T) {
-	// Apostrophe in block comment should not flip parser into quote mode
-	tests := []struct {
-		name string
-		sql  string
-		want string
-	}{
-		{
-			name: "apostrophe in block comment",
-			sql:  "CREATE TABLE t ( /* don't */ a   INTEGER )",
-			want: "CREATE TABLE t ( /* don't */ a INTEGER )",
-		},
-		{
-			name: "quote in block comment",
-			sql:  "CREATE TABLE t ( /* use 'single quotes' inside */ a INTEGER )",
-			want: "CREATE TABLE t ( /* use 'single quotes' inside */ a INTEGER )",
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			norm := normalizeSQL(tt.sql)
-			if norm != tt.want {
-				t.Fatalf("normalizeSQL(%q) =\n  %q\nwant\n  %q", tt.sql, norm, tt.want)
-			}
-		})
-	}
-}
-
-func TestNormalizeSQLPreservesWhitespaceInDoubleQuotedIdentifiers(t *testing.T) {
-	// Defect 2: double-quoted identifiers must preserve inner whitespace
-	tests := []struct {
-		name string
-		sql  string
-		want string
-	}{
-		{
-			name: "double-quoted identifier with multiple spaces",
-			sql:  `CREATE TABLE "my  table" ( a   INTEGER )`,
-			want: `CREATE TABLE "my  table" ( a INTEGER )`,
-		},
-		{
-			name: "double-quoted column name with spaces",
-			sql:  `CREATE TABLE t ( "col  name" INTEGER )`,
-			want: `CREATE TABLE t ( "col  name" INTEGER )`,
-		},
-		{
-			name: "double-quote escape in identifier",
-			sql:  `CREATE TABLE "my""table" ( a INTEGER )`,
-			want: `CREATE TABLE "my""table" ( a INTEGER )`,
-		},
-		{
-			name: "both single and double quoted identifiers",
-			sql:  `CREATE TABLE "my  table" ( id INTEGER, body TEXT DEFAULT 'x  y' )`,
-			want: `CREATE TABLE "my  table" ( id INTEGER, body TEXT DEFAULT 'x  y' )`,
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			norm := normalizeSQL(tt.sql)
-			if norm != tt.want {
-				t.Fatalf("normalizeSQL(%q) =\n  %q\nwant\n  %q", tt.sql, norm, tt.want)
-			}
-		})
-	}
-}
-
-func TestNormalizeSQLAdversarialCases(t *testing.T) {
-	// Various edge cases and adversarial inputs
-	tests := []struct {
-		name string
-		sql  string
-		want string
-	}{
-		{
-			name: "unterminated single quote",
-			sql:  "CREATE TABLE t ( a TEXT DEFAULT 'x )",
-			want: "CREATE TABLE t ( a TEXT DEFAULT 'x )",
-		},
-		{
-			name: "unterminated block comment",
-			sql:  "CREATE TABLE t ( a INTEGER /* comment",
-			want: "CREATE TABLE t ( a INTEGER /* comment",
-		},
-		{
-			name: "adjacent string literals",
-			sql:  "CREATE TABLE t ( a TEXT DEFAULT 'x' 'y' )",
-			want: "CREATE TABLE t ( a TEXT DEFAULT 'x' 'y' )",
-		},
-		{
-			name: "literal containing -- (line comment marker)",
-			sql:  "CREATE TABLE t ( a TEXT DEFAULT 'foo -- bar' )",
-			want: "CREATE TABLE t ( a TEXT DEFAULT 'foo -- bar' )",
-		},
-		{
-			name: "literal containing /* and */ (block comment markers)",
-			sql:  "CREATE TABLE t ( a TEXT DEFAULT 'foo /* bar */ baz' )",
-			want: "CREATE TABLE t ( a TEXT DEFAULT 'foo /* bar */ baz' )",
-		},
-		{
-			name: "empty string literal",
-			sql:  "CREATE TABLE t ( a TEXT DEFAULT '' )",
-			want: "CREATE TABLE t ( a TEXT DEFAULT '' )",
-		},
-		{
-			name: "comment containing -- marker",
-			sql:  "CREATE TABLE t ( a INTEGER -- the -- marker )",
-			want: "CREATE TABLE t ( a INTEGER -- the -- marker )",
-		},
-		{
-			name: "CRLF after line comment",
-			sql:  "CREATE TABLE t ( a INTEGER -- comment\r\nb INTEGER )",
-			want: "CREATE TABLE t ( a INTEGER -- comment b INTEGER )",
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			norm := normalizeSQL(tt.sql)
-			if norm != tt.want {
-				t.Fatalf("normalizeSQL(%q) =\n  %q\nwant\n  %q", tt.sql, norm, tt.want)
-			}
-		})
-	}
-}
-
-func TestNormalizeSQLCollapsesWhitespaceInsideComments(t *testing.T) {
-	// Comments are cosmetic — internal whitespace differences should not create
-	// different signatures. Two CREATE statements differing only in comment
-	// formatting should normalize identically (fix for latent defect #3).
-	tests := []struct {
-		name string
-		sql  string
-		want string
-	}{
-		{
-			name: "line comment with double space normalizes to single space",
-			sql:  "CREATE TABLE t ( -- note  double\na INTEGER )",
-			want: "CREATE TABLE t ( -- note double a INTEGER )",
-		},
-		{
-			name: "line comment with multiple spaces",
-			sql:  "CREATE TABLE t (   --   spaces   everywhere  \na INTEGER )",
-			want: "CREATE TABLE t ( -- spaces everywhere a INTEGER )",
-		},
-		{
-			name: "block comment with double space normalizes to single space",
-			sql:  "CREATE TABLE t ( /* note  double */ a INTEGER )",
-			want: "CREATE TABLE t ( /* note double */ a INTEGER )",
-		},
-		{
-			name: "block comment with mixed whitespace",
-			sql:  "CREATE TABLE t ( /*  multi  space  comment  */ a INTEGER )",
-			want: "CREATE TABLE t ( /* multi space comment */ a INTEGER )",
-		},
-		{
-			name: "inline comment inside CREATE with extra spaces",
-			sql:  "CREATE TABLE t (\n  --  inline   comment\n  a INTEGER\n)",
-			want: "CREATE TABLE t ( -- inline comment a INTEGER )",
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			norm := normalizeSQL(tt.sql)
-			if norm != tt.want {
-				t.Fatalf("normalizeSQL(%q) =\n  %q\nwant\n  %q", tt.sql, norm, tt.want)
-			}
-		})
-	}
 }
