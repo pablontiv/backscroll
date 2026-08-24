@@ -143,25 +143,24 @@ func TestPrepareIndexDataReadReturnsReadOnlyConnection(t *testing.T) {
 }
 
 func TestPrepareIndexDataReadDoesNotApplyPendingMigration(t *testing.T) {
-	dbPath := filepath.Join(t.TempDir(), "index.db")
-	writer, err := storage.Open(dbPath)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if _, err := writer.DB().Exec(`DELETE FROM schema_migrations WHERE version = 13`); err != nil {
-		t.Fatal(err)
-	}
-	if err := writer.Close(); err != nil {
-		t.Fatal(err)
-	}
+	dbPath := newFixtureIndexDB(t, "v13.sql")
 
 	db, diag, err := prepareIndex(context.Background(), &config.Config{DatabasePath: dbPath}, indexDataRead)
 	if db != nil {
 		_ = db.Close()
 		t.Fatal("read preparation returned DB requiring migration")
 	}
-	if err == nil && diag == nil {
+	if err != nil {
+		t.Fatalf("read preparation returned unexpected error: %v", err)
+	}
+	if diag == nil {
 		t.Fatal("read preparation accepted pending migration")
+	}
+	if diag.Code != compat.CodeIndexStale {
+		t.Fatalf("read preparation diagnostic code=%q, want %q", diag.Code, compat.CodeIndexStale)
+	}
+	if !strings.Contains(diag.Summary, "migration") || !strings.Contains(diag.Summary, "step") {
+		t.Fatalf("read preparation diagnostic summary=%q, want pending migration-step summary", diag.Summary)
 	}
 
 	inspect, err := storage.OpenReadOnly(dbPath)
@@ -170,11 +169,37 @@ func TestPrepareIndexDataReadDoesNotApplyPendingMigration(t *testing.T) {
 	}
 	defer inspect.Close()
 	var count int
-	if err := inspect.DB().QueryRow(`SELECT COUNT(*) FROM schema_migrations WHERE version = 13`).Scan(&count); err != nil {
+	if err := inspect.DB().QueryRow(`SELECT COUNT(*) FROM schema_migrations WHERE version = 14`).Scan(&count); err != nil {
 		t.Fatal(err)
 	}
 	if count != 0 {
-		t.Fatalf("read path applied migration 13 count=%d", count)
+		t.Fatalf("read path applied migration 14 count=%d", count)
+	}
+	assertIndexedFilesColumnAbsent(t, inspect.DB(), "file_size")
+	assertIndexedFilesColumnAbsent(t, inspect.DB(), "file_mtime")
+}
+
+func assertIndexedFilesColumnAbsent(t *testing.T, db *sql.DB, column string) {
+	t.Helper()
+	rows, err := db.Query(`PRAGMA table_info(indexed_files)`)
+	if err != nil {
+		t.Fatalf("indexed_files table_info: %v", err)
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var cid int
+		var name, typ string
+		var notNull, pk int
+		var defaultValue sql.NullString
+		if err := rows.Scan(&cid, &name, &typ, &notNull, &defaultValue, &pk); err != nil {
+			t.Fatalf("scan indexed_files column: %v", err)
+		}
+		if name == column {
+			t.Fatalf("read path applied migration 14 column %s", column)
+		}
+	}
+	if err := rows.Err(); err != nil {
+		t.Fatalf("iterate indexed_files columns: %v", err)
 	}
 }
 
