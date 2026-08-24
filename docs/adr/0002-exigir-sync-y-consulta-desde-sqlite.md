@@ -1,7 +1,7 @@
 ---
 tipo: adr
 estado: accepted
-fecha: 2026-08-20
+fecha: "2026-08-20"
 contexto: El port Go reintrodujo el comando público read y varias rutas indexed-only que permiten consultar archivos o snapshots sin pasar por la ingesta y el índice perenne definidos por el North Star.
 decision: Ejecutar un sync incremental central antes de toda operación, retirar read e indexed-only y permitir únicamente recover como continuación controlada después de un intento de sync fallido.
 consecuencias: SQLite vuelve a ser la única fuente pública de consulta; el CLI pierde superficies incompatibles y todos los comandos operativos asumen un índice recién sincronizado.

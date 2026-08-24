@@ -1,7 +1,7 @@
 ---
 tipo: adr
 estado: accepted
-fecha: 2026-08-21
+fecha: "2026-08-21"
 contexto: Varias sesiones pueden invocar Backscroll al mismo tiempo y cada proceso repite discovery, hashing, parseo y sync; el costo cuadrático al agregar texto y la serialización de escritores SQLite convierten esa duplicación en latencia y presión de recursos.
 decision: Eliminar la agregación completa de texto, coordinar preparación y startup sync con un lock advisory del sistema operativo por base canónica y permitir que los procesos read-safe no propietarios consulten una snapshot confirmada compatible.
 consecuencias: Habrá un solo owner de preparación, sync y mutaciones por base; las lecturas concurrentes conservarán disponibilidad a cambio de observar temporalmente una snapshot anterior y de introducir un sidecar persistente, diagnósticos de frescura y una dependencia de locking portable.

@@ -3,11 +3,11 @@ version: 2
 schema:
     tipo:
         type: enum
-        enum: [adr]
+        values: [adr]
         required: true
     estado:
         type: enum
-        enum: [proposed, accepted, superseded]
+        values: [proposed, accepted, superseded]
         required: true
     fecha:
         type: string
