@@ -99,11 +99,15 @@ func coordinateStartup(ctx context.Context, cfg *config.Config, progress io.Writ
 			}
 			return startupLockFailure(cfg, err)
 		}
-		return runOwnedStartup(ctx, cfg, progress, startupMutation, lease)
+		return runOwnedStartup(ctx, cfg, progress, class, lease)
 	}
 }
 
 func runOwnedStartup(ctx context.Context, cfg *config.Config, progress io.Writer, class startupCommandClass, lease startupLease) startupResult {
+	if class == startupRemediation {
+		return startupResult{Config: cfg, Lease: lease}
+	}
+
 	// Measure index preparation time
 	var indexPrepareStart time.Time
 	if diagnosticsEnabled() {
