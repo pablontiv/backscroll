@@ -105,7 +105,7 @@ func TestEveryOperationalCommandRunsStartupBeforeHandler(t *testing.T) {
 		{argv: []string{"status"}, wantClass: startupSnapshotRead},
 		{argv: []string{"validate"}, wantClass: startupSnapshotRead},
 		{argv: []string{"config"}, wantClass: startupMetadataRead},
-		{argv: []string{"recover", "--from", "missing.db", "--dry-run"}, wantClass: startupMutation},
+		{argv: []string{"recover", "--from", "missing.db", "--dry-run"}, wantClass: startupRemediation},
 	}
 	for _, command := range commands {
 		argv := command.argv
@@ -1015,7 +1015,7 @@ func replaceRootCommandRunEWrapped(t *testing.T, root *cobra.Command, commandNam
 	for _, child := range root.Commands() {
 		if child.Name() == commandName {
 			child.Run = nil
-			child.RunE = wrapMutationRunE(runE)
+			child.RunE = wrapLeaseRetainingRunE(runE)
 			return
 		}
 	}

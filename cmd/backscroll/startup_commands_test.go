@@ -21,7 +21,7 @@ func TestEveryOperationalCommandHasApprovedStartupClass(t *testing.T) {
 		"annotate": startupMutation,
 		"purge":    startupMutation,
 		"rebuild":  startupMutation,
-		"recover":  startupMutation,
+		"recover":  startupRemediation,
 	}
 	if len(root.Commands()) != len(want) {
 		t.Fatalf("operational command count=%d want=%d", len(root.Commands()), len(want))
@@ -38,61 +38,67 @@ func TestEveryOperationalCommandHasApprovedStartupClass(t *testing.T) {
 	}
 }
 
-func TestMutationRegistrationReleasesStartupLease(t *testing.T) {
+func TestLeaseRetainingRegistrationReleasesStartupLease(t *testing.T) {
 	handlerErr := errors.New("handler failed")
-	for _, tc := range []struct {
-		name string
-		err  error
-	}{
-		{name: "success"},
-		{name: "handler error", err: handlerErr},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			lease := &fakeStartupLease{}
+	for _, class := range []startupCommandClass{startupMutation, startupRemediation} {
+		for _, tc := range []struct {
+			name string
+			err  error
+		}{
+			{name: "success"},
+			{name: "handler error", err: handlerErr},
+		} {
+			t.Run(string(class)+"/"+tc.name, func(t *testing.T) {
+				lease := &fakeStartupLease{}
+				cmd := &cobra.Command{
+					Use: "operation",
+					RunE: func(*cobra.Command, []string) error {
+						return tc.err
+					},
+				}
+				root := &cobra.Command{Use: "root"}
+				registerStartupCommand(root, class, cmd)
+				cmd.SetContext(context.WithValue(context.Background(), startupContextKey{}, startupResult{Lease: lease}))
+
+				err := cmd.RunE(cmd, nil)
+				if !errors.Is(err, tc.err) {
+					t.Fatalf("RunE error=%v, want %v", err, tc.err)
+				}
+				if lease.releases != 1 {
+					t.Fatalf("lease releases=%d, want 1", lease.releases)
+				}
+			})
+		}
+	}
+}
+
+func TestLeaseRetainingRegistrationJoinsLeaseReleaseError(t *testing.T) {
+	releaseErr := errors.New("release failed")
+	handlerErr := errors.New("handler failed")
+	for _, class := range []startupCommandClass{startupMutation, startupRemediation} {
+		t.Run(string(class), func(t *testing.T) {
+			lease := &fakeStartupLease{err: releaseErr}
 			cmd := &cobra.Command{
-				Use: "mutate",
+				Use: "operation",
 				RunE: func(*cobra.Command, []string) error {
-					return tc.err
+					return handlerErr
 				},
 			}
 			root := &cobra.Command{Use: "root"}
-			registerStartupCommand(root, startupMutation, cmd)
+			registerStartupCommand(root, class, cmd)
 			cmd.SetContext(context.WithValue(context.Background(), startupContextKey{}, startupResult{Lease: lease}))
 
 			err := cmd.RunE(cmd, nil)
-			if !errors.Is(err, tc.err) {
-				t.Fatalf("RunE error=%v, want %v", err, tc.err)
+			if !errors.Is(err, handlerErr) {
+				t.Fatalf("RunE error=%v does not include handler error", err)
+			}
+			if !errors.Is(err, releaseErr) {
+				t.Fatalf("RunE error=%v does not include lease release error", err)
 			}
 			if lease.releases != 1 {
 				t.Fatalf("lease releases=%d, want 1", lease.releases)
 			}
 		})
-	}
-}
-
-func TestMutationRegistrationJoinsLeaseReleaseError(t *testing.T) {
-	releaseErr := errors.New("release failed")
-	handlerErr := errors.New("handler failed")
-	lease := &fakeStartupLease{err: releaseErr}
-	cmd := &cobra.Command{
-		Use: "mutate",
-		RunE: func(*cobra.Command, []string) error {
-			return handlerErr
-		},
-	}
-	root := &cobra.Command{Use: "root"}
-	registerStartupCommand(root, startupMutation, cmd)
-	cmd.SetContext(context.WithValue(context.Background(), startupContextKey{}, startupResult{Lease: lease}))
-
-	err := cmd.RunE(cmd, nil)
-	if !errors.Is(err, handlerErr) {
-		t.Fatalf("RunE error=%v does not include handler error", err)
-	}
-	if !errors.Is(err, releaseErr) {
-		t.Fatalf("RunE error=%v does not include lease release error", err)
-	}
-	if lease.releases != 1 {
-		t.Fatalf("lease releases=%d, want 1", lease.releases)
 	}
 }
 

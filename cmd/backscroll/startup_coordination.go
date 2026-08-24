@@ -138,7 +138,7 @@ func runOwnedStartup(ctx context.Context, cfg *config.Config, progress io.Writer
 		return ownedStartupFailureResult(cfg, class, lease, &startupFailure{Stage: startupStageStartupSync, Cause: err, Diagnostic: d, Recoverable: true})
 	}
 	result := startupResult{Config: cfg}
-	if class == startupMutation {
+	if startupClassRetainsLease(class) {
 		result.Lease = lease
 		return result
 	}
@@ -147,7 +147,7 @@ func runOwnedStartup(ctx context.Context, cfg *config.Config, progress io.Writer
 
 func ownedStartupFailureResult(cfg *config.Config, class startupCommandClass, lease startupLease, failure *startupFailure) startupResult {
 	result := startupResult{Config: cfg, Failure: failure}
-	if class == startupMutation {
+	if startupClassRetainsLease(class) {
 		result.Lease = lease
 		return result
 	}

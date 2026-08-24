@@ -201,7 +201,7 @@ query merges both by rank position (RRF).`,
 			if failure == nil {
 				return nil
 			}
-			if cmd.Name() == "recover" && failure.Recoverable && class == startupMutation {
+			if cmd.Name() == "recover" && failure.Recoverable && startupClassRetainsLease(class) {
 				return nil
 			}
 			failureErr := result.release(failure)
@@ -223,7 +223,7 @@ query merges both by rank position (RRF).`,
 	registerStartupCommand(root, startupSnapshotRead, newStatusCmd(stdout, stderr))
 	registerStartupCommand(root, startupMetadataRead, newConfigCmd(stdout, stderr))
 	registerStartupCommand(root, startupMutation, newAnnotateCmd(stdout, stderr))
-	registerStartupCommand(root, startupMutation, newRecoverCmd(stdout, stderr))
+	registerStartupCommand(root, startupRemediation, newRecoverCmd(stdout, stderr))
 
 	return root
 }
