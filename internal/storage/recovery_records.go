@@ -26,23 +26,23 @@ func ReadRecoveryInputFromQueryer(ctx context.Context, q compat.Queryer) (compat
 		return compat.RecoveryInput{}, diag, err
 	}
 
-	records, diag, err := readRecordsForSignature(ctx, q, plan.From.Signature)
+	records, diag, err := readRecordsForShape(ctx, q, plan.From)
 	if err != nil || diag != nil {
 		return compat.RecoveryInput{}, diag, err
 	}
 	return compat.RecoveryInput{Shape: plan.From, Records: records, RowCount: len(records)}, nil, nil
 }
 
-func readRecordsForSignature(ctx context.Context, q compat.Queryer, signature string) ([]models.IndexedRecord, *compat.Diagnostic, error) {
+func readRecordsForShape(ctx context.Context, q compat.Queryer, shape compat.SchemaShape) ([]models.IndexedRecord, *compat.Diagnostic, error) {
 	catalog, err := compat.LoadCatalog()
 	if err != nil {
 		return nil, nil, fmt.Errorf("load lineage catalog: %w", err)
 	}
 
-	if !catalog.IsKnownSignature(signature) {
+	if !catalog.IsKnownShape(shape) {
 		return nil, &compat.Diagnostic{
 			Code:    compat.CodeUnsupportedLineage,
-			Summary: fmt.Sprintf("unsupported index schema %s", signature),
+			Summary: fmt.Sprintf("unsupported index schema version %d signature %s", shape.AppliedVersion, shape.Signature),
 		}, nil
 	}
 

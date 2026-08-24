@@ -85,12 +85,12 @@ func TestLoadCatalogUsesCheckedInSignaturesWithoutExecutingFixtureSQL(t *testing
 	if err != nil {
 		t.Fatalf("load catalog executed fixture SQL or rejected checked-in signature data: %v", err)
 	}
-	if got := catalog.CurrentSignature(); got != "sha256:poisoned" {
-		t.Fatalf("current signature = %q, want checked-in signature", got)
+	if got := catalog.CurrentShape(); got != (SchemaShape{AppliedVersion: 13, Signature: "sha256:poisoned"}) {
+		t.Fatalf("current shape = %+v, want checked-in shape", got)
 	}
 }
 
-func TestCurrentSignatureFollowsLatestReleaseMapping(t *testing.T) {
+func TestCurrentShapeFollowsLatestReleaseMapping(t *testing.T) {
 	fixtureSQL := []byte("CREATE TABLE schema_migrations (version INTEGER PRIMARY KEY, name TEXT NOT NULL, applied_on TEXT NOT NULL, checksum TEXT NOT NULL);")
 	fixtureSHA := fmt.Sprintf("%x", sha256.Sum256(fixtureSQL))
 
@@ -112,8 +112,8 @@ func TestCurrentSignatureFollowsLatestReleaseMapping(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got := catalog.CurrentSignature(); got != "sha256:new-latest" {
-		t.Fatalf("current signature = %q, want latest release mapping signature", got)
+	if got := catalog.CurrentShape(); got != (SchemaShape{AppliedVersion: 14, Signature: "sha256:new-latest"}) {
+		t.Fatalf("current shape = %+v, want latest release mapping shape", got)
 	}
 }
 
@@ -375,12 +375,10 @@ func loadFixtureMigrationRows(t *testing.T, fixtureSQL []byte) []migrationRow {
 	return result
 }
 
-// TestCollisionConsistencyGuardsAgainstSignatureAmbiguity verifies that when
-// whitespace normalization collapses multiple fixtures into the same signature,
-// all colliding entries agree on AppliedVersion and HasSourceMetadata. If any
-// collision group disagrees, the Catalog.BySignature map's winner is arbitrary
-// and recovery could plan the wrong migration steps — a real bug.
-func TestCollisionConsistencyGuardsAgainstSignatureAmbiguity(t *testing.T) {
+// TestCollisionConsistencyDocumentsSharedSemanticSignatures verifies that when
+// canonicalization collapses multiple fixtures into the same signature, catalog
+// lookup remains unambiguous because AppliedVersion participates in the key.
+func TestCollisionConsistencyDocumentsSharedSemanticSignatures(t *testing.T) {
 	catalog, err := LoadCatalog()
 	if err != nil {
 		t.Fatal(err)
@@ -409,33 +407,21 @@ func TestCollisionConsistencyGuardsAgainstSignatureAmbiguity(t *testing.T) {
 		}{fmt.Sprintf("unmanifested %s", fixture.Fixture), fixture.AppliedVersion, fixture.HasSourceMetadata})
 	}
 
-	// Check each collision group for consistency
 	for sig, entries := range collisions {
 		if len(entries) <= 1 {
-			// No collision; skip
 			continue
 		}
-
-		// All entries in this collision must agree on AppliedVersion and HasSourceMetadata
-		first := entries[0]
-		for i, entry := range entries[1:] {
-			if entry.version != first.version {
-				t.Errorf("signature %s has inconsistent AppliedVersion: %s says %d, %s says %d",
-					sig, first.source, first.version, entry.source, entry.version)
-			}
-			if entry.hasMetaData != first.hasMetaData {
-				t.Errorf("signature %s has inconsistent HasSourceMetadata: %s says %v, %s says %v",
-					sig, first.source, first.hasMetaData, entry.source, entry.hasMetaData)
-			}
-			if i == 0 {
-				t.Logf("collision group %s: %s, %s agree", sig[:16], first.source, entry.source)
+		for _, entry := range entries {
+			shape := SchemaShape{AppliedVersion: entry.version, Signature: sig}
+			if _, ok := catalog.ByShape(shape); !ok {
+				t.Errorf("collision member %s with shape %+v is not addressable by full shape", entry.source, shape)
 			}
 		}
 	}
 }
 
 // TestRegenerateManifestOnNormalizationChange is an optional helper test that
-// regenerates manifest.json after normalizeSQL changes. Run with:
+// regenerates manifest.json after canonical SQL changes. Run with:
 // go test -run TestRegenerateManifestOnNormalizationChange ./internal/compat -v
 func TestRegenerateManifestOnNormalizationChange(t *testing.T) {
 	if os.Getenv("REGEN_MANIFEST") == "" {

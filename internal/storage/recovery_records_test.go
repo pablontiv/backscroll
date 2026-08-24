@@ -115,6 +115,28 @@ func TestReadRecoveryInputRejectsUnknownShape(t *testing.T) {
 	assertRecoveryFixtureUnchanged(t, handle)
 }
 
+func TestReadRecordsForShapeRejectsKnownSignatureWithUnknownVersion(t *testing.T) {
+	dbPath := createFixtureDatabase(t, "v14.sql")
+	db, err := OpenReadOnly(dbPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	catalog, err := compat.LoadCatalog()
+	if err != nil {
+		t.Fatal(err)
+	}
+	shape := catalog.CurrentShape()
+	shape.AppliedVersion++
+	records, diag, err := readRecordsForShape(context.Background(), db.DB(), shape)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if records != nil || diag == nil || diag.Code != compat.CodeUnsupportedLineage {
+		t.Fatalf("records=%v diagnostic=%+v", records, diag)
+	}
+}
+
 func TestReadRecoveryInputRejectsMissingCanonicalPayload(t *testing.T) {
 	dbPath := buildRecoveryFixtureDatabase(t, "active-v13.sql")
 	mutateRecoveryDatabase(t, dbPath, `

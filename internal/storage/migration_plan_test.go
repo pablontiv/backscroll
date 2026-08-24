@@ -1537,18 +1537,18 @@ func onlySnapshot(t *testing.T, dbPath string) string {
 	return matches[0]
 }
 
-// TestMigratedFixtureSignatureIsInCatalog is a regression test for issue #52.
+// TestMigratedFixtureShapeIsInCatalog is a regression test for issue #52.
 // It verifies that when a V1 fixture is migrated forward through the real
-// SetupSchema() code, the resulting database schema signature is recognized by
-// the catalog. This prevents cosmetic DDL formatting differences from silently
+// SetupSchema() code, the resulting database schema shape is recognized by the
+// catalog. This prevents cosmetic DDL formatting differences from silently
 // ejecting valid schemas from the lineage catalog.
 //
-// Before the fix to normalizeSQL() (making it whitespace-insensitive), databases
-// that were created at V1 and then migrated V8→V13 by published releases would
-// produce a signature not in the catalog, causing every operational command to
-// reject the database as "unsupported_lineage". This test would have caught that
-// regression during development.
-func TestMigratedFixtureSignatureIsInCatalog(t *testing.T) {
+// Before canonical SQL inspection made DDL formatting whitespace-insensitive,
+// databases that were created at V1 and then migrated V8→V13 by published
+// releases would produce a signature not in the catalog, causing every
+// operational command to reject the database as "unsupported_lineage". This test
+// would have caught that regression during development.
+func TestMigratedFixtureShapeIsInCatalog(t *testing.T) {
 	// Load v1.sql, the earliest released version fixture
 	dbPath := createFixtureDatabase(t, "v1.sql")
 
@@ -1571,9 +1571,8 @@ func TestMigratedFixtureSignatureIsInCatalog(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// Assert that the migrated database signature is in the catalog
-	if !catalog.IsKnownSignature(plan.From.Signature) {
-		t.Errorf("migrated V1→V13 database has signature %s not in catalog; this was the bug in issue #52",
-			plan.From.Signature)
+	// Assert that the migrated database shape is in the catalog.
+	if !catalog.IsKnownShape(plan.From) {
+		t.Errorf("migrated V1→V13 database has shape %+v not in catalog; this was the bug in issue #52", plan.From)
 	}
 }

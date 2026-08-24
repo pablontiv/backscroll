@@ -20,8 +20,8 @@ type Catalog struct {
 	Releases             []catalogRelease
 	UnmanifestedFixtures []catalogFixture
 
-	lineages         map[string]Lineage
-	currentSignature string
+	lineages     map[lineageKey]Lineage
+	currentShape SchemaShape
 }
 
 type catalogRelease struct {
@@ -47,22 +47,26 @@ type Lineage struct {
 	remainingSteps []MigrationStep
 }
 
-func (c Catalog) BySignature(signature string) (Lineage, bool) {
-	lineage, ok := c.lineages[signature]
+type lineageKey struct {
+	appliedVersion int
+	signature      string
+}
+
+func keyForShape(shape SchemaShape) lineageKey {
+	return lineageKey{appliedVersion: shape.AppliedVersion, signature: shape.Signature}
+}
+
+func (c Catalog) ByShape(shape SchemaShape) (Lineage, bool) {
+	lineage, ok := c.lineages[keyForShape(shape)]
 	return lineage, ok
 }
 
-// IsKnownSignature returns true if the signature is in the lineage catalog.
-// Use this to check if a schema is recognized, independent of its migration
-// status or other semantic properties.
-func (c Catalog) IsKnownSignature(signature string) bool {
-	_, ok := c.lineages[signature]
+func (c Catalog) IsKnownShape(shape SchemaShape) bool {
+	_, ok := c.ByShape(shape)
 	return ok
 }
 
-func (c Catalog) CurrentSignature() string {
-	return c.currentSignature
-}
+func (c Catalog) CurrentShape() SchemaShape { return c.currentShape }
 
 func (l Lineage) RemainingSteps() []MigrationStep {
 	steps := make([]MigrationStep, len(l.remainingSteps))
@@ -177,21 +181,21 @@ func (c Catalog) schemaFixtures() []catalogFixture {
 }
 
 func (c *Catalog) attachLineages() error {
-	lineages := map[string]Lineage{}
+	lineages := map[lineageKey]Lineage{}
 	for _, fixture := range c.schemaFixtures() {
 		shape := SchemaShape{AppliedVersion: fixture.AppliedVersion, Signature: fixture.Signature}
-		lineages[fixture.Signature] = Lineage{
+		lineages[keyForShape(shape)] = Lineage{
 			shape:          shape,
 			remainingSteps: remainingStepsFor(fixture.AppliedVersion, fixture.HasSourceMetadata),
 		}
 	}
 	for _, release := range c.Releases {
 		if release.Tag == c.LatestGoRelease {
-			c.currentSignature = release.Signature
+			c.currentShape = SchemaShape{AppliedVersion: release.AppliedVersion, Signature: release.Signature}
 			break
 		}
 	}
-	if c.currentSignature == "" {
+	if c.currentShape.Signature == "" {
 		return fmt.Errorf("release schema catalog latest release %q has no signature", c.LatestGoRelease)
 	}
 	c.lineages = lineages
