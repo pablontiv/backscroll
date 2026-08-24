@@ -197,15 +197,31 @@ func (c *Catalog) attachLineages() error {
 		}
 		lineages[key] = lineage
 	}
-	for _, release := range c.Releases {
-		if release.Tag == c.LatestGoRelease {
-			c.currentShape = SchemaShape{AppliedVersion: release.AppliedVersion, Signature: release.Signature}
-			break
+	maxVersion := 0
+	for _, lineage := range lineages {
+		if lineage.shape.AppliedVersion > maxVersion {
+			maxVersion = lineage.shape.AppliedVersion
 		}
 	}
-	if c.currentShape.Signature == "" {
-		return fmt.Errorf("release schema catalog latest release %q has no signature", c.LatestGoRelease)
+	if maxVersion == 0 {
+		return fmt.Errorf("release schema catalog has no fixtures")
 	}
+
+	var maxShape SchemaShape
+	for _, lineage := range lineages {
+		shape := lineage.shape
+		if shape.AppliedVersion != maxVersion {
+			continue
+		}
+		if maxShape.Signature == "" {
+			maxShape = shape
+			continue
+		}
+		if shape.Signature != maxShape.Signature {
+			return fmt.Errorf("ambiguous current head version=%d: signatures %s and %s", maxVersion, maxShape.Signature, shape.Signature)
+		}
+	}
+	c.currentShape = maxShape
 	c.lineages = lineages
 	return nil
 }

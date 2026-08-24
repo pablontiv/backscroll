@@ -99,6 +99,9 @@ func TestEveryCatalogFixtureReachesCurrentSemanticHead(t *testing.T) {
 			if len(plan.Steps) != 0 {
 				t.Fatalf("fixture %s retained steps: %+v", fixture.name, plan.Steps)
 			}
+			if plan.From != catalog.CurrentShape() {
+				t.Fatalf("fixture %s reached shape %+v, want %+v", fixture.name, plan.From, catalog.CurrentShape())
+			}
 			wantMigrationRows := authoritativeCurrentMigrationRows()
 			if fixture.name == "v13-development-alter-built.sql" {
 				for i := range wantMigrationRows {

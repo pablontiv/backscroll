@@ -90,18 +90,20 @@ func TestLoadCatalogUsesCheckedInSignaturesWithoutExecutingFixtureSQL(t *testing
 	}
 }
 
-func TestCurrentShapeFollowsLatestReleaseMapping(t *testing.T) {
+func TestCurrentShapeFollowsMaxAppliedVersionNotLatestRelease(t *testing.T) {
 	fixtureSQL := []byte("CREATE TABLE schema_migrations (version INTEGER PRIMARY KEY, name TEXT NOT NULL, applied_on TEXT NOT NULL, checksum TEXT NOT NULL);")
 	fixtureSHA := fmt.Sprintf("%x", sha256.Sum256(fixtureSQL))
 
 	withReleaseSchemaFS(t, fstest.MapFS{
 		"testdata/release-schemas/manifest.json": {Data: []byte(fmt.Sprintf(`{
 			"FirstGoRelease": "v0.3.7",
-			"LatestGoRelease": "v3.2.6",
+			"LatestGoRelease": "v3.2.5",
 			"Releases": [
-				{"Tag": "v0.3.7", "Fixture": "v13.sql", "ProvenanceSHA256": %q, "Signature": "sha256:old-latest", "AppliedVersion": 13},
-				{"Tag": "v3.2.5", "Fixture": "v13.sql", "ProvenanceSHA256": %q, "Signature": "sha256:old-latest", "AppliedVersion": 13},
-				{"Tag": "v3.2.6", "Fixture": "v14.sql", "ProvenanceSHA256": %q, "Signature": "sha256:new-latest", "AppliedVersion": 14}
+				{"Tag": "v0.3.7", "Fixture": "v13.sql", "ProvenanceSHA256": %q, "Signature": "sha256:latest-release", "AppliedVersion": 13},
+				{"Tag": "v3.2.5", "Fixture": "v13.sql", "ProvenanceSHA256": %q, "Signature": "sha256:latest-release", "AppliedVersion": 13}
+			],
+			"UnmanifestedFixtures": [
+				{"Fixture": "v14.sql", "ProvenanceSHA256": %q, "Signature": "sha256:unmanifested-head", "AppliedVersion": 14, "Provenance": "local current fixture"}
 			]
 		}`, fixtureSHA, fixtureSHA, fixtureSHA))},
 		"testdata/release-schemas/v13.sql": {Data: fixtureSQL},
@@ -112,8 +114,8 @@ func TestCurrentShapeFollowsLatestReleaseMapping(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got := catalog.CurrentShape(); got != (SchemaShape{AppliedVersion: 14, Signature: "sha256:new-latest"}) {
-		t.Fatalf("current shape = %+v, want latest release mapping shape", got)
+	if got := catalog.CurrentShape(); got != (SchemaShape{AppliedVersion: 14, Signature: "sha256:unmanifested-head"}) {
+		t.Fatalf("current shape = %+v, want max applied version shape", got)
 	}
 }
 
@@ -388,6 +390,43 @@ func TestAttachLineagesAcceptsEquivalentPhysicalHistories(t *testing.T) {
 	}
 	if err := catalog.attachLineages(); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestAttachLineagesAcceptsMultipleSignaturesBelowCurrentHead(t *testing.T) {
+	for i := 0; i < 200; i++ {
+		catalog := Catalog{
+			Releases: []catalogRelease{
+				{Tag: "v0.3.7", Fixture: "v3.sql", Signature: "sha256:v3-with-source", AppliedVersion: 3, HasSourceMetadata: true},
+				{Tag: "v3.2.5", Fixture: "v13.sql", Signature: "sha256:v13", AppliedVersion: 13, HasSourceMetadata: false},
+			},
+			UnmanifestedFixtures: []catalogFixture{
+				{Fixture: "v3-no-source-metadata.sql", Signature: "sha256:v3-without-source", AppliedVersion: 3, HasSourceMetadata: false, Provenance: "historical V3 without source_metadata"},
+				{Fixture: "v5-with-source-metadata.sql", Signature: "sha256:v5-with-source", AppliedVersion: 5, HasSourceMetadata: true, Provenance: "historical V5 with source_metadata"},
+				{Fixture: "v5-without-source-metadata.sql", Signature: "sha256:v5-without-source", AppliedVersion: 5, HasSourceMetadata: false, Provenance: "historical V5 without source_metadata"},
+				{Fixture: "v14.sql", Signature: "sha256:v14", AppliedVersion: 14, HasSourceMetadata: false, Provenance: "semantic head"},
+			},
+		}
+		if err := catalog.attachLineages(); err != nil {
+			t.Fatalf("iteration %d: attach lineages rejected non-head signatures: %v", i, err)
+		}
+		if got := catalog.CurrentShape(); got != (SchemaShape{AppliedVersion: 14, Signature: "sha256:v14"}) {
+			t.Fatalf("iteration %d: current shape = %+v, want V14 head", i, got)
+		}
+	}
+}
+
+func TestAttachLineagesRejectsAmbiguousCurrentHead(t *testing.T) {
+	catalog := Catalog{
+		Releases: []catalogRelease{
+			{Tag: "v3.2.5", Fixture: "fresh.sql", Signature: "sha256:head-a", AppliedVersion: 14},
+		},
+		UnmanifestedFixtures: []catalogFixture{
+			{Fixture: "alter.sql", Signature: "sha256:head-b", AppliedVersion: 14, Provenance: "competing head"},
+		},
+	}
+	if err := catalog.attachLineages(); err == nil || !strings.Contains(err.Error(), "ambiguous current head version=14") {
+		t.Fatalf("current head ambiguity error = %v", err)
 	}
 }
 
