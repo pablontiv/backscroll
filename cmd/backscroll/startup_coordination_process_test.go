@@ -20,7 +20,7 @@ import (
 
 const (
 	startupCoordinationSeedText = "singleflight snapshot sentinel"
-	startupCoordinationSeedUUID = "seed-u"
+	startupCoordinationSeedUUID = "11111111-1111-4111-8111-111111111111"
 )
 
 func TestStartupCoordinationHelperProcess(t *testing.T) {
@@ -171,6 +171,48 @@ func TestStartupCoordinationMutationTimeoutNoSideEffect(t *testing.T) {
 	writeFile(t, release, "release")
 	requireChildSuccess(t, owner, 2*time.Second)
 	assertStartupLockSidecarExists(t, dbPath)
+}
+
+func TestStartupCoordinationRemediationWaitsForOwner(t *testing.T) {
+	dir := t.TempDir()
+	dbPath := filepath.Join(dir, "index.db")
+	seedStartupCoordinationDB(t, dbPath)
+	setIndexPolicyEnv(t, dbPath, t.TempDir())
+
+	counter := filepath.Join(dir, "sync-counter.txt")
+	ready := filepath.Join(dir, "owner-ready")
+	release := filepath.Join(dir, "owner-release")
+
+	owner := startCoordinationChild(t, []string{"status", "--json"},
+		"BACKSCROLL_SYNC_COUNTER="+counter,
+		"BACKSCROLL_SYNC_READY="+ready,
+		"BACKSCROLL_SYNC_RELEASE="+release,
+		"BACKSCROLL_SYNC_BLOCK=1",
+	)
+	waitForPath(t, ready, 10*time.Second)
+
+	blocked := startCoordinationChild(t, []string{"recover", "--from", dbPath, "--dry-run"},
+		"BACKSCROLL_MUTATION_WAIT=100ms",
+	)
+	if err := waitForChild(t, blocked, 10*time.Second); err == nil {
+		t.Fatal("busy remediation unexpectedly succeeded")
+	}
+	assertStderrContains(t, blocked, "sync_in_progress")
+	if strings.Contains(blocked.stdout.String(), "recovery dry run") {
+		t.Fatalf("blocked remediation emitted recovery output: %q", blocked.stdout.String())
+	}
+
+	if err := os.WriteFile(release, []byte("release"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	requireChildSuccess(t, owner, 10*time.Second)
+
+	retry := startCoordinationChild(t, []string{"recover", "--from", dbPath, "--dry-run"})
+	requireChildSuccess(t, retry, 10*time.Second)
+	if !strings.Contains(retry.stdout.String(), "recovery dry run") {
+		t.Fatalf("retry stdout=%q", retry.stdout.String())
+	}
+	assertCounterLines(t, counter, 1)
 }
 
 func TestStartupCoordinationCrashRecovery(t *testing.T) {
