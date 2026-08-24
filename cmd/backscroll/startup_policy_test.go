@@ -645,17 +645,11 @@ func TestRejectedNonRecoverCommandReleasesBeforeDiagnostic(t *testing.T) {
 	}
 }
 
-func TestRecoverContinuationRetainsLeaseUntilHandlerReturns(t *testing.T) {
+func TestRecoverRemediationRetainsLeaseUntilHandlerReturns(t *testing.T) {
 	lease := &fakeStartupLease{}
-	startupErr := errors.New("startup recoverable")
 	var stdout, stderr bytes.Buffer
 	root := buildRootCmdWithStartup(&stdout, &stderr, func(context.Context, io.Writer, startupCommandClass) startupResult {
-		return startupResult{Config: &config.Config{DatabasePath: filepath.Join(t.TempDir(), "index.db")}, Lease: lease, Failure: &startupFailure{
-			Stage:       startupStageStartupSync,
-			Cause:       startupErr,
-			Diagnostic:  compat.Diagnostic{Code: compat.CodeIndexStale, Summary: startupErr.Error()},
-			Recoverable: true,
-		}}
+		return startupResult{Config: &config.Config{DatabasePath: filepath.Join(t.TempDir(), "index.db")}, Lease: lease}
 	})
 	replaceRootCommandRunEWrapped(t, root, "recover", func(cmd *cobra.Command, args []string) error {
 		if lease.releases != 0 {
