@@ -1,7 +1,7 @@
-# dagu-feature-bundle: @a4s/omp-dagu@0.3.101 source=pablontiv/a4s@04846df5940d65b8e230eafadff6621ae9186122 bootstrap=bootstrap-backscroll-v0-3-101 dagu=2.20.1
+# dagu-feature-bundle: @a4s/omp-dagu@0.3.108 source=pablontiv/a4s@2a0c2b100719627eb3d9214d798ab7c57a47f661 bootstrap=bootstrap-backscroll-v0-3-108 dagu=2.20.1
 labels:
   - workspace=backscroll
-  - dagu-feature-bundle=0.3.101
+  - dagu-feature-bundle=0.3.108
 queue: backscroll
 type: graph
 dotenv: []
@@ -32,7 +32,7 @@ env:
   - PRIMARY: "/Users/Shared/harness/backscroll"
   - RUN: ${context.run.id}
   - WORKTREE: ${PRIMARY}/.workspace/worktrees/poc-${RUN}
-  - DAGU_FEATURE_BUNDLE: "dagu-feature-bundle=0.3.101 source=pablontiv/a4s@04846df5940d65b8e230eafadff6621ae9186122 bootstrap=bootstrap-backscroll-v0-3-101"
+  - DAGU_FEATURE_BUNDLE: "dagu-feature-bundle=0.3.108 source=pablontiv/a4s@2a0c2b100719627eb3d9214d798ab7c57a47f661 bootstrap=bootstrap-backscroll-v0-3-108"
   - DAGU_RESOURCE_GUARD: |
       resource_lock() {
         local primary common expected actual attempt
@@ -460,7 +460,16 @@ handler_on:
             STATUS=$(dagu status poc --run-id "$RUN")
             if grep -q "^Waiting -" <<<"$STATUS"; then
               ITERATION=$(sed -nE "s/.*push-back iteration: ([0-9]+).*/\1/p" <<<"$STATUS" | head -1)
-              dagu human-task push-back poc --run-id "$RUN" --step fix_result --expected-iteration "${ITERATION:-0}"
+              transition=0
+              dagu human-task push-back poc --run-id "$RUN" --step fix_result --expected-iteration "${ITERATION:-0}" || transition=$?
+              if (( transition != 0 )); then
+                STATUS=$(dagu status poc --run-id "$RUN")
+                if grep -q "^Failed -" <<<"$STATUS" &&
+                   ATTEMPT=$(curl -fsS --max-time 10 --get "http://127.0.0.1:${DAGU_PORT:-8080}/api/v1/event-logs" --data-urlencode "dagName=poc" --data-urlencode "dagRunId=$RUN" --data-urlencode "paginationMode=cursor" --data-urlencode "limit=1" | jq -er ".entries[0] | select(.type == \"dag.run.failed\" and .data.dag_run_status.error == \"process terminated unexpectedly - stale local process detected\") | .attemptId"); then
+                  printf "stale-process repair: run=%s attempt=%s step=fix_result; recover: dagu retry --run-id %s --step scope_gate --downstream poc\n" "$RUN" "${ATTEMPT:-unknown}" "$RUN" >&2
+                fi
+                exit "$transition"
+              fi
               exit 0
             fi
             sleep 1
