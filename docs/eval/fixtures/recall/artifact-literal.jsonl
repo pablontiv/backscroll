@@ -1,0 +1,1 @@
+{"uuid":"eval-artifact","timestamp":"2026-01-01T00:00:00Z","sessionId":"eval-artifact-session","cwd":"/synthetic/eval","type":"assistant","message":{"role":"assistant","content":"The cobalt retention contract keeps durable records available after source removal."}}

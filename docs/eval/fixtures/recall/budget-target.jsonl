@@ -1,0 +1,1 @@
+{"uuid":"eval-budget","timestamp":"2026-01-01T00:08:00Z","sessionId":"eval-budget-session","cwd":"/synthetic/eval","type":"assistant","message":{"role":"assistant","content":"The quartz budget marker is deliberately too large to fit in a two-token robot payload."}}
