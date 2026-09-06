@@ -21,6 +21,7 @@ type options struct {
 type commandClient struct {
 	bin string
 	env []string
+	dir string
 }
 
 func main() { os.Exit(runMain(os.Args[1:], os.Stdout, os.Stderr)) }
@@ -58,6 +59,7 @@ func runMain(args []string, stdout, stderr io.Writer) int {
 		return 2
 	}
 	fixtureRoot := ""
+	workDir := ""
 	env := os.Environ()
 	cleanup := func() {}
 	digest := "operator-backed"
@@ -68,9 +70,10 @@ func runMain(args []string, stdout, stderr io.Writer) int {
 			return 2
 		}
 		fixtureRoot, env, cleanup, digest = prepared.FixtureRoot, prepared.Env, prepared.Cleanup, prepared.FixtureDigest
+		workDir = prepared.WorkDir
 		defer cleanup()
 	}
-	client := commandClient{bin: o.bin, env: env}
+	client := commandClient{bin: o.bin, env: env, dir: workDir}
 	status := client.execute([]string{"status", "--json"})
 	if status.Err != nil || status.ExitCode != 0 {
 		_, _ = fmt.Fprintf(stderr, "status failed (exit %d): %s\n", status.ExitCode, strings.TrimSpace(status.Stderr))
@@ -110,6 +113,9 @@ func searchArgs(query string, flags []string, fields string, maxTokens int) []st
 func (c commandClient) execute(args []string) commandResult {
 	cmd := exec.Command(c.bin, args...)
 	cmd.Env = c.env
+	if c.dir != "" {
+		cmd.Dir = c.dir
+	}
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout, cmd.Stderr = &stdout, &stderr
 	err := cmd.Run()

@@ -3,8 +3,10 @@ package main
 import (
 	"bytes"
 	"errors"
+	"fmt"
 	"io"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -172,6 +174,71 @@ printf '%s\n' 'diagnostic remains on stderr' >&2
 	}
 	if code := runMain([]string{"--dataset", "unsupported"}, io.Discard, io.Discard); code != 2 {
 		t.Fatalf("invalid options code=%d, want 2", code)
+	}
+}
+
+func TestEvalScriptPreservesEvaluatorExitCode(t *testing.T) {
+	repoRoot, err := filepath.Abs(filepath.Join("..", ".."))
+	if err != nil {
+		t.Fatal(err)
+	}
+	isolatedHome := t.TempDir()
+	cmd := exec.Command(filepath.Join(repoRoot, "scripts", "eval.sh"), "--dataset", "unsupported")
+	cmd.Dir = repoRoot
+	cmd.Env = overrideEnv(os.Environ(), map[string]string{
+		"HOME":                  isolatedHome,
+		"XDG_CONFIG_HOME":       filepath.Join(isolatedHome, "config"),
+		"BACKSCROLL_CONFIG_DIR": filepath.Join(isolatedHome, "config"),
+		"GOTELEMETRY":           "off",
+	})
+	output, err := cmd.CombinedOutput()
+	var exitErr *exec.ExitError
+	if !errors.As(err, &exitErr) {
+		t.Fatalf("eval.sh error = %v, output = %s", err, output)
+	}
+	if exitErr.ExitCode() != 2 {
+		t.Fatalf("eval.sh exit = %d, want 2; output = %s", exitErr.ExitCode(), output)
+	}
+}
+
+func TestSyntheticEvaluationIgnoresInvokerLocalConfig(t *testing.T) {
+	invokerDir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(invokerDir, "backscroll.toml"), []byte("[sources]\nlegacy = []\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	t.Chdir(invokerDir)
+
+	fixtures := t.TempDir()
+	target := filepath.Join(fixtures, "target.jsonl")
+	if err := os.WriteFile(target, []byte("{}\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	evalPath := filepath.Join(t.TempDir(), "queries.toml")
+	evalSet := "version = \"2.0\"\n[[query]]\nid = \"isolated\"\ndataset = \"synthetic\"\ncohort = \"query-echo\"\ntext = \"needle\"\nexpected_file = \"target.jsonl\"\nexpected_match = \"needle\"\n"
+	if err := os.WriteFile(evalPath, []byte(evalSet), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	bin := filepath.Join(t.TempDir(), "fake-backscroll")
+	script := fmt.Sprintf(`#!/bin/sh
+if [ -e ./backscroll.toml ]; then
+  printf 'local config leaked\n' >&2
+  exit 41
+fi
+if [ "$1" = status ]; then
+  printf '%%s\n' '{"index":{"total_files":1,"total_messages":1}}'
+  exit 0
+fi
+printf 'result_0_filepath=%%s\n' %q
+printf 'result_0_content=needle\n'
+`, target)
+	if err := os.WriteFile(bin, []byte(script), 0o700); err != nil {
+		t.Fatal(err)
+	}
+
+	var stdout, stderr bytes.Buffer
+	code := runMain([]string{"--backscroll", bin, "--eval-set", evalPath, "--dataset", "synthetic", "--fixture-root", fixtures}, &stdout, &stderr)
+	if code != 0 {
+		t.Fatalf("code=%d stdout=%s stderr=%s", code, stdout.String(), stderr.String())
 	}
 }
 
