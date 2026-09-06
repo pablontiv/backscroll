@@ -1,0 +1,1 @@
+{"uuid":"eval-paraphrase","timestamp":"2026-01-01T00:01:00Z","sessionId":"eval-paraphrase-session","cwd":"/synthetic/eval","type":"assistant","message":{"role":"assistant","content":"We named the persistence mechanism saffron bridge. It reconnects state after a process begins again."}}

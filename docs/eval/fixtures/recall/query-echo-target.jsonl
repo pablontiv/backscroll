@@ -1,0 +1,1 @@
+{"uuid":"eval-echo-target","timestamp":"2026-01-01T00:03:00Z","sessionId":"eval-echo-session","cwd":"/synthetic/eval","type":"assistant","message":{"role":"assistant","content":"The durable snapshot orchard protocol means readers use the last committed SQLite snapshot while synchronization owns the lock."}}

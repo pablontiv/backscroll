@@ -1,11 +1,11 @@
-# Backscroll Evaluation Set — M1 Slice A2+A3
-# ~20 real queries mined from indexed sessions (backscroll, rootline, pinata projects)
-# Each query includes: id, search text, flags, expected_match (ground-truth substring), description, rationale
+# Backscroll Evaluation Set — M1 Slice A2+A3 plus synthetic recall cohorts
+# Legacy queries use an operator-populated index. Synthetic queries use only the
+# tracked fixtures in docs/eval/fixtures/recall.
 #
 # eval.sh computes recall@5 (% of queries returning result at rank ≤5 with matching expected_match)
 # This is the M1 success metric: >80% recall@5 on this set after each slice.
 
-version = "1.0"
+version = "2.0"
 generated = "2026-07-02"
 
 [[query]]
@@ -187,3 +187,93 @@ expected_match = "25f742c7-f7da-49a9"
 description = "Diagnostic skill: mining backscroll's own history for bugs and gaps"
 rationale = "Self-audit: agents need to know backscroll-doctor exists and how it works"
 expected_rank = 2
+
+[[query]]
+id = "s1_artifact_literal"
+dataset = "synthetic"
+cohort = "artifact-literal"
+text = "cobalt retention contract"
+flags = ["--all-projects"]
+expected_file = "artifact-literal.jsonl"
+expected_match = "cobalt retention contract"
+max_tokens = 200
+
+[[query]]
+id = "s2_conversational_paraphrase"
+dataset = "synthetic"
+cohort = "conversational-paraphrase"
+text = "how did we make the remembered connector survive restarts"
+flags = ["--all-projects"]
+expected_file = "paraphrase-target.jsonl"
+expected_match = "saffron bridge"
+max_tokens = 200
+
+[[query]]
+id = "s3_terminology_beyond_preview"
+dataset = "synthetic"
+cohort = "terminology-recovery"
+text = "safe deployment handoff boundary"
+flags = ["--all-projects"]
+expected_file = "terminology-target.jsonl"
+expected_match = "amber relay"
+max_tokens = 200
+
+[[query]]
+id = "s4_query_echo_contamination"
+dataset = "synthetic"
+cohort = "query-echo"
+text = "durable snapshot orchard protocol"
+flags = ["--all-projects"]
+expected_file = "query-echo-target.jsonl"
+expected_match = "durable snapshot orchard protocol"
+max_tokens = 200
+
+[[query]]
+id = "s5_progressive_refinement"
+dataset = "synthetic"
+cohort = "conversational-paraphrase"
+text = "remember the implementation adaptation dialect variant for deployment"
+refined_text = "violet handshake"
+flags = ["--all-projects"]
+expected_file = "progressive-target.jsonl"
+expected_match = "violet handshake"
+max_tokens = 200
+
+[[query]]
+id = "s6_budgeted_agent_output"
+dataset = "synthetic"
+cohort = "budgeted-agent-output"
+text = "quartz budget marker"
+flags = ["--all-projects"]
+expected_file = "budget-target.jsonl"
+expected_match = "quartz budget marker"
+max_tokens = 2
+
+[[query]]
+id = "s7_exact_target_identity"
+dataset = "synthetic"
+cohort = "artifact-literal"
+text = "exact identity indigo token"
+flags = ["--all-projects"]
+expected_file = "identity-target.jsonl"
+expected_match = "exact identity indigo token"
+max_tokens = 200
+
+[[query]]
+id = "s8_target_absent"
+dataset = "synthetic"
+cohort = "artifact-literal"
+text = "nonexistent marmalade astrolabe"
+flags = ["--all-projects"]
+expected_file = "absent-target.jsonl"
+expect_absent = true
+max_tokens = 200
+
+[[query]]
+id = "s9_command_failure"
+dataset = "synthetic"
+cohort = "artifact-literal"
+text = "cobalt"
+flags = ["--all-projects", "--content-type", "invalid-eval-type"]
+expect_error = true
+max_tokens = 200

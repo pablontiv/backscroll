@@ -73,6 +73,8 @@ internal/
 ├── hybrid/            — Reciprocal Rank Fusion helpers for merged lexical/vector retrieval
 ├── sequences/         — F4 PrefixSpan mining (deterministic discovery of frequent tool-call sequences per session)
 └── storage/           — SQLite adapter (dual FTS5 indexes: tool_fts + messages_fts, BM25, WAL mode, migrations v1–v14, search_items, session_tags, tool_events, message_templates, template_matches, correction_signals, annotations, AggregateCommands, AggregateFailures, AggregateTemplates, AggregateCorrections, UpsertAnnotation, LoadToolSequences)
+scripts/
+└── recall-eval/       — isolated legacy/synthetic recall evaluator and cohort reporter
 ```
 
 Ten v2 CLI commands: `list [--project] [--all-projects] [--recent N] [--order timestamp:desc|asc] [--limit] [--offset] [--json] [--robot]`, `search [--text <query>] [--project] [--all-projects] [--source] [--source-path] [--after] [--before] [--role] [--content-type] [--tag] [--limit] [--offset] [--fields minimal|full] [--max-tokens N] [--lexical-only] [--similarity-threshold F] [--json] [--robot]`, `patterns --kind commands|failures|templates|sequences|corrections [--pending] [--batch N] [--project] [--all-projects] [--tag] [--trend] [--after] [--before] [--min-support N] [--min-confidence F] [--min-length N] [--max-length N] [--limit] [--offset] [--json] [--robot]`, `annotate --uuid <u> --kind <k> --label <l> [--path <p> --ordinal <n>]`, `recover --from <path> [--dry-run]`, `status [--json]`, `validate [--json]`, `rebuild`, `purge --before <date>`, `config [--json]`.
@@ -154,7 +156,7 @@ External knowledge sources are configured with active `*.inputs.toml` manifests 
 - **Zero-result guidance**: when `search`/`list` return no rows, actionable suggestions (`--all-projects`, `--content-type tool`, `backscroll status`) are printed to STDERR — never STDOUT, so `--json` stays a clean empty payload.
 - **Search robot output contract**: robot mode on search emits `result_N_field=value` lines exactly once-wrapped (the robot path writes lines directly; passing pre-formatted lines through the picokit formatter double-wraps them as `result_N=result_N_field=...`). Search robot string values escape backslash as `\\`, carriage return as `\r`, and newline as `\n`. Minimal fields use bounded snippets; full fields retain indexed content. Positive `--max-tokens` budgets count the complete escaped payload with one Picokit estimate, including omission metadata; never sum independently rounded line/result estimates. Truncation removes whole trailing results, and emits no output when even the omission record cannot fit.
 - **Cross-host project identity**: `projects.Identify()` normalizes session cwd against registry roots by matching root tails (≥2 components, case-insensitive), so `/home/shared/<proj>` sessions resolve against `/Users/Shared/<proj>` roots on a synced index. Registry roots should keep distinct suffixes — two projects whose roots share the same trailing components could misbucket.
-- **Recall eval-set**: `docs/eval/queries.toml` (~20 real mined queries with `expected_match` ground truth) + `scripts/eval.sh` compute recall@5; a query counts only if its expected target appears in the top 5. Local regression gate, not a required CI step.
+- **Recall eval-set**: `docs/eval/queries.toml` retains 20 operator-backed legacy queries and adds tracked synthetic fixtures grouped by recall cohort. `scripts/eval.sh` builds a dev binary; synthetic mode uses temporary HOME/config/SQLite state, reports full-reference rank separately from bounded minimal robot reachability, keeps stderr out of robot parsing, and is observational. Only the legacy dataset retains the local 80% gate; neither dataset is a required CI step.
 - **Single catalog source of truth**: The lineage catalog lives in `internal/compat/manifest.json` (data, regenerable via `REGEN_MANIFEST=1`). `internal/storage/recovery_records.go` queries `compat.Catalog.IsKnownSignature()` to check if a schema is recognized, rather than carrying a stale hardcoded switch. This eliminates duplication and the risk of catalog drift. Catalog validation must confirm semantic-signature collisions remain compatible for all entries sharing a signature.
 - **V14 file metadata prefilter with racy-clean guard**: (migration v14) adds `file_size INTEGER` and `file_mtime TEXT` columns to `indexed_files`, populated during sync for every processed file. During startup sync, `maybeAutoSync` collects current file metadata (size via `os.Stat()`, mtime in RFC3339 format) BEFORE calling `reader.Hash()` on each discovered file. Freshness guarantee: skipped files have not changed since last index time; any modification (content, size, timestamp) re-triggers hashing. Conservative design: NULL metadata for pre-v14 rows means always re-hash. Racy-clean guard (git-style): files whose mtime is not strictly older than `last_indexed` (within 2-second granularity margin) are treated as potentially modified in the same timestamp tick and are always re-hashed, preventing silent data loss from same-length edits. Unchanged files (size + mtime both match, and mtime strictly older than `last_indexed`) skip re-reading entirely, reducing startup time on stable corpora. Truncations, replacements, and same-size-different-content edits are all reliably detected. The `isRacyCleanFile()` function accepts both SQLite CURRENT_TIMESTAMP raw format (`2006-01-02 15:04:05`) and RFC3339 (actual driver conversion): the indexed_files.last_indexed column stores raw text but modernc.org/sqlite converts DATETIME on read, so Go receives RFC3339; the sqlite3 CLI shows raw format, a trap that has fooled multiple reviewers, so verify through the driver.
 
@@ -208,13 +210,12 @@ No manual release steps are needed — just push to `main` with conventional com
 
 ## CI/CD
 
-Workflows delegate to [pablontiv/crossbeam](https://github.com/pablontiv/crossbeam) reusable workflows at `@v1`:
+Workflows delegate to [pablontiv/crossbeam](https://github.com/pablontiv/crossbeam) reusable workflows at `@v2`:
 
 | Workflow | Crossbeam caller |
 |---|---|
 | `ci.yml` | `go-ci.yml`, `gitleaks.yml`, `go-release.yml` |
 | `codeql.yml` | `codeql.yml` |
-| `scorecard.yml` | `scorecard.yml` |
 
 ## Config Resolution Order
 
@@ -247,4 +248,5 @@ github.com/pablontiv/backscroll/internal/projects      — Project identity regi
 github.com/pablontiv/backscroll/internal/readers       — SessionReader interface, Registry, ClaudeReader (text+tool_use+tool_result), PiReader (text+toolCall+custom results), OpenCodeReader (text+tool state.input+state.output), MarkdownDocumentReader (`markdown_document`), MarkdownSectionsReader (`markdown_sections`); toolfmt serializer
 github.com/pablontiv/backscroll/internal/recovery      — Stranded database recovery orchestration, durable backup, atomic replacement, and post-install sync
 github.com/pablontiv/backscroll/internal/startuplock   — Canonical database lock coordination via persistent OS advisory sidecar
+github.com/pablontiv/backscroll/scripts/recall-eval    — Isolated recall evaluation runner and cohort reporter
 ```
