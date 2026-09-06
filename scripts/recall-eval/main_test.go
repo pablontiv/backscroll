@@ -182,14 +182,10 @@ func TestEvalScriptPreservesEvaluatorExitCode(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	isolatedHome := t.TempDir()
 	cmd := exec.Command(filepath.Join(repoRoot, "scripts", "eval.sh"), "--dataset", "unsupported")
 	cmd.Dir = repoRoot
 	cmd.Env = overrideEnv(os.Environ(), map[string]string{
-		"HOME":                  isolatedHome,
-		"XDG_CONFIG_HOME":       filepath.Join(isolatedHome, "config"),
-		"BACKSCROLL_CONFIG_DIR": filepath.Join(isolatedHome, "config"),
-		"GOTELEMETRY":           "off",
+		"GOTELEMETRY": "off",
 	})
 	output, err := cmd.CombinedOutput()
 	var exitErr *exec.ExitError
