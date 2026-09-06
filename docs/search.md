@@ -76,13 +76,28 @@ Current full-mode fields are exactly: `Source`, `Role`, `Content`, `FilePath`, `
 
 ### Robot
 
-Robot mode on search emits deterministic `result_N_field=value` lines:
+Robot mode emits deterministic `result_N_field=value` lines. Like JSON,
+`--fields minimal` is the default and uses the bounded search snippet:
+
+```
+result_0_filepath=/home/user/.claude/projects/example/session.jsonl
+result_0_content=bounded matched snippet
+result_0_score=12.34
+result_0_role=assistant
+result_0_timestamp=2026-08-20T12:34:56Z
+```
+
+Use `--fields full` when the consumer needs the complete indexed content and
+metadata:
 
 ```
 result_0_source=session
 result_0_role=assistant
 result_0_filepath=/home/user/.claude/projects/example/session.jsonl
-result_0_content=matched content with escaped newlines
+result_0_content=complete content with escaped newlines
+result_0_project=backscroll
+result_0_content_type=text
+result_0_timestamp=2026-08-20T12:34:56Z
 result_0_score=12.34
 result_0_rank=1
 ```
@@ -91,7 +106,23 @@ No ANSI escape codes. Search robot string values escape backslash as `\\`, carri
 
 ## Token Limiting
 
-The `--max-tokens` flag applies an approximate token limit (characters / 4) to the total output. Once the limit is reached, no more results are emitted. This is useful when feeding results into context-limited tools.
+The `--max-tokens` flag applies Picokit's approximate token estimator (word count
+multiplied by 1.3) to the total output. Once the next complete result would
+exceed the limit, search stops and emits a parseable omission record when that
+record fits the remaining budget:
+
+```
+result_3_truncated=true
+result_3_omitted=7
+```
+
+For robot output, the estimator is applied once to the complete escaped payload,
+including all fields and the omission record; estimates rounded independently per
+line or per result are not added together. Whole trailing results may be removed
+to make room for the omission record. If even that record cannot fit, stdout is
+empty. `--max-tokens 0` keeps output unlimited.
+
+This is useful when feeding results into context-limited tools.
 
 ```bash
 backscroll search "decisions" --robot --max-tokens 4000

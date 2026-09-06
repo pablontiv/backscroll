@@ -13,6 +13,7 @@ import (
 
 	"github.com/pablontiv/backscroll/internal/config"
 	"github.com/pablontiv/backscroll/internal/models"
+	"github.com/pablontiv/backscroll/internal/storage"
 )
 
 func newSearchCmd(stdout, stderr io.Writer) *cobra.Command {
@@ -54,7 +55,7 @@ Use --content-type to filter by content type (text, code, tool, reasoning).
 Use --tag to filter sessions by auto-detected tags.
 Use --source-path to filter by indexed source path (exact, SQL LIKE pattern, or * glob).
 Use --json to output as JSON.
-Use --fields to choose JSON detail: minimal (default) or full.
+Use --fields to choose machine-readable detail: minimal (default) or full.
 Use --max-tokens to limit output size (approximate token count).`,
 		Args: func(cmd *cobra.Command, args []string) error {
 			return validateCommandBeforeStartup(cmd, args, cobra.MaximumNArgs(1), func() error {
@@ -87,7 +88,7 @@ Use --max-tokens to limit output size (approximate token count).`,
 	cmd.Flags().IntVar(&offset, "offset", 0, "Result offset")
 	cmd.Flags().StringVar(&contentType, "content-type", "", "Filter by content type")
 	cmd.Flags().StringVar(&tag, "tag", "", "Filter sessions by tag")
-	cmd.Flags().StringVar(&fields, "fields", "minimal", "JSON fields to emit: minimal or full")
+	cmd.Flags().StringVar(&fields, "fields", "minimal", "Machine-readable fields to emit: minimal or full")
 	cmd.Flags().IntVar(&maxTokens, "max-tokens", 0, "Max tokens in output (0=unlimited)")
 	cmd.Flags().BoolVar(&lexicalOnly, "lexical-only", false, "Use BM25 only, skip vector search")
 	cmd.Flags().Float64Var(&similarityThreshold, "similarity-threshold", 0.3, "Minimum cosine similarity for vector results (0=no threshold)")
@@ -239,8 +240,9 @@ func runSearch(ctx context.Context, stdout, stderr io.Writer, cfg *config.Config
 			return fmt.Errorf("write results: %w", err)
 		}
 	} else if format == picokitoutput.FormatRobot {
-		// Robot format: write lines directly (already formatted as result_N_field=value)
-		lines := resultsToLines(modelResults, format)
+		// Robot format is projected from storage results so minimal mode can use
+		// bounded snippets rather than loading full indexed content into output.
+		lines := searchRobotLines(results, fields, maxTokens)
 		for _, line := range lines {
 			if _, err := fmt.Fprintln(stdout, line); err != nil {
 				return fmt.Errorf("write results: %w", err)
@@ -255,6 +257,98 @@ func runSearch(ctx context.Context, stdout, stderr io.Writer, cfg *config.Config
 	}
 
 	return nil
+}
+
+func searchRobotLines(results []storage.SearchResult, fields string, maxTokens int) []string {
+	groups := make([][]string, len(results))
+	for i, result := range results {
+		groups[i] = searchRobotResultLines(result, i, fields)
+	}
+
+	if maxTokens <= 0 {
+		return flattenRobotGroups(groups)
+	}
+
+	included := 0
+	for included < len(groups) {
+		if robotLinesTokenCount(flattenRobotGroups(groups[:included+1])) > maxTokens {
+			break
+		}
+		included++
+	}
+
+	if included == len(groups) {
+		return flattenRobotGroups(groups)
+	}
+
+	for {
+		marker := searchRobotTruncationLines(included, len(groups)-included)
+		payload := append(flattenRobotGroups(groups[:included]), marker...)
+		if robotLinesTokenCount(payload) <= maxTokens {
+			return payload
+		}
+		if included == 0 {
+			return nil
+		}
+		included--
+	}
+}
+
+func searchRobotResultLines(result storage.SearchResult, index int, fields string) []string {
+	timestamp := ""
+	if !result.Timestamp.IsZero() {
+		timestamp = result.Timestamp.Format(time.RFC3339)
+	}
+
+	if fields == "minimal" {
+		return []string{
+			fmt.Sprintf("result_%d_filepath=%s", index, escapeRobotValue(result.SourcePath)),
+			fmt.Sprintf("result_%d_content=%s", index, escapeRobotValue(result.Snippet)),
+			fmt.Sprintf("result_%d_score=%.2f", index, result.Score),
+			fmt.Sprintf("result_%d_role=%s", index, escapeRobotValue(result.Role)),
+			fmt.Sprintf("result_%d_timestamp=%s", index, timestamp),
+		}
+	}
+
+	lines := []string{
+		fmt.Sprintf("result_%d_source=%s", index, escapeRobotValue(result.Source)),
+		fmt.Sprintf("result_%d_role=%s", index, escapeRobotValue(result.Role)),
+		fmt.Sprintf("result_%d_filepath=%s", index, escapeRobotValue(result.SourcePath)),
+		fmt.Sprintf("result_%d_content=%s", index, escapeRobotValue(result.Text)),
+	}
+	if result.Project != "" {
+		lines = append(lines, fmt.Sprintf("result_%d_project=%s", index, escapeRobotValue(result.Project)))
+	}
+	if result.ContentType != "" {
+		lines = append(lines, fmt.Sprintf("result_%d_content_type=%s", index, escapeRobotValue(result.ContentType)))
+	}
+	lines = append(lines,
+		fmt.Sprintf("result_%d_timestamp=%s", index, timestamp),
+		fmt.Sprintf("result_%d_score=%.2f", index, result.Score),
+		fmt.Sprintf("result_%d_rank=%d", index, index+1),
+	)
+	return lines
+}
+
+func searchRobotTruncationLines(index, omitted int) []string {
+	return []string{
+		fmt.Sprintf("result_%d_truncated=true", index),
+		fmt.Sprintf("result_%d_omitted=%d", index, omitted),
+	}
+}
+
+func robotLinesTokenCount(lines []string) int {
+	// Round once for the complete escaped payload, including omission metadata.
+	// Summing separately rounded lines or results undercounts the total.
+	return picokitoutput.TokenCount(strings.Join(lines, "\n"))
+}
+
+func flattenRobotGroups(groups [][]string) []string {
+	var lines []string
+	for _, group := range groups {
+		lines = append(lines, group...)
+	}
+	return lines
 }
 
 // minimalSearchResult is the reduced JSON payload emitted by --fields=minimal,
