@@ -270,13 +270,10 @@ func searchRobotLines(results []storage.SearchResult, fields string, maxTokens i
 	}
 
 	included := 0
-	usedTokens := 0
 	for included < len(groups) {
-		resultTokens := robotLinesTokenCount(groups[included])
-		if usedTokens+resultTokens > maxTokens {
+		if robotLinesTokenCount(flattenRobotGroups(groups[:included+1])) > maxTokens {
 			break
 		}
-		usedTokens += resultTokens
 		included++
 	}
 
@@ -286,14 +283,14 @@ func searchRobotLines(results []storage.SearchResult, fields string, maxTokens i
 
 	for {
 		marker := searchRobotTruncationLines(included, len(groups)-included)
-		if usedTokens+robotLinesTokenCount(marker) <= maxTokens {
-			return append(flattenRobotGroups(groups[:included]), marker...)
+		payload := append(flattenRobotGroups(groups[:included]), marker...)
+		if robotLinesTokenCount(payload) <= maxTokens {
+			return payload
 		}
 		if included == 0 {
 			return nil
 		}
 		included--
-		usedTokens -= robotLinesTokenCount(groups[included])
 	}
 }
 
@@ -341,11 +338,9 @@ func searchRobotTruncationLines(index, omitted int) []string {
 }
 
 func robotLinesTokenCount(lines []string) int {
-	tokens := 0
-	for _, line := range lines {
-		tokens += picokitoutput.TokenCount(line)
-	}
-	return tokens
+	// Round once for the complete escaped payload, including omission metadata.
+	// Summing separately rounded lines or results undercounts the total.
+	return picokitoutput.TokenCount(strings.Join(lines, "\n"))
 }
 
 func flattenRobotGroups(groups [][]string) []string {

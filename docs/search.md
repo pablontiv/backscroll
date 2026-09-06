@@ -116,6 +116,12 @@ result_3_truncated=true
 result_3_omitted=7
 ```
 
+For robot output, the estimator is applied once to the complete escaped payload,
+including all fields and the omission record; estimates rounded independently per
+line or per result are not added together. Whole trailing results may be removed
+to make room for the omission record. If even that record cannot fit, stdout is
+empty. `--max-tokens 0` keeps output unlimited.
+
 This is useful when feeding results into context-limited tools.
 
 ```bash
