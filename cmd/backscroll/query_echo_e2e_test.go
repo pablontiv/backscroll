@@ -105,6 +105,55 @@ func TestDirectBackscrollSearchEchoesDoNotCrowdUnfilteredRecall(t *testing.T) {
 	e.assertIntegrity()
 }
 
+func TestDirectBackscrollSearchEchoesRefillToolCandidateWindow(t *testing.T) {
+	e := newQueryEchoE2E(t)
+	query := "overflow scarlet zebra"
+	legitimatePath := e.writeRecord("overflow-legitimate.jsonl", "overflow-legitimate", "overflow", 0,
+		queryEchoToolBlock("overflow-legitimate", "rg '"+query+"' /synthetic"), false)
+	e.run("status", "--json")
+
+	if got := queryEchoRank(e.searchJSON(query, "", 300), filepath.Base(legitimatePath)); got != 1 {
+		t.Fatalf("no-echo legitimate command rank = %d, want 1", got)
+	}
+
+	echoPath := filepath.Join(e.fixtures, "overflow-echoes.jsonl")
+	for i := 0; i < 199; i++ {
+		e.writeRecord(filepath.Base(echoPath), fmt.Sprintf("overflow-echo-%03d", i), "overflow", 1+i,
+			queryEchoToolBlock(fmt.Sprintf("overflow-echo-%03d", i), "backscroll search --text '"+query+"' --robot"), i > 0)
+	}
+	e.run("status", "--json")
+
+	exactPage := e.searchJSON(query, "tool", 300)
+	if len(exactPage) != 200 || queryEchoRank(exactPage, filepath.Base(legitimatePath)) != 200 {
+		t.Fatalf("exact candidate page: count=%d legitimate_rank=%d, want 200/200", len(exactPage), queryEchoRank(exactPage, filepath.Base(legitimatePath)))
+	}
+	if got := e.searchJSON(query, "", 300); len(got) != 1 || queryEchoRank(got, filepath.Base(legitimatePath)) != 1 {
+		t.Fatalf("exact candidate page must preserve legitimate command once: %v", queryEchoShape(got))
+	}
+
+	for i := 199; i < 205; i++ {
+		e.writeRecord(filepath.Base(echoPath), fmt.Sprintf("overflow-echo-%03d", i), "overflow", 1+i,
+			queryEchoToolBlock(fmt.Sprintf("overflow-echo-%03d", i), "backscroll search --text '"+query+"' --robot"), true)
+	}
+	e.run("status", "--json")
+
+	overflowTool := e.searchJSON(query, "tool", 300)
+	if len(overflowTool) != 206 || queryEchoRank(overflowTool, filepath.Base(legitimatePath)) != 206 {
+		t.Fatalf("overflow explicit tool results: count=%d legitimate_rank=%d, want 206/206", len(overflowTool), queryEchoRank(overflowTool, filepath.Base(legitimatePath)))
+	}
+	unfiltered := e.searchJSON(query, "", 300)
+	if len(unfiltered) != 1 || queryEchoRank(unfiltered, filepath.Base(legitimatePath)) != 1 {
+		t.Errorf("205 echoes hid the unrelated rank-206 command: %v", queryEchoShape(unfiltered))
+	}
+	if repeat := e.searchJSON(query, "", 300); !reflect.DeepEqual(repeat, unfiltered) {
+		t.Errorf("overflow query repeat changed: first=%v repeat=%v", queryEchoShape(unfiltered), queryEchoShape(repeat))
+	}
+	if got := e.countCoreRows([]string{legitimatePath, echoPath}); got != 206 {
+		t.Errorf("overflow stored rows = %d, want 206", got)
+	}
+	e.assertIntegrity()
+}
+
 func newQueryEchoE2E(t *testing.T) *queryEchoE2E {
 	t.Helper()
 	root := t.TempDir()
