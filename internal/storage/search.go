@@ -41,11 +41,10 @@ func (d *Database) Search(query string, opts models.SearchOptions) ([]SearchResu
 		if err != nil {
 			return nil, err
 		}
-		tool, err := d.searchTable("tool_fts", query, withoutPaging(opts))
+		tool, err := d.searchToolCandidatesWithoutDirectEchoes(query, withoutPaging(opts))
 		if err != nil {
 			return nil, err
 		}
-		tool = excludeDirectBackscrollSearchEchoes(tool)
 		merged := mergeRRF(prose, tool)
 		return paginate(merged, opts.Limit, opts.Offset), nil
 	default:
@@ -316,12 +315,58 @@ func sanitizeFTS5QueryTrigram(query string, stopwords map[string]struct{}) strin
 	return strings.Join(parts, " ")
 }
 
+const unfilteredSearchCandidateLimit = 200
+
 // withoutPaging returns a copy of opts with Limit/Offset cleared so each
 // table query returns its full candidate set for cross-table merging.
 func withoutPaging(o models.SearchOptions) models.SearchOptions {
-	o.Limit = 200
+	o.Limit = unfilteredSearchCandidateLimit
 	o.Offset = 0
 	return o
+}
+
+func (d *Database) searchToolCandidatesWithoutDirectEchoes(query string, opts models.SearchOptions) ([]SearchResult, error) {
+	return refillToolCandidatesWithoutDirectEchoes(opts, func(page models.SearchOptions) ([]SearchResult, error) {
+		return d.searchTable("tool_fts", query, page)
+	})
+}
+
+func refillToolCandidatesWithoutDirectEchoes(opts models.SearchOptions, loadPage func(models.SearchOptions) ([]SearchResult, error)) ([]SearchResult, error) {
+	target := opts.Limit
+	if target <= 0 {
+		target = unfilteredSearchCandidateLimit
+	}
+	pageOpts := opts
+	pageOpts.Limit = target
+
+	filtered := make([]SearchResult, 0, target)
+	seen := make(map[int]struct{})
+	for len(filtered) < target {
+		page, err := loadPage(pageOpts)
+		if err != nil {
+			return nil, err
+		}
+		if len(page) == 0 {
+			break
+		}
+		for _, result := range page {
+			if _, duplicate := seen[result.ID]; duplicate {
+				continue
+			}
+			seen[result.ID] = struct{}{}
+			if !isDirectBackscrollSearchEcho(result) {
+				filtered = append(filtered, result)
+				if len(filtered) == target {
+					break
+				}
+			}
+		}
+		if len(page) < pageOpts.Limit {
+			break
+		}
+		pageOpts.Offset += len(page)
+	}
+	return filtered, nil
 }
 
 // excludeDirectBackscrollSearchEchoes removes direct Backscroll retrieval calls
