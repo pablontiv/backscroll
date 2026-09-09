@@ -45,6 +45,7 @@ func (d *Database) Search(query string, opts models.SearchOptions) ([]SearchResu
 		if err != nil {
 			return nil, err
 		}
+		tool = excludeDirectBackscrollSearchEchoes(tool)
 		merged := mergeRRF(prose, tool)
 		return paginate(merged, opts.Limit, opts.Offset), nil
 	default:
@@ -321,6 +322,30 @@ func withoutPaging(o models.SearchOptions) models.SearchOptions {
 	o.Limit = 200
 	o.Offset = 0
 	return o
+}
+
+// excludeDirectBackscrollSearchEchoes removes direct Backscroll retrieval calls
+// from the tool candidates used for unfiltered recall. Explicit tool-only search
+// bypasses this function and retains the commands.
+func excludeDirectBackscrollSearchEchoes(results []SearchResult) []SearchResult {
+	filtered := make([]SearchResult, 0, len(results))
+	for _, result := range results {
+		if !isDirectBackscrollSearchEcho(result) {
+			filtered = append(filtered, result)
+		}
+	}
+	return filtered
+}
+
+func isDirectBackscrollSearchEcho(result SearchResult) bool {
+	if result.ContentType != "tool" {
+		return false
+	}
+	fields := strings.Fields(result.Text)
+	if len(fields) < 3 || !strings.EqualFold(fields[0], "bash") {
+		return false
+	}
+	return fields[1] == "command=backscroll" && fields[2] == "search"
 }
 
 // mergeRRF uses Reciprocal Rank Fusion to merge two ranked lists by position,
