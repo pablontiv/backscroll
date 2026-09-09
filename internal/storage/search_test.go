@@ -2,6 +2,7 @@ package storage
 
 import (
 	"math"
+	"reflect"
 	"testing"
 )
 
@@ -82,7 +83,7 @@ func TestMergeRRF_ScoreFormula(t *testing.T) {
 
 // TestMergeRRF_NoOverlap verifies that items with no overlap between lists both appear.
 func TestMergeRRF_NoOverlap(t *testing.T) {
-	// Two lists with no common IDs; both should appear, sorted by RRF
+	// Two lists with no overlap between lists; both should appear, sorted by RRF
 	proseResults := []SearchResult{{ID: 301, Source: "session", ContentType: "text", Score: 10.0}}
 	toolResults := []SearchResult{{ID: 300, Source: "session", ContentType: "tool", Score: 10.0}}
 
@@ -95,5 +96,31 @@ func TestMergeRRF_NoOverlap(t *testing.T) {
 	// Tiebreak by ID ascending (from hybrid.RRF tiebreak rule)
 	if fused[0].ID != 300 || fused[1].ID != 301 {
 		t.Errorf("expected [300, 301], got [%d, %d]", fused[0].ID, fused[1].ID)
+	}
+}
+
+func TestExcludeDirectBackscrollSearchEchoesPreservesBoundaries(t *testing.T) {
+	results := []SearchResult{
+		{ID: 1, ContentType: "tool", Text: "Bash command=backscroll search --text needle"},
+		{ID: 2, ContentType: "tool", Text: "bash command=backscroll search --text needle"},
+		{ID: 3, ContentType: "tool", Text: "/private/tmp/bin/backscroll search --text needle"},
+		{ID: 4, ContentType: "tool", Text: "Bash command=/private/tmp/bin/backscroll search --text needle"},
+		{ID: 5, ContentType: "tool", Text: "Bash command=env backscroll search --text needle"},
+		{ID: 6, ContentType: "tool", Text: `Bash command=bash -lc "backscroll search --text needle"`},
+		{ID: 7, ContentType: "tool", Text: "Bash command=rg needle ."},
+		{ID: 8, ContentType: "tool", Text: "Bash command=backscroll status"},
+		{ID: 9, ContentType: "tool", Text: "Bash command=backscroll searcher needle"},
+		{ID: 10, ContentType: "tool", Text: "error: Bash command=backscroll search failed"},
+		{ID: 11, ContentType: "text", Text: "Bash command=backscroll search --text needle"},
+	}
+
+	filtered := excludeDirectBackscrollSearchEchoes(results)
+	var got []int
+	for _, result := range filtered {
+		got = append(got, result.ID)
+	}
+	want := []int{3, 4, 5, 6, 7, 8, 9, 10, 11}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("preserved result IDs = %v, want %v", got, want)
 	}
 }

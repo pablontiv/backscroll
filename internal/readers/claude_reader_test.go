@@ -138,6 +138,30 @@ func TestExtractExitCodeBeforeTruncation(t *testing.T) {
 func ptrInt(i int) *int { return &i }
 
 // Test cases for commandHead() VAR= prefix stripping (RED test - task 4.1)
+func TestCommandHeadDistinguishesDirectSearchFromWrappers(t *testing.T) {
+	tests := []struct {
+		name     string
+		command  string
+		expected string
+	}{
+		{"direct", "backscroll search --text needle", "backscroll"},
+		{"absolute path", "/tmp/bin/backscroll search --text needle", "/tmp/bin/backscroll"},
+		{"env wrapper", "env backscroll search --text needle", "env"},
+		{"shell wrapper", `bash -lc "backscroll search --text needle"`, "bash"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			input, err := json.Marshal(map[string]string{"command": tt.command})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got := commandHead(input); got != tt.expected {
+				t.Fatalf("commandHead(%q) = %q, want %q", tt.command, got, tt.expected)
+			}
+		})
+	}
+}
+
 func TestCommandHeadVarPrefixStripping(t *testing.T) {
 	tests := []struct {
 		name     string
