@@ -52,6 +52,13 @@ func TestLivingInputManifestExamplesIngestThroughCommandBoundary(t *testing.T) {
 			query:   "docpisaffron",
 		},
 		{
+			name:    "configuration guide session example",
+			path:    "docs/configuration.md",
+			anchor:  "A minimal installed manifest looks like:",
+			fixture: claudeFixture,
+			query:   "docclaudecobalt",
+		},
+		{
 			name:    "sync guide session example",
 			path:    "docs/sync.md",
 			anchor:  "A session input example:",
@@ -87,6 +94,57 @@ func TestLivingInputManifestExamplesIngestThroughCommandBoundary(t *testing.T) {
 				t.Fatalf("living manifest %s did not ingest searchable fixture %q\nargv=%q\nstdout=%s\nstderr=%s", tc.path, tc.query, argv, stdout.String(), stderr.String())
 			}
 		})
+	}
+}
+
+func TestLivingInputManifestDocsDoNotAdvertiseRetiredGenericFields(t *testing.T) {
+	for _, path := range []string{"docs/configuration.md", "docs/input-contract.md", "docs/sync.md"} {
+		_, content := readTrackedSkillMarkdown(t, path)
+		for _, retired := range []string{
+			`format = "jsonl"`,
+			"[inputs.record]",
+			"[inputs.map]",
+			"[inputs.content]",
+			"[inputs.text]",
+		} {
+			if strings.Contains(content, retired) {
+				t.Errorf("%s advertises retired generic input field %q", path, retired)
+			}
+		}
+	}
+}
+
+func TestUnsupportedInputDecoderFailsBeforeSearch(t *testing.T) {
+	root := t.TempDir()
+	cfgDir := filepath.Join(root, "config")
+	setIndexPolicyEnv(t, filepath.Join(root, "index.db"), cfgDir)
+	writeFile(t, filepath.Join(cfgDir, "backscroll", "inputs", "unsupported.inputs.toml"), fmt.Sprintf(`version = 1
+
+[[inputs]]
+id = "unsupported"
+source = "session"
+active = true
+
+[inputs.discover]
+roots = [%q]
+include = ["**/*.jsonl"]
+
+[inputs.decode]
+format = "jsonl"
+`, filepath.Join(root, "sessions")))
+
+	var stdout, stderr bytes.Buffer
+	err := run(&stdout, &stderr, []string{"search", "--text", "sentinel", "--all-projects", "--json"})
+	if err == nil {
+		t.Fatalf("unsupported decoder search succeeded; stdout=%s stderr=%s", stdout.String(), stderr.String())
+	}
+	const want = `no reader registered for format "jsonl"`
+	if !strings.Contains(err.Error(), want) {
+		t.Fatalf("unsupported decoder error missing %q; err=%v stdout=%s stderr=%s", want, err, stdout.String(), stderr.String())
+	}
+	const wantJSON = `no reader registered for format \"jsonl\"`
+	if !strings.Contains(stdout.String(), wantJSON) {
+		t.Fatalf("unsupported decoder JSON missing %q; stdout=%s stderr=%s", wantJSON, stdout.String(), stderr.String())
 	}
 }
 

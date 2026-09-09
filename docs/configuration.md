@@ -53,7 +53,7 @@ Canonical input manifests are loaded from exactly this runtime directory:
 
 Set `BACKSCROLL_CONFIG_DIR` to override the base directory. For example, `BACKSCROLL_CONFIG_DIR=/tmp/bs-cfg` makes Backscroll read `/tmp/bs-cfg/backscroll/inputs/*.inputs.toml`.
 
-The repository ships a source preset manifest at `inputs/claude.inputs.toml`. Backscroll reads source presets only after they are copied into the user input config directory. When installing or refreshing presets, keep existing files by default so user edits are not overwritten.
+The repository ships source preset manifests for Claude, Pi, OpenCode, and optional Markdown inputs under `inputs/`. Backscroll reads presets only after they are copied into the user input config directory. When installing or refreshing presets, keep existing files by default so user edits are not overwritten.
 
 A minimal installed manifest looks like:
 
@@ -71,13 +71,7 @@ include = ["**/*.jsonl"]
 exclude = ["**/subagents/**"]
 
 [inputs.decode]
-format = "jsonl"
-
-[inputs.map]
-role = "$.message.role"
-
-[inputs.content]
-selector = "$.message.content"
+format = "claude"
 ```
 
 Markdown documents use the same input list with `decode.format = "markdown_document"` for whole-document indexing or `decode.format = "markdown_sections"` for `## ` header splitting:
@@ -110,7 +104,7 @@ include = ["**/*.md"]
 format = "markdown_document"
 ```
 
-Invalid TOML, unknown fields, unsupported versions, invalid selectors/globs/regexes, or invalid active manifests fail with an error that includes the manifest path. Missing discovery roots are skipped so shipped Claude/Pi presets can coexist on machines that only have one tool installed.
+Malformed TOML fails with an error that includes the manifest path. An active input whose `decode.format` has no registered reader fails operational startup with an actionable error. Missing discovery roots are skipped so presets can coexist on machines that only have some supported tools installed. The current TOML loader ignores unrecognized fields; those fields do not configure or extend dedicated readers.
 
 ## Common commands
 
@@ -132,6 +126,6 @@ sync before executing. Session, plan, and Markdown files are ingestion inputs;
 SQLite is the perennial record used by search, list, patterns, status, and validate.
 Use `--source-path` on search as a filter, paired with query text, for database-backed retrieval scoped to a known input path.
 
-There is no public `inputs` or `sync` command. Active manifests are validated during command preflight; invalid manifests fail with their path before indexing begins. Use `backscroll rebuild` only after the mandatory startup sync has prepared the database; the handler re-derives FTS and other derived data from the perennial database and performs no second sync. It is not a replacement for manifest validation.
+There is no public `inputs` or `sync` command. Manifest TOML is loaded during command preflight; reader resolution and discovery happen during mandatory startup sync, and failures block the requested command. Use `backscroll rebuild` only after startup sync has prepared the database; the handler re-derives FTS and other derived data from the perennial database and performs no second sync. It is not a replacement for correcting manifest errors.
 
-See [the generic input contract](input-contract.md) for the full manifest schema. For downstream audit consumers, see the [downstream audit integration contract](audit-integration.md).
+See [the input manifest contract](input-contract.md) for the supported fields and registered decoders. For downstream audit consumers, see the [downstream audit integration contract](audit-integration.md).

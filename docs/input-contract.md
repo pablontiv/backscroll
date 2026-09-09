@@ -1,19 +1,32 @@
-# Generic input manifest contract
+# Input manifest contract
 
-This is the MVP contract for Backscroll `*.inputs.toml` files. A file such as
-`claude.inputs.toml` or `pi.inputs.toml` declares how Backscroll turns agent
-conversation records into the stable ingestion boundary:
+Backscroll loads user-scoped `*.inputs.toml` manifests that select ingestion
+sources and one registered reader for each source. A manifest tells Backscroll
+**where** to discover inputs and **which dedicated decoder** understands them;
+the reader owns provider-specific record selection, field extraction, content
+normalization, and tool metadata.
 
-- `ParsedFile { source, source_path, hash, project, messages }`
-- `ParsedMessage { role, text, ordinal, uuid, timestamp, content_type }`
-- Normalized session events stored with `schema_version = 1`, `source`, `source_path`, `project`, `ordinal`, `timestamp`, `event_type`, `actor`/`role`, optional tool/command/error metadata, and a bounded `snippet`.
+The runtime ingestion boundary is:
 
-The manifest carries provider-specific details in data, while Backscroll keeps a
-provider-neutral pipeline. Runtime loaders discover manifests from the OS-aware
-user config directory at `<config_dir>/backscroll/inputs/*.inputs.toml`; set
-`BACKSCROLL_CONFIG_DIR` to override `<config_dir>` in tests or custom installs.
-`backscroll.toml` remains application configuration and is not the canonical
-source of ingestion routes.
+```text
+manifest discovery -> registered reader -> ParsedFile -> perennial SQLite
+```
+
+There is no generic JSON/JSONL selector engine. Tables such as `record`, `map`,
+`content`, and `text` belonged to a retired declarative pipeline and do not
+configure current readers.
+
+## Runtime location
+
+Manifests are loaded from:
+
+```text
+<config_dir>/backscroll/inputs/*.inputs.toml
+```
+
+`<config_dir>` is the OS config directory, or `BACKSCROLL_CONFIG_DIR` when set.
+`backscroll.toml` remains application configuration and is not an ingestion
+manifest.
 
 | OS | Manifest directory |
 |---|---|
@@ -22,20 +35,12 @@ source of ingestion routes.
 | Windows | `%APPDATA%\\backscroll\\inputs\\` |
 | Override | `$BACKSCROLL_CONFIG_DIR/backscroll/inputs/` |
 
-Backscroll ships Claude and Pi preset manifests in the repository `inputs/`
-directory. Those are source presets; install or copy them into the user input
-config directory before running a query command. The command preflight validates
-active manifests, and normal `search`, `list`, or `patterns` use incremental
-auto-sync. Preset installation should skip existing manifest files by default so
-user edits are not overwritten.
-
-```text
-discover -> decode -> record -> map -> content -> text -> emit -> search_items
-```
-
-`search_items` is optimized for both retrieval UX and audit surfaces. Each indexed row carries `source`, `source_path`, `project`, `role`, `content_type`, `timestamp`, `ordinal`, and bounded `text`. Tool inputs, outputs, and errors are indexed with `content_type='tool'` and stored in a separate FTS5 index (`tool_fts`) for substring/exact matching; prose and code use the main messages_fts index for morphological search. Every operational command validates active manifests and attempts one incremental sync before executing. Session, plan, and Markdown files are ingestion inputs; SQLite is the perennial record used by search, list, patterns, status, and validate. Use `--source-path` on search as a filter, paired with query text, for database-backed retrieval scoped to a known input path. Downstream consumers should treat the JSON surfaces described in [Downstream audit integration contract](audit-integration.md) as the stable read boundary.
+Repository presets under `inputs/` are examples to install into this runtime
+directory. Backscroll does not read the repository preset directory directly.
 
 ## File shape
+
+A Claude session manifest uses only discovery and decoder selection:
 
 ```toml
 version = 1
@@ -49,178 +54,55 @@ active = true
 roots = ["~/.claude/projects"]
 include = ["**/*.jsonl"]
 exclude = ["**/subagents/**"]
+follow_symlinks = false
 
 [inputs.decode]
-format = "jsonl"
-encoding = "utf-8"
-
-[inputs.record]
-selector = "$"
-include_when = [
-  { selector = "$.type", op = "in", value = ["user", "assistant"] },
-  { selector = "$.isMeta", op = "ne", value = true },
-]
-
-[inputs.map]
-role = "$.message.role"
-uuid = "$.uuid"
-timestamp = "$.timestamp"
-session_id = "$.sessionId"
-
-[inputs.map.role_aliases]
-human = "user"
-
-[inputs.content]
-selector = "$.message.content"
-string = "$"
-blocks = "$.message.content[*]"
-block_text = "$.text"
-content_type = "$.type"
-include_when = [
-  { selector = "$.type", op = "eq", value = "text" },
-]
-
-[inputs.text]
-join = "\n"
-trim = true
-drop_empty = true
-remove = [
-  { kind = "regex", pattern = "<system-reminder>[\\s\\S]*?</system-reminder>" },
-  { kind = "regex", pattern = "<task-notification>[\\s\\S]*?</task-notification>" },
-]
+format = "claude"
 ```
 
-## Top-level fields
+## Manifest fields
 
-| Field | Type | Default | Meaning |
-|---|---:|---:|---|
-| `version` | integer | required | Contract version. MVP uses `1`. |
-| `inputs` | array | required | Ordered input definitions. |
+### Top level
 
-## `[[inputs]]`
+| Field | Type | Use |
+|---|---:|---|
+| `version` | integer | Manifest contract version. Shipped manifests use `1`. |
+| `inputs` | array | Ordered `[[inputs]]` definitions. |
 
-| Field | Type | Default | Meaning |
-|---|---:|---:|---|
-| `id` | string | required | Stable manifest-local input name such as `claude` or `pi`. |
-| `source` | string | required | Semantic Backscroll source emitted to storage. Conversations use `session`. |
-| `active` | bool | `true` | Allows disabling an input without deleting it. |
+### `[[inputs]]`
 
-`source` is not the provider name and not the file format. Claude and Pi
-conversation manifests both set `source = "session"`; provider details belong in
-`id`, `discover`, `decode`, selectors, and filters.
+| Field | Type | Use |
+|---|---:|---|
+| `id` | string | Stable name shown in configuration and diagnostics. |
+| `source` | string | Semantic source stored in SQLite, such as `session`, `plan`, `decision`, or `ke`. |
+| `active` | bool | Only active definitions participate in ingestion. Set it explicitly. |
 
-## `discover`
+`source` is not the provider or decoder name. Claude, Pi, and OpenCode
+conversation inputs all use `source = "session"`.
 
-Finds candidate files without provider-specific Rust rules.
+### `inputs.discover`
 
-| Field | Type | Default | Meaning |
-|---|---:|---:|---|
-| `roots` | array of strings | required | Files or directories to scan. |
-| `include` | array of glob strings | required | Positive file patterns. |
-| `exclude` | array of glob strings | `[]` | Negative file patterns. |
-| `follow_symlinks` | bool | `false` | Whether directory walking follows symlinks. |
+| Field | Type | Use |
+|---|---:|---|
+| `roots` | array of strings | Files or directories to scan. `~` is expanded. |
+| `include` | array of strings | Glob patterns relative to each root; `**` is supported. |
+| `exclude` | array of strings | Glob patterns to skip. |
+| `follow_symlinks` | bool | Follow symlinks when true; false in shipped presets. |
 
-Claude subagent exclusion is expressed here as data:
+Missing or unreadable roots are skipped. Discovery never grants a reader access
+outside the configured root.
 
-```toml
-[inputs.discover]
-roots = ["~/.claude/projects"]
-include = ["**/*.jsonl"]
-exclude = ["**/subagents/**"]
-```
+### `inputs.decode`
 
-The core only applies generic glob include/exclude rules; it does not need to
-know what `subagents` means.
+| Field | Type | Use |
+|---|---:|---|
+| `format` | string | Registered decoder: `claude`, `pi`, `opencode`, `markdown_document`, or `markdown_sections`. |
+| `index_reasoning` | bool | Pi-only opt-in for reasoning blocks; false by default. |
 
-## `decode`
-
-Declares the technical file format.
-
-| Field | Type | Default | Meaning |
-|---|---:|---:|---|
-| `format` | enum | required | MVP values: `jsonl`, `json`, `markdown_document`, `markdown_sections`. |
-| `encoding` | string | `utf-8` | Text encoding for file reads. |
-
-## `record`
-
-Selects and filters raw decoded records before mapping.
-
-| Field | Type | Default | Meaning |
-|---|---:|---:|---|
-| `selector` | JSONPath string | `$` | Record selector inside each decoded item. |
-| `include_when` | array of predicates | `[]` | Predicates that must match. |
-| `exclude_when` | array of predicates | `[]` | Predicates that drop a record when matched. |
-
-Predicate shape:
-
-```toml
-{ selector = "$.type", op = "eq", value = "assistant" }
-```
-
-MVP operators are `eq`, `ne`, `in`, `exists`, and `missing`.
-
-## `map`
-
-Maps record fields to Backscroll metadata. Required for `jsonl` and `json` inputs. Markdown inputs (`markdown_document` and `markdown_sections`) emit document text directly and may omit this section. `project` is also evaluated against the full JSON document (or each JSONL line) before record filtering, so file/session metadata records can provide a project for emitted messages.
-
-| Field | Type | Default | Meaning |
-|---|---:|---:|---|
-| `role` | JSONPath string | required | Role value before aliasing. |
-| `uuid` | JSONPath string | unset | Message or session identifier. |
-| `timestamp` | JSONPath string | unset | Message timestamp. |
-| `session_id` | JSONPath string | unset | Conversation identifier. |
-| `project` | JSONPath string | unset | Project value when present on the document/line or emitted records. |
-| `role_aliases` | table | `{}` | Provider role names mapped to Backscroll roles. |
-
-## `content`
-
-Selects text-bearing values and optional content blocks. Required for `jsonl` and `json` inputs. Markdown inputs may omit this section; when omitted, emitted messages use `content_type = "text"`.
-
-| Field | Type | Default | Meaning |
-|---|---:|---:|---|
-| `selector` | JSONPath string | required | Content value selector. |
-| `string` | JSONPath string | `$` | String selector when content is a scalar. |
-| `blocks` | JSONPath string | unset | Selector for arrays of content blocks. |
-| `block_text` | JSONPath string | unset | Text selector within each block. |
-| `content_type` | JSONPath string | unset | Selector for a block or message content type. |
-| `include_when` | array of predicates | `[]` | Predicates that a block must match. |
-| `exclude_when` | array of predicates | `[]` | Predicates that drop a block when matched. |
-| `default_content_type` | string | `text` | Content type used when no selector yields a value. |
-
-Pi non-text block filtering is expressed here as data:
-
-```toml
-[inputs.content]
-selector = "$.message.content"
-blocks = "$.message.content[*]"
-block_text = "$.text"
-content_type = "$.type"
-include_when = [
-  { selector = "$.type", op = "eq", value = "text" },
-]
-```
-
-The core only evaluates the generic predicate; it does not need Pi-specific
-knowledge of `thinking` or `toolCall` blocks.
-
-## `text`
-
-Normalizes extracted text.
-
-| Field | Type | Default | Meaning |
-|---|---:|---:|---|
-| `join` | string | `\n` | Separator for multiple text fragments. |
-| `trim` | bool | `true` | Trim leading and trailing whitespace. |
-| `drop_empty` | bool | `true` | Drop messages whose final text is empty. |
-| `remove` | array of remove rules | `[]` | Ordered text removal rules. |
-
-Remove rule shape:
-
-```toml
-{ kind = "regex", pattern = "<system-reminder>[\\s\\S]*?</system-reminder>" }
-```
-
-MVP `kind` values are `regex`, `prefix`, and `suffix`.
+An active input with an unregistered decoder fails startup with an actionable
+`no reader registered for format ...` error. Adding a new format requires a
+reader implementation and registration; a manifest alone cannot define a new
+provider schema.
 
 ## Complete Claude example
 
@@ -236,45 +118,15 @@ active = true
 roots = ["~/.claude/projects"]
 include = ["**/*.jsonl"]
 exclude = ["**/subagents/**"]
+follow_symlinks = false
 
 [inputs.decode]
-format = "jsonl"
-
-[inputs.record]
-selector = "$"
-include_when = [
-  { selector = "$.type", op = "in", value = ["user", "assistant"] },
-]
-exclude_when = [
-  { selector = "$.isMeta", op = "eq", value = true },
-]
-
-[inputs.map]
-role = "$.message.role"
-uuid = "$.uuid"
-timestamp = "$.timestamp"
-session_id = "$.sessionId"
-
-[inputs.content]
-selector = "$.message.content"
-string = "$"
-blocks = "$.message.content[*]"
-block_text = "$.text"
-content_type = "$.type"
-include_when = [
-  { selector = "$.type", op = "eq", value = "text" },
-]
-default_content_type = "text"
-
-[inputs.text]
-join = "\n"
-trim = true
-drop_empty = true
-remove = [
-  { kind = "regex", pattern = "<system-reminder>[\\s\\S]*?</system-reminder>" },
-  { kind = "regex", pattern = "<task-notification>[\\s\\S]*?</task-notification>" },
-]
+format = "claude"
 ```
+
+The Claude reader extracts text, tool inputs/results, stable message UUIDs,
+timestamps, interruption markers, exit codes, and provider noise directly from
+Claude's session schema.
 
 ## Complete Pi example
 
@@ -287,45 +139,24 @@ source = "session"
 active = true
 
 [inputs.discover]
-roots = ["~/.pi/agent/sessions"]
+roots = ["~/.pi/agent/sessions", "~/.pi/agent/sessions-archive"]
 include = ["**/*.jsonl"]
 exclude = []
+follow_symlinks = false
 
 [inputs.decode]
-format = "jsonl"
-
-[inputs.record]
-selector = "$"
-include_when = [
-  { selector = "$.type", op = "eq", value = "message" },
-  { selector = "$.message.role", op = "in", value = ["user", "assistant"] },
-]
-
-[inputs.map]
-role = "$.message.role"
-uuid = "$.id"
-timestamp = "$.timestamp"
-
-[inputs.content]
-selector = "$.message.content"
-string = "$"
-blocks = "$.message.content[*]"
-block_text = "$.text"
-content_type = "$.type"
-include_when = [
-  { selector = "$.type", op = "eq", value = "text" },
-]
-default_content_type = "text"
-
-[inputs.text]
-join = "\n"
-trim = true
-drop_empty = true
+format = "pi"
+index_reasoning = false
 ```
+
+The Pi reader selects user/assistant text from Pi sessions, indexes supported
+tool activity, and includes reasoning only when `index_reasoning = true`.
 
 ## Markdown document inputs
 
-Plans and external documents are declared as normal inputs. Whole-document markdown uses `decode.format = "markdown_document"`; sectioned markdown uses `decode.format = "markdown_sections"`, which splits on `## ` headers and preserves any pre-header preamble as the first message.
+Whole-document Markdown uses `markdown_document`. Sectioned Markdown uses
+`markdown_sections`, which splits on `## ` headings and preserves a pre-header
+preamble as the first message.
 
 ```toml
 version = 1
@@ -359,17 +190,21 @@ include = ["**/*.md"]
 format = "markdown_document"
 ```
 
-Use `source = "plan"`, `"ke"`, `"decision"`, `"memory"`, `"rule"`, `"spec"`, or `"backlog"` to preserve the semantic source stored in SQLite. Specs can opt into `markdown_sections` when section-level indexing is desired.
+Use `source = "plan"`, `"ke"`, `"decision"`, `"memory"`, `"rule"`, `"spec"`,
+or `"backlog"` to preserve the semantic source stored in SQLite. Markdown
+readers index text; they do not parse YAML frontmatter into structured metadata.
 
-## Validation policy
+## Loading and failure behavior
 
-- Unknown fields are invalid at every level.
-- Missing required fields are invalid.
-- Predicate operators outside the MVP set are invalid.
-- `source` must be explicit; conversation manifests for Claude and Pi use
-  `source = "session"`.
-- All selectors are JSONPath in the MVP. JMESPath is outside the MVP and is
-  reserved for the future evaluation in
-  [T013](roadmap/O02-generic-agnostic-input-engine/T013-evaluate-jmespath-future.md).
-- The contract has no fields that run shell or external processes. It is limited
-  to discovery, decoding, selectors, predicates, mapping, and text normalization.
+- Malformed TOML fails with the manifest path in the error.
+- Unsupported decoder names fail when operational startup resolves the active
+  reader; cached results are not returned after that sync failure.
+- Missing discovery roots yield no files so presets for absent tools can coexist.
+- The current TOML loader ignores unrecognized fields. That permissiveness is
+  not an extension mechanism: ignored fields do not alter reader behavior.
+- Manifests cannot run shell commands or external processes.
+
+Every operational command validates the active configuration, attempts one
+incremental sync, and then queries the perennial SQLite record. Use
+`backscroll config` to inspect resolved manifests and `backscroll validate
+--json` to inspect index health.
