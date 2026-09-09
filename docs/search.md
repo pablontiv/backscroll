@@ -133,16 +133,18 @@ The limit is approximate — it will not truncate a result mid-output, but will 
 
 ## Query-Echo Handling
 
-Unfiltered search removes direct `backscroll search` tool invocations before
+Unfiltered search removes direct Backscroll search-tool invocations before
 merging tool and prose rankings. This prevents a retrieval command from
 outranking the historical prose it is trying to recover merely because the
 command repeats every query term.
 
 The filter applies only to the canonical direct Bash serialization
-`Bash command=backscroll search ...` (tool-name matching is case-insensitive).
-Explicit `--content-type tool` searches still return those commands. Absolute
-paths and wrappers such as `/path/backscroll search`, `env backscroll search`,
-and `bash -lc "backscroll search ..."` remain ordinary tool results. Text that
+`Bash command=backscroll search --text needle` (tool-name matching is
+case-insensitive). Explicit `--content-type tool` searches still return those
+commands. Absolute paths and wrappers such as
+`/path/backscroll search --text needle`,
+`env backscroll search --text needle`, and
+`bash -lc "backscroll search --text needle"` remain ordinary tool results. Text that
 mentions Backscroll and unrelated tool commands are unchanged. There is no
 opt-in flag or shell parsing.
 
