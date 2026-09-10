@@ -3,7 +3,7 @@ estado: Completed
 ---
 # Search Engine
 
-The search command performs full-text search across all indexed sessions using BM25 relevance ranking. Results include highlighted snippets showing where the query matched. `--source-path` is a filter: every executable search example must include positional query text or `--text <query>`.
+The search command performs full-text search across all indexed sessions using BM25 relevance ranking. Results include highlighted snippets showing where the query matched. Results are always best-first: rank 1 is the strongest match. For a `--content-type` search the `Score`/`score` field is the raw FTS5 `bm25()` value, which is zero or negative with a more negative value meaning a better match, so rows are ordered by ascending score with row id as a deterministic tiebreaker. An unfiltered search merges the prose and tool indexes by rank position and reports the positive Reciprocal Rank Fusion score instead, where higher is better. `--source-path` is a filter: every executable search example must include positional query text or `--text <query>`.
 
 ## CLI Usage
 
@@ -36,7 +36,7 @@ Human-readable output with terminal bold for match highlights. Each result uses 
 
 ```
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-Rank: 1 | Source: session | Role: assistant | Score: 12.34
+Rank: 1 | Source: session | Role: assistant | Score: -3.63
 Path: /home/user/.claude/projects/backscroll/sessions/abc123/session.jsonl
 ...the migration plan involves three phases...
 ```
@@ -49,7 +49,7 @@ Match markers (`>>>` and `<<<` in the raw snippet) are rendered as bold text in 
 
 ```json
 [
-  {"source_path": "~/.claude/.../session.jsonl", "snippet": "...matched text...", "score": 12.34, "role": "assistant", "timestamp": "2026-08-20T12:34:56Z"}
+  {"source_path": "~/.claude/.../session.jsonl", "snippet": "...matched text...", "score": -3.63, "role": "assistant", "timestamp": "2026-08-20T12:34:56Z"}
 ]
 ```
 
@@ -65,7 +65,7 @@ With `--fields full`, ordinary results encode the existing `models.SearchResult`
     "Timestamp": "2026-08-20T12:34:56Z",
     "SessionID": "",
     "ProjectPath": "backscroll",
-    "Score": 12.34,
+    "Score": -3.63,
     "Tags": null,
     "ContentType": "text",
     "Rank": 1
@@ -83,7 +83,7 @@ Robot mode emits deterministic `result_N_field=value` lines. Like JSON,
 ```
 result_0_filepath=/home/user/.claude/projects/example/session.jsonl
 result_0_content=bounded matched snippet
-result_0_score=12.34
+result_0_score=-3.63
 result_0_role=assistant
 result_0_timestamp=2026-08-20T12:34:56Z
 ```
@@ -99,7 +99,7 @@ result_0_content=complete content with escaped newlines
 result_0_project=backscroll
 result_0_content_type=text
 result_0_timestamp=2026-08-20T12:34:56Z
-result_0_score=12.34
+result_0_score=-3.63
 result_0_rank=1
 ```
 
