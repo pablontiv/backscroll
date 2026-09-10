@@ -25,6 +25,6 @@ type DiscoverConfig struct {
 
 // DecodeConfig specifies how to decode discovered files.
 type DecodeConfig struct {
-	Format         string `toml:"format"`          // "pi", "claude", "opencode", "markdown"
-	IndexReasoning bool   `toml:"index_reasoning"` // Pi only; opt-in to index reasoning blocks
+	Format         string `toml:"format"`          // Registered reader name; see docs/input-contract.md
+	IndexReasoning bool   `toml:"index_reasoning"` // Pi/Codex: opt-in to index readable reasoning blocks
 }

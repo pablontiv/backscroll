@@ -1,0 +1,16 @@
+{"ordinal":0,"timestamp":"2026-09-01T12:00:00Z","type":"session_meta","payload":{"id":"synthetic-codex-session","session_id":"synthetic-codex-session","timestamp":"2026-09-01T12:00:00Z","cwd":"/synthetic/codex-fixture-project","source":"cli","cli_version":"0.153.4","model_provider":"openai","git":{"branch":"synthetic"}}}
+{"ordinal":1,"timestamp":"2026-09-01T12:00:01Z","type":"response_item","payload":{"type":"message","role":"developer","content":[{"type":"input_text","text":"codexignoredinstructions"}]}}
+{"ordinal":2,"timestamp":"2026-09-01T12:00:02Z","type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"codexuserquartz Please inspect the synthetic fixture."}]}}
+{"ordinal":3,"timestamp":"2026-09-01T12:00:03Z","type":"event_msg","payload":{"type":"user_message","message":"codexuserquartz Please inspect the synthetic fixture."}}
+{"ordinal":4,"timestamp":"2026-09-01T12:00:04Z","type":"response_item","payload":{"type":"function_call","id":"synthetic-call-item","name":"exec_command","call_id":"synthetic-call","arguments":"{\"cmd\":\"echo codextoolquartz\"}"}}
+{"ordinal":5,"timestamp":"2026-09-01T12:00:05Z","type":"response_item","payload":{"type":"function_call_output","call_id":"synthetic-call","output":"codexoutputquartz"}}
+{"ordinal":6,"timestamp":"2026-09-01T12:00:06Z","type":"response_item","payload":{"type":"custom_tool_call","id":"synthetic-custom-item","name":"apply_patch","call_id":"synthetic-custom","input":"*** Begin Patch\n*** Add File: codexpatchquartz.txt\n+synthetic\n*** End Patch"}}
+{"ordinal":7,"timestamp":"2026-09-01T12:00:07Z","type":"response_item","payload":{"type":"custom_tool_call_output","id":"synthetic-result","call_id":"synthetic-custom","output":[{"type":"input_text","text":"codexblockquartz"},{"type":"input_image","image_url":"codexignoredimage"}]}}
+{"ordinal":8,"timestamp":"2026-09-01T12:00:08Z","type":"response_item","payload":{"type":"reasoning","id":"synthetic-reasoning","summary":[{"type":"summary_text","text":"codexreasonquartz"}],"encrypted_content":"codexignoredencrypted"}}
+{"ordinal":9,"timestamp":"2026-09-01T12:00:09Z","type":"response_item","payload":{"type":"message","id":"synthetic-assistant","role":"assistant","phase":"final_answer","content":[{"type":"output_text","text":"codexanswerquartz The synthetic fixture is ready."}]}}
+{"ordinal":10,"timestamp":"2026-09-01T12:00:10Z","type":"event_msg","payload":{"type":"task_complete","last_agent_message":"codexanswerquartz The synthetic fixture is ready."}}
+{"ordinal":11,"timestamp":"2026-09-01T12:00:11Z","type":"compacted","payload":{"message":"codexignoredcompact","replacement_history":[{"type":"message","role":"assistant","content":[{"type":"output_text","text":"codexanswerquartz The synthetic fixture is ready."}]}]}}
+{"ordinal":12,"timestamp":"2026-09-01T12:00:12Z","type":"future_record","payload":{"text":"codexignoredfuture"}}
+not valid json
+{"ordinal":14,"timestamp":"2026-09-01T12:00:14Z","type":"response_item","payload":{"type":"message","role":"user","content":"codexignoredmalformed"}}
+{"ordinal":15,"timestamp":"2026-09-01T12:00:15Z","type":"response_item","payload":{"type":"message","role":"assistant","content":[{"type":"output_text","text":"codexafterquartz survives a malformed line"}]}}
