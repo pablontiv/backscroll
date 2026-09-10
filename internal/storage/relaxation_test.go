@@ -30,6 +30,12 @@ func relaxationDB(t *testing.T) *Database {
 
 func TestRelaxationStagesAndProtectedCore(t *testing.T) {
 	db := relaxationDB(t)
+	t.Run("punctuation cannot satisfy the two-term floor", func(t *testing.T) {
+		results, stages, err := db.SearchRelaxed("handshake adaptation ...", models.SearchOptions{SourcePath: "/target.jsonl", ContentType: "text", Limit: 5})
+		if err == nil || !strings.Contains(err.Error(), "has no searchable characters") || len(results) != 0 || len(stages) != 0 {
+			t.Fatalf("punctuation must be rejected before any stage, not allow single-term recall: err=%v stages=%v results=%+v", err, stages, results)
+		}
+	})
 	for _, tc := range []struct {
 		query string
 		want  bool
@@ -123,9 +129,14 @@ func TestRelaxationToolFilterAndPagination(t *testing.T) {
 }
 
 func TestRelaxationValidationAndLiterals(t *testing.T) {
-	for _, query := range []string{"", "  ", "+", "+ term", `""`, `"unclosed`, `"phrase"suffix`, strings.Repeat("word ", 33) + "+"} {
+	for _, query := range []string{"", "  ", "+", "+ term", `""`, `"unclosed`, `"phrase"suffix`, strings.Repeat("word ", 33) + "+", "...", "&&", "->", "--", "::", "||", "+...", `"... &&"`, "✨"} {
 		if err := ValidateRelaxationQuery(query); err == nil {
 			t.Errorf("expected invalid query %q", query)
+		}
+	}
+	for _, query := range []string{"a", "7", "é", "東京", "١", "+東京", "--dry-run", "/tmp/a-b", "foo::bar", `"東京 7"`} {
+		if err := ValidateRelaxationQuery(query); err != nil {
+			t.Errorf("letter/digit-bearing unit rejected %q: %v", query, err)
 		}
 	}
 	var long []string

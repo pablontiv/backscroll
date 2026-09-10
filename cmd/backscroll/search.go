@@ -100,7 +100,7 @@ protected. All scope filters remain fixed; no OR or semantic expansion is used.`
 	cmd.Flags().StringVar(&fields, "fields", "minimal", "Machine-readable fields to emit: minimal or full")
 	cmd.Flags().IntVar(&maxTokens, "max-tokens", 0, "Max tokens in output (0=unlimited)")
 	cmd.Flags().BoolVar(&lexicalOnly, "lexical-only", false, "Use BM25 only, skip vector search")
-	cmd.Flags().BoolVar(&relax, "relax", false, "After zero lexical rows, drop low-IDF terms within the same scope (+term protects a term)")
+	cmd.Flags().BoolVar(&relax, "relax", false, "Lexical-only recall: after zero rows, drop low-IDF terms within the same scope (+term protects a term); ignores vector similarity thresholds")
 	cmd.Flags().Float64Var(&similarityThreshold, "similarity-threshold", 0.3, "Minimum cosine similarity for vector results (0=no threshold)")
 	cmd.Flags().StringVar(&text, "text", "", "Search text (v2 preferred grammar)")
 

@@ -195,7 +195,7 @@ Stemming/phrase-expansion stages are skipped: stemming is already available and 
 
 Pagination and output budgets do not trigger extra relaxation: an exhausted page of an existing stage stays empty, and truncating a result to fit a budget does not cause a new query. Strict matches are never mixed with relaxed matches because fallback runs only after strict eligibility is empty. The existing index candidate limits and ranking are unchanged.
 
-Opt-in syntax supports up to 32 distinct query units. A leading `+` requires a nonempty term; quoted phrases must be nonempty, balanced, and whitespace-delimited. Inside a phrase, double an inner quote (`""`). These validations run before database/startup side effects. FTS operator words such as OR remain literal, not executable query syntax. Marker syntax and phrase parsing apply only with `--relax`.
+Opt-in syntax supports up to 32 distinct query units. A leading `+` requires a nonempty term; quoted phrases must be nonempty, balanced, and whitespace-delimited. Inside a phrase, double an inner quote (`""`). Every unit, including a protected term or phrase, must contain at least one Unicode letter or digit; punctuation-only units such as `...`, `&&`, or `::` are rejected rather than counting toward the core without constraining matches. These validations run before database/startup side effects. FTS operator words such as OR remain literal, not executable query syntax. Marker syntax and phrase parsing apply only with `--relax`.
 
 ### Provenance and limits
 

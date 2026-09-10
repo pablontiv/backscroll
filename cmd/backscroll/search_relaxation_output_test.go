@@ -35,7 +35,7 @@ func TestSearchRelaxationBudgetKeepsProvenanceWithEachResult(t *testing.T) {
 
 func TestSearchRelaxationInvalidSyntaxPrecedesStartup(t *testing.T) {
 	testEnv(t)
-	for _, query := range []string{`"unclosed`, "+", `""`, "+ word"} {
+	for _, query := range []string{`"unclosed`, "+", `""`, "+ word", "handshake adaptation ...", "violet && handshake", "+...", `"... &&"`} {
 		path := filepath.Join(t.TempDir(), "must-not-exist.db")
 		t.Setenv("BACKSCROLL_DATABASE_PATH", path)
 		out, _, err := runCmd("search", "--text", query, "--relax", "--robot")

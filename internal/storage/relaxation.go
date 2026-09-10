@@ -61,6 +61,11 @@ func parseRecallTerms(query string) ([]recallTerm, error) {
 		if strings.TrimSpace(term.text) == "" {
 			return nil, fmt.Errorf("invalid --relax query: empty phrase or keep-term")
 		}
+		// FTS can ignore punctuation-only units inside AND expressions. They
+		// must not count toward the core while adding no search constraint.
+		if !strings.ContainsFunc(term.text, func(r rune) bool { return unicode.IsLetter(r) || unicode.IsDigit(r) }) {
+			return nil, fmt.Errorf("invalid --relax query: unit %q has no searchable characters", term.text)
+		}
 		// Repeated spellings are one unit, not a way around the two-term floor.
 		duplicate := false
 		for i := range terms {
