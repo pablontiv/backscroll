@@ -104,6 +104,9 @@ fi
 echo "[Linux x86_64 detection]"
 testable=$(make_testable)
 output=$(bash -c "
+    export BACKSCROLL_INSTALL_DIR=\$(mktemp -d)
+    export BACKSCROLL_CONFIG_DIR=\$(mktemp -d)
+    export BACKSCROLL_INPUTS_SOURCE_DIR='$INPUTS_DIR'
     source '$testable'
     uname() {
         case \"\$1\" in
@@ -128,9 +131,6 @@ output=$(bash -c "
         fi
     }
     chmod() { :; }
-    export BACKSCROLL_INSTALL_DIR=\$(mktemp -d)
-    export BACKSCROLL_CONFIG_DIR=\$(mktemp -d)
-    export BACKSCROLL_INPUTS_SOURCE_DIR='$INPUTS_DIR'
     main 2>&1
 ") && rc=$? || rc=$?
 rm -f "$testable"
@@ -145,6 +145,9 @@ fi
 echo "[macOS arm64 detection]"
 testable=$(make_testable)
 output=$(bash -c "
+    export BACKSCROLL_INSTALL_DIR=\$(mktemp -d)
+    export BACKSCROLL_CONFIG_DIR=\$(mktemp -d)
+    export BACKSCROLL_INPUTS_SOURCE_DIR='$INPUTS_DIR'
     source '$testable'
     uname() {
         case \"\$1\" in
@@ -169,9 +172,6 @@ output=$(bash -c "
         fi
     }
     chmod() { :; }
-    export BACKSCROLL_INSTALL_DIR=\$(mktemp -d)
-    export BACKSCROLL_CONFIG_DIR=\$(mktemp -d)
-    export BACKSCROLL_INPUTS_SOURCE_DIR='$INPUTS_DIR'
     main 2>&1
 ") && rc=$? || rc=$?
 rm -f "$testable"
