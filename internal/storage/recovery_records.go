@@ -58,7 +58,49 @@ func readCanonicalSearchItems(ctx context.Context, q compat.Queryer) ([]models.I
 	if err != nil {
 		return nil, nil, fmt.Errorf("query recovery records: %w", err)
 	}
-	return readCanonicalSearchItemsFromRows(rows)
+	records, diag, err := readCanonicalSearchItemsFromRows(rows)
+	if err != nil || diag != nil {
+		return nil, diag, err
+	}
+	// Pre-v15 inputs have no pairing evidence. Keep the canonical text reader
+	// compatible with every historical shape, then retain positive provenance.
+	var hasEcho int
+	if err := q.QueryRowContext(ctx, `SELECT COUNT(*) FROM pragma_table_info('search_items') WHERE name = 'search_echo'`).Scan(&hasEcho); err != nil {
+		return nil, nil, fmt.Errorf("inspect recovery echo provenance: %w", err)
+	}
+	if hasEcho == 0 {
+		return records, nil, nil
+	}
+	marked, err := q.QueryContext(ctx, `SELECT source_path, ordinal, COALESCE(uuid, ''), text, role, content_type FROM search_items WHERE search_echo = 1`)
+	if err != nil {
+		return nil, nil, fmt.Errorf("read recovery echo provenance: %w", err)
+	}
+	defer marked.Close()
+	type anchor struct {
+		path                          string
+		ordinal                       int64
+		uuid, text, role, contentType string
+	}
+	echoes := make(map[anchor]bool)
+	for marked.Next() {
+		var a anchor
+		if err := marked.Scan(&a.path, &a.ordinal, &a.uuid, &a.text, &a.role, &a.contentType); err != nil {
+			return nil, nil, fmt.Errorf("scan recovery echo provenance: %w", err)
+		}
+		echoes[a] = true
+	}
+	if err := marked.Err(); err != nil {
+		return nil, nil, fmt.Errorf("iterate recovery echo provenance: %w", err)
+	}
+	for i := range records {
+		r := &records[i]
+		uuid := ""
+		if r.UUID != nil {
+			uuid = *r.UUID
+		}
+		r.SearchEcho = echoes[anchor{r.SourcePath, r.Ordinal, uuid, r.Text, r.Role, r.ContentType}]
+	}
+	return records, nil, nil
 }
 
 type recoveryRows interface {

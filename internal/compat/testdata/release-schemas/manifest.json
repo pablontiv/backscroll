@@ -619,6 +619,14 @@
       "AppliedVersion": 14,
       "HasSourceMetadata": false,
       "Provenance": "Migration v14 adds file_size and file_mtime columns to indexed_files for startup prefilter optimization."
+    },
+    {
+      "Fixture": "v15.sql",
+      "ProvenanceSHA256": "0591a7bbd689d302a12d7f28430396a0a2c2024e018bf4c35a093d14781c0353",
+      "Signature": "sha256:1d41e6b499ad7b3e3a8072c3c65017566525ee4df3de1dd38764d553b636c91d",
+      "AppliedVersion": 15,
+      "HasSourceMetadata": false,
+      "Provenance": "Migration v15 applied to the retained v14 fixture; adds nullable paired-search echo provenance without deleting indexed content."
     }
   ]
 }

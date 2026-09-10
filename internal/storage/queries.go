@@ -977,19 +977,31 @@ func (d *Database) LoadToolSequences(opts LoadSequencesOpts) ([]sequences.Sequen
 }
 
 // StalePaths returns source paths from session rows whose extraction_version is NULL
-// or older than currentVersion. Rows are ordered by last_indexed ASC (FIFO draining).
-// This powers incremental re-parsing of files whose rich metadata needs backfill.
+// or older than currentVersion, or whose v15 pairing provenance is still unknown.
+// Rows are ordered by last_indexed ASC (FIFO draining). Only surviving source
+// files can supply pairing evidence; expired outputs are never guessed from text.
 func (d *Database) StalePaths(currentVersion int) ([]string, error) {
+	return d.stalePaths(currentVersion, false)
+}
+
+// PendingSearchEchoPaths distinguishes the v15 backlog from older extraction
+// epochs so already-classified perennial rows cannot consume its replay budget.
+func (d *Database) PendingSearchEchoPaths() ([]string, error) {
+	return d.stalePaths(0, true)
+}
+
+func (d *Database) stalePaths(currentVersion int, echoOnly bool) ([]string, error) {
 	query := `
 		SELECT DISTINCT search_items.source_path
 		FROM search_items
 		LEFT JOIN indexed_files ON search_items.source_path = indexed_files.path
 		WHERE search_items.source = 'session'
-		  AND (search_items.extraction_version IS NULL OR search_items.extraction_version < ?)
+		  AND ((? AND (search_items.extraction_version IS NULL OR search_items.extraction_version < ?))
+		       OR search_items.search_echo IS NULL)
 		ORDER BY indexed_files.last_indexed ASC, search_items.source_path ASC
 	`
 
-	rows, err := d.db.Query(query, currentVersion)
+	rows, err := d.db.Query(query, !echoOnly, currentVersion)
 	if err != nil {
 		return nil, fmt.Errorf("query stale paths: %w", err)
 	}

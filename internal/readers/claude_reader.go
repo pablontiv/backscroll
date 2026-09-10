@@ -98,6 +98,7 @@ func (r *ClaudeReader) Parse(path string, _ input_config.InputDefinition) (model
 		if !ok {
 			continue
 		}
+		msgs[i].SearchEcho = msgs[j].SearchEcho
 		if msgs[i].IsError != nil {
 			msgs[j].IsError = msgs[i].IsError
 		}
@@ -200,6 +201,7 @@ func extractClaudeMessages(rec claudeRecord) []models.Message {
 					ToolName:    b.Name,
 					CommandHead: commandHead(b.Input),
 					ToolUseID:   b.ID,
+					SearchEcho:  isDirectSearchInput(b.Name, b.Input),
 				})
 				toolNameByID[b.ID] = b.Name
 			}
@@ -234,6 +236,22 @@ func extractClaudeMessages(rec claudeRecord) []models.Message {
 			UUID: rec.UUID, WasInterrupted: interrupted}}, out...)
 	}
 	return out
+}
+
+// isDirectSearchInput recognizes only the same direct Bash command boundary as
+// unfiltered retrieval. Inspect raw input before toolfmt can truncate the command.
+func isDirectSearchInput(tool string, input json.RawMessage) bool {
+	if !strings.EqualFold(tool, "bash") {
+		return false
+	}
+	var obj struct {
+		Command string `json:"command"`
+	}
+	if err := json.Unmarshal(input, &obj); err != nil {
+		return false
+	}
+	fields := strings.Fields(obj.Command)
+	return len(fields) >= 2 && fields[0] == "backscroll" && fields[1] == "search"
 }
 
 func classifyText(text string) string {

@@ -15,7 +15,7 @@ Backscroll has two separate configuration surfaces:
 Application config is resolved from:
 
 | Priority | Source | Example |
-|----------|--------|---------|
+| ---------- | -------- | --------- |
 | 1 (highest) | `./backscroll.toml` | Project-local app config |
 | 2 | `~/.config/backscroll/config.toml` | User-level app config |
 | 3 | Environment variables | `BACKSCROLL_DATABASE_PATH` |
@@ -46,7 +46,7 @@ Canonical input manifests are loaded from exactly this runtime directory:
 `<config_dir>` is resolved as:
 
 | OS | Default `<config_dir>` | Manifest directory |
-|---|---|---|
+| --- | --- | --- |
 | Linux | `${XDG_CONFIG_HOME:-$HOME/.config}` | `${XDG_CONFIG_HOME:-$HOME/.config}/backscroll/inputs/` |
 | macOS | `$HOME/Library/Application Support` | `$HOME/Library/Application Support/backscroll/inputs/` |
 | Windows | `%APPDATA%` | `%APPDATA%\backscroll\inputs\` |
@@ -74,7 +74,7 @@ exclude = ["**/subagents/**"]
 format = "claude"
 ```
 
-Markdown documents use the same input list with `decode.format = "markdown_document"` for whole-document indexing or `decode.format = "markdown_sections"` for `## ` header splitting:
+Markdown documents use the same input list with `decode.format = "markdown_document"` for whole-document indexing or `decode.format = "markdown_sections"` for `##` header splitting:
 
 ```toml
 version = 1

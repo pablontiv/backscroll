@@ -16,6 +16,30 @@ func TestSerializeToolInput_Object(t *testing.T) {
 	}
 }
 
+func TestSerializeToolInputPreservesDirectSearchAndWrapperShapes(t *testing.T) {
+	tests := []struct {
+		name    string
+		command string
+		want    string
+	}{
+		{"direct", "backscroll search --text needle", "Bash command=backscroll search --text needle"},
+		{"absolute path", "/tmp/bin/backscroll search --text needle", "Bash command=/tmp/bin/backscroll search --text needle"},
+		{"env wrapper", "env backscroll search --text needle", "Bash command=env backscroll search --text needle"},
+		{"shell wrapper", `bash -lc "backscroll search --text needle"`, `Bash command=bash -lc "backscroll search --text needle"`},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			input, err := json.Marshal(map[string]string{"command": tt.command})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got := SerializeToolInput("Bash", input); got != tt.want {
+				t.Fatalf("SerializeToolInput() = %q, want %q", got, tt.want)
+			}
+		})
+	}
+}
+
 func TestSerializeToolOutput_String(t *testing.T) {
 	got := SerializeToolOutput(json.RawMessage(`"exit code 1: build failed"`))
 	if got != "exit code 1: build failed" {
