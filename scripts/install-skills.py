@@ -6,6 +6,7 @@ renamed into a private transaction directory. Receipts precede mutation and a
 restore operation is safe to repeat after an interrupted install or restore.
 Requires Python 3.9+, Git, and a stable ordinary clone (not a linked worktree).
 """
+
 import argparse
 import contextlib
 import fcntl
@@ -23,7 +24,9 @@ STATE = Path(".local/state/backscroll/skill-install")
 
 
 def digest(value):
-    return hashlib.sha256(json.dumps(value, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
+    return hashlib.sha256(
+        json.dumps(value, sort_keys=True, separators=(",", ":")).encode()
+    ).hexdigest()
 
 
 def safe_parents(path):
@@ -51,17 +54,32 @@ def snapshot(path):
     if stat.S_ISREG(meta.st_mode):
         if meta.st_nlink != 1:
             raise ValueError(f"hard-linked file not supported: {path}")
-        return {"kind": "file", "mode": mode, "sha256": hashlib.sha256(path.read_bytes()).hexdigest()}
+        return {
+            "kind": "file",
+            "mode": mode,
+            "sha256": hashlib.sha256(path.read_bytes()).hexdigest(),
+        }
     if stat.S_ISDIR(meta.st_mode):
-        return {"kind": "directory", "mode": mode,
-                "entries": {child.name: snapshot(child) for child in sorted(path.iterdir())}}
+        return {
+            "kind": "directory",
+            "mode": mode,
+            "entries": {
+                child.name: snapshot(child) for child in sorted(path.iterdir())
+            },
+        }
     raise ValueError(f"special file not supported: {path}")
 
 
 def source_info(root):
     root = absolute(root)
-    if root.is_symlink() or not (root / ".git").is_dir() or (root / ".git").is_symlink():
-        raise ValueError("source-root must be a stable ordinary clone, not a linked worktree")
+    if (
+        root.is_symlink()
+        or not (root / ".git").is_dir()
+        or (root / ".git").is_symlink()
+    ):
+        raise ValueError(
+            "source-root must be a stable ordinary clone, not a linked worktree"
+        )
     env = {k: v for k, v in os.environ.items() if not k.startswith("GIT_")}
     env["GIT_OPTIONAL_LOCKS"] = "0"  # inventory must not refresh/write the source index
     command = ["git", "-c", "core.fsmonitor=false", "-C", str(root)]
@@ -76,20 +94,26 @@ def source_info(root):
     tree = snapshot(source)
     if tree["kind"] != "directory" or not (source / "SKILL.md").is_file():
         raise ValueError("canonical SKILL.md missing")
+
     # Keep distribution entirely product-owned; reject local overlays/links.
     def check_tree(node):
         if node["kind"] == "link":
             raise ValueError("canonical skill tree must not contain symlinks")
         for child in node.get("entries", {}).values():
             check_tree(child)
+
     check_tree(tree)
-    if git("status", "--porcelain", "--untracked-files=all", "--ignored", "--", str(SKILL)):
+    if git(
+        "status", "--porcelain", "--untracked-files=all", "--ignored", "--", str(SKILL)
+    ):
         raise ValueError("canonical skill must be clean and fully tracked")
     git("ls-files", "--error-unmatch", str(SKILL / "SKILL.md"))
     commit = git("rev-parse", "HEAD")
     # status alone can miss assume-unchanged / skip-worktree edits. Compare
     # committed blob bytes too; never ship a local overlay as a committed source.
-    records = subprocess.check_output([*command, "ls-tree", "-rz", commit, "--", str(SKILL)], env=env)
+    records = subprocess.check_output(
+        [*command, "ls-tree", "-rz", commit, "--", str(SKILL)], env=env
+    )
     for record in records.split(b"\0"):
         if not record:
             continue
@@ -97,16 +121,25 @@ def source_info(root):
         mode, kind, oid = header.split()
         if kind != b"blob" or mode not in (b"100644", b"100755"):
             raise ValueError("canonical source contains non-file Git entries")
-        content = subprocess.check_output([*command, "cat-file", "blob", oid.decode()], env=env)
+        content = subprocess.check_output(
+            [*command, "cat-file", "blob", oid.decode()], env=env
+        )
         if (root / os.fsdecode(name)).read_bytes() != content:
             raise ValueError("canonical skill bytes differ from the source commit")
-    return {"root": str(root), "path": str(source), "commit": commit,
-            "tree_sha256": digest(tree)}
+    return {
+        "root": str(root),
+        "path": str(source),
+        "commit": commit,
+        "tree_sha256": digest(tree),
+    }
 
 
 def targets(home, config_home):
-    return [home / ".claude/skills/backscroll", home / ".agents/skills/backscroll",
-            config_home / "opencode/skills/backscroll"]
+    return [
+        home / ".claude/skills/backscroll",
+        home / ".agents/skills/backscroll",
+        config_home / "opencode/skills/backscroll",
+    ]
 
 
 def make_plan(root, home, config_home, action):
@@ -114,10 +147,15 @@ def make_plan(root, home, config_home, action):
     destinations = targets(home, config_home)
     protected = [Path(source["path"]), home / STATE]
     for i, target in enumerate(destinations):
-        for other in protected + destinations[i + 1:]:
+        for other in protected + destinations[i + 1 :]:
             if target == other or target in other.parents or other in target.parents:
-                raise ValueError(f"overlapping source, state or destinations: {target}, {other}")
-    if home / STATE == Path(source["root"]) or home / STATE in Path(source["root"]).parents:
+                raise ValueError(
+                    f"overlapping source, state or destinations: {target}, {other}"
+                )
+    if (
+        home / STATE == Path(source["root"])
+        or home / STATE in Path(source["root"]).parents
+    ):
         raise ValueError("source must not live inside installation state")
     rows = []
     for target in destinations:
@@ -126,10 +164,21 @@ def make_plan(root, home, config_home, action):
         linked = before == {"kind": "link", "target": source["path"]}
         if action == "uninstall" and before["kind"] != "absent" and not linked:
             raise ValueError(f"uninstall refuses an unowned destination: {target}")
-        rows.append({"path": str(target), "before": before,
-                     "change": not linked if action == "install" else linked})
-    plan = {"version": 1, "action": action, "home": str(home), "config_home": str(config_home),
-            "source": source, "targets": rows}
+        rows.append(
+            {
+                "path": str(target),
+                "before": before,
+                "change": not linked if action == "install" else linked,
+            }
+        )
+    plan = {
+        "version": 1,
+        "action": action,
+        "home": str(home),
+        "config_home": str(config_home),
+        "source": source,
+        "targets": rows,
+    }
     return {**plan, "approval": digest(plan)}
 
 
@@ -157,7 +206,11 @@ def locked(home):
 
 
 def append_event(run, event):
-    fd = os.open(run / "events.jsonl", os.O_WRONLY | os.O_APPEND | os.O_CREAT | os.O_NOFOLLOW, 0o600)
+    fd = os.open(
+        run / "events.jsonl",
+        os.O_WRONLY | os.O_APPEND | os.O_CREAT | os.O_NOFOLLOW,
+        0o600,
+    )
     with os.fdopen(fd, "a") as stream:
         if os.fstat(stream.fileno()).st_nlink != 1:
             raise ValueError("unsafe event file")
@@ -177,7 +230,11 @@ def sync_dir(path):
 def restore_rows(run, receipt):
     """Validate every preimage first. Preserve all evidence if anything drifted."""
     plan = receipt["plan"]
-    after = {"kind": "link", "target": plan["source"]["path"]} if plan["action"] == "install" else {"kind": "absent"}
+    after = (
+        {"kind": "link", "target": plan["source"]["path"]}
+        if plan["action"] == "install"
+        else {"kind": "absent"}
+    )
     pending = []
     for i, row in enumerate(plan["targets"]):
         if not row["change"]:
@@ -233,10 +290,14 @@ def apply(root, home, config_home, action, approval):
                 target = Path(row["path"])
                 safe_parents(target)
                 if snapshot(target) != row["before"]:
-                    raise ValueError(f"destination changed during installation: {target}")
+                    raise ValueError(
+                        f"destination changed during installation: {target}"
+                    )
                 target.parent.mkdir(parents=True, exist_ok=True)
                 if target.parent.stat().st_dev != run.stat().st_dev:
-                    raise ValueError("backup and destination must be on the same filesystem")
+                    raise ValueError(
+                        "backup and destination must be on the same filesystem"
+                    )
                 append_event(run, {"event": "install-intent", "path": str(target)})
                 if row["before"]["kind"] != "absent":
                     target.rename(run / f"backup-{i}")
@@ -250,18 +311,29 @@ def apply(root, home, config_home, action, approval):
             if source_info(root) != plan["source"]:
                 raise ValueError("canonical source changed during installation")
         except Exception:
-            print(f"recovery receipt: {run / 'receipt.json'}; restore_approval: {restore_approval}", file=sys.stderr)
+            print(
+                f"recovery receipt: {run / 'receipt.json'}; restore_approval: {restore_approval}",
+                file=sys.stderr,
+            )
             append_event(run, {"event": "failed", "receipt": str(run / "receipt.json")})
             restore_rows(run, receipt)
             raise
         append_event(run, {"event": "complete", "changed": changed})
-        return {"changed": changed, "receipt": str(run / "receipt.json"), "restore_approval": restore_approval}
+        return {
+            "changed": changed,
+            "receipt": str(run / "receipt.json"),
+            "restore_approval": restore_approval,
+        }
 
 
 def restore(home, receipt_path, approval):
     with locked(home) as state:
         path = absolute(receipt_path)
-        if path.name != "receipt.json" or path.parent.parent != state or path.is_symlink():
+        if (
+            path.name != "receipt.json"
+            or path.parent.parent != state
+            or path.is_symlink()
+        ):
             raise ValueError("receipt must belong to this home's installation state")
         private_dir(path.parent)
         try:
@@ -271,7 +343,11 @@ def restore(home, receipt_path, approval):
         if digest(receipt) != approval:
             raise ValueError("restore approval mismatch")
         plan = receipt["plan"]
-        if receipt["version"] != 1 or receipt["run"] != path.parent.name or plan["home"] != str(home):
+        if (
+            receipt["version"] != 1
+            or receipt["run"] != path.parent.name
+            or plan["home"] != str(home)
+        ):
             raise ValueError("receipt identity mismatch")
         expected = targets(home, absolute(plan["config_home"]))
         if [str(p) for p in expected] != [r["path"] for r in plan["targets"]]:
@@ -286,16 +362,31 @@ def main():
     sub = parser.add_subparsers(dest="command", required=True)
     for name in ("plan", "apply"):
         cmd = sub.add_parser(name)
-        cmd.add_argument("--source-root", required=True, help="operator-selected stable ordinary product clone")
+        cmd.add_argument(
+            "--source-root",
+            required=True,
+            help="operator-selected stable ordinary product clone",
+        )
         cmd.add_argument("--home", required=True, help="explicit destination home")
-        cmd.add_argument("--config-home", help="OpenCode config root; defaults to HOME/.config, not ambient XDG")
-        cmd.add_argument("--action", choices=("install", "uninstall"), default="install")
+        cmd.add_argument(
+            "--config-home",
+            help="OpenCode config root; defaults to HOME/.config, not ambient XDG",
+        )
+        cmd.add_argument(
+            "--action", choices=("install", "uninstall"), default="install"
+        )
         if name == "apply":
-            cmd.add_argument("--approve", required=True, help="exact approval digest from a freshly inspected plan")
+            cmd.add_argument(
+                "--approve",
+                required=True,
+                help="exact approval digest from a freshly inspected plan",
+            )
     cmd = sub.add_parser("restore")
     cmd.add_argument("--home", required=True)
     cmd.add_argument("--receipt", required=True)
-    cmd.add_argument("--approve", required=True, help="restore_approval from apply/prepared event")
+    cmd.add_argument(
+        "--approve", required=True, help="restore_approval from apply/prepared event"
+    )
     args = parser.parse_args()
     try:
         # Canonicalize HOME once (macOS /var is a system symlink); all children
@@ -306,7 +397,9 @@ def main():
         if args.command == "restore":
             result = restore(home, args.receipt, args.approve)
         else:
-            config = absolute(args.config_home) if args.config_home else home / ".config"
+            config = (
+                absolute(args.config_home) if args.config_home else home / ".config"
+            )
             root = Path(args.source_root).resolve(strict=True)
             if args.command == "plan":
                 result = make_plan(root, home, config, args.action)
