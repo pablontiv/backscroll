@@ -106,7 +106,7 @@ recover apply → post-install sync under retained remediation lease
 
 ### Declarative Markdown Source Types
 
-External knowledge sources are configured with active `*.inputs.toml` manifests under `<config_dir>/backscroll/inputs/`, not with legacy `[sources]` tables. Supported Markdown decode formats are `markdown_document` (whole file as one record) and `markdown_sections` (one record per `## ` section, falling back to one whole-document record when no sections exist). Source values such as `ke`, `decision`, `memory`, `rule`, `spec`, and `backlog` are preserved from the manifest and are filterable via `--source`.
+External knowledge sources are configured with active `*.inputs.toml` manifests under `<config_dir>/backscroll/inputs/`, not with legacy `[sources]` tables. Supported Markdown decode formats are `markdown_document` (whole file as one record) and `markdown_sections` (one record per section whose heading starts with two hash characters followed by a space, falling back to one whole-document record when no sections exist). Source values such as `ke`, `decision`, `memory`, `rule`, `spec`, and `backlog` are preserved from the manifest and are filterable via `--source`.
 
 ### Key Design Decisions
 

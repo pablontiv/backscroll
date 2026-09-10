@@ -220,7 +220,8 @@ Limits (observed format boundary and RED/GREEN evidence: [Codex input evidence](
 ## Markdown document inputs
 
 Whole-document Markdown uses `markdown_document`. Sectioned Markdown uses
-`markdown_sections`, which splits on `## ` headings. When a file contains one or
+`markdown_sections`, which splits on headings starting with two hash characters
+followed by a space. When a file contains one or
 more such headings, content before the first heading is not indexed; when it
 contains none, the entire document is indexed as one record.
 
