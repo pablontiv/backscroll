@@ -20,6 +20,28 @@ jobs:
   gitleaks:
     uses: pablontiv/crossbeam/.github/workflows/gitleaks.yml@v2
 
+  skill-install:
+    strategy:
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.9'
+      - name: Test isolated skill installation and recipe retrieval
+        run: |
+          mkdir -p .local-evidence
+          go build -o .local-evidence/backscroll ./cmd/backscroll
+          export BACKSCROLL_TEST_BINARY="$PWD/.local-evidence/backscroll"
+          python3 tests/test_skill_install.py -v
+
   release:
     uses: pablontiv/crossbeam/.github/workflows/go-release.yml@v2
     needs: [ci, gitleaks]

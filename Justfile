@@ -18,6 +18,12 @@ test:
     config_dir="$(mktemp -d)" && trap 'rm -rf "$config_dir"' EXIT && \
     BACKSCROLL_CONFIG_DIR="$config_dir" go test ./...
 
+# Isolated skill installer filesystem + installed-recipe E2E (Python 3.9+)
+test-skills:
+    mkdir -p .local-evidence
+    go build -o .local-evidence/backscroll ./cmd/backscroll
+    BACKSCROLL_TEST_BINARY="$PWD/.local-evidence/backscroll" python3 tests/test_skill_install.py -v
+
 # Build binary
 build:
     go build -o backscroll ./cmd/backscroll

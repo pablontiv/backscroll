@@ -12,6 +12,8 @@
 # Test artifacts
 session_test.json
 coverage.out
+.local-evidence/
+__pycache__/
 
 # Skill eval workspace (local artifacts)
 .claude/skills/backscroll-workspace/iteration-*/

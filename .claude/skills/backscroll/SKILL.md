@@ -60,7 +60,7 @@ where `<config_dir>` is the OS config directory, or `BACKSCROLL_CONFIG_DIR`. The
 Use machine-readable, budgeted output:
 
 - Robot mode on search emits `result_N_field=value` lines; search string values escape backslash as `\\`, carriage return as `\r`, and newline as `\n`.
-- `--fields minimal`: returns `source_path`, `snippet`, `score`, `role`, and `timestamp`.
+- `--robot --fields minimal`: emits `result_N_filepath`, `result_N_content` (bounded snippet), `result_N_score`, `result_N_role`, and `result_N_timestamp`. JSON uses `source_path` and `snippet`; do not use those names as robot keys.
 - `--fields full`: use only for a selected source-path drill.
 - `--max-tokens <budget>`: declare and enforce the output budget.
 
@@ -132,7 +132,7 @@ backscroll search "go test" --all-projects --content-type tool --robot --fields 
 1. **Drill the top hit.** If a top-ranked result contains relevant decision keywords, inspect indexed rows from that returned path before dismissing it by age or hunting another session.
 
 ```bash
-SOURCE_PATH="<result_N_source_path>"
+SOURCE_PATH="<decoded result_N_filepath value>"
 backscroll search --text "$QUERY" --all-projects --source-path "$SOURCE_PATH" --robot --fields full --max-tokens 4000
 ```
 
