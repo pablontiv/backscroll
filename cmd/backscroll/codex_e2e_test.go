@@ -65,7 +65,10 @@ format = "codex"
 			}
 		})
 	}
-	for _, marker := range []string{"codexignored", "codexreasonquartz"} {
+	for _, marker := range []string{
+		"codexignoredinstructions", "codexignoredimage", "codexignoredencrypted",
+		"codexignoredcompact", "codexignoredfuture", "codexignoredmalformed", "codexreasonquartz",
+	} {
 		out, stderr, err := runCmd("search", marker, "--all-projects", "--lexical-only", "--json")
 		if err != nil {
 			t.Fatalf("negative search: %v %s", err, stderr)

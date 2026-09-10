@@ -24,4 +24,21 @@ The fixture is hand-authored synthetic data matching observed shapes, not a copi
 
 ## Versioned RED
 
-Before any production edits, `go test ./cmd/backscroll -run '^TestCodexRolloutV1E2E$' -v` failed for all seven positive recall cases with `index_stale: index sync failed: resolve reader for input "codex": no reader registered for format "codex"`. The test and synthetic fixture were committed before production implementation. The oracle crosses real manifest routing, startup sync, SQLite, project/source/path/role/content/date filters and CLI JSON; it requires one match per marker, not merely a successful parser return.
+Before any production edits, `go test ./cmd/backscroll -run '^TestCodexRolloutV1E2E$' -v` failed for all seven positive recall cases with `index_stale: index sync failed: resolve reader for input "codex": no reader registered for format "codex"`. The test and synthetic fixture were committed before production implementation. The oracle crosses real manifest routing, startup sync, SQLite, project/source/path/role/content/date filters and CLI JSON; it requires one match per marker, not merely a successful parser return. RED commit: `7e83574`.
+
+## GREEN and regression evidence
+
+Fresh production implementation registers `CodexReader` in the ordinary registry, without importing the prototype or adding a migration. The same E2E command passed in 0.07s. Later negative controls were tightened to exact excluded markers (rather than a lexical prefix), without weakening any RED oracle.
+
+Validation before delivery:
+
+- `go vet ./...`: passed; primary Go LSP diagnostics: zero errors across the edited reader/CLI files.
+- `go test ./... -race -coverprofile=...`: all packages passed, **86.1% aggregate statement coverage**; readers **90.1%**. Existing Claude/Pi/OpenCode and schema/recovery tests run in the same suite.
+- `just ci`: passed (build, scrubbed HOME/config, full tests, aggregate gate **86.1%**).
+- `go test ./internal/readers -run '^$' -fuzz '^FuzzCodexReaderRecord$' -fuzztime=5s`: passed, 865,350 executions in this observation.
+- `TestCodexPresetIncrementalAndPerennialRecall`: shipped active/archive roots, readable reasoning opt-in, unchanged re-sync, appended input and missing-source recall after rebuild all passed.
+- `TestLivingInputManifestExamplesIngestThroughCommandBoundary`: the shipped Codex preset and documented TOML both ingest through the real CLI, alongside the existing reader controls.
+- `bash tests/test-install.sh`: **14 passed** with synthetic download/binary fixtures, isolated HOME/config and a stub PATH binary. Codex preset bytes and preservation of user edits are checked. A stale macOS test expectation was corrected to the installer's existing `~/.config` behavior (no runtime path change).
+- PowerShell preset registration is updated, but PowerShell execution is **not verified** on this macOS environment (`pwsh` unavailable).
+
+No global binary, manifest, Codex configuration, or transcript data was modified. The [local install runbook](../runbooks/local-install.md) provides the exact post-merge build/install and installed-commit verification commands. Independent alternate-family review must bind to the final PR head before Firstmate merges; this worker does not merge or install globally.

@@ -278,7 +278,8 @@ CONFIG_DIR=$(mktemp -d)
 output=$(run_main_linux "$testable" "$INSTALL_DIR" "$CONFIG_DIR") && rc=$? || rc=$?
 rm -f "$testable"
 
-if [ -f "$CONFIG_DIR/backscroll/inputs/claude.inputs.toml" ]; then
+if [ -f "$CONFIG_DIR/backscroll/inputs/claude.inputs.toml" ] &&
+   cmp -s "$INPUTS_DIR/codex.inputs.toml" "$CONFIG_DIR/backscroll/inputs/codex.inputs.toml"; then
     pass "installs input presets under BACKSCROLL_CONFIG_DIR/backscroll/inputs"
 else
     fail "input preset install" "preset not found in $CONFIG_DIR/backscroll/inputs; output: $output"
@@ -291,13 +292,16 @@ testable=$(make_testable)
 CONFIG_DIR=$(mktemp -d)
 mkdir -p "$CONFIG_DIR/backscroll/inputs"
 echo "user edit" > "$CONFIG_DIR/backscroll/inputs/claude.inputs.toml"
+echo "codex user edit" > "$CONFIG_DIR/backscroll/inputs/codex.inputs.toml"
 output=$(BACKSCROLL_CONFIG_DIR="$CONFIG_DIR" BACKSCROLL_INPUTS_SOURCE_DIR="$INPUTS_DIR" bash -c "
     source '$testable'
     install_input_presets 'v0.2.3' 2>&1
 ") && rc=$? || rc=$?
 rm -f "$testable"
 
-if grep -q "user edit" "$CONFIG_DIR/backscroll/inputs/claude.inputs.toml" && echo "$output" | grep -q "exists, skipping"; then
+if grep -q "user edit" "$CONFIG_DIR/backscroll/inputs/claude.inputs.toml" &&
+   grep -q "codex user edit" "$CONFIG_DIR/backscroll/inputs/codex.inputs.toml" &&
+   echo "$output" | grep -q "exists, skipping"; then
     pass "existing input preset is skipped by default"
 else
     fail "input preset skip" "file or output did not show skip; output: $output"
@@ -341,7 +345,7 @@ else
 fi
 rm -rf "$XDG_DIR"
 
-# Test 14: macOS default config dir uses Application Support
+# Test 14: macOS installer default matches the runtime ~/.config location
 echo "[macOS config dir resolution]"
 testable=$(make_testable)
 HOME_DIR=$(mktemp -d)
@@ -352,10 +356,10 @@ output=$(HOME="$HOME_DIR" bash -c "
 ") && rc=$? || rc=$?
 rm -f "$testable"
 
-if [ "$output" = "$HOME_DIR/Library/Application Support" ]; then
-    pass "macOS config dir uses ~/Library/Application Support"
+if [ "$output" = "$HOME_DIR/.config" ]; then
+    pass "macOS config dir uses ~/.config"
 else
-    fail "macOS config dir" "expected $HOME_DIR/Library/Application Support, got $output"
+    fail "macOS config dir" "expected $HOME_DIR/.config, got $output"
 fi
 rm -rf "$HOME_DIR"
 

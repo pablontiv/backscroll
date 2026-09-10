@@ -38,7 +38,7 @@ Backscroll ships as a **single self-contained binary**: pure Go, built with CGO 
 curl -fsSL https://raw.githubusercontent.com/pablontiv/backscroll/master/install.sh | bash
 ```
 
-Detects your platform (Linux x86_64 / macOS aarch64), installs the binary to `~/.local/bin/`, and installs the shipped Claude, Pi, and OpenCode input presets into the user input config directory without overwriting existing manifests.
+Detects your platform (Linux x86_64 / macOS aarch64), installs the binary to `~/.local/bin/`, and installs the shipped Claude, Pi, OpenCode, and Codex input presets into the user input config directory without overwriting existing manifests.
 
 **Windows (PowerShell):**
 
@@ -46,36 +46,35 @@ Detects your platform (Linux x86_64 / macOS aarch64), installs the binary to `~/
 irm https://raw.githubusercontent.com/pablontiv/backscroll/master/install.ps1 | iex
 ```
 
-Installs the binary to `%LOCALAPPDATA%\backscroll\bin\`, adds it to your PATH, and installs the shipped Claude, Pi, and OpenCode input presets into `%APPDATA%\backscroll\inputs\` without overwriting existing manifests. Compatible with Windows PowerShell 5.1+.
+Installs the binary to `%LOCALAPPDATA%\backscroll\bin\`, adds it to your PATH, and installs the shipped Claude and Codex input presets into `%APPDATA%\backscroll\inputs\` without overwriting existing manifests. Compatible with Windows PowerShell 5.1+.
 
 ### Install input presets
 
-Backscroll ships Claude, Pi, and OpenCode input presets at `inputs/claude.inputs.toml`, `inputs/pi.inputs.toml`, and `inputs/opencode.inputs.toml`. The install scripts copy those files into the user input config directory and skip existing manifests by default; set `BACKSCROLL_FORCE_INPUTS=1` only when you intentionally want to replace edited presets.
-Default input config directories:
+Backscroll ships Claude, Pi, OpenCode, and Codex input presets at `inputs/claude.inputs.toml`, `inputs/pi.inputs.toml`, `inputs/opencode.inputs.toml`, and `inputs/codex.inputs.toml`. Existing manifests are preserved by default; set `BACKSCROLL_FORCE_INPUTS=1` only when you intentionally want to replace edited presets. For Codex roots, supported records and limits, see the [Codex input contract](docs/input-contract.md#complete-codex-example).
+Runtime input config directories:
 
 | OS | Input manifest directory |
 |---|---|
-| Linux | `${XDG_CONFIG_HOME:-$HOME/.config}/backscroll/inputs/` |
-| macOS | `$HOME/Library/Application Support/backscroll/inputs/` |
-| Windows | `%APPDATA%\backscroll\inputs\` |
+| Linux / macOS | `$HOME/.config/backscroll/inputs/` |
+| Windows | `<user-home>\.config\backscroll\inputs\` |
 
-Set `BACKSCROLL_CONFIG_DIR` to override the `<config_dir>` base; manifests are then read from `$BACKSCROLL_CONFIG_DIR/backscroll/inputs/`.
+Set `BACKSCROLL_CONFIG_DIR` to override the `<config_dir>` base; manifests are then read from `$BACKSCROLL_CONFIG_DIR/backscroll/inputs/`. Set this explicitly when using an installer/hook with a different OS-specific default (for example the Windows installer above).
 
 If you install from a source checkout, copy presets without clobbering existing files:
 
 ```bash
-config_dir="${BACKSCROLL_CONFIG_DIR:-${XDG_CONFIG_HOME:-$HOME/.config}}"
+config_dir="${BACKSCROLL_CONFIG_DIR:-$HOME/.config}"
 mkdir -p "$config_dir/backscroll/inputs"
-cp -n inputs/claude.inputs.toml inputs/pi.inputs.toml inputs/opencode.inputs.toml "$config_dir/backscroll/inputs/"
+cp -n inputs/claude.inputs.toml inputs/pi.inputs.toml inputs/opencode.inputs.toml inputs/codex.inputs.toml "$config_dir/backscroll/inputs/"
 backscroll validate
 backscroll config
 ```
 
 ```powershell
-$configDir = if ($env:BACKSCROLL_CONFIG_DIR) { $env:BACKSCROLL_CONFIG_DIR } else { $env:APPDATA }
+$configDir = if ($env:BACKSCROLL_CONFIG_DIR) { $env:BACKSCROLL_CONFIG_DIR } else { Join-Path $HOME ".config" }
 $inputsDir = Join-Path $configDir "backscroll\inputs"
 New-Item -ItemType Directory -Force $inputsDir | Out-Null
-foreach ($name in "claude.inputs.toml", "pi.inputs.toml", "opencode.inputs.toml") {
+foreach ($name in "claude.inputs.toml", "pi.inputs.toml", "opencode.inputs.toml", "codex.inputs.toml") {
   $dest = Join-Path $inputsDir $name
   if (-not (Test-Path $dest)) { Copy-Item (Join-Path "inputs" $name) $dest }
 }
@@ -88,6 +87,10 @@ backscroll config
 ```bash
 go install github.com/pablontiv/backscroll/cmd/backscroll@latest
 ```
+
+To install **the exact merged local commit**, rather than a published version,
+use the [project-local install and build-revision verification](docs/runbooks/local-install.md).
+This does not create a release or publish artifacts.
 
 ---
 
@@ -241,7 +244,7 @@ exclude = ["**/subagents/**"]
 format = "claude"
 ```
 
-A manifest declares only **where** to find sessions (`discover`) and **how** to decode them (`decode.format`). Each `format` is handled by a dedicated reader that knows that agent's session schema — `claude`, `pi`, and `opencode` ship built in. The repository presets (`inputs/*.inputs.toml`) are examples to install into the global input directory via the install script; Backscroll does not read the repository `inputs/` directory at runtime. View configured inputs with `backscroll config` or `backscroll validate`.
+A manifest declares only **where** to find sessions (`discover`) and **how** to decode them (`decode.format`). Each `format` is handled by a dedicated reader that knows that agent's session schema — `claude`, `pi`, `opencode`, and `codex` ship built in. The repository presets (`inputs/*.inputs.toml`) are examples to install into the global input directory via the install script; Backscroll does not read the repository `inputs/` directory at runtime. View configured inputs with `backscroll config` or `backscroll validate`.
 
 See [Configuration docs](docs/configuration.md) for the full resolution order and all options.
 

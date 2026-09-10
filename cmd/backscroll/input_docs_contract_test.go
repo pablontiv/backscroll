@@ -11,6 +11,7 @@ import (
 func TestLivingInputManifestExamplesIngestThroughCommandBoundary(t *testing.T) {
 	const (
 		claudeFixture = `{"type":"user","uuid":"docs-claude-u1","timestamp":"2026-09-09T20:00:00Z","message":{"role":"user","content":[{"type":"text","text":"docclaudecobalt manifest example"}]}}` + "\n"
+		codexFixture  = `{"type":"response_item","timestamp":"2026-09-01T12:00:00Z","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"doccodexquartz manifest example"}]}}` + "\n"
 		piFixture     = `{"type":"session","id":"docs-pi-session","timestamp":"2026-09-09T20:00:00Z","cwd":"/workspace/docs"}` + "\n" +
 			`{"type":"message","id":"docs-pi-u1","parentId":"docs-pi-session","timestamp":"2026-09-09T20:00:01Z","message":{"role":"user","content":[{"type":"text","text":"docpisaffron manifest example"}]}}` + "\n"
 	)
@@ -50,6 +51,20 @@ func TestLivingInputManifestExamplesIngestThroughCommandBoundary(t *testing.T) {
 			anchor:  "## Complete Pi example",
 			fixture: piFixture,
 			query:   "docpisaffron",
+		},
+		{
+			name:      "supported shipped Codex preset",
+			path:      "inputs/codex.inputs.toml",
+			fixture:   codexFixture,
+			query:     "doccodexquartz",
+			wholeFile: true,
+		},
+		{
+			name:    "input contract complete Codex example",
+			path:    "docs/input-contract.md",
+			anchor:  "## Complete Codex example",
+			fixture: codexFixture,
+			query:   "doccodexquartz",
 		},
 		{
 			name:    "configuration guide session example",

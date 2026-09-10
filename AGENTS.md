@@ -4,7 +4,7 @@ This file provides project guidance to coding agents working in this repository.
 
 ## Project Overview
 
-Backscroll is a Go CLI tool that indexes Claude Code, Pi, OpenCode, and declarative Markdown inputs (`markdown_document`, `markdown_sections`) plus plans into SQLite for full-text search (BM25 via FTS5). It treats sessions as an event store with incremental sync via SHA-256 deduplication.
+Backscroll is a Go CLI tool that indexes Claude Code, Pi, OpenCode, Codex CLI, and declarative Markdown inputs (`markdown_document`, `markdown_sections`) plus plans into SQLite for full-text search (BM25 via FTS5). It treats sessions as an event store with incremental sync via SHA-256 deduplication.
 
 **Status**: Go port complete — `main` branch is the active Go implementation. The Rust implementation is frozen in the `v0` branch.
 
@@ -62,7 +62,7 @@ internal/
 ├── plans/             — Markdown plan parser (split by ## headers, goldmark)
 ├── sources/           — external source parsers (ke, decision, memory, rule, spec, backlog) + SourceRegistry
 ├── projects/          — project identity registry: LoadGlobalRegistry(), Identify(), LoadLocalHint()
-├── readers/           — SessionReader interface, Registry, ClaudeReader (text+tool_use+tool_result), PiReader (text+toolCall+custom results), OpenCodeReader (text+tool state.input+state.output), MarkdownDocumentReader (`markdown_document`), MarkdownSectionsReader (`markdown_sections`); toolfmt serializer
+├── readers/           — SessionReader interface, Registry, ClaudeReader (text+tool_use+tool_result), PiReader (text+toolCall+custom results), OpenCodeReader (text+tool state.input+state.output), CodexReader (rollout response items; docs/input-contract.md), MarkdownDocumentReader (`markdown_document`), MarkdownSectionsReader (`markdown_sections`); toolfmt serializer
 ├── recovery/          — stranded database recovery orchestration, verified active+stranded union, durable backup, atomic replacement, and post-install sync
 ├── startuplock/       — canonical database lock coordination via persistent OS advisory sidecar
 ├── templates/         — F2 Drain-inspired miner: Miner, ProcessLine, ExtractErrorLines, deterministic signature via SHA256
@@ -109,6 +109,8 @@ recover apply → post-install sync under retained remediation lease
 External knowledge sources are configured with active `*.inputs.toml` manifests under `<config_dir>/backscroll/inputs/`, not with legacy `[sources]` tables. Supported Markdown decode formats are `markdown_document` (whole file as one record) and `markdown_sections` (one record per `## ` section, falling back to one whole-document record when no sections exist). Source values such as `ke`, `decision`, `memory`, `rule`, `spec`, and `backlog` are preserved from the manifest and are filterable via `--source`.
 
 ### Key Design Decisions
+
+- **Codex rollout boundary**: `internal/readers/codex_reader.go` and `docs/input-contract.md` own supported records and exclusions; `docs/research/codex-input-evidence.md` records privacy-safe shape evidence and the native RED/GREEN test. The exact local-build install and commit verification path is `docs/runbooks/local-install.md`; development builds must retain `version=dev` and verify `vcs.revision` via `go version -m` rather than inventing a release version.
 
 - **Defensive parsing**: `SessionRecord` wrapper with `json.RawMessage` for fields handles legacy schemas and noise.
 - **Noise filtering**: Excludes `system-reminder`, `task-notification`, and subagent sessions by default.
@@ -177,7 +179,7 @@ External knowledge sources are configured with active `*.inputs.toml` manifests 
 - `docs/research/` — Structured research documents: feasibility study and architecture decisions
 - `docs/roadmap/` — Roadmap decomposition (O01–O06): outcomes and tasks with frontmatter metadata
 - `.claude/skills/backscroll/` — Claude Code skill for `/backscroll` (distributed to `~/.claude/skills/` via pre-push hook)
-- `inputs/` — Shipped input presets (`claude.inputs.toml`, `pi.inputs.toml`, `decisions.inputs.toml`, `opencode.inputs.toml`, `categories.toml`); copied to `<config_dir>/backscroll/inputs/` by `install.sh` and the pre-push hook (skips if already present; `BACKSCROLL_FORCE_INPUTS=1` to overwrite)
+- `inputs/` — Shipped input presets (`claude.inputs.toml`, `pi.inputs.toml`, `decisions.inputs.toml`, `opencode.inputs.toml`, `codex.inputs.toml`, `categories.toml`); copied to `<config_dir>/backscroll/inputs/` by `install.sh` and the pre-push hook (skips if already present; `BACKSCROLL_FORCE_INPUTS=1` to overwrite)
 - Documentation is written in a mix of Spanish and English (roadmap fields like `estado`, `tipo` are in Spanish)
 
 ## Code Style
@@ -245,7 +247,7 @@ github.com/pablontiv/backscroll/internal/hybrid        — Reciprocal Rank Fusio
 github.com/pablontiv/backscroll/internal/sequences     — F4 PrefixSpan mining (deterministic pattern discovery per session)
 github.com/pablontiv/backscroll/internal/storage       — Database schema, migrations v1–v14, FTS5 indexes
 github.com/pablontiv/backscroll/internal/projects      — Project identity registry
-github.com/pablontiv/backscroll/internal/readers       — SessionReader interface, Registry, ClaudeReader (text+tool_use+tool_result), PiReader (text+toolCall+custom results), OpenCodeReader (text+tool state.input+state.output), MarkdownDocumentReader (`markdown_document`), MarkdownSectionsReader (`markdown_sections`); toolfmt serializer
+github.com/pablontiv/backscroll/internal/readers       — SessionReader interface, Registry, ClaudeReader (text+tool_use+tool_result), PiReader (text+toolCall+custom results), OpenCodeReader (text+tool state.input+state.output), CodexReader (rollout response items; docs/input-contract.md), MarkdownDocumentReader (`markdown_document`), MarkdownSectionsReader (`markdown_sections`); toolfmt serializer
 github.com/pablontiv/backscroll/internal/recovery      — Stranded database recovery orchestration, durable backup, atomic replacement, and post-install sync
 github.com/pablontiv/backscroll/internal/startuplock   — Canonical database lock coordination via persistent OS advisory sidecar
 github.com/pablontiv/backscroll/scripts/recall-eval    — Isolated recall evaluation runner and cohort reporter
