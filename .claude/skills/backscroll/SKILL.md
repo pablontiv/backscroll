@@ -136,16 +136,16 @@ SOURCE_PATH="<result_N_source_path>"
 backscroll search --text "$QUERY" --all-projects --source-path "$SOURCE_PATH" --robot --fields full --max-tokens 4000
 ```
 
-2. **Use the artifact's vocabulary.** For transcripts, logs, reports, and pasted artifacts, query literal speaker names, boilerplate, IDs, exact errors, paths, and the artifact language. A translated or paraphrased query is secondary evidence only.
+1. **Use the artifact's vocabulary.** For transcripts, logs, reports, and pasted artifacts, query literal speaker names, boilerplate, IDs, exact errors, paths, and the artifact language. A translated or paraphrased query is secondary evidence only.
 
-3. **A failed invocation is a syntax problem first.** For unknown flags, missing arguments, warnings, or path/session resolution errors, check current help, correct the command, and retry once. Never cite one malformed call as tool failure.
+2. **A failed invocation is a syntax problem first.** For unknown flags, missing arguments, warnings, or path/session resolution errors, check current help, correct the command, and retry once. Never cite one malformed call as tool failure.
 
 ```bash
 backscroll search --help
 backscroll list --help
 ```
 
-4. **Two empty searches prove nothing.** Before concluding content is absent from the index: retry with artifact-literal terms; broaden to `--all-projects`; if a path or UUID is known, drill down with search `--source-path` plus query text; rely on mandatory startup sync to refresh active manifests; then collect diagnostics and report the gap.
+1. **Two empty searches prove nothing.** Before concluding content is absent from the index: retry with artifact-literal terms; broaden to `--all-projects`; if a path or UUID is known, drill down with search `--source-path` plus query text; rely on mandatory startup sync to refresh active manifests; then collect diagnostics and report the gap.
 
 ```bash
 backscroll search "literal speaker or error" --all-projects --robot --fields minimal --max-tokens 2000
@@ -158,7 +158,7 @@ backscroll validate
 
 Report the source path or UUID, literal probes, scopes used, and full diagnostic output as an indexing gap when the probe remains absent.
 
-5. **Raw-file boundary.** `cat`, `jq`, Python, or filesystem session hunting is not a normal retrieval fallback. Do not use raw JSONL parsing, directory listings for session hunting, or direct file inspection unless the user explicitly authorizes indexing-bug diagnosis after you report the gap and the indexed commands attempted. Database-backed search with `--source-path` and query text is the supported drill-down path.
+1. **Raw-file boundary.** `cat`, `jq`, Python, or filesystem session hunting is not a normal retrieval fallback. Do not use raw JSONL parsing, directory listings for session hunting, or direct file inspection unless the user explicitly authorizes indexing-bug diagnosis after you report the gap and the indexed commands attempted. Database-backed search with `--source-path` and query text is the supported drill-down path.
 
 ## 6) Degradation and troubleshooting
 
@@ -192,7 +192,7 @@ backscroll rebuild
 ## 7) Token budget allocation for agents
 
 | Use case | Budget | Notes |
-|---|---:|---|
+| --- | ---: | --- |
 | Pre-work feature/bug recall | 2000 | First lookup in the session. |
 | Refinement | 1000–1500 | Narrow query after first pass. |
 | Tool/error investigation | 1000–1500 | Exact command, flag, path, or error. |
@@ -217,7 +217,7 @@ backscroll search "query" --all-projects --robot --fields minimal --max-tokens 2
 Search answers “find what I can already name.” For discovery — “what recurs that nobody named?” — use census commands. BM25 pattern queries usually yield anecdotes, not counts.
 
 | Question | Command |
-|---|---|
+| --- | --- |
 | What errors recur? | `backscroll patterns --kind templates --min-support 3` |
 | What breaks, and is it growing? | `backscroll patterns --kind failures --trend` |
 | Where did the user correct me/us? | `backscroll patterns --kind corrections --min-confidence 0.6` |
