@@ -19,7 +19,7 @@ backscroll search "artifact literal" --source-path "*/session.jsonl" --robot
 ### Flags
 
 | Flag | Description |
-|------|-------------|
+| ------ | ------------- |
 | `--project <NAME>` | Filter results to a specific project |
 | `--json` | Output as a JSON array |
 | `--robot` | Output compact `result_N_field=value` lines |
