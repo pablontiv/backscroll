@@ -135,35 +135,55 @@ The limit is approximate — it will not truncate a result mid-output, but will 
 ## Query-Echo Handling
 
 Unfiltered search removes direct Backscroll search-tool calls and their
-proven paired Claude result rows before merging tool and prose rankings.
+proven paired result rows before merging tool and prose rankings.
 This prevents retrieval commands and copied search output from crowding out
 historical prose. The same rule applies to both candidate streams, including
 after an FTS rebuild.
 
-The command boundary is the canonical direct Bash invocation
-`Bash command=backscroll search --text needle` (tool-name matching is
-case-insensitive). The Claude reader pairs results by `tool_use_id` within the
-source file, not by adjacency or the appearance of robot/JSON output. Explicit
-`--content-type tool` searches still return both commands and results. Absolute paths and wrappers such as
+The command boundary is the canonical direct invocation whose raw command text
+starts with the two bare tokens `backscroll` and `search`, recognized per reader
+from the raw tool input before serialization:
+
+- Claude: a `Bash` tool call (`Bash command=backscroll search --text needle`;
+  tool-name matching is case-insensitive), paired to its `tool_result` by
+  `tool_use_id` within the source file.
+- Codex: an `exec_command` call whose `cmd` is that command, or a `shell` call
+  whose argv is exactly `[<shell>, "-c" | "-lc", "backscroll search --text needle"]` (Codex's
+  own direct form, three elements, no other flags), paired to its
+  `function_call_output` by `call_id` within the rollout.
+- OpenCode: a `bash` tool part whose `state.input.command` is that command;
+  the part carries both the input and output rows, so both are marked.
+- Pi: a `bash` `toolCall` is recognized by the same text; Pi tool results are not
+  indexed, so there is no paired output row.
+
+Pairing is always by identity, never by adjacency or the appearance of
+robot/JSON output. Explicit `--content-type tool` searches still return both
+commands and results. Absolute paths and wrappers such as
 `/path/backscroll search --text needle`,
-`env backscroll search --text needle`, and
-`bash -lc "backscroll search --text needle"` remain ordinary tool results. Text that
-mentions Backscroll and unrelated tool commands are unchanged. There is no
-opt-in flag or shell parsing, query relaxation, or whole-session exclusion.
+`env backscroll search --text needle`, and, inside a Claude or OpenCode
+command string or a Codex `cmd`, `bash -lc "backscroll search --text needle"`
+remain ordinary tool results; the Codex argv form above is the only shell form
+recognized, and only in that reader. Text that mentions Backscroll and
+unrelated tool commands are unchanged. There is no opt-in flag or shell
+parsing, query relaxation, or whole-session exclusion.
 
-Migration v15 adds nullable `search_echo` provenance. Already-indexed session
-rows with surviving sources reparse through the existing bounded incremental
-backfill, even when hashes and file metadata match. This updates provenance
-without replacing perennial IDs or stored text. Subsequent source expiry,
-`rebuild`, and supported canonical recovery preserve proven pairing evidence.
-The general extraction epoch is unchanged.
+Migration v15 adds nullable `search_echo` provenance. Already-indexed Claude
+session rows with surviving sources reparse through the existing bounded
+incremental backfill, even when hashes and file metadata match. This updates
+provenance without replacing perennial IDs or stored text. Codex and OpenCode
+rows use the UUID-less per-file reload path, so an index built before their
+provenance existed converges the next time each surviving source is reparsed.
+Subsequent source expiry, `rebuild`, and supported canonical recovery preserve
+proven pairing evidence. The general extraction epoch is unchanged.
 
-**Limits:** pre-v15 outputs whose source files have expired lack reliable call
-linkage and remain searchable; output shape is never guessed. Unpaired outputs,
-Pi/OpenCode output rows, absolute-path calls, and shell/env wrappers remain
-unchanged. Paired-result provenance is currently extracted only by the Claude
-reader. This is a bounded improvement to issue #64, not a claim to eliminate
-every possible echo or repair unrelated BM25 ordering.
+**Limits:** outputs whose source files expired before their reader recorded
+provenance (Claude rows indexed before v15, Codex/OpenCode rows indexed before
+their readers marked echoes) lack reliable call linkage and remain searchable;
+output shape is never guessed, and this is an accepted, documented limit rather
+than a heuristic target. Unpaired outputs, absolute-path calls, and env/shell
+wrappers other than the Codex argv form remain unchanged. This is a bounded
+improvement to issue #64, not a claim to eliminate every possible echo or
+repair unrelated BM25 ordering.
 
 ## Query Sanitization
 
