@@ -178,8 +178,9 @@ External knowledge sources are configured with active `*.inputs.toml` manifests 
 
 - `docs/research/` — Structured research documents: feasibility study and architecture decisions
 - `docs/roadmap/` — Roadmap decomposition (O01–O06): outcomes and tasks with frontmatter metadata
-- `.claude/skills/backscroll/` — Claude Code skill for `/backscroll` (distributed to `~/.claude/skills/` via pre-push hook)
+- `.claude/skills/backscroll/` — canonical skill for Claude, Agents (Codex), and OpenCode. Explicit stable-source installation, approvals, backup/restore and runtime checks are owned by `docs/skill-installation.md` and `scripts/install-skills.py`; Git hooks never replace skills. `just test-skills` runs isolated filesystem and installed-recipe E2E tests.
 - `inputs/` — Shipped input presets (`claude.inputs.toml`, `pi.inputs.toml`, `decisions.inputs.toml`, `opencode.inputs.toml`, `codex.inputs.toml`, `categories.toml`); copied to `<config_dir>/backscroll/inputs/` by `install.sh` and the pre-push hook (skips if already present; `BACKSCROLL_FORCE_INPUTS=1` to overwrite)
+
 - Documentation is written in a mix of Spanish and English (roadmap fields like `estado`, `tipo` are in Spanish)
 
 ## Code Style

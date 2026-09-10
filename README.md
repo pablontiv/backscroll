@@ -202,7 +202,7 @@ On `search`, `--fields minimal|full` controls density and `--max-tokens N` caps 
 
 Backscroll is a CLI. Nothing requires an agent, and there is no MCP server — a CLI call costs a fraction of the tokens an MCP tool schema does.
 
-Agents use the same commands with `--robot --fields minimal --max-tokens N`. A `/backscroll` skill for Claude Code ships in `.claude/skills/backscroll/`, and the pre-push hook installs it to `~/.claude/skills/`.
+Agents use the same commands with `--robot --fields minimal --max-tokens N`. The canonical Backscroll skill ships in `.claude/skills/backscroll/`. The optional [skill installer](docs/skill-installation.md) links Claude, Agents (Codex), and OpenCode to that single source in an explicitly selected stable clone. Installation requires a reviewed inventory digest; existing destinations are backed up and can be restored. Git hooks and binary installers never replace skills implicitly.
 
 ---
 
@@ -286,10 +286,10 @@ git config core.hooksPath .githooks
 Without this, git uses `.git/hooks/` (samples only) and **every push silently skips**:
 
 - the binary rebuild + install into `$HOME/.local/bin/backscroll` (so your installed CLI stays stale vs. the pushed code),
-- the `just coverage-check` gate, and
+- the `just ci` aggregate-coverage gate when Go files change, and
 - the AGENTS.md / docs-update validation.
 
-Once activated, `pre-push` runs those gates and reinstalls the binary, skill, and input presets on every push; `post-merge` reinstalls after a `git pull`/merge. Verify a hook actually fired by running the command you changed from the PATH binary — `go build` reports `version dev` (the release version is injected by CI), so confirm by behavior, not the version string.
+Once activated, `pre-push` runs those gates and reinstalls the binary and input presets on every push; `post-merge` reinstalls them after a `git pull`/merge. Neither hook replaces skill directories. Explicitly installed skill links follow the operator-selected stable clone; see [installation and restoration](docs/skill-installation.md). Verify a hook actually fired by running the command you changed from the PATH binary — `go build` reports `version dev` (the release version is injected by CI), so confirm by behavior, not the version string.
 
 Commits follow [Conventional Commits](https://www.conventionalcommits.org/) (`type(scope): description`).
 
