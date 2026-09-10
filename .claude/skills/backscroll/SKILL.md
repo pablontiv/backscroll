@@ -29,7 +29,7 @@ curl -fsSL https://raw.githubusercontent.com/pablontiv/backscroll/master/install
 # Optional: copy shipped input presets after the binary is in PATH.
 config_dir="${BACKSCROLL_CONFIG_DIR:-${XDG_CONFIG_HOME:-$HOME/.config}}"
 mkdir -p "$config_dir/backscroll/inputs"
-cp -n inputs/claude.inputs.toml inputs/pi.inputs.toml inputs/opencode.inputs.toml inputs/decisions.inputs.toml "$config_dir/backscroll/inputs/"
+cp -n inputs/claude.inputs.toml inputs/pi.inputs.toml inputs/opencode.inputs.toml inputs/decisions.inputs.toml inputs/codex.inputs.toml "$config_dir/backscroll/inputs/"
 ```
 
 ## 2) When to Invoke (automatic triggers)

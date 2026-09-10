@@ -203,6 +203,12 @@ Limits (observed format boundary and RED/GREEN evidence: [Codex input evidence](
   ordinals or item IDs. Event-only legacy logs are not supported. Unknown records,
   developer/system messages, UI events, compaction replacement histories, encrypted
   reasoning and image/audio payloads are not indexed.
+- For user text blocks only, complete leading `<recommended_plugins>`,
+  `<environment_context>`, `<heartbeat>` and `<turn_aborted>` pairs are removed
+  before normalization. Trailing real prose and other content blocks survive.
+  `<task>`, unknown or incomplete wrappers, embedded/quoted examples, and
+  assistant/tool/reasoning text are not subject to this exclusion. Tag names
+  match exactly (no attribute/case guessing). See [wrapper RED/GREEN evidence](research/codex-wrapper-evidence.md).
 - `index_reasoning = true` includes only readable summary/plaintext reasoning.
   Choose it before initial ingestion; as with existing readers, changing decode
   options alone does not invalidate unchanged file hashes.

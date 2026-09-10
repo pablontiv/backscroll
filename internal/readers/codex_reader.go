@@ -93,7 +93,13 @@ func codexMessage(item codexItem, ts time.Time, reasoning bool) (models.Message,
 			return msg, false
 		}
 		msg.Role = item.Role
-		msg.Content = sync.CleanContent(codexTextBlocks(item.Content, "input_text", "output_text"))
+		parts := codexTextParts(item.Content, "input_text", "output_text")
+		if item.Role == "user" {
+			for i, text := range parts {
+				parts[i] = stripCodexInjectedWrappers(text)
+			}
+		}
+		msg.Content = sync.CleanContent(strings.Join(parts, "\n"))
 		msg.ContentType = classifyText(msg.Content)
 	case "function_call":
 		// Codex stores arguments as JSON encoded inside a JSON string.
@@ -137,9 +143,13 @@ func codexMessage(item codexItem, ts time.Time, reasoning bool) (models.Message,
 // codexTextBlocks selects only explicit text types, excluding arbitrary JSON
 // and multimodal data. A malformed block does not hide valid sibling blocks.
 func codexTextBlocks(raw json.RawMessage, types ...string) string {
+	return strings.Join(codexTextParts(raw, types...), "\n")
+}
+
+func codexTextParts(raw json.RawMessage, types ...string) []string {
 	var blocks []json.RawMessage
 	if json.Unmarshal(raw, &blocks) != nil {
-		return ""
+		return nil
 	}
 	var parts []string
 	for _, rawBlock := range blocks {
@@ -157,5 +167,32 @@ func codexTextBlocks(raw json.RawMessage, types ...string) string {
 			}
 		}
 	}
-	return strings.Join(parts, "\n")
+	return parts
+}
+
+// stripCodexInjectedWrappers removes only complete, leading known injection
+// pairs from a user text block. Keep task/unknown wrappers, embedded examples,
+// incomplete pairs and prose after the closing tag. Never apply this policy to
+// assistant messages, reasoning or tool output; their text is recall evidence.
+func stripCodexInjectedWrappers(text string) string {
+	text = strings.TrimSpace(text)
+	for {
+		removed := false
+		for _, tag := range [...]string{"recommended_plugins", "environment_context", "heartbeat", "turn_aborted"} {
+			open, close := "<"+tag+">", "</"+tag+">"
+			if !strings.HasPrefix(text, open) {
+				continue
+			}
+			end := strings.Index(text[len(open):], close)
+			if end < 0 {
+				return text
+			}
+			text = strings.TrimSpace(text[len(open)+end+len(close):])
+			removed = true
+			break
+		}
+		if !removed {
+			return text
+		}
+	}
 }
