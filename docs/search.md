@@ -133,20 +133,36 @@ The limit is approximate — it will not truncate a result mid-output, but will 
 
 ## Query-Echo Handling
 
-Unfiltered search removes direct Backscroll search-tool invocations before
-merging tool and prose rankings. This prevents a retrieval command from
-outranking the historical prose it is trying to recover merely because the
-command repeats every query term.
+Unfiltered search removes direct Backscroll search-tool calls and their
+proven paired Claude result rows before merging tool and prose rankings.
+This prevents retrieval commands and copied search output from crowding out
+historical prose. The same rule applies to both candidate streams, including
+after an FTS rebuild.
 
-The filter applies only to the canonical direct Bash serialization
+The command boundary is the canonical direct Bash invocation
 `Bash command=backscroll search --text needle` (tool-name matching is
-case-insensitive). Explicit `--content-type tool` searches still return those
-commands. Absolute paths and wrappers such as
+case-insensitive). The Claude reader pairs results by `tool_use_id` within the
+source file, not by adjacency or the appearance of robot/JSON output. Explicit
+`--content-type tool` searches still return both commands and results. Absolute paths and wrappers such as
 `/path/backscroll search --text needle`,
 `env backscroll search --text needle`, and
 `bash -lc "backscroll search --text needle"` remain ordinary tool results. Text that
 mentions Backscroll and unrelated tool commands are unchanged. There is no
-opt-in flag or shell parsing.
+opt-in flag or shell parsing, query relaxation, or whole-session exclusion.
+
+Migration v15 adds nullable `search_echo` provenance. Already-indexed session
+rows with surviving sources reparse through the existing bounded incremental
+backfill, even when hashes and file metadata match. This updates provenance
+without replacing perennial IDs or stored text. Subsequent source expiry,
+`rebuild`, and supported canonical recovery preserve proven pairing evidence.
+The general extraction epoch is unchanged.
+
+**Limits:** pre-v15 outputs whose source files have expired lack reliable call
+linkage and remain searchable; output shape is never guessed. Unpaired outputs,
+Pi/OpenCode output rows, absolute-path calls, and shell/env wrappers remain
+unchanged. Paired-result provenance is currently extracted only by the Claude
+reader. This is a bounded improvement to issue #64, not a claim to eliminate
+every possible echo or repair unrelated BM25 ordering.
 
 ## Query Sanitization
 

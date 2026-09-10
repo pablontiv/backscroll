@@ -74,10 +74,16 @@ func PlanRecovery(inputs []RecoveryInput) (RecoveryPlan, []Diagnostic, error) {
 		}
 		for hash, occurrences := range groups {
 			sortOccurrences(occurrences)
+			// Pairing provenance is enrichment, not canonical payload identity.
+			// A legacy duplicate must not erase positive reader evidence.
+			record := occurrences[0].record
+			for _, occurrence := range occurrences {
+				record.SearchEcho = record.SearchEcho || occurrence.record.SearchEcho
+			}
 			canonical = append(canonical, plannedRecord{
 				identity: identity,
 				hash:     hash,
-				record:   occurrences[0].record,
+				record:   record,
 			})
 			plan.ExactDuplicates += len(occurrences) - 1
 		}

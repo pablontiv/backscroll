@@ -131,7 +131,7 @@ func TestExcludeDirectBackscrollSearchEchoesPreservesBoundaries(t *testing.T) {
 
 func TestRefillToolCandidatesPagesPastEchoesAndDeduplicates(t *testing.T) {
 	var offsets []int
-	got, err := refillToolCandidatesWithoutDirectEchoes(models.SearchOptions{Limit: 3}, func(opts models.SearchOptions) ([]SearchResult, error) {
+	got, err := refillCandidatesWithoutDirectEchoes(models.SearchOptions{Limit: 3}, func(opts models.SearchOptions) ([]SearchResult, error) {
 		offsets = append(offsets, opts.Offset)
 		switch opts.Offset {
 		case 0:
@@ -170,7 +170,7 @@ func TestRefillToolCandidatesPagesPastEchoesAndDeduplicates(t *testing.T) {
 
 func TestRefillToolCandidatesStopsAtExactFullNonEchoPage(t *testing.T) {
 	calls := 0
-	got, err := refillToolCandidatesWithoutDirectEchoes(models.SearchOptions{Limit: 2}, func(opts models.SearchOptions) ([]SearchResult, error) {
+	got, err := refillCandidatesWithoutDirectEchoes(models.SearchOptions{Limit: 2}, func(opts models.SearchOptions) ([]SearchResult, error) {
 		calls++
 		return []SearchResult{
 			{ID: 1, ContentType: "tool", Text: "Bash command=rg one ."},
@@ -187,7 +187,7 @@ func TestRefillToolCandidatesStopsAtExactFullNonEchoPage(t *testing.T) {
 
 func TestRefillToolCandidatesExhaustsAfterFullEchoPage(t *testing.T) {
 	var offsets []int
-	got, err := refillToolCandidatesWithoutDirectEchoes(models.SearchOptions{Limit: 2}, func(opts models.SearchOptions) ([]SearchResult, error) {
+	got, err := refillCandidatesWithoutDirectEchoes(models.SearchOptions{Limit: 2}, func(opts models.SearchOptions) ([]SearchResult, error) {
 		offsets = append(offsets, opts.Offset)
 		if opts.Offset == 0 {
 			return []SearchResult{
@@ -207,7 +207,7 @@ func TestRefillToolCandidatesExhaustsAfterFullEchoPage(t *testing.T) {
 
 func TestRefillToolCandidatesPropagatesCancellationWithoutPartialResults(t *testing.T) {
 	calls := 0
-	got, err := refillToolCandidatesWithoutDirectEchoes(models.SearchOptions{Limit: 2}, func(opts models.SearchOptions) ([]SearchResult, error) {
+	got, err := refillCandidatesWithoutDirectEchoes(models.SearchOptions{Limit: 2}, func(opts models.SearchOptions) ([]SearchResult, error) {
 		calls++
 		if calls == 1 {
 			return []SearchResult{

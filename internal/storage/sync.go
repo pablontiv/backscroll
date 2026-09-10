@@ -30,6 +30,7 @@ type IndexedMessage struct {
 	WasInterrupted    bool
 	ExitCode          *int // extracted by the reader from FULL tool output, before truncation
 	ExtractionVersion int
+	SearchEcho        bool // proven direct search call/result, never guessed from output text
 }
 
 // IndexedFile represents a file to be synced into the database.
@@ -61,7 +62,8 @@ func (d *Database) SyncFiles(files []IndexedFile) error {
 
 	for _, file := range files {
 		// Perennial path: session files where every message carries a UUID
-		// sync append-only — existing rows (and their ids) are never touched.
+		// sync append-only — IDs and content are retained; pairing provenance
+		// may be enriched below when the original source supplies evidence.
 		// Flap guard: if the file was previously perennial (DB has uuid-bearing rows),
 		// keep it perennial even if this sync has some uuid-less messages (prevents
 		// wiping rows during temporary parsing drift).
@@ -133,8 +135,8 @@ func (d *Database) SyncFiles(files []IndexedFile) error {
 			}
 			_, err := tx.Exec(`
 				INSERT OR IGNORE INTO search_items
-				(source, source_path, ordinal, role, text, timestamp, uuid, project, content_type, extraction_version, was_interrupted)
-				VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+				(source, source_path, ordinal, role, text, timestamp, uuid, project, content_type, extraction_version, was_interrupted, search_echo)
+				VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 			`,
 				file.Source,
 				file.SourcePath,
@@ -147,9 +149,23 @@ func (d *Database) SyncFiles(files []IndexedFile) error {
 				msg.ContentType,
 				msg.ExtractionVersion,
 				msg.WasInterrupted,
+				msg.SearchEcho,
 			)
 			if err != nil {
 				return fmt.Errorf("insert search_item for %s: %w", file.SourcePath, err)
+			}
+
+			// Re-parsing a perennial row must enrich provenance without replacing
+			// its ID, original text, or extraction epoch. NULL is migration backlog;
+			// a later paired result may also supply positive evidence. Never erase
+			// previously proven linkage when a partial source no longer has the call.
+			if perennial {
+				if _, err := tx.Exec(`UPDATE search_items SET search_echo = ?
+					WHERE source_path = ? AND uuid = ? AND text = ? AND content_type = ?
+					AND (search_echo IS NULL OR (search_echo = 0 AND ? = 1))`,
+					msg.SearchEcho, file.SourcePath, msg.UUID, msg.Text, msg.ContentType, msg.SearchEcho); err != nil {
+					return fmt.Errorf("update search echo provenance for %s: %w", file.SourcePath, err)
+				}
 			}
 
 			if msg.ToolName != "" {

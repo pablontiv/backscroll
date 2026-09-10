@@ -11,4 +11,5 @@ type IndexedRecord struct {
 	UUID        *string
 	Timestamp   *string
 	ContentType string
+	SearchEcho  bool `json:",omitempty"` // positive reader provenance, retained by recovery
 }

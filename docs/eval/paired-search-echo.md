@@ -28,4 +28,47 @@ Native sequence: build `go build -mod=readonly -buildvcs=false -o <lab>/backscro
 
 Confirmed cause: the reader has cross-record call-ID pairing, but storage retains neither that link nor an echo provenance marker. Query-time recognition sees only the serialized command, not its paired output. Output-shape guessing would incorrectly exclude unrelated tools returning similar text. Historical rank is compared to the same executable's no-echo baseline; this does not claim to fix the separately reported BM25 inversion.
 
-Next: version a regression using actual CLI output, observe behavioral RED on the unchanged production candidate, then persist precise paired-result provenance and preserve the existing command filter. Already-indexed rows with surviving source data require reparsing and metadata-only updates without replacing perennial IDs; expired rows lacking pairing evidence must remain searchable rather than be guessed from adjacency or output shape.
+The observed defect proceeded to a versioned regression using actual CLI output, behavioral RED on unchanged production, and a fresh production correction preserving the existing command filter. Already-indexed rows with surviving source data require reparsing and metadata-only updates without replacing perennial IDs; expired rows lacking pairing evidence must remain searchable rather than be guessed from adjacency or output shape.
+
+## Versioned RED and unchanged GREEN oracle
+
+The regression was committed before production edits in `c1fe0fb` (parent: the reviewed candidate). The source at RED was still exactly `0df913f3dae42b97b27e3adccbd36754ee66de8d`.
+
+```text
+Test: cmd/backscroll/paired_echo_e2e_test.go
+SHA-256: 1760545a1af8106cb7229e3efa091632d09fd1f17c6d27049c396e45a70913df
+Command: go test ./cmd/backscroll -run '^TestPairedBackscrollSearchResultsDoNotCrowdRecall$' -count=1 -v
+RED: exit 1; target rank=7; paired results crowded target out of top five
+GREEN: exit 0; paired shape exactly equals baseline, target rank=4
+```
+
+The E2E file/hash is unchanged between RED and GREEN. Both assertions run again after deleting only owned source fixtures; all ten perennial rows remain and all six command/result rows remain explicit-tool searchable.
+
+## Correction and hardening
+
+- The Claude reader marks direct Bash searches from raw input and propagates that fact to results by `tool_use_id` within the parsed file. No output-shape or proximity heuristic is used.
+- V15 adds nullable `search_echo`. Existing session rows start NULL; surviving sources are eligible for reparsing even with unchanged hash/size/mtime. Metadata-only updates preserve original IDs, UUIDs, text and extraction epochs; later incomplete parses cannot erase positive evidence.
+- The v15 replay has a measured 200-unchanged-file startup bound. The initial inherited counter did not count metadata-prefilter hits: an actual CLI regression with 201 pending files observed all 201 replayed at once. The correction counts pending echo files independently of older extraction epochs, preventing already-classified perennial rows from starving remaining NULL rows. The regression verifies 201→1→0 for both current and older extraction epochs. Other extraction semantics are not redesigned.
+- Canonical recovery reads and retains positive evidence and combines it monotonically across otherwise-identical legacy/current duplicates. A regression first failed with `recovery read lost paired echo evidence`, then passed through real recovery-destination import and independent verification. Canonical content identity/hashes are unchanged.
+- A further observed E2E failure after `rebuild` showed the external-content rebuild places marked tool rows in `messages_fts` too: the real SQLite MATCH returned four prose rows and six marked tool rows from that index. Therefore both unfiltered candidate streams use the same narrow echo filter/refill. This does not change rebuild semantics, explicit text/tool paths, general query matching, session inclusion, or BM25 ordering.
+
+## Upgrade and negative-control evidence
+
+The original PoC database, created by the reviewed binary, was opened by a fresh corrected dev binary. Native CLI search migrated v14→v15 and restored target rank 4. A read-only comparison verified all original `(id, uuid, text)` tuples unchanged, with four ordinary rows and six marked rows; repeated JSON output was byte-identical.
+
+Committed regression coverage:
+
+- `paired_echo_e2e_test.go`: actual robot output, baseline/top-five, explicit six-row retention, repeat after source expiry, SQLite integrity.
+- `paired_echo_upgrade_test.go`: retained v14 schema populated with real CLI records and matching metadata; replay convergence, bounded-output baseline, original identities, expiry/rebuild; identical-output unrelated commands, wrappers, orphans and same-session prose.
+- `echo_backfill_cap_test.go`: actual CLI replay count, 200-file bound, current/older epoch convergence.
+- `internal/readers/search_echo_test.go`: raw-command boundary, interleaved paired calls/results, error output, unrelated identical output, unmatched IDs and file-local pairing.
+- `internal/storage/search_echo_test.go`: migration backlog, expired/unprovable rows retained, idempotent metadata-only enrichment, immutable row identity/text/epoch and persistent positive evidence.
+- `internal/storage/echo_refill_test.go`: 205 marked results plus one unrelated result survive refill in both indexes after rebuild; explicit tool search retains all 206 rows.
+- `internal/storage/recovery_echo_test.go`: current/legacy duplicate unions in either order preserve positive evidence through verified recovery.
+- `TestEveryCatalogFixtureReachesCurrentSemanticHead`: every retained physical lineage upgrades to v15, with the exact migration ledger verified; no old fixture or migration rewritten.
+
+## Scope and residual limits
+
+This is a bounded improvement, not an automatic closure of #64. Paired-result provenance currently comes from the Claude reader; Pi/OpenCode output rows remain unchanged. Pre-v15 outputs whose files expired before enrichment lack reliable call linkage and remain searchable. Absolute-path, env and shell wrappers remain negative controls. Historical prose and unrelated tool results are never excluded by session membership. The pre-existing BM25 sort inversion is explicitly out of scope.
+
+The proposed ADR records the metadata boundary; Firstmate owns the new alternate-family exact-head review and any subsequent integration decision. No second PR, merge, release, install, or global-state mutation is part of delivery. The effective Git configuration in this task copy has no `core.hooksPath` and only sample hooks; ordinary pushes do not execute the installation-changing project pre-push script. Validation runs its repository-required checks explicitly, without installing hooks or claiming an installed-binary freshness check.
