@@ -30,27 +30,27 @@ while read local_ref local_sha remote_ref remote_sha; do
 
   # Check if Go source changed but docs weren't updated (test-only changes exempt)
   if git diff --name-only "$range" -- internal/ cmd/ 2>/dev/null | grep -v '_test\.go' | grep -q .; then
-    if ! git diff --name-only "$range" -- docs/ README.md CLAUDE.md 2>/dev/null | grep -q .; then
+    if ! git diff --name-only "$range" -- docs/ README.md AGENTS.md 2>/dev/null | grep -q .; then
       echo "Go source changed but docs were not updated."
-      echo "Update docs/, README.md, or CLAUDE.md before pushing."
+      echo "Update docs/, README.md, or AGENTS.md before pushing."
       exit 1
     fi
   fi
 
-  # Check if packages were added/removed — requires CLAUDE.md update
+  # Check if packages were added/removed — requires AGENTS.md update
   if git diff --diff-filter=AD --name-only "$range" -- 'internal/**/*.go' 'cmd/**/*.go' 2>/dev/null | grep -q .; then
-    if ! git diff --name-only "$range" -- CLAUDE.md 2>/dev/null | grep -q .; then
-      echo "Package added/removed but CLAUDE.md not updated."
-      echo "Update the Module Layout and Package Layout sections in CLAUDE.md."
+    if ! git diff --name-only "$range" -- AGENTS.md 2>/dev/null | grep -q .; then
+      echo "Package added/removed but AGENTS.md not updated."
+      echo "Update the Module Layout and Package Layout sections in AGENTS.md."
       exit 1
     fi
   fi
 
   # Check if CI, install scripts, or build config changed but docs weren't updated
   if git diff --name-only "$range" -- .github/ install.sh install.ps1 Justfile go.mod .goreleaser.yml 2>/dev/null | grep -q .; then
-    if ! git diff --name-only "$range" -- README.md docs/ CLAUDE.md 2>/dev/null | grep -q .; then
+    if ! git diff --name-only "$range" -- README.md docs/ AGENTS.md 2>/dev/null | grep -q .; then
       echo "CI/scripts/config changed but docs were not updated."
-      echo "Update README.md, docs/, or CLAUDE.md before pushing."
+      echo "Update README.md, docs/, or AGENTS.md before pushing."
       exit 1
     fi
   fi
