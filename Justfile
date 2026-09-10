@@ -45,9 +45,23 @@ coverage-check: coverage
 audit:
     go mod verify
 
-# Local mirror of CI gate: build + scrubbed-HOME tests + coverage ≥85%
+# Install-script bash regression suite (issue #74). Scrubs inherited BACKSCROLL_*
+# and XDG_CONFIG_HOME so a developer shell environment cannot mask regressions
+# or override test 14's macOS config-dir assertion (install.sh:88 prefers
+# XDG_CONFIG_HOME over HOME).
+install-tests:
+    env -u XDG_CONFIG_HOME -u BACKSCROLL_INSTALL_DIR -u BACKSCROLL_CONFIG_DIR \
+        -u BACKSCROLL_INPUTS_SOURCE_DIR \
+        bash tests/test-install.sh
+    env -u XDG_CONFIG_HOME -u BACKSCROLL_INSTALL_DIR -u BACKSCROLL_CONFIG_DIR \
+        -u BACKSCROLL_INPUTS_SOURCE_DIR \
+        bash tests/test-install-isolation.sh
+
+# Local mirror of CI gate: build + scrubbed-HOME tests + coverage ≥85% +
+# install-script bash regression suite.
 ci:
     go build ./...
     config_dir="$(mktemp -d)" && trap 'rm -rf "$config_dir"' EXIT && \
     HOME="$(mktemp -d)" BACKSCROLL_CONFIG_DIR="$config_dir" go test ./... -coverprofile=coverage.out && \
-    go tool cover -func=coverage.out | grep total | awk '{print substr($3, 1, length($3)-1)}' | { read cov; echo "Coverage: ${cov}%"; if (( $(echo "$cov < 85" | bc -l) )); then echo "Coverage ${cov}% below 85%"; exit 1; fi; }
+    go tool cover -func=coverage.out | grep total | awk '{print substr($3, 1, length($3)-1)}' | { read cov; echo "Coverage: ${cov}%"; if (( $(echo "$cov < 85" | bc -l) )); then echo "Coverage ${cov}% below 85%"; exit 1; fi; } && \
+    just install-tests
