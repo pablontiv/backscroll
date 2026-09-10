@@ -90,14 +90,10 @@ install_input_presets() {
   done
 }
 
-# Install project skills to the Claude user scope.
-SKILLS_DEST="$HOME/.claude/skills"
-mkdir -p "$SKILLS_DEST"
-for skill in backscroll backscroll-doctor; do
-  rm -rf "${SKILLS_DEST:?}/$skill"
-  cp -r "$REPO_ROOT/.claude/skills/$skill" "$SKILLS_DEST/$skill"
-  echo "backscroll: installed $skill skill → $SKILLS_DEST/$skill"
-done
+# Skill replacement is an explicit, digest-approved operator action, never a
+# side effect of pushing from a potentially disposable worktree.
+# See docs/skill-installation.md and scripts/install-skills.py.
+echo "backscroll: skills unchanged; explicit installation: docs/skill-installation.md"
 install_input_presets
 
 # Rebuild backscroll binary so the installed version matches the pushed code.
