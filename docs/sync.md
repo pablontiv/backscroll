@@ -93,16 +93,10 @@ exclude = ["**/subagents/**"]
 follow_symlinks = false
 
 [inputs.decode]
-format = "jsonl"
-
-[inputs.map]
-role = "$.message.role"
-
-[inputs.content]
-selector = "$.message.content"
+format = "claude"
 ```
 
-Plans and external Markdown documents are also declared as inputs. Use `decode.format = "markdown_document"` for a whole document or `decode.format = "markdown_sections"` to split on `## ` headings. See [Generic input manifest contract](input-contract.md) for the complete schema.
+Plans and external Markdown documents are also declared as inputs. Use `decode.format = "markdown_document"` for a whole document or `decode.format = "markdown_sections"` to split on `## ` headings. See the [input manifest contract](input-contract.md) for supported fields and decoders.
 
 ## Incremental and perennial behavior
 
@@ -118,7 +112,7 @@ The SQLite database is the perennial event store, not a disposable cache. When a
 
 ## Noise filtering
 
-Text cleanup and record inclusion are defined in each manifest. The shipped presets remove provider noise such as system reminders, task notifications, local command metadata, and configured subagent paths. Empty messages are dropped when `drop_empty = true`.
+Each dedicated reader owns provider-specific record inclusion, text cleanup, and tool extraction. Discovery exclusions in the manifest remove configured paths such as Claude subagent sessions; readers remove provider noise such as system reminders, task notifications, and local command metadata. Pi reasoning is indexed only when its manifest sets `index_reasoning = true`.
 
 ## Exit codes
 

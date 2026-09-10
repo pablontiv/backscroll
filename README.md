@@ -126,7 +126,7 @@ Found 20 templates (min_support=5):
 
 How a file is re-synced depends on whether its messages carry identity. Sessions whose messages have a uuid — Claude Code, from schema v8 onward — sync append-only: rows already keyed by uuid are left alone and their ids stay stable. The one exception is a one-time cleanup. If the same file was indexed before v8, those older rows carry no uuid, and re-parsing would duplicate the whole file; they are deleted once, on the first re-sync after the upgrade, and never again. Sessions without one, which today is most of the corpus, are wiped and reloaded on every re-sync, so their row ids are not stable and edits to a live file replace its rows wholesale. Either way the deletion only ever happens while the file still exists; `backscroll purge --before` is the only command that removes anything on your behalf.
 
-**Every assistant, one index.** Claude Code, Pi and OpenCode each store sessions differently. A reader per format normalizes them behind one schema, so you search content, not file layouts. New formats arrive as input manifests, not as code changes at the call site.
+**Every assistant, one index.** Claude Code, Pi and OpenCode each store sessions differently. A dedicated reader per format normalizes them behind one schema, so you search content, not file layouts. Input manifests select a registered reader and its discovery roots; adding a new provider format requires a reader implementation, not only a manifest.
 
 **Conversation and tool activity are indexed separately, on purpose.** Prose goes to an FTS5 index with a Porter stemmer, so "migrating" finds "migration". Tool text — commands, paths, errors — goes to a trigram index, where an exact substring like `internal/storage/sync.go` matches. An unfiltered query merges both by rank position, which is why a search never has to pick one.
 
@@ -256,7 +256,7 @@ See [Configuration docs](docs/configuration.md) for the full resolution order an
 | [Pattern Discovery](docs/patterns.md) | The five censuses, the classification loop, calibration |
 | [Source Path Retrieval](docs/read.md) | DB-backed lookup using `search_items.source_path` |
 | [Configuration](docs/configuration.md) | Config resolution, TOML format, environment variables |
-| [Generic Input Contract](docs/input-contract.md) | Global `*.inputs.toml` contract for provider-neutral ingestion |
+| [Input Manifest Contract](docs/input-contract.md) | Supported fields and registered decoders for global `*.inputs.toml` files |
 | [Session Search Research](docs/research/backscroll-session-search-cli.md) | Feasibility study: axioms, evidence tables, capabilities matrix |
 
 ---
