@@ -23,6 +23,7 @@ type queryEchoResult struct {
 	Content     string
 	ContentType string
 	Rank        int
+	Score       float64
 }
 
 type queryEchoE2E struct {
@@ -42,16 +43,16 @@ func TestDirectBackscrollSearchEchoesDoNotCrowdUnfilteredRecall(t *testing.T) {
 
 	baseline := e.searchJSON(queryEchoText, "", 20)
 	wantBaseline := []string{
-		"decoy-2.jsonl:text:1",
+		"decoy-0.jsonl:text:1",
 		"decoy-1.jsonl:text:2",
-		"decoy-0.jsonl:text:3",
+		"decoy-2.jsonl:text:3",
 		"target.jsonl:text:4",
 	}
 	if got := queryEchoShape(baseline); !reflect.DeepEqual(got, wantBaseline) {
 		t.Fatalf("four-prose baseline must put target at rank 4\ngot:  %v\nwant: %v", got, wantBaseline)
 	}
-	baselineBudgets := e.budgetReachability(queryEchoText, []int{150, 160, 170, 180, 190, 200, 210})
-	wantBaselineBudgets := map[int]bool{150: false, 160: true, 170: true, 180: true, 190: true, 200: true, 210: true}
+	baselineBudgets := e.budgetReachability(queryEchoText, []int{110, 120, 130, 140, 150, 160, 170})
+	wantBaselineBudgets := map[int]bool{110: false, 120: false, 130: false, 140: true, 150: true, 160: true, 170: true}
 	if !reflect.DeepEqual(baselineBudgets, wantBaselineBudgets) {
 		t.Fatalf("unexpected no-echo budget baseline: got %v want %v", baselineBudgets, wantBaselineBudgets)
 	}
@@ -73,8 +74,8 @@ func TestDirectBackscrollSearchEchoesDoNotCrowdUnfilteredRecall(t *testing.T) {
 	if got := queryEchoFiles(e.searchJSON(queryEchoText, "tool", 20)); !reflect.DeepEqual(got, wantEchoes) {
 		t.Errorf("explicit tool search must retain exact echo identities: got %v want %v", got, wantEchoes)
 	}
-	if got := e.budgetReachability(queryEchoText, []int{150, 160, 170, 180, 190, 200, 210}); !reflect.DeepEqual(got, wantBaselineBudgets) {
-		t.Errorf("query echoes changed bounded baseline, including focal budget 180: got %v want %v", got, wantBaselineBudgets)
+	if got := e.budgetReachability(queryEchoText, []int{110, 120, 130, 140, 150, 160, 170}); !reflect.DeepEqual(got, wantBaselineBudgets) {
+		t.Errorf("query echoes changed bounded baseline, including focal budget 140: got %v want %v", got, wantBaselineBudgets)
 	}
 	if repeat := queryEchoShape(e.searchJSON(queryEchoText, "", 20)); !reflect.DeepEqual(repeat, wantBaseline) {
 		t.Errorf("repeat must preserve corrected deterministic order: got %v want %v", repeat, wantBaseline)
@@ -108,8 +109,10 @@ func TestDirectBackscrollSearchEchoesDoNotCrowdUnfilteredRecall(t *testing.T) {
 func TestDirectBackscrollSearchEchoesRefillToolCandidateWindow(t *testing.T) {
 	e := newQueryEchoE2E(t)
 	query := "overflow scarlet zebra"
+	// The legitimate command is deliberately the longest (weakest bm25) match so
+	// it sits at the end of the candidate window behind every echo.
 	legitimatePath := e.writeRecord("overflow-legitimate.jsonl", "overflow-legitimate", "overflow", 0,
-		queryEchoToolBlock("overflow-legitimate", "rg '"+query+"' /synthetic"), false)
+		queryEchoToolBlock("overflow-legitimate", "rg '"+query+"' /synthetic --glob '*.go' --glob '*.md' --hidden --no-ignore --max-columns 200 --context 3 --sort path"), false)
 	e.run("status", "--json")
 
 	if got := queryEchoRank(e.searchJSON(query, "", 300), filepath.Base(legitimatePath)); got != 1 {
@@ -217,11 +220,14 @@ func newQueryEchoE2E(t *testing.T) *queryEchoE2E {
 func (e *queryEchoE2E) writeCoreProse() []string {
 	e.t.Helper()
 	var paths []string
+	// Decoys repeat the query densely so they legitimately outrank the target;
+	// the target is the weakest genuine prose match and sits at rank 4, where
+	// query echoes could crowd it out of a short page.
 	for i := 0; i < 3; i++ {
-		content := "We asked about " + queryEchoText + ". No answer yet. " + strings.Repeat("Unrelated planning notes. ", 10+i*10)
+		content := "We asked about " + queryEchoText + ". " + queryEchoText + " again. " + strings.Repeat("Unrelated planning notes. ", 1+i)
 		paths = append(paths, e.writeRecord(fmt.Sprintf("decoy-%d.jsonl", i), fmt.Sprintf("decoy-%d", i), fmt.Sprintf("decoy-%d", i), i, content, false))
 	}
-	paths = append(paths, e.writeRecord("target.jsonl", "target", "historical-target", 3, queryEchoText+": readers use the last committed SQLite snapshot.", false))
+	paths = append(paths, e.writeRecord("target.jsonl", "target", "historical-target", 3, queryEchoText+": readers use the last committed SQLite snapshot. "+strings.Repeat("Unrelated planning notes. ", 10), false))
 	return paths
 }
 

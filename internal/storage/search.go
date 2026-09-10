@@ -179,7 +179,7 @@ func (d *Database) searchTableQuery(ftsTable, ftsQuery string, opts models.Searc
 		JOIN search_items si ON %[1]s.rowid = si.id
 		%[2]s
 		%[3]s
-		ORDER BY score DESC
+		ORDER BY score ASC, si.id ASC -- bm25() is lower-is-better; si.id keeps LIMIT/OFFSET pages stable
 		LIMIT ? OFFSET ?
 	`, ftsTable, tagJoin, whereSQL)
 
