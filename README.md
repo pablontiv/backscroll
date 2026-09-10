@@ -54,7 +54,7 @@ Backscroll ships Claude, Pi, OpenCode, and Codex input presets at `inputs/claude
 Runtime input config directories:
 
 | OS | Input manifest directory |
-|---|---|
+| --- | --- |
 | Linux / macOS | `$HOME/.config/backscroll/inputs/` |
 | Windows | `<user-home>\.config\backscroll\inputs\` |
 
@@ -253,7 +253,7 @@ See [Configuration docs](docs/configuration.md) for the full resolution order an
 ## Documentation
 
 | Topic | Description |
-|-------|-------------|
+| ------- | ------------- |
 | [Sync & Indexing](docs/sync.md) | Incremental sync, noise filtering, project detection |
 | [Search Engine](docs/search.md) | BM25 ranking, output formats, token limiting |
 | [Pattern Discovery](docs/patterns.md) | The five censuses, the classification loop, calibration |

@@ -30,7 +30,7 @@ Manifests are loaded from:
 manifest.
 
 | OS | Manifest directory |
-|---|---|
+| --- | --- |
 | Linux / macOS | `$HOME/.config/backscroll/inputs/` |
 | Windows | `<user-home>\\.config\\backscroll\\inputs\\` |
 | Override | `$BACKSCROLL_CONFIG_DIR/backscroll/inputs/` |
@@ -65,14 +65,14 @@ format = "claude"
 ### Top level
 
 | Field | Type | Use |
-|---|---:|---|
+| --- | ---: | --- |
 | `version` | integer | Manifest contract version. Shipped manifests use `1`. |
 | `inputs` | array | Ordered `[[inputs]]` definitions. |
 
 ### `[[inputs]]`
 
 | Field | Type | Use |
-|---|---:|---|
+| --- | ---: | --- |
 | `id` | string | Stable name shown in configuration and diagnostics. |
 | `source` | string | Semantic source stored in SQLite, such as `session`, `plan`, `decision`, or `ke`. |
 | `active` | bool | Only active definitions participate in ingestion. Set it explicitly. |
@@ -83,7 +83,7 @@ conversation inputs all use `source = "session"`.
 ### `inputs.discover`
 
 | Field | Type | Use |
-|---|---:|---|
+| --- | ---: | --- |
 | `roots` | array of strings | Files or directories to scan. `~` is expanded. |
 | `include` | array of strings | Glob patterns relative to each root; `**` is supported. |
 | `exclude` | array of strings | Glob patterns to skip. |
@@ -95,7 +95,7 @@ outside the configured root.
 ### `inputs.decode`
 
 | Field | Type | Use |
-|---|---:|---|
+| --- | ---: | --- |
 | `format` | string | Registered decoder: `claude`, `pi`, `opencode`, `codex`, `markdown_document`, or `markdown_sections`. |
 | `index_reasoning` | bool | Pi/Codex opt-in for readable reasoning blocks; false by default. |
 

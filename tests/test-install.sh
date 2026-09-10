@@ -10,13 +10,19 @@ INPUTS_DIR="$SCRIPT_DIR/inputs"
 
 FIXTURE_DIR="$(mktemp -d)"
 trap 'rm -rf "$FIXTURE_DIR"' EXIT
-echo 'FAKE_BINARY' > "$FIXTURE_DIR/backscroll"
+echo 'FAKE_BINARY' >"$FIXTURE_DIR/backscroll"
 FIXTURE_TARBALL="$FIXTURE_DIR/asset.tar.gz"
 tar -czf "$FIXTURE_TARBALL" -C "$FIXTURE_DIR" backscroll
 export FIXTURE_TARBALL
 
-pass() { ((PASS++)); echo "  PASS: $1"; }
-fail() { ((FAIL++)); echo "  FAIL: $1 — $2"; }
+pass() {
+    ((PASS++))
+    echo "  PASS: $1"
+}
+fail() {
+    ((FAIL++))
+    echo "  FAIL: $1 — $2"
+}
 
 # Create a testable version: strip set -e and the main call
 make_testable() {
@@ -24,7 +30,7 @@ make_testable() {
     tmp=$(mktemp)
     sed -e 's/^set -euo pipefail$/set -uo pipefail/' \
         -e 's/^main "\$@"$//' \
-        "$SCRIPT" > "$tmp"
+        "$SCRIPT" >"$tmp"
     echo "$tmp"
 }
 
@@ -34,9 +40,9 @@ run_main_linux() {
     install_dir="$2"
     config_dir="$3"
     BACKSCROLL_INSTALL_DIR="$install_dir" \
-    BACKSCROLL_CONFIG_DIR="$config_dir" \
-    BACKSCROLL_INPUTS_SOURCE_DIR="$INPUTS_DIR" \
-    bash -c "
+        BACKSCROLL_CONFIG_DIR="$config_dir" \
+        BACKSCROLL_INPUTS_SOURCE_DIR="$INPUTS_DIR" \
+        bash -c "
         source '$testable'
         uname() {
             case \"\$1\" in
@@ -279,7 +285,7 @@ output=$(run_main_linux "$testable" "$INSTALL_DIR" "$CONFIG_DIR") && rc=$? || rc
 rm -f "$testable"
 
 if [ -f "$CONFIG_DIR/backscroll/inputs/claude.inputs.toml" ] &&
-   cmp -s "$INPUTS_DIR/codex.inputs.toml" "$CONFIG_DIR/backscroll/inputs/codex.inputs.toml"; then
+    cmp -s "$INPUTS_DIR/codex.inputs.toml" "$CONFIG_DIR/backscroll/inputs/codex.inputs.toml"; then
     pass "installs input presets under BACKSCROLL_CONFIG_DIR/backscroll/inputs"
 else
     fail "input preset install" "preset not found in $CONFIG_DIR/backscroll/inputs; output: $output"
@@ -291,8 +297,8 @@ echo "[input preset skip existing]"
 testable=$(make_testable)
 CONFIG_DIR=$(mktemp -d)
 mkdir -p "$CONFIG_DIR/backscroll/inputs"
-echo "user edit" > "$CONFIG_DIR/backscroll/inputs/claude.inputs.toml"
-echo "codex user edit" > "$CONFIG_DIR/backscroll/inputs/codex.inputs.toml"
+echo "user edit" >"$CONFIG_DIR/backscroll/inputs/claude.inputs.toml"
+echo "codex user edit" >"$CONFIG_DIR/backscroll/inputs/codex.inputs.toml"
 output=$(BACKSCROLL_CONFIG_DIR="$CONFIG_DIR" BACKSCROLL_INPUTS_SOURCE_DIR="$INPUTS_DIR" bash -c "
     source '$testable'
     install_input_presets 'v0.2.3' 2>&1
@@ -300,8 +306,8 @@ output=$(BACKSCROLL_CONFIG_DIR="$CONFIG_DIR" BACKSCROLL_INPUTS_SOURCE_DIR="$INPU
 rm -f "$testable"
 
 if grep -q "user edit" "$CONFIG_DIR/backscroll/inputs/claude.inputs.toml" &&
-   grep -q "codex user edit" "$CONFIG_DIR/backscroll/inputs/codex.inputs.toml" &&
-   echo "$output" | grep -q "exists, skipping"; then
+    grep -q "codex user edit" "$CONFIG_DIR/backscroll/inputs/codex.inputs.toml" &&
+    echo "$output" | grep -q "exists, skipping"; then
     pass "existing input preset is skipped by default"
 else
     fail "input preset skip" "file or output did not show skip; output: $output"
@@ -313,7 +319,7 @@ echo "[input preset force overwrite]"
 testable=$(make_testable)
 CONFIG_DIR=$(mktemp -d)
 mkdir -p "$CONFIG_DIR/backscroll/inputs"
-echo "user edit" > "$CONFIG_DIR/backscroll/inputs/claude.inputs.toml"
+echo "user edit" >"$CONFIG_DIR/backscroll/inputs/claude.inputs.toml"
 output=$(BACKSCROLL_CONFIG_DIR="$CONFIG_DIR" BACKSCROLL_INPUTS_SOURCE_DIR="$INPUTS_DIR" BACKSCROLL_FORCE_INPUTS=1 bash -c "
     source '$testable'
     install_input_presets 'v0.2.3' 2>&1
