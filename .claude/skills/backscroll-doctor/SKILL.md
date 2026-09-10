@@ -22,7 +22,7 @@ Run when asked to diagnose, self-audit, or find bugs/gaps/enhancements in backsc
    - **Errors/bugs** — failed tool outputs: `assets/gather.sh errors`. Trigram matching on tool content yields prose false positives; treat every error-signature hit as a LEAD, never a fact — the verify step (4) is the guard.
    - **Gaps/wishes** — prose friction and workarounds: `assets/gather.sh gaps`.
    - **Usage friction** — invocation patterns (pipes to jq/rg, retried flags, `--tail` then `search`): `assets/gather.sh usage`.
-   - **Known backlog** — read `docs/roadmap/`, CLAUDE.md "Key Design Decisions", `git log`, and in-repo `TODO`/`FIXME`. Never re-propose already-planned or already-dropped work.
+   - **Known backlog** — read `docs/roadmap/`, AGENTS.md "Key Design Decisions", `git log`, and in-repo `TODO`/`FIXME`. Never re-propose already-planned or already-dropped work.
 3. **Filter noise**: ignore Pi `encrypted_content`/`pi-drive:observation` blobs, `system-reminder`, `task-notification` (`gather.sh` strips these).
 4. **VERIFY before reporting (mandatory — non-skippable).** A snippet is a lead, not a fact. Confirm each claim against the live tool and source:
    - Missing flag/command? Check `backscroll <cmd> --help` and actually run it.
@@ -39,5 +39,5 @@ Present usage counts as approximate signals, not exact metrics. Lead with the hi
 ## References
 
 - `assets/gather.sh` — categorized query batches (`errors|gaps|usage|all`) over the live index.
-- `docs/roadmap/`, `CLAUDE.md` — known/deferred/dropped work to exclude.
+- `docs/roadmap/`, `AGENTS.md` — known/deferred/dropped work to exclude.
 - `.claude/skills/backscroll/SKILL.md` — the base retrieval recipe (commands, flags, noise rules).

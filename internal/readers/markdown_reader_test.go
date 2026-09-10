@@ -75,6 +75,23 @@ func TestMarkdownSectionsReaderParse(t *testing.T) {
 	assertMarkdownMessage(t, pf.Records[1], "## Second\nBeta decision.", modTime)
 }
 
+func TestMarkdownSectionsReaderDropsPreamble(t *testing.T) {
+	content := "# Preamble\nNot a section record.\n\n## First\nIndexed content.\n"
+	path := writeMarkdownTestFile(t, "sectioned.md", content)
+
+	pf, err := (&MarkdownSectionsReader{}).Parse(path, input_config.InputDefinition{Source: "decision"})
+	if err != nil {
+		t.Fatalf("Parse() error = %v", err)
+	}
+
+	if len(pf.Records) != 1 {
+		t.Fatalf("len(Records) = %d, want 1", len(pf.Records))
+	}
+	if got := pf.Records[0].Content; got != "## First\nIndexed content." {
+		t.Errorf("section content = %q, want only the headed section", got)
+	}
+}
+
 func TestMarkdownSectionsReaderFallsBackToDocument(t *testing.T) {
 	path := writeMarkdownTestFile(t, "notes.md", "\nNo section heading here.\n\n")
 	modTime := fixedMarkdownModTime(t, path)
