@@ -42,7 +42,7 @@ Tests use stdlib `testing` + subprocess or direct `run()` invocation. Unit tests
 cmd/backscroll/
 ├── main.go            — entrypoint; run(stdout, stderr, args) for testability
 ├── list.go            — list command (v2: --project, --all-projects, --recent N, --order, --limit, --offset, --json, --robot)
-├── search.go          — search command (v2: --text, --project, --all-projects, --source, --source-path, --after, --before, --role, --content-type, --tag, --fields, --max-tokens, --lexical-only, --similarity-threshold, --json, --robot)
+├── search.go          — search command (v2: --text, --project, --all-projects, --source, --source-path, --after, --before, --role, --content-type, --tag, --fields, --max-tokens, --lexical-only, --relax, --similarity-threshold, --json, --robot)
 ├── patterns.go        — patterns command (v2: --kind commands|failures|templates|sequences|corrections [--pending] [--batch N] [--trend], --project, --all-projects, --tag, --min-support, --min-confidence, --min-length, --max-length, --json, --robot)
 ├── annotate.go        — annotate command (F3b: --uuid --kind --label; validates message existence; upsert semantics)
 ├── recover.go         — recover command (--from, --dry-run; lossless active+stranded database union)
@@ -77,9 +77,11 @@ scripts/
 └── recall-eval/       — isolated legacy/synthetic recall evaluator and cohort reporter
 ```
 
-Ten v2 CLI commands: `list [--project] [--all-projects] [--recent N] [--order timestamp:desc|asc] [--limit] [--offset] [--json] [--robot]`, `search [--text <query>] [--project] [--all-projects] [--source] [--source-path] [--after] [--before] [--role] [--content-type] [--tag] [--limit] [--offset] [--fields minimal|full] [--max-tokens N] [--lexical-only] [--similarity-threshold F] [--json] [--robot]`, `patterns --kind commands|failures|templates|sequences|corrections [--pending] [--batch N] [--project] [--all-projects] [--tag] [--trend] [--after] [--before] [--min-support N] [--min-confidence F] [--min-length N] [--max-length N] [--limit] [--offset] [--json] [--robot]`, `annotate --uuid <u> --kind <k> --label <l> [--path <p> --ordinal <n>]`, `recover --from <path> [--dry-run]`, `status [--json]`, `validate [--json]`, `rebuild`, `purge --before <date>`, `config [--json]`.
+Ten v2 CLI commands: `list [--project] [--all-projects] [--recent N] [--order timestamp:desc|asc] [--limit] [--offset] [--json] [--robot]`, `search [--text <query>] [--project] [--all-projects] [--source] [--source-path] [--after] [--before] [--role] [--content-type] [--tag] [--limit] [--offset] [--fields minimal|full] [--max-tokens N] [--lexical-only] [--relax] [--similarity-threshold F] [--json] [--robot]`, `patterns --kind commands|failures|templates|sequences|corrections [--pending] [--batch N] [--project] [--all-projects] [--tag] [--trend] [--after] [--before] [--min-support N] [--min-confidence F] [--min-length N] [--max-length N] [--limit] [--offset] [--json] [--robot]`, `annotate --uuid <u> --kind <k> --label <l> [--path <p> --ordinal <n>]`, `recover --from <path> [--dry-run]`, `status [--json]`, `validate [--json]`, `rebuild`, `purge --before <date>`, `config [--json]`.
 
 The `SearchEngine` interface is the port; `internal/storage` is the adapter. Database opened lazily. `OpenReadOnly()` provides read-only access for external consumers.
+
+Opt-in lexical term dropping is owned by `internal/storage/relaxation.go`; `docs/search.md#opt-in-lexical-relaxation` defines protected units, the two-unprotected-term floor, fixed scope, provenance and zero-overlap limits. Ordinary search behavior/output must remain unchanged.
 
 ### Core Pipeline
 

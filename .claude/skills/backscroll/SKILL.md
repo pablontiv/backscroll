@@ -92,6 +92,8 @@ Token budget guidance:
 
 If output is truncated, treat it as evidence that more indexed data exists. Refine the query, selected source, or budget instead of abandoning the index.
 
+For explicit lexical term-overload recall, add `--relax` (for example `backscroll search --text '+violet handshake technique adaptation' --relax --robot --fields minimal --max-tokens 2000`); `+term`/quoted phrases stay protected, scope never widens, and relaxed results report `match_stage`/`dropped_terms`—this does not recover missing vocabulary.
+
 ## 5) Query patterns by use case
 
 ### Decision recovery

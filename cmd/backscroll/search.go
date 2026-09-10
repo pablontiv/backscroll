@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"io"
 	"strings"
@@ -34,6 +35,7 @@ func newSearchCmd(stdout, stderr io.Writer) *cobra.Command {
 		fields              string
 		maxTokens           int
 		lexicalOnly         bool
+		relax               bool
 		similarityThreshold float64
 		text                string
 	)
@@ -56,10 +58,17 @@ Use --tag to filter sessions by auto-detected tags.
 Use --source-path to filter by indexed source path (exact, SQL LIKE pattern, or * glob).
 Use --json to output as JSON.
 Use --fields to choose machine-readable detail: minimal (default) or full.
-Use --max-tokens to limit output size (approximate token count).`,
+Use --max-tokens to limit output size (approximate token count).
+Use --relax for opt-in lexical recall: after zero rows, drop low-IDF terms while
+keeping at least two unprotected terms. Leading +term and quoted phrases are
+protected. All scope filters remain fixed; no OR or semantic expansion is used.`,
 		Args: func(cmd *cobra.Command, args []string) error {
 			return validateCommandBeforeStartup(cmd, args, cobra.MaximumNArgs(1), func() error {
-				_, _, err := validateAndParseSearchRequest(searchQuery(text, args), fields, contentType, after, before)
+				query := searchQuery(text, args)
+				_, _, err := validateAndParseSearchRequest(query, fields, contentType, after, before)
+				if err == nil && relax {
+					return storage.ValidateRelaxationQuery(query)
+				}
 				return err
 			})
 		},
@@ -71,7 +80,7 @@ Use --max-tokens to limit output size (approximate token count).`,
 			}
 			return runSearch(cmd.Context(), stdout, stderr, startup.Config, query, project, allProjects, jsonFormat, robotFormat,
 				source, sourcePath, after, before, role, limit, offset, contentType, tag,
-				fields, maxTokens, lexicalOnly, similarityThreshold)
+				fields, maxTokens, lexicalOnly, similarityThreshold, relax)
 		},
 	}
 
@@ -91,6 +100,7 @@ Use --max-tokens to limit output size (approximate token count).`,
 	cmd.Flags().StringVar(&fields, "fields", "minimal", "Machine-readable fields to emit: minimal or full")
 	cmd.Flags().IntVar(&maxTokens, "max-tokens", 0, "Max tokens in output (0=unlimited)")
 	cmd.Flags().BoolVar(&lexicalOnly, "lexical-only", false, "Use BM25 only, skip vector search")
+	cmd.Flags().BoolVar(&relax, "relax", false, "After zero lexical rows, drop low-IDF terms within the same scope (+term protects a term)")
 	cmd.Flags().Float64Var(&similarityThreshold, "similarity-threshold", 0.3, "Minimum cosine similarity for vector results (0=no threshold)")
 	cmd.Flags().StringVar(&text, "text", "", "Search text (v2 preferred grammar)")
 
@@ -146,11 +156,16 @@ func runSearch(ctx context.Context, stdout, stderr io.Writer, cfg *config.Config
 	source, sourcePath, after, before, role string,
 	limit, offset int, contentType, tag string,
 	fields string, maxTokens int,
-	lexicalOnly bool, similarityThreshold float64) (retErr error) {
+	lexicalOnly bool, similarityThreshold float64, relax bool) (retErr error) {
 
 	afterTime, beforeTime, err := validateAndParseSearchRequest(query, fields, contentType, after, before)
 	if err != nil {
 		return err
+	}
+	if relax {
+		if err := storage.ValidateRelaxationQuery(query); err != nil {
+			return err
+		}
 	}
 
 	db, diag, err := prepareIndex(ctx, cfg, indexDataRead)
@@ -184,29 +199,40 @@ func runSearch(ctx context.Context, stdout, stderr io.Writer, cfg *config.Config
 		SimilarityThreshold: similarityThreshold,
 	}
 
-	// Execute search — HybridSearch falls back to BM25 when no provider/vectors
-	results, err := db.HybridSearch(query, opts)
+	// The existing path is unchanged unless lexical relaxation is explicit.
+	var results []storage.SearchResult
+	var stages []string
+	if relax {
+		results, stages, err = db.SearchRelaxed(query, opts)
+	} else {
+		results, err = db.HybridSearch(query, opts)
+	}
 	if err != nil {
 		return fmt.Errorf("search: %w", err)
 	}
 
 	if len(results) == 0 {
 		writeSearchHints(stderr, allProjects, contentType == "tool")
+		if relax {
+			fmt.Fprintf(stderr, "relaxation stages tried: %s; stemming/phrase expansion and scope widening skipped\n", strings.Join(stages, ", "))
+		}
 	}
 
 	// Convert storage.SearchResult to models.SearchResult
 	var modelResults []models.SearchResult
 	for i, r := range results {
 		modelResults = append(modelResults, models.SearchResult{
-			Source:      r.Source,
-			Role:        r.Role,
-			Content:     r.Text,
-			FilePath:    r.SourcePath,
-			Timestamp:   r.Timestamp,
-			ProjectPath: r.Project,
-			Score:       r.Score,
-			ContentType: r.ContentType,
-			Rank:        i + 1,
+			Source:       r.Source,
+			Role:         r.Role,
+			Content:      r.Text,
+			FilePath:     r.SourcePath,
+			Timestamp:    r.Timestamp,
+			ProjectPath:  r.Project,
+			Score:        r.Score,
+			ContentType:  r.ContentType,
+			Rank:         i + 1,
+			MatchStage:   r.MatchStage,
+			DroppedTerms: r.DroppedTerms,
 		})
 	}
 
@@ -226,11 +252,13 @@ func runSearch(ctx context.Context, stdout, stderr io.Writer, cfg *config.Config
 			minimal := make([]minimalSearchResult, len(results))
 			for i, r := range results {
 				minimal[i] = minimalSearchResult{
-					SourcePath: r.SourcePath,
-					Snippet:    r.Snippet,
-					Score:      r.Score,
-					Role:       r.Role,
-					Timestamp:  r.Timestamp,
+					SourcePath:   r.SourcePath,
+					Snippet:      r.Snippet,
+					Score:        r.Score,
+					Role:         r.Role,
+					Timestamp:    r.Timestamp,
+					MatchStage:   r.MatchStage,
+					DroppedTerms: r.DroppedTerms,
 				}
 			}
 			if err := formatter.WriteJSON(stdout, minimal); err != nil {
@@ -301,13 +329,13 @@ func searchRobotResultLines(result storage.SearchResult, index int, fields strin
 	}
 
 	if fields == "minimal" {
-		return []string{
+		return searchRobotProvenance([]string{
 			fmt.Sprintf("result_%d_filepath=%s", index, escapeRobotValue(result.SourcePath)),
 			fmt.Sprintf("result_%d_content=%s", index, escapeRobotValue(result.Snippet)),
 			fmt.Sprintf("result_%d_score=%.2f", index, result.Score),
 			fmt.Sprintf("result_%d_role=%s", index, escapeRobotValue(result.Role)),
 			fmt.Sprintf("result_%d_timestamp=%s", index, timestamp),
-		}
+		}, result, index)
 	}
 
 	lines := []string{
@@ -327,7 +355,18 @@ func searchRobotResultLines(result storage.SearchResult, index int, fields strin
 		fmt.Sprintf("result_%d_score=%.2f", index, result.Score),
 		fmt.Sprintf("result_%d_rank=%d", index, index+1),
 	)
-	return lines
+	return searchRobotProvenance(lines, result, index)
+}
+
+func searchRobotProvenance(lines []string, result storage.SearchResult, index int) []string {
+	if result.MatchStage == "" {
+		return lines
+	}
+	dropped, _ := json.Marshal(result.DroppedTerms) // []string is always JSON-encodable
+	return append(lines,
+		fmt.Sprintf("result_%d_match_stage=%s", index, escapeRobotValue(result.MatchStage)),
+		fmt.Sprintf("result_%d_dropped_terms=%s", index, escapeRobotValue(string(dropped))),
+	)
 }
 
 func searchRobotTruncationLines(index, omitted int) []string {
@@ -354,11 +393,13 @@ func flattenRobotGroups(groups [][]string) []string {
 // minimalSearchResult is the reduced JSON payload emitted by --fields=minimal,
 // matching the v0 minimal field set.
 type minimalSearchResult struct {
-	SourcePath string    `json:"source_path"`
-	Snippet    string    `json:"snippet"`
-	Score      float64   `json:"score"`
-	Role       string    `json:"role"`
-	Timestamp  time.Time `json:"timestamp"`
+	SourcePath   string    `json:"source_path"`
+	Snippet      string    `json:"snippet"`
+	Score        float64   `json:"score"`
+	Role         string    `json:"role"`
+	Timestamp    time.Time `json:"timestamp"`
+	MatchStage   string    `json:"match_stage,omitempty"`
+	DroppedTerms []string  `json:"dropped_terms,omitempty"`
 }
 
 // resultsToLines converts SearchResults to string lines for the specified format.
@@ -391,7 +432,11 @@ func resultsToLines(results []models.SearchResult, format picokitoutput.Format) 
 		} else {
 			// Text format: separator + fields
 			lines = append(lines, "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
-			lines = append(lines, fmt.Sprintf("Rank: %d | Source: %s | Role: %s | Score: %.2f", result.Rank, result.Source, result.Role, result.Score))
+			header := fmt.Sprintf("Rank: %d | Source: %s | Role: %s | Score: %.2f", result.Rank, result.Source, result.Role, result.Score)
+			if result.MatchStage != "" {
+				header += fmt.Sprintf(" | Match stage: %s | Dropped terms: %q", result.MatchStage, result.DroppedTerms)
+			}
+			lines = append(lines, header)
 			lines = append(lines, fmt.Sprintf("Path: %s", result.FilePath))
 			if !result.Timestamp.IsZero() {
 				lines = append(lines, fmt.Sprintf("Time: %s", result.Timestamp.Format("2006-01-02 15:04:05")))
