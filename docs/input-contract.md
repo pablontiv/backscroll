@@ -155,8 +155,9 @@ tool activity, and includes reasoning only when `index_reasoning = true`.
 ## Markdown document inputs
 
 Whole-document Markdown uses `markdown_document`. Sectioned Markdown uses
-`markdown_sections`, which splits on `## ` headings and preserves a pre-header
-preamble as the first message.
+`markdown_sections`, which splits on `## ` headings. When a file contains one or
+more such headings, content before the first heading is not indexed; when it
+contains none, the entire document is indexed as one record.
 
 ```toml
 version = 1
