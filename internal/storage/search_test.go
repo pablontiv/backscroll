@@ -1,8 +1,13 @@
 package storage
 
 import (
+	"context"
+	"errors"
 	"math"
+	"reflect"
 	"testing"
+
+	"github.com/pablontiv/backscroll/internal/models"
 )
 
 // TestMergeRRF_DifferentFromMinMax verifies that RRF merging orders results
@@ -82,7 +87,7 @@ func TestMergeRRF_ScoreFormula(t *testing.T) {
 
 // TestMergeRRF_NoOverlap verifies that items with no overlap between lists both appear.
 func TestMergeRRF_NoOverlap(t *testing.T) {
-	// Two lists with no common IDs; both should appear, sorted by RRF
+	// Two lists with no overlap between lists; both should appear, sorted by RRF
 	proseResults := []SearchResult{{ID: 301, Source: "session", ContentType: "text", Score: 10.0}}
 	toolResults := []SearchResult{{ID: 300, Source: "session", ContentType: "tool", Score: 10.0}}
 
@@ -95,5 +100,127 @@ func TestMergeRRF_NoOverlap(t *testing.T) {
 	// Tiebreak by ID ascending (from hybrid.RRF tiebreak rule)
 	if fused[0].ID != 300 || fused[1].ID != 301 {
 		t.Errorf("expected [300, 301], got [%d, %d]", fused[0].ID, fused[1].ID)
+	}
+}
+
+func TestExcludeDirectBackscrollSearchEchoesPreservesBoundaries(t *testing.T) {
+	results := []SearchResult{
+		{ID: 1, ContentType: "tool", Text: "Bash command=backscroll search --text needle"},
+		{ID: 2, ContentType: "tool", Text: "bash command=backscroll search --text needle"},
+		{ID: 3, ContentType: "tool", Text: "/private/tmp/bin/backscroll search --text needle"},
+		{ID: 4, ContentType: "tool", Text: "Bash command=/private/tmp/bin/backscroll search --text needle"},
+		{ID: 5, ContentType: "tool", Text: "Bash command=env backscroll search --text needle"},
+		{ID: 6, ContentType: "tool", Text: `Bash command=bash -lc "backscroll search --text needle"`},
+		{ID: 7, ContentType: "tool", Text: "Bash command=rg needle ."},
+		{ID: 8, ContentType: "tool", Text: "Bash command=backscroll status"},
+		{ID: 9, ContentType: "tool", Text: "Bash command=backscroll searcher needle"},
+		{ID: 10, ContentType: "tool", Text: "error: Bash command=backscroll search failed"},
+		{ID: 11, ContentType: "text", Text: "Bash command=backscroll search --text needle"},
+	}
+
+	filtered := excludeDirectBackscrollSearchEchoes(results)
+	var got []int
+	for _, result := range filtered {
+		got = append(got, result.ID)
+	}
+	want := []int{3, 4, 5, 6, 7, 8, 9, 10, 11}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("preserved result IDs = %v, want %v", got, want)
+	}
+}
+
+func TestRefillToolCandidatesPagesPastEchoesAndDeduplicates(t *testing.T) {
+	var offsets []int
+	got, err := refillCandidatesWithoutDirectEchoes(models.SearchOptions{Limit: 3}, func(opts models.SearchOptions) ([]SearchResult, error) {
+		offsets = append(offsets, opts.Offset)
+		switch opts.Offset {
+		case 0:
+			return []SearchResult{
+				{ID: 1, ContentType: "tool", Text: "Bash command=backscroll search --text needle"},
+				{ID: 2, ContentType: "tool", Text: "Bash command=rg needle ."},
+				{ID: 3, ContentType: "tool", Text: "Bash command=backscroll search --text needle"},
+			}, nil
+		case 3:
+			return []SearchResult{
+				{ID: 2, ContentType: "tool", Text: "Bash command=rg needle ."},
+				{ID: 4, ContentType: "tool", Text: "Bash command=backscroll search --text needle"},
+				{ID: 5, ContentType: "tool", Text: "Bash command=grep needle ."},
+			}, nil
+		case 6:
+			return []SearchResult{{ID: 6, ContentType: "tool", Text: "Bash command=fd needle ."}}, nil
+		default:
+			t.Fatalf("unexpected page offset %d", opts.Offset)
+			return nil, nil
+		}
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(offsets, []int{0, 3, 6}) {
+		t.Fatalf("page offsets = %v, want [0 3 6]", offsets)
+	}
+	var ids []int
+	for _, result := range got {
+		ids = append(ids, result.ID)
+	}
+	if !reflect.DeepEqual(ids, []int{2, 5, 6}) {
+		t.Fatalf("refilled IDs = %v, want [2 5 6]", ids)
+	}
+}
+
+func TestRefillToolCandidatesStopsAtExactFullNonEchoPage(t *testing.T) {
+	calls := 0
+	got, err := refillCandidatesWithoutDirectEchoes(models.SearchOptions{Limit: 2}, func(opts models.SearchOptions) ([]SearchResult, error) {
+		calls++
+		return []SearchResult{
+			{ID: 1, ContentType: "tool", Text: "Bash command=rg one ."},
+			{ID: 2, ContentType: "tool", Text: "Bash command=rg two ."},
+		}, nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if calls != 1 || len(got) != 2 {
+		t.Fatalf("calls/results = %d/%d, want 1/2", calls, len(got))
+	}
+}
+
+func TestRefillToolCandidatesExhaustsAfterFullEchoPage(t *testing.T) {
+	var offsets []int
+	got, err := refillCandidatesWithoutDirectEchoes(models.SearchOptions{Limit: 2}, func(opts models.SearchOptions) ([]SearchResult, error) {
+		offsets = append(offsets, opts.Offset)
+		if opts.Offset == 0 {
+			return []SearchResult{
+				{ID: 1, ContentType: "tool", Text: "Bash command=backscroll search one"},
+				{ID: 2, ContentType: "tool", Text: "Bash command=backscroll search two"},
+			}, nil
+		}
+		return nil, nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 0 || !reflect.DeepEqual(offsets, []int{0, 2}) {
+		t.Fatalf("all-echo result/offsets = %v/%v, want empty/[0 2]", got, offsets)
+	}
+}
+
+func TestRefillToolCandidatesPropagatesCancellationWithoutPartialResults(t *testing.T) {
+	calls := 0
+	got, err := refillCandidatesWithoutDirectEchoes(models.SearchOptions{Limit: 2}, func(opts models.SearchOptions) ([]SearchResult, error) {
+		calls++
+		if calls == 1 {
+			return []SearchResult{
+				{ID: 1, ContentType: "tool", Text: "Bash command=rg needle ."},
+				{ID: 2, ContentType: "tool", Text: "Bash command=backscroll search needle"},
+			}, nil
+		}
+		return nil, context.Canceled
+	})
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("error = %v, want context.Canceled", err)
+	}
+	if got != nil {
+		t.Fatalf("partial results returned on cancellation: %v", got)
 	}
 }

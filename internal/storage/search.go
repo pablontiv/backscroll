@@ -24,6 +24,7 @@ type SearchResult struct {
 	UUID        string
 	Project     string
 	ContentType string
+	SearchEcho  bool `json:"-"` // persisted call/result provenance; not a public output field
 }
 
 // Search performs a hybrid search (BM25 + optional vector) on the indexed content.
@@ -37,11 +38,13 @@ func (d *Database) Search(query string, opts models.SearchOptions) ([]SearchResu
 		return d.searchTable("messages_fts", query, opts)
 	case "":
 		// Unfiltered search: query both tables and merge via RRF
-		prose, err := d.searchTable("messages_fts", query, withoutPaging(opts))
+		// External-content FTS rebuilds may expose tool rows in either index.
+		// Apply the same narrow echo policy to both unfiltered candidate streams.
+		prose, err := d.searchCandidatesWithoutDirectEchoes("messages_fts", query, withoutPaging(opts))
 		if err != nil {
 			return nil, err
 		}
-		tool, err := d.searchTable("tool_fts", query, withoutPaging(opts))
+		tool, err := d.searchCandidatesWithoutDirectEchoes("tool_fts", query, withoutPaging(opts))
 		if err != nil {
 			return nil, err
 		}
@@ -157,7 +160,8 @@ func (d *Database) searchTable(ftsTable, query string, opts models.SearchOptions
 			si.timestamp,
 			si.uuid,
 			si.project,
-			si.content_type
+			si.content_type,
+			COALESCE(si.search_echo, 0)
 		FROM %[1]s
 		JOIN search_items si ON %[1]s.rowid = si.id
 		%[2]s
@@ -205,6 +209,7 @@ func (d *Database) searchTable(ftsTable, query string, opts models.SearchOptions
 			&uuid,
 			&project,
 			&r.ContentType,
+			&r.SearchEcho,
 		)
 		if err != nil {
 			return nil, fmt.Errorf("scan search result: %w", err)
@@ -315,12 +320,85 @@ func sanitizeFTS5QueryTrigram(query string, stopwords map[string]struct{}) strin
 	return strings.Join(parts, " ")
 }
 
+const unfilteredSearchCandidateLimit = 200
+
 // withoutPaging returns a copy of opts with Limit/Offset cleared so each
 // table query returns its full candidate set for cross-table merging.
 func withoutPaging(o models.SearchOptions) models.SearchOptions {
-	o.Limit = 200
+	o.Limit = unfilteredSearchCandidateLimit
 	o.Offset = 0
 	return o
+}
+
+func (d *Database) searchCandidatesWithoutDirectEchoes(table, query string, opts models.SearchOptions) ([]SearchResult, error) {
+	return refillCandidatesWithoutDirectEchoes(opts, func(page models.SearchOptions) ([]SearchResult, error) {
+		return d.searchTable(table, query, page)
+	})
+}
+
+func refillCandidatesWithoutDirectEchoes(opts models.SearchOptions, loadPage func(models.SearchOptions) ([]SearchResult, error)) ([]SearchResult, error) {
+	target := opts.Limit
+	if target <= 0 {
+		target = unfilteredSearchCandidateLimit
+	}
+	pageOpts := opts
+	pageOpts.Limit = target
+
+	filtered := make([]SearchResult, 0, target)
+	seen := make(map[int]struct{})
+	for len(filtered) < target {
+		page, err := loadPage(pageOpts)
+		if err != nil {
+			return nil, err
+		}
+		if len(page) == 0 {
+			break
+		}
+		for _, result := range page {
+			if _, duplicate := seen[result.ID]; duplicate {
+				continue
+			}
+			seen[result.ID] = struct{}{}
+			if !isDirectBackscrollSearchEcho(result) {
+				filtered = append(filtered, result)
+				if len(filtered) == target {
+					break
+				}
+			}
+		}
+		if len(page) < pageOpts.Limit {
+			break
+		}
+		pageOpts.Offset += len(page)
+	}
+	return filtered, nil
+}
+
+// excludeDirectBackscrollSearchEchoes removes direct Backscroll retrieval calls
+// from the tool candidates used for unfiltered recall. Explicit tool-only search
+// bypasses this function and retains the commands.
+func excludeDirectBackscrollSearchEchoes(results []SearchResult) []SearchResult {
+	filtered := make([]SearchResult, 0, len(results))
+	for _, result := range results {
+		if !isDirectBackscrollSearchEcho(result) {
+			filtered = append(filtered, result)
+		}
+	}
+	return filtered
+}
+
+func isDirectBackscrollSearchEcho(result SearchResult) bool {
+	if result.ContentType != "tool" {
+		return false
+	}
+	if result.SearchEcho {
+		return true
+	}
+	fields := strings.Fields(result.Text)
+	if len(fields) < 3 || !strings.EqualFold(fields[0], "bash") {
+		return false
+	}
+	return fields[1] == "command=backscroll" && fields[2] == "search"
 }
 
 // mergeRRF uses Reciprocal Rank Fusion to merge two ranked lists by position,

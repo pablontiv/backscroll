@@ -135,6 +135,15 @@ func maybeAutoSync(cfg *config.Config, progress io.Writer) (retErr error) {
 		staleSet[p] = true
 	}
 
+	echoPaths, err := db.PendingSearchEchoPaths()
+	if err != nil {
+		return fmt.Errorf("discover pending search echo paths: %w", err)
+	}
+	echoSet := make(map[string]bool, len(echoPaths))
+	for _, path := range echoPaths {
+		echoSet[path] = true
+	}
+
 	const staleParsesCap = 200
 	staleParsesDone := 0
 
@@ -256,15 +265,18 @@ func maybeAutoSync(cfg *config.Config, progress io.Writer) (retErr error) {
 				hashingTime += time.Since(hashingStart)
 			}
 
-			// Skip unchanged files UNLESS they are in the stale-set and cap allows
-			if shouldParse || (exists && existingMeta.Hash != hash) {
-				if !shouldParse && staleSet[ref] && staleParsesDone < staleParsesCap {
-					staleParsesDone++
-					_, _ = fmt.Fprintf(progress, "Re-parsing stale file %d/%d: %s\n", staleParsesDone, len(stalePaths), ref)
+			// Bound the v15 replay even on metadata-prefilter hits. Already-proven
+			// rows at an older extraction epoch must not consume this budget and
+			// starve remaining NULL provenance; other extraction behavior is unchanged.
+			if exists && existingMeta.Hash == hash && echoSet[ref] {
+				if staleParsesDone >= staleParsesCap {
+					continue
 				}
-				// Will parse below
-			} else {
-				// File unchanged and not stale: skip
+				staleParsesDone++
+				shouldParse = true
+				_, _ = fmt.Fprintf(progress, "Re-parsing stale file %d/%d: %s\n", staleParsesDone, len(echoPaths), ref)
+			}
+			if !shouldParse && (!exists || existingMeta.Hash == hash) {
 				continue
 			}
 
@@ -306,6 +318,7 @@ func maybeAutoSync(cfg *config.Config, progress io.Writer) (retErr error) {
 					IsError:           msg.IsError,
 					WasInterrupted:    msg.WasInterrupted,
 					ExitCode:          msg.ExitCode,
+					SearchEcho:        msg.SearchEcho,
 					ExtractionVersion: storage.CurrentExtractionVersion,
 				})
 			}

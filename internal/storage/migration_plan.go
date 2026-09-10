@@ -156,6 +156,7 @@ var migrationPlanDispatch = map[compat.MigrationStep]migrationApplier{
 	{Version: 12, Name: "V12 agent classification: annotations"}:                         applyV12,
 	{Version: 13, Name: "V13 backfill discovery indexes"}:                                applyV13,
 	{Version: 14, Name: "V14 file metadata prefilter"}:                                   applyV14,
+	{Version: 15, Name: "V15 search echo provenance"}:                                    applyV15,
 }
 
 func isDestructiveMigration(step compat.MigrationStep) bool {
@@ -428,6 +429,20 @@ func applyV14(ctx context.Context, tx *sql.Tx, from compat.SchemaShape) error {
 		return fmt.Errorf("apply v14 metadata prefilter columns: %w", err)
 	}
 	return recordMigration(ctx, tx, 14, "V14 file metadata prefilter", sqlV14, "record migration v14")
+}
+
+// NULL on existing session rows queues evidence-based re-parsing. New writes
+// without reader provenance default to ordinary searchable content.
+const sqlV15 = `
+ALTER TABLE search_items ADD COLUMN search_echo INTEGER DEFAULT 0;
+UPDATE search_items SET search_echo = NULL WHERE source = 'session';
+`
+
+func applyV15(ctx context.Context, tx *sql.Tx, _ compat.SchemaShape) error {
+	if _, err := tx.ExecContext(ctx, sqlV15); err != nil {
+		return fmt.Errorf("apply v15 search echo provenance: %w", err)
+	}
+	return recordMigration(ctx, tx, 15, "V15 search echo provenance", sqlV15, "record migration v15")
 }
 
 func recordMigration(ctx context.Context, tx *sql.Tx, version int, name string, body string, errorPrefix string) error {

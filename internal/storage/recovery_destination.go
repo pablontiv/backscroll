@@ -205,9 +205,9 @@ func insertRecoveryDestinationRecord(ctx context.Context, tx *sql.Tx, r models.I
 	// canonical recovery record does not carry that lossy derived metadata, and
 	// recovered rows remain eligible for safe rederivation by future sync/mining.
 	_, err := tx.ExecContext(ctx, `
-		INSERT INTO search_items (source, source_path, ordinal, role, text, timestamp, uuid, project, content_type, extraction_version, was_interrupted)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, NULL)
-	`, r.Source, r.SourcePath, r.Ordinal, r.Role, r.Text, recoveryDestinationNullableString(r.Timestamp), recoveryDestinationUUIDValue(r.UUID), recoveryDestinationNullableString(r.Project), r.ContentType)
+		INSERT INTO search_items (source, source_path, ordinal, role, text, timestamp, uuid, project, content_type, extraction_version, was_interrupted, search_echo)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, NULL, ?)
+	`, r.Source, r.SourcePath, r.Ordinal, r.Role, r.Text, recoveryDestinationNullableString(r.Timestamp), recoveryDestinationUUIDValue(r.UUID), recoveryDestinationNullableString(r.Project), r.ContentType, r.SearchEcho)
 	if err != nil {
 		return fmt.Errorf("insert search_items: %w", err)
 	}

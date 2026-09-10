@@ -42,6 +42,7 @@ type Message struct {
 	IsError        *bool  // tool result signal; nil = no signal
 	WasInterrupted bool   // raw content carried an interrupt marker (detected pre-clean)
 	ExitCode       *int   // Extracted exit code from Bash tool result (e.g., "exit code 1"), before truncation
+	SearchEcho     bool   // tool result paired by call ID with a direct Backscroll search
 }
 
 // Stats represents indexing statistics.

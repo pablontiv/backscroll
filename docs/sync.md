@@ -96,7 +96,7 @@ follow_symlinks = false
 format = "claude"
 ```
 
-Plans and external Markdown documents are also declared as inputs. Use `decode.format = "markdown_document"` for a whole document or `decode.format = "markdown_sections"` to split on `## ` headings. See the [input manifest contract](input-contract.md) for supported fields and decoders.
+Plans and external Markdown documents are also declared as inputs. Use `decode.format = "markdown_document"` for a whole document or `decode.format = "markdown_sections"` to split on `##` headings. See the [input manifest contract](input-contract.md) for supported fields and decoders.
 
 ## Incremental and perennial behavior
 
