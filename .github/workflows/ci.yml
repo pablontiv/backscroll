@@ -22,6 +22,7 @@ jobs:
 
   skill-install:
     strategy:
+      fail-fast: false
       matrix:
         os: [ubuntu-latest, macos-latest]
     runs-on: ${{ matrix.os }}
@@ -41,6 +42,18 @@ jobs:
           go build -o .local-evidence/backscroll ./cmd/backscroll
           export BACKSCROLL_TEST_BINARY="$PWD/.local-evidence/backscroll"
           python3 tests/test_skill_install.py -v
+      - name: "Install-script bash regression suite (issue #74)"
+        run: |
+          env -u XDG_CONFIG_HOME \
+              -u BACKSCROLL_INSTALL_DIR \
+              -u BACKSCROLL_CONFIG_DIR \
+              -u BACKSCROLL_INPUTS_SOURCE_DIR \
+              bash tests/test-install.sh
+          env -u XDG_CONFIG_HOME \
+              -u BACKSCROLL_INSTALL_DIR \
+              -u BACKSCROLL_CONFIG_DIR \
+              -u BACKSCROLL_INPUTS_SOURCE_DIR \
+              bash tests/test-install-isolation.sh
 
   release:
     uses: pablontiv/crossbeam/.github/workflows/go-release.yml@v2
