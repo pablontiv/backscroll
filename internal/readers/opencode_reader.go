@@ -153,11 +153,14 @@ func (r *OpenCodeReader) Parse(dbPath string, _ input_config.InputDefinition) (m
 			}
 			role := normalizeOpenCodeRole(currentRole)
 			ts := time.UnixMilli(currentTime)
+			// One part carries both the call and its output, so a direct
+			// Backscroll search marks both rows by identity; no adjacency guess.
+			echo := isDirectSearchInput(pd.Tool, pd.State.Input)
 			if in := SerializeToolInput(pd.Tool, pd.State.Input); strings.TrimSpace(in) != "" {
-				toolMsgs = append(toolMsgs, models.Message{Role: role, Content: in, ContentType: "tool", Timestamp: ts})
+				toolMsgs = append(toolMsgs, models.Message{Role: role, Content: in, ContentType: "tool", Timestamp: ts, SearchEcho: echo})
 			}
 			if out := SerializeToolOutput(pd.State.Output); strings.TrimSpace(out) != "" {
-				toolMsgs = append(toolMsgs, models.Message{Role: role, Content: out, ContentType: "tool", Timestamp: ts})
+				toolMsgs = append(toolMsgs, models.Message{Role: role, Content: out, ContentType: "tool", Timestamp: ts, SearchEcho: echo})
 			}
 		}
 	}

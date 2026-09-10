@@ -2,6 +2,7 @@ package readers
 
 import (
 	"encoding/json"
+	"path"
 	"strings"
 	"time"
 
@@ -36,9 +37,18 @@ type codexItem struct {
 	Content   json.RawMessage `json:"content"`
 	Summary   json.RawMessage `json:"summary"`
 	Name      string          `json:"name"`
+	CallID    string          `json:"call_id"`
 	Arguments string          `json:"arguments"`
 	Input     string          `json:"input"`
 	Output    json.RawMessage `json:"output"`
+}
+
+// codexCall carries the call-ID linkage for one parsed record so a direct
+// Backscroll search's own output can be marked by identity within the file,
+// never by adjacency or output shape (the same boundary the Claude reader uses).
+type codexCall struct {
+	callID string
+	isCall bool
 }
 
 // Parse skips malformed/unknown records without serializing their raw payload.
@@ -51,6 +61,7 @@ func (*CodexReader) Parse(path string, def input_config.InputDefinition) (models
 		return models.ParsedFile{}, err
 	}
 	result := models.ParsedFile{Path: path, Hash: hash}
+	var calls []codexCall
 	err = sync.IterateJSONLFile(path, func(_ int, line []byte) error {
 		var rec codexRecord
 		if json.Unmarshal(line, &rec) != nil {
@@ -75,6 +86,7 @@ func (*CodexReader) Parse(path string, def input_config.InputDefinition) (models
 			}
 			if msg, ok := codexMessage(item, ts, def.Decode.IndexReasoning); ok {
 				result.Records = append(result.Records, msg)
+				calls = append(calls, codexCallOf(item))
 			}
 		}
 		return nil
@@ -82,7 +94,68 @@ func (*CodexReader) Parse(path string, def input_config.InputDefinition) (models
 	if err != nil {
 		return models.ParsedFile{}, err
 	}
+	// Pair each output with its call by call_id within this file, exactly as
+	// the Claude reader pairs tool_result to tool_use. Outputs usually follow
+	// their call but a later record may still supply it; an unmatched output
+	// stays unmarked.
+	useIdx := make(map[string]int)
+	for i, call := range calls {
+		if call.isCall && call.callID != "" {
+			useIdx[call.callID] = i
+		}
+	}
+	for i, call := range calls {
+		if call.isCall || call.callID == "" {
+			continue
+		}
+		if j, ok := useIdx[call.callID]; ok {
+			result.Records[i].SearchEcho = result.Records[j].SearchEcho
+		}
+	}
 	return result, nil
+}
+
+func codexCallOf(item codexItem) codexCall {
+	switch item.Type {
+	case "function_call", "custom_tool_call":
+		return codexCall{callID: item.CallID, isCall: true}
+	case "function_call_output", "custom_tool_call_output":
+		return codexCall{callID: item.CallID}
+	}
+	return codexCall{}
+}
+
+// isCodexDirectSearchCall recognizes Codex's own direct shell invocations of
+// `backscroll search`: an `exec_command` whose raw `cmd` starts with the bare
+// tokens, or a `shell` call whose argv is exactly a shell, `-c`/`-lc`, and
+// that same command string. The wrapper form is Codex-reader-local; the
+// shared command boundary itself never widens.
+func isCodexDirectSearchCall(tool, arguments string) bool {
+	switch tool {
+	case "exec_command":
+		var obj struct {
+			Cmd string `json:"cmd"`
+		}
+		if json.Unmarshal([]byte(arguments), &obj) != nil {
+			return false
+		}
+		return isDirectSearchCommand(obj.Cmd)
+	case "shell":
+		var obj struct {
+			Command []string `json:"command"`
+		}
+		if json.Unmarshal([]byte(arguments), &obj) != nil || len(obj.Command) != 3 {
+			return false
+		}
+		if !strings.HasSuffix(path.Base(obj.Command[0]), "sh") {
+			return false
+		}
+		if obj.Command[1] != "-c" && obj.Command[1] != "-lc" {
+			return false
+		}
+		return isDirectSearchCommand(obj.Command[2])
+	}
+	return false
 }
 
 func codexMessage(item codexItem, ts time.Time, reasoning bool) (models.Message, bool) {
@@ -109,6 +182,7 @@ func codexMessage(item codexItem, ts time.Time, reasoning bool) (models.Message,
 		}
 		msg.Role, msg.ContentType = "assistant", "tool"
 		msg.Content = SerializeToolInput(item.Name, json.RawMessage(item.Arguments))
+		msg.SearchEcho = isCodexDirectSearchCall(item.Name, item.Arguments)
 	case "custom_tool_call":
 		if strings.TrimSpace(item.Name) == "" || strings.TrimSpace(item.Input) == "" {
 			return msg, false
