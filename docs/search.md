@@ -26,6 +26,7 @@ backscroll search "artifact literal" --source-path "*/session.jsonl" --robot
 | `--fields minimal\|full` | Field set to include (default: `minimal`) |
 | `--max-tokens <N>` | Approximate token limit for total output |
 | `--source-path <PATH_OR_PATTERN>` | Filter a normal text query by indexed `source_path`; exact paths or `*`/SQL `LIKE` patterns |
+| `--relax` | Opt in to bounded lexical term dropping after zero rows; all scope filters stay fixed |
 
 ## Output Formats
 
@@ -52,7 +53,7 @@ Match markers (`>>>` and `<<<` in the raw snippet) are rendered as bold text in 
 ]
 ```
 
-With `--fields full`, the array encodes `models.SearchResult` without JSON tags, so keys are emitted in the current Go field names (PascalCase), not snake_case:
+With `--fields full`, ordinary results encode the existing `models.SearchResult` fields in their Go names (PascalCase):
 
 ```json
 [
@@ -72,7 +73,7 @@ With `--fields full`, the array encodes `models.SearchResult` without JSON tags,
 ]
 ```
 
-Current full-mode fields are exactly: `Source`, `Role`, `Content`, `FilePath`, `Timestamp`, `SessionID`, `ProjectPath`, `Score`, `Tags`, `ContentType`, and `Rank`. `ProjectPath` is a legacy field name; its value is the project identifier (for example `backscroll` or `myproj`), not a filesystem path. Only `--fields minimal` uses the snake_case payload (`source_path`, `snippet`, `score`, `role`, `timestamp`).
+Ordinary full-mode fields are: `Source`, `Role`, `Content`, `FilePath`, `Timestamp`, `SessionID`, `ProjectPath`, `Score`, `Tags`, `ContentType`, and `Rank`. `ProjectPath` is a legacy field name; its value is the project identifier (for example `backscroll` or `myproj`), not a filesystem path. Minimal mode uses the snake_case payload (`source_path`, `snippet`, `score`, `role`, `timestamp`). After opt-in relaxation, both field sets additionally include `match_stage` and `dropped_terms`; ordinary results omit these keys.
 
 ### Robot
 
@@ -168,11 +169,48 @@ every possible echo or repair unrelated BM25 ordering.
 
 User queries are automatically sanitized before being passed to the FTS5 engine:
 
-1. **Dynamic stopword removal** — High-frequency terms (appearing in >50% of documents) are automatically filtered out. These stopwords are computed during `sync` and stored in a `dynamic_stopwords` table, adapting to the corpus without hardcoded dictionaries.
+1. **Dynamic stopword removal** — Sync stores up to 1000 vocabulary terms ordered by document frequency in `dynamic_stopwords`; the implementation does not apply a percentage threshold. The sanitizer compares lowercased input tokens against that Porter-stemmed vocabulary, so raw inflected words may not match their stored stems. This existing behavior is unchanged by the opt-in feature.
 2. **Literal quoting** — Remaining tokens are wrapped in double quotes so special characters (hyphens, colons, parentheses, FTS5 operators like `AND`/`OR`/`NOT`) are treated as literal search terms.
-3. **Prefix matching** — Each token gets an FTS5 prefix `*` suffix, enabling substring matching (e.g., "crash" matches "crashloopbackoff").
+3. **Prefix matching** — Each token gets an FTS5 prefix `*` suffix (e.g., "crash" matches "crashloopbackoff"); this is not arbitrary interior-substring matching.
 
 If all tokens in a query are stopwords, the original query is used unfiltered as a fallback. The FTS5 tokenizer (`porter unicode61`) provides stemming on top of these features.
+
+## Opt-in lexical relaxation
+
+Ordinary searches, including `--relax=false`, retain the existing behavior and output. `--relax` is a lexical-only option, not a new default and not semantic search:
+
+```bash
+backscroll search --text 'violet handshake adaptation' --relax --robot --fields minimal --max-tokens 2000
+backscroll search --text '+violet handshake technique adaptation' --relax --project example
+backscroll search --text '"violet handshake" quartz marker adaptation' --relax --source-path '*/session.jsonl'
+```
+
+The deterministic sequence is:
+
+1. Run strict AND search. Unmarked queries keep the existing sanitizer, ranking and snippets. Leading `+term` marks a term that cannot be dropped; quoted spans are protected phrase units. For queries containing these protected units, strict matching keeps every unit without dynamic stopword removal. Quotes preserve FTS phrase order; ordinary unquoted terms retain Porter stemming/prefix matching (trigram matching for tools).
+2. Only if that stage has zero eligible rows, drop one **unprotected** term at a time, lowest IDF first. For a fixed corpus, this is highest document frequency first. Frequencies are counted with the actual tokenizer's MATCH expression over the applicable index(es), globally rather than within the result scope; equal frequencies drop in original query order. Zero-frequency terms have highest IDF and are not specially discarded. Each retry still requires every retained unit, bypassing dynamic stopwords so the retained core cannot silently disappear.
+3. Stop at the first stage with results, or before fewer than **two distinct unprotected terms** remain. Protected terms are additional to that floor. Case-insensitive repeated spellings count once, and a keep marker on any occurrence protects that unit. Queries with at most two unprotected terms perform strict search only. There is no single-term/empty fallback and no global OR.
+
+Stemming/phrase-expansion stages are skipped: stemming is already available and protected phrases must not weaken. Scope widening is always skipped. Project (including cwd-inferred project), source, source-path, content-type, role, dates, and tags are retained at every stage. Tool searches remain on their trigram index even when relaxation is explicitly requested. Existing unfiltered echo exclusion and cross-index RRF still apply.
+
+Pagination and output budgets do not trigger extra relaxation: an exhausted page of an existing stage stays empty, and truncating a result to fit a budget does not cause a new query. Strict matches are never mixed with relaxed matches because fallback runs only after strict eligibility is empty. The existing index candidate limits and ranking are unchanged.
+
+Opt-in syntax supports up to 32 distinct query units. A leading `+` requires a nonempty term; quoted phrases must be nonempty, balanced, and whitespace-delimited. Inside a phrase, double an inner quote (`""`). Every unit, including a protected term or phrase, must contain at least one Unicode letter or digit; punctuation-only units such as `...`, `&&`, or `::` are rejected rather than counting toward the core without constraining matches. These validations run before database/startup side effects. FTS operator words such as OR remain literal, not executable query syntax. Marker syntax and phrase parsing apply only with `--relax`.
+
+### Provenance and limits
+
+Every relaxed result carries its stage and the cumulative dropped terms. Robot mode adds these lines to the same budgeted result group (minimal and full):
+
+```text
+result_0_match_stage=drop-terms
+result_0_dropped_terms=["adaptation"]
+```
+
+`dropped_terms` is a JSON string array encoded as a robot string: undo robot backslash/CR/LF escaping before JSON decoding. Human output includes `Match stage: drop-terms | Dropped terms: ["adaptation"]` in the result header. JSON adds optional snake_case `match_stage` and `dropped_terms` keys to both existing projections. Strict results have no extra result fields. An empty result page reports stages tried on **stderr**, for example `strict, drop-terms/1`; stdout retains its normal empty machine-readable shape. Skipped expansion/widening stages are identified as skipped, not as executed searches.
+
+This addresses **recoverable term overload**, not vocabulary invention. In the native regression, the target contains `violet handshake`, while unrelated records make `adaptation` a common term; strict search misses and dropping that term recovers the target. In contrast, the existing synthetic `s2_conversational_paraphrase` and `s5_progressive_refinement` targets share no surviving content terms with their original queries. The refinement `violet handshake` adds new vocabulary; this feature does not promise to recover those zero-overlap cases. An absent, high-IDF extra term can also prevent recovery at the two-term floor. No production p95 or broad semantic-recall gain is claimed from the small fixture corpus.
+
+Regression owners: `cmd/backscroll/search_relaxation_test.go` (native input-to-output recovery and unchanged strict controls), `cmd/backscroll/search_relaxation_output_test.go` (budgeted provenance and early validation), and `internal/storage/relaxation_test.go` (IDF order, protected core, scope and paging).
 
 ## Exit Codes
 

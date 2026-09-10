@@ -7,17 +7,19 @@ import (
 
 // SearchResult represents a single search result.
 type SearchResult struct {
-	Source      string // "session", "plan", "ke", "decision", etc.
-	Role        string // "user", "assistant"
-	Content     string // text content (possibly snippet)
-	FilePath    string // path to original file
-	Timestamp   time.Time
-	SessionID   string
-	ProjectPath string
-	Score       float64
-	Tags        []string
-	ContentType string // "text", "code", "tool"
-	Rank        int    // 1-based rank in results
+	Source       string // "session", "plan", "ke", "decision", etc.
+	Role         string // "user", "assistant"
+	Content      string // text content (possibly snippet)
+	FilePath     string // path to original file
+	Timestamp    time.Time
+	SessionID    string
+	ProjectPath  string
+	Score        float64
+	Tags         []string
+	ContentType  string   // "text", "code", "tool"
+	Rank         int      // 1-based rank in results
+	MatchStage   string   `json:"match_stage,omitempty"` // present only after opt-in term dropping
+	DroppedTerms []string `json:"dropped_terms,omitempty"`
 }
 
 // ParsedFile represents a parsed session or plan file.

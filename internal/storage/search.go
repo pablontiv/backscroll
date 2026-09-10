@@ -12,47 +12,55 @@ import (
 
 // SearchResult represents a single search result.
 type SearchResult struct {
-	ID          int
-	Source      string
-	SourcePath  string
-	Ordinal     int
-	Role        string
-	Text        string
-	Snippet     string
-	Score       float64
-	Timestamp   time.Time
-	UUID        string
-	Project     string
-	ContentType string
-	SearchEcho  bool `json:"-"` // persisted call/result provenance; not a public output field
+	ID           int
+	Source       string
+	SourcePath   string
+	Ordinal      int
+	Role         string
+	Text         string
+	Snippet      string
+	Score        float64
+	Timestamp    time.Time
+	UUID         string
+	Project      string
+	ContentType  string
+	SearchEcho   bool `json:"-"` // persisted call/result provenance; not a public output field
+	MatchStage   string
+	DroppedTerms []string
 }
 
 // Search performs a hybrid search (BM25 + optional vector) on the indexed content.
 // It applies all filters and returns results ranked by BM25 score.
 // When ContentType is empty, it queries both FTS tables and merges via RRF.
 func (d *Database) Search(query string, opts models.SearchOptions) ([]SearchResult, error) {
-	switch opts.ContentType {
-	case "tool":
-		return d.searchTable("tool_fts", query, opts)
-	case "text", "code":
-		return d.searchTable("messages_fts", query, opts)
-	case "":
-		// Unfiltered search: query both tables and merge via RRF
-		// External-content FTS rebuilds may expose tool rows in either index.
-		// Apply the same narrow echo policy to both unfiltered candidate streams.
-		prose, err := d.searchCandidatesWithoutDirectEchoes("messages_fts", query, withoutPaging(opts))
-		if err != nil {
-			return nil, err
-		}
-		tool, err := d.searchCandidatesWithoutDirectEchoes("tool_fts", query, withoutPaging(opts))
-		if err != nil {
-			return nil, err
-		}
-		merged := mergeRRF(prose, tool)
-		return paginate(merged, opts.Limit, opts.Offset), nil
-	default:
-		return d.searchTable("messages_fts", query, opts)
+	return searchTables(opts, func(table string, page models.SearchOptions) ([]SearchResult, error) {
+		return d.searchTable(table, query, page)
+	})
+}
+
+// searchTables shares filtering, echo exclusion, RRF and pagination between
+// ordinary lexical queries and opt-in relaxation. Query syntax stays private.
+func searchTables(opts models.SearchOptions, search func(string, models.SearchOptions) ([]SearchResult, error)) ([]SearchResult, error) {
+	if opts.ContentType == "tool" {
+		return search("tool_fts", opts)
 	}
+	if opts.ContentType != "" {
+		return search("messages_fts", opts)
+	}
+	candidates := func(table string) ([]SearchResult, error) {
+		return refillCandidatesWithoutDirectEchoes(withoutPaging(opts), func(page models.SearchOptions) ([]SearchResult, error) {
+			return search(table, page)
+		})
+	}
+	prose, err := candidates("messages_fts")
+	if err != nil {
+		return nil, err
+	}
+	tool, err := candidates("tool_fts")
+	if err != nil {
+		return nil, err
+	}
+	return paginate(mergeRRF(prose, tool), opts.Limit, opts.Offset), nil
 }
 
 // searchTable queries a single FTS table with all filters applied.
@@ -71,6 +79,11 @@ func (d *Database) searchTable(ftsTable, query string, opts models.SearchOptions
 		ftsQuery = sanitizeFTS5Query(query, stopwords)
 	}
 
+	return d.searchTableQuery(ftsTable, ftsQuery, opts)
+}
+
+// searchTableQuery accepts only internally compiled MATCH expressions.
+func (d *Database) searchTableQuery(ftsTable, ftsQuery string, opts models.SearchOptions) ([]SearchResult, error) {
 	// Build WHERE clause for filters
 	var whereClauses []string
 	var args []interface{}
@@ -328,12 +341,6 @@ func withoutPaging(o models.SearchOptions) models.SearchOptions {
 	o.Limit = unfilteredSearchCandidateLimit
 	o.Offset = 0
 	return o
-}
-
-func (d *Database) searchCandidatesWithoutDirectEchoes(table, query string, opts models.SearchOptions) ([]SearchResult, error) {
-	return refillCandidatesWithoutDirectEchoes(opts, func(page models.SearchOptions) ([]SearchResult, error) {
-		return d.searchTable(table, query, page)
-	})
 }
 
 func refillCandidatesWithoutDirectEchoes(opts models.SearchOptions, loadPage func(models.SearchOptions) ([]SearchResult, error)) ([]SearchResult, error) {
