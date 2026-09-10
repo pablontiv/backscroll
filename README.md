@@ -284,7 +284,7 @@ Without this, git uses `.git/hooks/` (samples only) and **every push silently sk
 
 - the binary rebuild + install into `$HOME/.local/bin/backscroll` (so your installed CLI stays stale vs. the pushed code),
 - the `just coverage-check` gate, and
-- the CLAUDE.md / docs-update validation.
+- the AGENTS.md / docs-update validation.
 
 Once activated, `pre-push` runs those gates and reinstalls the binary, skill, and input presets on every push; `post-merge` reinstalls after a `git pull`/merge. Verify a hook actually fired by running the command you changed from the PATH binary — `go build` reports `version dev` (the release version is injected by CI), so confirm by behavior, not the version string.
 

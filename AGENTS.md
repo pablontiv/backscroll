@@ -1,6 +1,6 @@
-# CLAUDE.md
+# AGENTS.md
 
-This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
+This file provides project guidance to coding agents working in this repository.
 
 ## Project Overview
 
@@ -28,7 +28,7 @@ just ci                 # local mirror of CI gate: build + scrubbed-HOME tests +
 
 Run a single test: `go test -run TestName ./internal/...`
 
-**Pre-push gate**: the pre-push hook validates that Module Layout and Package Layout sections in CLAUDE.md are up to date whenever a Go package is added or deleted. When deleting a package, remove its entries from the "Implemented:" list, the `internal/` tree in Module Layout, and the Package Layout table before committing, or the push will be rejected. The hook also runs `just ci` when any `*.go` file changes — push is blocked if the CI gate fails (build error, test failure, or coverage below 85%). Test-only changes (`*_test.go`) are exempt from the docs-update requirement.
+**Pre-push gate**: the pre-push hook validates that Module Layout and Package Layout sections in AGENTS.md are up to date whenever a Go package is added or deleted. When deleting a package, remove its entries from the "Implemented:" list, the `internal/` tree in Module Layout, and the Package Layout table before committing, or the push will be rejected. The hook also runs `just ci` when any `*.go` file changes — push is blocked if the CI gate fails (build error, test failure, or coverage below 85%). Test-only changes (`*_test.go`) are exempt from the docs-update requirement.
 
 **Coverage**: the release-blocking gate is **aggregate** statement coverage ≥85%, checked identically by CI (crossbeam `go-ci` light profile) and the local pre-push hook via `just ci`. Per-package floors in `.coverage-floors.toml` (default 85%) remain available as an advisory quality check via `just coverage-check` (pkcov), but are **not** release-blocking — individual packages may dip below 85% as long as the aggregate holds. backscroll conforms to [coverage-spec v1.0](https://github.com/pablontiv/picokit/blob/main/docs/coverage-spec.md).
 
