@@ -29,6 +29,7 @@ func TestPrePushDocumentationGateUsesSubstantiveAGENTS(t *testing.T) {
 		{"package addition with AGENTS", mutatePackageAndAGENTS, 0, "DOC_GATES_OK"},
 		{"CI config with AGENTS", mutateCIConfigAndAGENTS, 0, "DOC_GATES_OK"},
 		{"package addition without docs", mutatePackageOnly, 1, "Go source changed but docs were not updated."},
+		{"package addition with README only", mutatePackageAndREADME, 1, "Package added/removed but AGENTS.md not updated."},
 		{"package addition with pointer only", mutatePackageAndPointer, 1, "Go source changed but docs were not updated."},
 	}
 
@@ -161,6 +162,11 @@ func mutateCIConfigAndAGENTS(t *testing.T, repo string) {
 
 func mutatePackageOnly(t *testing.T, repo string) {
 	writePrePushFixture(t, filepath.Join(repo, "internal", "newpkg", "new.go"), "package newpkg\n")
+}
+
+func mutatePackageAndREADME(t *testing.T, repo string) {
+	mutatePackageOnly(t, repo)
+	writePrePushFixture(t, filepath.Join(repo, "README.md"), "# Package documentation\n")
 }
 
 func mutatePackageAndPointer(t *testing.T, repo string) {
