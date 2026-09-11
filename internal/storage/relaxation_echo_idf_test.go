@@ -243,6 +243,7 @@ func TestRecallFrequencySQLEchoPredicatePreservesBoundaries(t *testing.T) {
 		{name: "uppercase BASH", contentType: "tool", text: "BASH command=backscroll search --text boundtok14", unique: "boundtok14", wantEcho: true},
 		{name: "folded command=", contentType: "tool", text: "Bash Command=backscroll search --text boundtok15", unique: "boundtok15"},
 		{name: "folded Search", contentType: "tool", text: "Bash command=backscroll Search --text boundtok16", unique: "boundtok16"},
+		{name: "canonical exec_command", contentType: "tool", text: `exec_command cmd=backscroll search --text boundtok17 command=[["unused"]]`, unique: "boundtok17", wantEcho: true},
 	}
 
 	var files []IndexedFile

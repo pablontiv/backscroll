@@ -402,10 +402,13 @@ func isDirectBackscrollSearchEcho(result SearchResult) bool {
 		return true
 	}
 	fields := strings.Fields(result.Text)
-	if len(fields) < 3 || !strings.EqualFold(fields[0], "bash") {
+	if len(fields) < 3 {
 		return false
 	}
-	return fields[1] == "command=backscroll" && fields[2] == "search"
+	if strings.EqualFold(fields[0], "bash") {
+		return fields[1] == "command=backscroll" && fields[2] == "search"
+	}
+	return fields[0] == "exec_command" && fields[1] == "cmd=backscroll" && fields[2] == "search"
 }
 
 // asciiWhitespaceSQL is the ASCII subset of unicode.IsSpace. SQL-side echo
@@ -415,18 +418,22 @@ const asciiWhitespaceSQL = "char(9, 10, 11, 12, 13, 32)"
 // directBackscrollSearchEchoSQL is the SQL equivalent of
 // isDirectBackscrollSearchEcho for the given search_items alias. Keep them in
 // lockstep: tool rows with search_echo != 0, or a three-token prefix of
-// case-insensitive "bash", exact "command=backscroll", exact "search".
-// GLOB is case-sensitive, so only the first token uses a character class;
-// LIKE would fold tokens 2 and 3. The pattern is prefix-only: a lookalike
-// that does not start with that prefix, including path collisions and
-// "searcher", must not match.
+// case-insensitive "bash", exact "command=backscroll", exact "search"; or
+// exact "exec_command", exact "cmd=backscroll", exact "search". GLOB is
+// case-sensitive, so only the bash token uses a character class; LIKE would
+// fold the exact tokens. The patterns are prefix-only: lookalikes that do not
+// start with either prefix, including path collisions and "searcher", must not
+// match.
 func directBackscrollSearchEchoSQL(alias string) string {
 	trimmed := "ltrim(" + alias + ".text, " + asciiWhitespaceSQL + ")"
 	sep := "'[' || " + asciiWhitespaceSQL + " || ']'"
-	prefix := "'[Bb][Aa][Ss][Hh]' || " + sep + " || 'command=backscroll' || " + sep + " || 'search'"
+	bash := "'[Bb][Aa][Ss][Hh]' || " + sep + " || 'command=backscroll' || " + sep + " || 'search'"
+	execCmd := "'exec_command' || " + sep + " || 'cmd=backscroll' || " + sep + " || 'search'"
+	glob := func(prefix string) string {
+		return trimmed + " GLOB (" + prefix + ") OR " + trimmed + " GLOB (" + prefix + " || " + sep + " || '*')"
+	}
 	return alias + ".content_type = 'tool' AND (COALESCE(" + alias + ".search_echo, 0) != 0 OR " +
-		trimmed + " GLOB (" + prefix + ") OR " +
-		trimmed + " GLOB (" + prefix + " || " + sep + " || '*'))"
+		glob(bash) + " OR " + glob(execCmd) + ")"
 }
 
 // unmarkedDirectSearchCallSQL matches tool rows stored as search_echo=0 whose
