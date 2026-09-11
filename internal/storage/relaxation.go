@@ -206,9 +206,36 @@ func (d *Database) recallFrequency(term recallTerm, contentType string) (int, er
 		selects = append(selects, "SELECT rowid FROM "+table+" WHERE "+table+" MATCH ?")
 		args = append(args, recallExpression([]recallTerm{term}, table))
 	}
-	var count int
-	err := d.db.QueryRow("SELECT COUNT(*) FROM ("+strings.Join(selects, " UNION ")+")", args...).Scan(&count)
+	matched := strings.Join(selects, " UNION ")
+	// Explicit tool search keeps echo rows in the result page, so they remain
+	// IDF documents. Unfiltered recall excludes them from both pages and DF.
+	if contentType != "" {
+		var count int
+		err := d.db.QueryRow("SELECT COUNT(*) FROM ("+matched+")", args...).Scan(&count)
+		if err != nil {
+			return 0, fmt.Errorf("measure relaxation term frequency: %w", err)
+		}
+		return count, nil
+	}
+	rows, err := d.db.Query("SELECT si.content_type, COALESCE(si.search_echo, 0), si.text FROM ("+matched+") matched JOIN search_items si ON si.id = matched.rowid", args...)
 	if err != nil {
+		return 0, fmt.Errorf("measure relaxation term frequency: %w", err)
+	}
+	defer func() { _ = rows.Close() }()
+	var count int
+	for rows.Next() {
+		var result SearchResult
+		var echo int
+		if err := rows.Scan(&result.ContentType, &echo, &result.Text); err != nil {
+			return 0, fmt.Errorf("measure relaxation term frequency: %w", err)
+		}
+		result.SearchEcho = echo != 0
+		if isDirectBackscrollSearchEcho(result) {
+			continue
+		}
+		count++
+	}
+	if err := rows.Err(); err != nil {
 		return 0, fmt.Errorf("measure relaxation term frequency: %w", err)
 	}
 	return count, nil
