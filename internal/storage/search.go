@@ -408,6 +408,27 @@ func isDirectBackscrollSearchEcho(result SearchResult) bool {
 	return fields[1] == "command=backscroll" && fields[2] == "search"
 }
 
+// asciiWhitespaceSQL is the ASCII subset of unicode.IsSpace. SQL-side echo
+// matching trims a leading run and treats one separator between tokens.
+const asciiWhitespaceSQL = "char(9, 10, 11, 12, 13, 32)"
+
+// directBackscrollSearchEchoSQL is the SQL equivalent of
+// isDirectBackscrollSearchEcho for the given search_items alias. Keep them in
+// lockstep: tool rows with search_echo != 0, or a three-token prefix of
+// case-insensitive "bash", exact "command=backscroll", exact "search".
+// GLOB is case-sensitive, so only the first token uses a character class;
+// LIKE would fold tokens 2 and 3. The pattern is prefix-only: a lookalike
+// that does not start with that prefix, including path collisions and
+// "searcher", must not match.
+func directBackscrollSearchEchoSQL(alias string) string {
+	trimmed := "ltrim(" + alias + ".text, " + asciiWhitespaceSQL + ")"
+	sep := "'[' || " + asciiWhitespaceSQL + " || ']'"
+	prefix := "'[Bb][Aa][Ss][Hh]' || " + sep + " || 'command=backscroll' || " + sep + " || 'search'"
+	return alias + ".content_type = 'tool' AND (COALESCE(" + alias + ".search_echo, 0) != 0 OR " +
+		trimmed + " GLOB (" + prefix + ") OR " +
+		trimmed + " GLOB (" + prefix + " || " + sep + " || '*'))"
+}
+
 // mergeRRF uses Reciprocal Rank Fusion to merge two ranked lists by position,
 // immune to score-scale differences between tokenizers (trigram vs porter).
 // k=60 is the standard RRF constant.
