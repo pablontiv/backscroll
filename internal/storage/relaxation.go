@@ -217,25 +217,12 @@ func (d *Database) recallFrequency(term recallTerm, contentType string) (int, er
 		}
 		return count, nil
 	}
-	rows, err := d.db.Query("SELECT si.content_type, COALESCE(si.search_echo, 0), si.text FROM ("+matched+") matched JOIN search_items si ON si.id = matched.rowid", args...)
-	if err != nil {
-		return 0, fmt.Errorf("measure relaxation term frequency: %w", err)
-	}
-	defer func() { _ = rows.Close() }()
 	var count int
-	for rows.Next() {
-		var result SearchResult
-		var echo int
-		if err := rows.Scan(&result.ContentType, &echo, &result.Text); err != nil {
-			return 0, fmt.Errorf("measure relaxation term frequency: %w", err)
-		}
-		result.SearchEcho = echo != 0
-		if isDirectBackscrollSearchEcho(result) {
-			continue
-		}
-		count++
-	}
-	if err := rows.Err(); err != nil {
+	err := d.db.QueryRow(
+		"SELECT COUNT(*) FROM ("+matched+") matched JOIN search_items si ON si.id = matched.rowid WHERE NOT ("+directBackscrollSearchEchoSQL("si")+")",
+		args...,
+	).Scan(&count)
+	if err != nil {
 		return 0, fmt.Errorf("measure relaxation term frequency: %w", err)
 	}
 	return count, nil

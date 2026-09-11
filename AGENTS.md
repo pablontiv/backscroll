@@ -81,7 +81,7 @@ Ten v2 CLI commands: `list [--project] [--all-projects] [--recent N] [--order ti
 
 The `SearchEngine` interface is the port; `internal/storage` is the adapter. Database opened lazily. `OpenReadOnly()` provides read-only access for external consumers.
 
-Opt-in lexical term dropping is owned by `internal/storage/relaxation.go`; `docs/search.md#opt-in-lexical-relaxation` defines protected units, the two-unprotected-term floor, fixed scope, provenance and zero-overlap limits. Unfiltered IDF uses the same query-echo eligibility as unfiltered result pages. Ordinary search behavior/output must remain unchanged.
+Opt-in lexical term dropping is owned by `internal/storage/relaxation.go`; `docs/search.md#opt-in-lexical-relaxation` defines protected units, the two-unprotected-term floor, fixed scope, provenance and zero-overlap limits. Unfiltered IDF uses the same query-echo eligibility as unfiltered result pages, counted in SQL via `directBackscrollSearchEchoSQL` (keep lockstep with `isDirectBackscrollSearchEcho`; do not reintroduce a Go-side row scan). Ordinary search behavior/output must remain unchanged.
 
 ### Core Pipeline
 
