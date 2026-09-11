@@ -4,11 +4,14 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"os"
 	"path/filepath"
 	"reflect"
+	"strings"
 	"testing"
 
 	"github.com/pablontiv/backscroll/internal/compat"
+	"github.com/pablontiv/backscroll/internal/input_config"
 	"github.com/pablontiv/backscroll/internal/models"
 	"github.com/pablontiv/backscroll/internal/readers"
 )
@@ -325,5 +328,95 @@ func TestEchoProvenanceDoesNotAffectProse(t *testing.T) {
 	got, err := db.Search("orchard", models.SearchOptions{AllProjects: true})
 	if err != nil || len(got) != 1 {
 		t.Fatalf("prose filtered: %v %v", got, err)
+	}
+}
+
+// TestPendingSearchEchoPathsRequeuesCodexShellRoundTrip is the regression
+// fixture for the round-3 reviewer finding. Real Codex shell calls carry
+// not just `command` but also `workdir`, `timeout_ms`, and potentially
+// `additional_permissions` — Codex's own ShellToolCallParams schema.
+// SerializeToolInput sorts the keys alphabetically, so a call with
+// `additional_permissions` serializes as
+// `shell additional_permissions={...} command=[...] workdir=/tmp timeout_ms=10000`,
+// not `shell command=[...] workdir=/tmp timeout_ms=10000`. The requeue path
+// must accept both orderings (Bug B: broaden the admission past the literal
+// `shell command=` prefix and locate the `command=` token boundary inside
+// the sorted list) and must read only the JSON array that follows,
+// ignoring the trailing key=value tokens (Bug A: don't try to wrap the
+// entire remainder as a JSON object).
+//
+// The fixture is generated via a full CodexReader.Parse round-trip of an
+// inline rollout JSONL — not via SerializeToolInput directly, not via a
+// hand-written string — so it exercises the same storage path the production
+// ingest uses.
+func TestPendingSearchEchoPathsRequeuesCodexShellRoundTrip(t *testing.T) {
+	db, err := Open(filepath.Join(t.TempDir(), "index.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	// Three shapes: command-only (control), command + workdir + timeout_ms,
+	// and the worst case — additional_permissions sorts before command, so
+	// the legacy `text LIKE 'shell command=[%'` prefilter would miss it.
+	cases := []struct {
+		name, argsJSON string
+		requeue       bool
+	}{
+		{"control", `{"command":["sh","-c","backscroll search --text orchard"]}`, true},
+		{"workdir_timeout_ms", `{"command":["sh","-c","backscroll search"],"workdir":"/tmp","timeout_ms":10000}`, true},
+		{"additional_permissions_first", `{"additional_permissions":{"network":false},"command":["bash","-lc","backscroll search --text orchard"]}`, true},
+		{"workdir_first", `{"workdir":"/tmp","command":["sh","-c","backscroll search"]}`, true},
+		{"wrong_command", `{"command":["sh","-c","ls"],"workdir":"/tmp","timeout_ms":10000}`, false},
+		{"four_elements", `{"command":["sh","-c","backscroll search","bar"],"workdir":"/tmp"}`, false},
+	}
+	for i, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			jsonl := "{\"ordinal\":0,\"timestamp\":\"2026-09-01T12:00:00Z\",\"type\":\"session_meta\",\"payload\":{\"cwd\":\"/synthetic/test\"}}\n" +
+				"{\"ordinal\":1,\"timestamp\":\"2026-09-01T12:00:01Z\",\"type\":\"response_item\",\"payload\":{\"type\":\"function_call\",\"name\":\"shell\",\"call_id\":\"test-call\",\"arguments\":\"" + strings.ReplaceAll(tc.argsJSON, "\"", "\\\"") + "\"}}\n"
+			dir := t.TempDir()
+			path := filepath.Join(dir, "codex.jsonl")
+			if err := os.WriteFile(path, []byte(jsonl), 0o644); err != nil {
+				t.Fatal(err)
+			}
+			parsed, err := (&readers.CodexReader{}).Parse(path, input_config.InputDefinition{})
+			if err != nil {
+				t.Fatal(err)
+			}
+			var storedText string
+			for _, rec := range parsed.Records {
+				if rec.ContentType == "tool" && strings.HasPrefix(rec.Content, "shell ") {
+					storedText = rec.Content
+					break
+				}
+			}
+			if storedText == "" {
+				t.Fatal("shell record not parsed")
+			}
+			db2, err := Open(filepath.Join(t.TempDir(), "db-"+tc.name+".db"))
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer db2.Close()
+			sourcePath := "shell_" + tc.name + ".jsonl"
+			if err := db2.SyncFiles([]IndexedFile{{Source: "session", SourcePath: sourcePath, Hash: "h", Messages: []IndexedMessage{{Ordinal: 0, Role: "assistant", Text: storedText, ContentType: "tool"}}}}); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := db2.db.Exec(`UPDATE search_items SET search_echo=0`); err != nil {
+				t.Fatal(err)
+			}
+			got, err := db2.PendingSearchEchoPaths()
+			if err != nil {
+				t.Fatal(err)
+			}
+			if tc.requeue {
+				if !reflect.DeepEqual(got, []string{sourcePath}) {
+					t.Errorf("case %d (%s): pending=%v want [%s]", i, tc.name, got, sourcePath)
+				}
+			} else {
+				if len(got) != 0 {
+					t.Errorf("case %d (%s): pending=%v want []", i, tc.name, got)
+				}
+			}
+		})
 	}
 }

@@ -55,6 +55,7 @@ cmd/backscroll/
 internal/
 ├── config/            — config resolution: backscroll.toml → ~/.config → env → defaults
 ├── compat/            — stateless schema-shape inspection, release lineage catalog, migration plans, and canonical recovery planning
+├── directsearch/      — shared direct-search predicates (IsDirectSearchCommand, IsCodexDirectSearchCall) so readers ingest path and storage replay path use the exact same strings.Fields / argv-shape acceptance
 ├── input_config/      — input manifest loading, discovery, and legacy session-dirs compatibility
 ├── models/            — domain types: SessionRecord, MessageContent, ParsedFile, SearchResult, Stats
 ├── sync/              — WalkDir, SHA-256 dedup, JSONL parsing, noise filtering, content-type classification
@@ -235,6 +236,7 @@ Workflows delegate to [pablontiv/crossbeam](https://github.com/pablontiv/crossbe
 github.com/pablontiv/backscroll/cmd/backscroll         — CLI entrypoint
 github.com/pablontiv/backscroll/internal/config        — Config structs and resolution
 github.com/pablontiv/backscroll/internal/compat        — Stateless schema inspection, release lineage catalog, migration planning, and canonical recovery planning
+github.com/pablontiv/backscroll/internal/directsearch  — Shared direct-search predicates (IsDirectSearchCommand, IsCodexDirectSearchCall) used by readers and storage replay
 github.com/pablontiv/backscroll/internal/input_config  — Input manifest loading, discovery, and legacy session-dirs compatibility
 github.com/pablontiv/backscroll/internal/models        — Domain types and SearchEngine interface
 github.com/pablontiv/backscroll/internal/sync          — Session parsing and noise filtering
