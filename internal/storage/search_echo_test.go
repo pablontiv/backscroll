@@ -4,10 +4,8 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
-	"fmt"
 	"path/filepath"
 	"reflect"
-	"strings"
 	"testing"
 
 	"github.com/pablontiv/backscroll/internal/compat"
@@ -15,15 +13,25 @@ import (
 	"github.com/pablontiv/backscroll/internal/readers"
 )
 
-// shellText serializes a Codex shell argv triple via readers.SerializeToolInput
-// so the stored text mirrors what the reader would actually persist for an
-// accepted argv shape — in particular, any whitespace separator between the
-// 'backscroll' and 'search' tokens gets JSON-escaped (\t, \n, \u00a0, …) by the
-// encoder, which is what the SQL selection must match.
+// shellText serializes a Codex shell argv triple via a real json.Marshal
+// round-trip into readers.SerializeToolInput, so the stored text mirrors what
+// the CodexReader actually persists for an accepted argv shape. The earlier
+// fmt.Sprintf+%q fixture used Go's strconv.Quote escaping, which escapes
+// NBSP (U+00A0) as `\u00a0` text — but real JSON encoders (Go's encoding/json
+// and Rust serde_json) only escape control chars (<0x20) and emit other
+// unicode.IsSpace runes as their raw UTF-8 bytes. Building fixtures through
+// a real json.Marshal round-trip catches encoding-divergence bugs the string
+// quoting cannot.
 func shellText(t *testing.T, shellBin, flag, argv2 string) string {
 	t.Helper()
-	argsJSON := fmt.Sprintf(`{"command":[%q,%q,%q]}`, shellBin, flag, argv2)
-	return readers.SerializeToolInput("shell", json.RawMessage(argsJSON))
+	args := struct {
+		Command []string `json:"command"`
+	}{Command: []string{shellBin, flag, argv2}}
+	raw, err := json.Marshal(args)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return readers.SerializeToolInput("shell", raw)
 }
 
 // shellTextN serializes a Codex shell call with an arbitrary argv length. Used
@@ -31,13 +39,15 @@ func shellText(t *testing.T, shellBin, flag, argv2 string) string {
 // over-match guard must still hold for every JSON-escape separator form.
 func shellTextN(t *testing.T, shellBin, flag string, argvRest ...string) string {
 	t.Helper()
-	quoted := make([]string, 0, 2+len(argvRest))
-	quoted = append(quoted, fmt.Sprintf("%q", shellBin), fmt.Sprintf("%q", flag))
-	for _, a := range argvRest {
-		quoted = append(quoted, fmt.Sprintf("%q", a))
+	argv := append([]string{shellBin, flag}, argvRest...)
+	args := struct {
+		Command []string `json:"command"`
+	}{Command: argv}
+	raw, err := json.Marshal(args)
+	if err != nil {
+		t.Fatal(err)
 	}
-	argsJSON := fmt.Sprintf(`{"command":[%s]}`, strings.Join(quoted, ","))
-	return readers.SerializeToolInput("shell", json.RawMessage(argsJSON))
+	return readers.SerializeToolInput("shell", raw)
 }
 
 func TestV15EchoBackfillPreservesPerennialIdentity(t *testing.T) {
@@ -223,15 +233,16 @@ func TestPendingSearchEchoPathsRequeuesZeroValuedCodexShellCall(t *testing.T) {
 }
 
 // TestPendingSearchEchoPathsRequeuesZeroValuedCodexShellSerializedWhitespace
-// mirrors the reader's strings.Fields acceptance for any whitespace separator
-// between 'backscroll' and 'search' inside the shell argv's third element.
-// Each fixture is built via readers.SerializeToolInput from a real accepted
-// argv triple, so the stored text carries the JSON-escape shape the encoder
-// produces for each whitespace form (literal \t, \n, \r, \f; the GLOB \uXXXX
-// class for NBSP and other unicode.IsSpace runes). The SQL must requeue
-// search_echo=0 rows in every accepted shape, and must NOT requeue
-// 4-element calls whose argv[2] starts with 'backscroll' followed by any of
-// those separators (the over-match guard per separator form).
+// walks the reader's strings.Fields acceptance for every unicode.IsSpace
+// separator between 'backscroll' and 'search' inside the shell argv's third
+// element. Each fixture is built via a real json.Marshal round-trip into
+// readers.SerializeToolInput, so the stored text carries whatever the JSON
+// encoder actually produces — control chars (U+0009/000A/000D/000C) escape
+// to \t/\n/\r/\f, but every other unicode.IsSpace rune (NBSP U+00A0, NEL
+// U+0085, en/em spaces U+2002-2003, …) survives as raw UTF-8 bytes that no
+// SQL GLOB can keep up with. The replay check must therefore do what the
+// reader does — decode the JSON argv and re-run strings.Fields — and this
+// test pins that behavior down.
 func TestPendingSearchEchoPathsRequeuesZeroValuedCodexShellSerializedWhitespace(t *testing.T) {
 	db, err := Open(filepath.Join(t.TempDir(), "index.db"))
 	if err != nil {
@@ -239,41 +250,51 @@ func TestPendingSearchEchoPathsRequeuesZeroValuedCodexShellSerializedWhitespace(
 	}
 	defer db.Close()
 	files := []IndexedFile{
-		// Requeued: literal space between backscroll and search (control case).
+		// Requeued: literal space (control case).
 		{Source: "session", SourcePath: "sep_space.jsonl", Hash: "h1", Messages: []IndexedMessage{
 			{Ordinal: 0, Role: "assistant", Text: shellText(t, "sh", "-c", "backscroll search orchard"), ContentType: "tool"},
 		}},
-		// Requeued: JSON \t escape (tab between backscroll and search).
+		// Requeued: JSON \t escape (U+0009 < 0x20 → escapes).
 		{Source: "session", SourcePath: "sep_tab.jsonl", Hash: "h2", Messages: []IndexedMessage{
 			{Ordinal: 0, Role: "assistant", Text: shellText(t, "sh", "-c", "backscroll\tsearch orchard"), ContentType: "tool"},
 		}},
-		// Requeued: JSON \n escape.
+		// Requeued: JSON \n escape (U+000A < 0x20).
 		{Source: "session", SourcePath: "sep_newline.jsonl", Hash: "h3", Messages: []IndexedMessage{
 			{Ordinal: 0, Role: "assistant", Text: shellText(t, "sh", "-c", "backscroll\nsearch orchard"), ContentType: "tool"},
 		}},
-		// Requeued: JSON \r escape.
+		// Requeued: JSON \r escape (U+000D < 0x20).
 		{Source: "session", SourcePath: "sep_cr.jsonl", Hash: "h4", Messages: []IndexedMessage{
 			{Ordinal: 0, Role: "assistant", Text: shellText(t, "sh", "-c", "backscroll\rsearch orchard"), ContentType: "tool"},
 		}},
-		// Requeued: JSON \f escape.
+		// Requeued: JSON \f escape (U+000C < 0x20).
 		{Source: "session", SourcePath: "sep_ff.jsonl", Hash: "h5", Messages: []IndexedMessage{
 			{Ordinal: 0, Role: "assistant", Text: shellText(t, "sh", "-c", "backscroll\fsearch orchard"), ContentType: "tool"},
 		}},
-		// Requeued: JSON \u00a0 escape (NBSP — covered by the \uXXXX GLOB class).
+		// Requeued: NBSP (U+00A0) — raw UTF-8 bytes (0xc2 0xa0), no \uXXXX escape.
+		// This is the case the round-2 SQL GLOB missed.
 		{Source: "session", SourcePath: "sep_nbsp.jsonl", Hash: "h6", Messages: []IndexedMessage{
 			{Ordinal: 0, Role: "assistant", Text: shellText(t, "sh", "-c", "backscroll\u00a0search orchard"), ContentType: "tool"},
 		}},
-		// Requeued: -lc flag with JSON \t escape and a shell binary path ending in 'sh'.
-		{Source: "session", SourcePath: "sep_tab_lc.jsonl", Hash: "h7", Messages: []IndexedMessage{
-			{Ordinal: 0, Role: "assistant", Text: shellText(t, "/bin/bash", "-lc", "backscroll\tsearch orchard"), ContentType: "tool"},
+		// Requeued: en space (U+2002) — raw UTF-8 bytes (0xe2 0x80 0x82).
+		{Source: "session", SourcePath: "sep_en_space.jsonl", Hash: "h7", Messages: []IndexedMessage{
+			{Ordinal: 0, Role: "assistant", Text: shellText(t, "sh", "-c", "backscroll\u2002search orchard"), ContentType: "tool"},
 		}},
-		// NOT requeued: 4-element argv with tab separator + 4th element (over-match guard).
-		{Source: "session", SourcePath: "sep_tab_four.jsonl", Hash: "h8", Messages: []IndexedMessage{
-			{Ordinal: 0, Role: "assistant", Text: shellTextN(t, "sh", "-c", "backscroll\tsearch ", "bar"), ContentType: "tool"},
+		// Requeued: em space (U+2003) — raw UTF-8 bytes (0xe2 0x80 0x83).
+		{Source: "session", SourcePath: "sep_em_space.jsonl", Hash: "h8", Messages: []IndexedMessage{
+			{Ordinal: 0, Role: "assistant", Text: shellText(t, "sh", "-c", "backscroll\u2003search orchard"), ContentType: "tool"},
 		}},
-		// NOT requeued: 4-element argv with NBSP separator + 4th element.
-		{Source: "session", SourcePath: "sep_nbsp_four.jsonl", Hash: "h9", Messages: []IndexedMessage{
+		// Requeued: NBSP with -lc flag and /bin/bash path (cross-flag sanity).
+		{Source: "session", SourcePath: "sep_nbsp_lc.jsonl", Hash: "h9", Messages: []IndexedMessage{
+			{Ordinal: 0, Role: "assistant", Text: shellText(t, "/bin/bash", "-lc", "backscroll\u00a0search orchard"), ContentType: "tool"},
+		}},
+		// NOT requeued: 4-element argv with NBSP separator + 4th element
+		// (over-match guard holds for raw UTF-8 separators too).
+		{Source: "session", SourcePath: "sep_nbsp_four.jsonl", Hash: "h10", Messages: []IndexedMessage{
 			{Ordinal: 0, Role: "assistant", Text: shellTextN(t, "sh", "-c", "backscroll\u00a0search ", "bar"), ContentType: "tool"},
+		}},
+		// NOT requeued: 4-element argv with tab separator + 4th element.
+		{Source: "session", SourcePath: "sep_tab_four.jsonl", Hash: "h11", Messages: []IndexedMessage{
+			{Ordinal: 0, Role: "assistant", Text: shellTextN(t, "sh", "-c", "backscroll\tsearch ", "bar"), ContentType: "tool"},
 		}},
 	}
 	if err := db.SyncFiles(files); err != nil {
@@ -286,7 +307,7 @@ func TestPendingSearchEchoPathsRequeuesZeroValuedCodexShellSerializedWhitespace(
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := []string{"sep_cr.jsonl", "sep_ff.jsonl", "sep_nbsp.jsonl", "sep_newline.jsonl", "sep_space.jsonl", "sep_tab.jsonl", "sep_tab_lc.jsonl"}
+	want := []string{"sep_cr.jsonl", "sep_em_space.jsonl", "sep_en_space.jsonl", "sep_ff.jsonl", "sep_nbsp.jsonl", "sep_nbsp_lc.jsonl", "sep_newline.jsonl", "sep_space.jsonl", "sep_tab.jsonl"}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("pending=%v want %v", got, want)
 	}
