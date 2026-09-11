@@ -439,33 +439,63 @@ func unmarkedDirectSearchCallSQL(alias string) string {
 	sep := "'[' || " + asciiWhitespaceSQL + " || ']'"
 	bash := "'[Bb][Aa][Ss][Hh]' || " + sep + " || 'command=backscroll' || " + sep + " || 'search'"
 	execCmd := "'exec_command' || " + sep + " || 'cmd=backscroll' || " + sep + " || 'search'"
-	// Codex shell wrapper form: argv is exactly [<shell>, -c|-lc, "backscroll search ..."]
-	// serialized as shell<ws>command=[*sh","-c|-lc","backscroll search"] (bare) or
-	// shell<ws>command=[*sh","-c|-lc","backscroll search<ws>..."] (with extra args).
-	shellC := "'shell' || " + sep + " || 'command=[[]*sh' || '\",\"' || '-c' || '\",\"' || 'backscroll search'"
-	shellLC := "'shell' || " + sep + " || 'command=[[]*sh' || '\",\"' || '-lc' || '\",\"' || 'backscroll search'"
 	glob := func(prefix string) string {
 		return trimmed + " GLOB (" + prefix + ") OR " + trimmed + " GLOB (" + prefix + " || " + sep + " || '*')"
 	}
-	// shellGlob matches the bare form (prefix + '"]') or the with-args form
-	// (prefix + sep + '*' + '"]'). The trailing '"]' anchors the closing of the
-	// JSON string for argv[2] and the array.
-	shellGlob := func(prefix string) string {
-		return trimmed + " GLOB (" + prefix + ` || '"]') OR ` +
-			trimmed + " GLOB (" + prefix + " || " + sep + ` || '*"]')`
+	// Codex shell wrapper form: argv is exactly [<shell>, -c|-lc, "backscroll search ..."].
+	// SerializeToolInput renders the JSON-encoded argv as compact JSON, so the
+	// separator between the 'backscroll' and 'search' tokens depends on what the
+	// original argv[2] looked like: a literal space (the common case), a JSON
+	// single-letter escape (\t, \n, \f, \r) for the matching ASCII whitespace,
+	// or a JSON \uXXXX escape for any other unicode.IsSpace rune (vertical tab,
+	// NEL, NBSP, em/en spaces, line/paragraph separators). The reader's
+	// isCodexDirectSearchCall uses strings.Fields on the unescaped command, so
+	// it accepts every separator form — the SQL must mirror that exactly, or
+	// the row stays at search_echo=0 forever.
+	shellPrefixC := "'shell' || " + sep + " || 'command=[[]*sh' || '\",\"' || '-c' || '\",\"' || 'backscroll'"
+	shellPrefixLC := "'shell' || " + sep + " || 'command=[[]*sh' || '\",\"' || '-lc' || '\",\"' || 'backscroll'"
+	// shellSeparators lists the SQL fragments that evaluate to the separator text
+	// between 'backscroll' and 'search' in the serialized third element. The
+	// single-letter escapes and the \uXXXX char class cover every JSON encoding
+	// of a rune that strings.Fields would split on. SQLite (via modernc.org/sqlite)
+	// does not process backslash escapes in string literals by default, so we build
+	// the JSON backslash via char(92) (92 = ASCII '\') and concatenate.
+	backslash := "char(92)"
+	shellSeparators := []string{
+		sep, // literal whitespace
+		backslash + " || 't'",
+		backslash + " || 'n'",
+		backslash + " || 'f'",
+		backslash + " || 'r'",
+		backslash + " || 'u[0-9a-fA-F][0-9a-fA-F][0-9a-fA-F][0-9a-fA-F]'",
 	}
-	// shellExtra excludes 4+ argv-element shell calls (e.g. argv[2]="backscroll search ",
-	// argv[3]="bar") that the with-args '*"]' would otherwise over-match. The reader's
-	// isCodexDirectSearchCall rejects them via len(Command)==3, so requeueing them
-	// would loop forever: the SQL matches every sync and the reader never marks.
-	shellExtra := func(flag string) string {
-		notPattern := "'shell' || " + sep + " || 'command=[[]*sh' || '\",\"' || '" + flag + "' || '\",\"' || 'backscroll search*' || '\",\"*'"
+	// shellForms returns the bare + with-args GLOB clauses for one (prefix,
+	// separator) pair. The trailing '"]' anchors the closing of the JSON
+	// string for argv[2] and the array.
+	shellForms := func(prefix, separator string) string {
+		p := prefix + " || " + separator
+		return trimmed + " GLOB (" + p + ` || '"]') OR ` +
+			trimmed + " GLOB (" + p + ` || '*"]')`
+	}
+	// shellFormNotExtra returns the NOT GLOB guard for one (prefix, separator)
+	// pair. Excludes 4+ argv-element shell calls (e.g. argv[2]="backscroll search ",
+	// argv[3]="bar") that the reader rejects via len(Command)==3, so requeuing
+	// them would loop forever: SQL matches every sync, reader never marks.
+	shellFormNotExtra := func(prefix, separator string) string {
+		notPattern := prefix + " || " + separator + " || '*' || '\",\"*'"
 		return alias + ".text NOT GLOB (" + notPattern + ")"
 	}
+	orParts := []string{glob(bash), glob(execCmd)}
+	notParts := make([]string, 0, len(shellSeparators)*2)
+	for _, separator := range shellSeparators {
+		orParts = append(orParts, shellForms(shellPrefixC, separator))
+		orParts = append(orParts, shellForms(shellPrefixLC, separator))
+		notParts = append(notParts, shellFormNotExtra(shellPrefixC, separator))
+		notParts = append(notParts, shellFormNotExtra(shellPrefixLC, separator))
+	}
 	return alias + ".content_type = 'tool' AND COALESCE(" + alias + ".search_echo, 0) = 0 AND (" +
-		glob(bash) + " OR " + glob(execCmd) + " OR " +
-		shellGlob(shellC) + " OR " + shellGlob(shellLC) + ")" +
-		" AND " + shellExtra("-c") + " AND " + shellExtra("-lc")
+		strings.Join(orParts, " OR ") + ")" +
+		" AND " + strings.Join(notParts, " AND ")
 }
 
 // mergeRRF uses Reciprocal Rank Fusion to merge two ranked lists by position,
