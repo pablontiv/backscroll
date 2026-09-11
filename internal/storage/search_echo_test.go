@@ -3,13 +3,55 @@ package storage
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
+	"os"
 	"path/filepath"
 	"reflect"
+	"strings"
 	"testing"
 
 	"github.com/pablontiv/backscroll/internal/compat"
+	"github.com/pablontiv/backscroll/internal/input_config"
 	"github.com/pablontiv/backscroll/internal/models"
+	"github.com/pablontiv/backscroll/internal/readers"
 )
+
+// shellText serializes a Codex shell argv triple via a real json.Marshal
+// round-trip into readers.SerializeToolInput, so the stored text mirrors what
+// the CodexReader actually persists for an accepted argv shape. The earlier
+// fmt.Sprintf+%q fixture used Go's strconv.Quote escaping, which escapes
+// NBSP (U+00A0) as `\u00a0` text — but real JSON encoders (Go's encoding/json
+// and Rust serde_json) only escape control chars (<0x20) and emit other
+// unicode.IsSpace runes as their raw UTF-8 bytes. Building fixtures through
+// a real json.Marshal round-trip catches encoding-divergence bugs the string
+// quoting cannot.
+func shellText(t *testing.T, shellBin, flag, argv2 string) string {
+	t.Helper()
+	args := struct {
+		Command []string `json:"command"`
+	}{Command: []string{shellBin, flag, argv2}}
+	raw, err := json.Marshal(args)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return readers.SerializeToolInput("shell", raw)
+}
+
+// shellTextN serializes a Codex shell call with an arbitrary argv length. Used
+// for 4+ element fixtures the reader rejects via len(Command)==3, whose
+// over-match guard must still hold for every JSON-escape separator form.
+func shellTextN(t *testing.T, shellBin, flag string, argvRest ...string) string {
+	t.Helper()
+	argv := append([]string{shellBin, flag}, argvRest...)
+	args := struct {
+		Command []string `json:"command"`
+	}{Command: argv}
+	raw, err := json.Marshal(args)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return readers.SerializeToolInput("shell", raw)
+}
 
 func TestV15EchoBackfillPreservesPerennialIdentity(t *testing.T) {
 	path := createFixtureDatabase(t, "v14.sql")
@@ -133,6 +175,147 @@ func TestPendingSearchEchoPathsRequeuesZeroValuedDirectCalls(t *testing.T) {
 	}
 }
 
+func TestPendingSearchEchoPathsRequeuesZeroValuedCodexShellCall(t *testing.T) {
+	db, err := Open(filepath.Join(t.TempDir(), "index.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	// Each fixture stores one tool row at search_echo=0 to simulate a pre-#80
+	// Codex writer. The requeue expectation mirrors isCodexDirectSearchCall's
+	// argv shape: argv is exactly [<shell>, -c|-lc, "backscroll search ..."].
+	files := []IndexedFile{
+		// Requeued: bare 3-element -c shell direct search.
+		{Source: "session", SourcePath: "shell_bare_c.jsonl", Hash: "h1", Messages: []IndexedMessage{
+			{Ordinal: 0, Role: "assistant", Text: `shell command=["sh","-c","backscroll search"]`, ContentType: "tool"},
+		}},
+		// Requeued: 3-element -c with extra args.
+		{Source: "session", SourcePath: "shell_args_c.jsonl", Hash: "h2", Messages: []IndexedMessage{
+			{Ordinal: 0, Role: "assistant", Text: `shell command=["sh","-c","backscroll search --text orchard"]`, ContentType: "tool"},
+		}},
+		// Requeued: 3-element -lc with /bin/bash path.
+		{Source: "session", SourcePath: "shell_args_lc.jsonl", Hash: "h3", Messages: []IndexedMessage{
+			{Ordinal: 0, Role: "assistant", Text: `shell command=["/bin/bash","-lc","backscroll search --text orchard"]`, ContentType: "tool"},
+		}},
+		// NOT requeued: different command (argv[2]="ls").
+		{Source: "session", SourcePath: "shell_ls.jsonl", Hash: "h4", Messages: []IndexedMessage{
+			{Ordinal: 0, Role: "assistant", Text: `shell command=["sh","-c","ls"]`, ContentType: "tool"},
+		}},
+		// NOT requeued: wrong flag (argv[1]="-x").
+		{Source: "session", SourcePath: "shell_xflag.jsonl", Hash: "h5", Messages: []IndexedMessage{
+			{Ordinal: 0, Role: "assistant", Text: `shell command=["sh","-x","backscroll search"]`, ContentType: "tool"},
+		}},
+		// NOT requeued: 4-element argv with trailing 4th element.
+		{Source: "session", SourcePath: "shell_four.jsonl", Hash: "h6", Messages: []IndexedMessage{
+			{Ordinal: 0, Role: "assistant", Text: `shell command=["sh","-c","backscroll search","bar"]`, ContentType: "tool"},
+		}},
+		// NOT requeued: 4-element argv with trailing whitespace + 4th element (over-match guard).
+		{Source: "session", SourcePath: "shell_four_ws.jsonl", Hash: "h7", Messages: []IndexedMessage{
+			{Ordinal: 0, Role: "assistant", Text: `shell command=["sh","-c","backscroll search ","bar"]`, ContentType: "tool"},
+		}},
+		// NOT requeued: 4-element argv with -lc flag.
+		{Source: "session", SourcePath: "shell_four_lc.jsonl", Hash: "h8", Messages: []IndexedMessage{
+			{Ordinal: 0, Role: "assistant", Text: `shell command=["bash","-lc","backscroll search","bar"]`, ContentType: "tool"},
+		}},
+	}
+	if err := db.SyncFiles(files); err != nil {
+		t.Fatal(err)
+	}
+	// Force every row to search_echo=0 so only the new SQL clause can requeue them.
+	if _, err := db.db.Exec(`UPDATE search_items SET search_echo=0`); err != nil {
+		t.Fatal(err)
+	}
+	got, err := db.PendingSearchEchoPaths()
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []string{"shell_args_c.jsonl", "shell_args_lc.jsonl", "shell_bare_c.jsonl"}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("pending=%v want %v", got, want)
+	}
+}
+
+// TestPendingSearchEchoPathsRequeuesZeroValuedCodexShellSerializedWhitespace
+// walks the reader's strings.Fields acceptance for every unicode.IsSpace
+// separator between 'backscroll' and 'search' inside the shell argv's third
+// element. Each fixture is built via a real json.Marshal round-trip into
+// readers.SerializeToolInput, so the stored text carries whatever the JSON
+// encoder actually produces — control chars (U+0009/000A/000D/000C) escape
+// to \t/\n/\r/\f, but every other unicode.IsSpace rune (NBSP U+00A0, NEL
+// U+0085, en/em spaces U+2002-2003, …) survives as raw UTF-8 bytes that no
+// SQL GLOB can keep up with. The replay check must therefore do what the
+// reader does — decode the JSON argv and re-run strings.Fields — and this
+// test pins that behavior down.
+func TestPendingSearchEchoPathsRequeuesZeroValuedCodexShellSerializedWhitespace(t *testing.T) {
+	db, err := Open(filepath.Join(t.TempDir(), "index.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	files := []IndexedFile{
+		// Requeued: literal space (control case).
+		{Source: "session", SourcePath: "sep_space.jsonl", Hash: "h1", Messages: []IndexedMessage{
+			{Ordinal: 0, Role: "assistant", Text: shellText(t, "sh", "-c", "backscroll search orchard"), ContentType: "tool"},
+		}},
+		// Requeued: JSON \t escape (U+0009 < 0x20 → escapes).
+		{Source: "session", SourcePath: "sep_tab.jsonl", Hash: "h2", Messages: []IndexedMessage{
+			{Ordinal: 0, Role: "assistant", Text: shellText(t, "sh", "-c", "backscroll\tsearch orchard"), ContentType: "tool"},
+		}},
+		// Requeued: JSON \n escape (U+000A < 0x20).
+		{Source: "session", SourcePath: "sep_newline.jsonl", Hash: "h3", Messages: []IndexedMessage{
+			{Ordinal: 0, Role: "assistant", Text: shellText(t, "sh", "-c", "backscroll\nsearch orchard"), ContentType: "tool"},
+		}},
+		// Requeued: JSON \r escape (U+000D < 0x20).
+		{Source: "session", SourcePath: "sep_cr.jsonl", Hash: "h4", Messages: []IndexedMessage{
+			{Ordinal: 0, Role: "assistant", Text: shellText(t, "sh", "-c", "backscroll\rsearch orchard"), ContentType: "tool"},
+		}},
+		// Requeued: JSON \f escape (U+000C < 0x20).
+		{Source: "session", SourcePath: "sep_ff.jsonl", Hash: "h5", Messages: []IndexedMessage{
+			{Ordinal: 0, Role: "assistant", Text: shellText(t, "sh", "-c", "backscroll\fsearch orchard"), ContentType: "tool"},
+		}},
+		// Requeued: NBSP (U+00A0) — raw UTF-8 bytes (0xc2 0xa0), no \uXXXX escape.
+		// This is the case the round-2 SQL GLOB missed.
+		{Source: "session", SourcePath: "sep_nbsp.jsonl", Hash: "h6", Messages: []IndexedMessage{
+			{Ordinal: 0, Role: "assistant", Text: shellText(t, "sh", "-c", "backscroll\u00a0search orchard"), ContentType: "tool"},
+		}},
+		// Requeued: en space (U+2002) — raw UTF-8 bytes (0xe2 0x80 0x82).
+		{Source: "session", SourcePath: "sep_en_space.jsonl", Hash: "h7", Messages: []IndexedMessage{
+			{Ordinal: 0, Role: "assistant", Text: shellText(t, "sh", "-c", "backscroll\u2002search orchard"), ContentType: "tool"},
+		}},
+		// Requeued: em space (U+2003) — raw UTF-8 bytes (0xe2 0x80 0x83).
+		{Source: "session", SourcePath: "sep_em_space.jsonl", Hash: "h8", Messages: []IndexedMessage{
+			{Ordinal: 0, Role: "assistant", Text: shellText(t, "sh", "-c", "backscroll\u2003search orchard"), ContentType: "tool"},
+		}},
+		// Requeued: NBSP with -lc flag and /bin/bash path (cross-flag sanity).
+		{Source: "session", SourcePath: "sep_nbsp_lc.jsonl", Hash: "h9", Messages: []IndexedMessage{
+			{Ordinal: 0, Role: "assistant", Text: shellText(t, "/bin/bash", "-lc", "backscroll\u00a0search orchard"), ContentType: "tool"},
+		}},
+		// NOT requeued: 4-element argv with NBSP separator + 4th element
+		// (over-match guard holds for raw UTF-8 separators too).
+		{Source: "session", SourcePath: "sep_nbsp_four.jsonl", Hash: "h10", Messages: []IndexedMessage{
+			{Ordinal: 0, Role: "assistant", Text: shellTextN(t, "sh", "-c", "backscroll\u00a0search ", "bar"), ContentType: "tool"},
+		}},
+		// NOT requeued: 4-element argv with tab separator + 4th element.
+		{Source: "session", SourcePath: "sep_tab_four.jsonl", Hash: "h11", Messages: []IndexedMessage{
+			{Ordinal: 0, Role: "assistant", Text: shellTextN(t, "sh", "-c", "backscroll\tsearch ", "bar"), ContentType: "tool"},
+		}},
+	}
+	if err := db.SyncFiles(files); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.db.Exec(`UPDATE search_items SET search_echo=0`); err != nil {
+		t.Fatal(err)
+	}
+	got, err := db.PendingSearchEchoPaths()
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []string{"sep_cr.jsonl", "sep_em_space.jsonl", "sep_en_space.jsonl", "sep_ff.jsonl", "sep_nbsp.jsonl", "sep_nbsp_lc.jsonl", "sep_newline.jsonl", "sep_space.jsonl", "sep_tab.jsonl"}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("pending=%v want %v", got, want)
+	}
+}
+
 func TestEchoProvenanceDoesNotAffectProse(t *testing.T) {
 	db, err := Open(filepath.Join(t.TempDir(), "index.db"))
 	if err != nil {
@@ -145,5 +328,95 @@ func TestEchoProvenanceDoesNotAffectProse(t *testing.T) {
 	got, err := db.Search("orchard", models.SearchOptions{AllProjects: true})
 	if err != nil || len(got) != 1 {
 		t.Fatalf("prose filtered: %v %v", got, err)
+	}
+}
+
+// TestPendingSearchEchoPathsRequeuesCodexShellRoundTrip is the regression
+// fixture for the round-3 reviewer finding. Real Codex shell calls carry
+// not just `command` but also `workdir`, `timeout_ms`, and potentially
+// `additional_permissions` — Codex's own ShellToolCallParams schema.
+// SerializeToolInput sorts the keys alphabetically, so a call with
+// `additional_permissions` serializes as
+// `shell additional_permissions={...} command=[...] workdir=/tmp timeout_ms=10000`,
+// not `shell command=[...] workdir=/tmp timeout_ms=10000`. The requeue path
+// must accept both orderings (Bug B: broaden the admission past the literal
+// `shell command=` prefix and locate the `command=` token boundary inside
+// the sorted list) and must read only the JSON array that follows,
+// ignoring the trailing key=value tokens (Bug A: don't try to wrap the
+// entire remainder as a JSON object).
+//
+// The fixture is generated via a full CodexReader.Parse round-trip of an
+// inline rollout JSONL — not via SerializeToolInput directly, not via a
+// hand-written string — so it exercises the same storage path the production
+// ingest uses.
+func TestPendingSearchEchoPathsRequeuesCodexShellRoundTrip(t *testing.T) {
+	db, err := Open(filepath.Join(t.TempDir(), "index.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	// Three shapes: command-only (control), command + workdir + timeout_ms,
+	// and the worst case — additional_permissions sorts before command, so
+	// the legacy `text LIKE 'shell command=[%'` prefilter would miss it.
+	cases := []struct {
+		name, argsJSON string
+		requeue       bool
+	}{
+		{"control", `{"command":["sh","-c","backscroll search --text orchard"]}`, true},
+		{"workdir_timeout_ms", `{"command":["sh","-c","backscroll search"],"workdir":"/tmp","timeout_ms":10000}`, true},
+		{"additional_permissions_first", `{"additional_permissions":{"network":false},"command":["bash","-lc","backscroll search --text orchard"]}`, true},
+		{"workdir_first", `{"workdir":"/tmp","command":["sh","-c","backscroll search"]}`, true},
+		{"wrong_command", `{"command":["sh","-c","ls"],"workdir":"/tmp","timeout_ms":10000}`, false},
+		{"four_elements", `{"command":["sh","-c","backscroll search","bar"],"workdir":"/tmp"}`, false},
+	}
+	for i, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			jsonl := "{\"ordinal\":0,\"timestamp\":\"2026-09-01T12:00:00Z\",\"type\":\"session_meta\",\"payload\":{\"cwd\":\"/synthetic/test\"}}\n" +
+				"{\"ordinal\":1,\"timestamp\":\"2026-09-01T12:00:01Z\",\"type\":\"response_item\",\"payload\":{\"type\":\"function_call\",\"name\":\"shell\",\"call_id\":\"test-call\",\"arguments\":\"" + strings.ReplaceAll(tc.argsJSON, "\"", "\\\"") + "\"}}\n"
+			dir := t.TempDir()
+			path := filepath.Join(dir, "codex.jsonl")
+			if err := os.WriteFile(path, []byte(jsonl), 0o644); err != nil {
+				t.Fatal(err)
+			}
+			parsed, err := (&readers.CodexReader{}).Parse(path, input_config.InputDefinition{})
+			if err != nil {
+				t.Fatal(err)
+			}
+			var storedText string
+			for _, rec := range parsed.Records {
+				if rec.ContentType == "tool" && strings.HasPrefix(rec.Content, "shell ") {
+					storedText = rec.Content
+					break
+				}
+			}
+			if storedText == "" {
+				t.Fatal("shell record not parsed")
+			}
+			db2, err := Open(filepath.Join(t.TempDir(), "db-"+tc.name+".db"))
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer db2.Close()
+			sourcePath := "shell_" + tc.name + ".jsonl"
+			if err := db2.SyncFiles([]IndexedFile{{Source: "session", SourcePath: sourcePath, Hash: "h", Messages: []IndexedMessage{{Ordinal: 0, Role: "assistant", Text: storedText, ContentType: "tool"}}}}); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := db2.db.Exec(`UPDATE search_items SET search_echo=0`); err != nil {
+				t.Fatal(err)
+			}
+			got, err := db2.PendingSearchEchoPaths()
+			if err != nil {
+				t.Fatal(err)
+			}
+			if tc.requeue {
+				if !reflect.DeepEqual(got, []string{sourcePath}) {
+					t.Errorf("case %d (%s): pending=%v want [%s]", i, tc.name, got, sourcePath)
+				}
+			} else {
+				if len(got) != 0 {
+					t.Errorf("case %d (%s): pending=%v want []", i, tc.name, got)
+				}
+			}
+		})
 	}
 }

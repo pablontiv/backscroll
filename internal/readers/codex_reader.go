@@ -2,10 +2,10 @@ package readers
 
 import (
 	"encoding/json"
-	"path"
 	"strings"
 	"time"
 
+	"github.com/pablontiv/backscroll/internal/directsearch"
 	"github.com/pablontiv/backscroll/internal/input_config"
 	"github.com/pablontiv/backscroll/internal/models"
 	"github.com/pablontiv/backscroll/internal/sync"
@@ -125,37 +125,11 @@ func codexCallOf(item codexItem) codexCall {
 	return codexCall{}
 }
 
-// isCodexDirectSearchCall recognizes Codex's own direct shell invocations of
-// `backscroll search`: an `exec_command` whose raw `cmd` starts with the bare
-// tokens, or a `shell` call whose argv is exactly a shell, `-c`/`-lc`, and
-// that same command string. The wrapper form is Codex-reader-local; the
-// shared command boundary itself never widens.
+// isCodexDirectSearchCall is now a thin wrapper around the shared predicate
+// in internal/directsearch. The storage replay path uses the same function,
+// so the two call sites cannot drift apart.
 func isCodexDirectSearchCall(tool, arguments string) bool {
-	switch tool {
-	case "exec_command":
-		var obj struct {
-			Cmd string `json:"cmd"`
-		}
-		if json.Unmarshal([]byte(arguments), &obj) != nil {
-			return false
-		}
-		return isDirectSearchCommand(obj.Cmd)
-	case "shell":
-		var obj struct {
-			Command []string `json:"command"`
-		}
-		if json.Unmarshal([]byte(arguments), &obj) != nil || len(obj.Command) != 3 {
-			return false
-		}
-		if !strings.HasSuffix(path.Base(obj.Command[0]), "sh") {
-			return false
-		}
-		if obj.Command[1] != "-c" && obj.Command[1] != "-lc" {
-			return false
-		}
-		return isDirectSearchCommand(obj.Command[2])
-	}
-	return false
+	return directsearch.IsCodexDirectSearchCall(tool, arguments)
 }
 
 func codexMessage(item codexItem, ts time.Time, reasoning bool) (models.Message, bool) {

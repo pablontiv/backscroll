@@ -441,6 +441,17 @@ func directBackscrollSearchEchoSQL(alias string) string {
 // readers wrote false as 0, so those rows are not in the v15 NULL backlog.
 // Requeueing the call's source file lets identity pairing mark the result;
 // output shape is never matched here.
+//
+// Only the bash and exec_cmd cases are matched in SQL: their stored text uses
+// simple `name key=value` tokens with no JSON encoding, so a GLOB prefix is
+// faithful. The Codex shell case has its own predicate in Go (see
+// PendingSearchEchoPaths and directsearch.IsCodexDirectSearchCall) because
+// its arguments are JSON-encoded and the on-disk separator between
+// 'backscroll' and 'search' can be any form strings.Fields accepts but the
+// JSON encoder leaves in the wild (literal space, \t/\n/\f/\r, \uXXXX, or
+// raw UTF-8 bytes for non-control whitespace). Trying to enumerate every
+// byte sequence in SQL GLOB is provably unbounded; decoding the JSON argv
+// in Go is not.
 func unmarkedDirectSearchCallSQL(alias string) string {
 	trimmed := "ltrim(" + alias + ".text, " + asciiWhitespaceSQL + ")"
 	sep := "'[' || " + asciiWhitespaceSQL + " || ']'"

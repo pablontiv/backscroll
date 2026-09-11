@@ -6,6 +6,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/pablontiv/backscroll/internal/directsearch"
 	"github.com/pablontiv/backscroll/internal/input_config"
 	"github.com/pablontiv/backscroll/internal/models"
 	"github.com/pablontiv/backscroll/internal/sync"
@@ -250,15 +251,7 @@ func isDirectSearchInput(tool string, input json.RawMessage) bool {
 	if err := json.Unmarshal(input, &obj); err != nil {
 		return false
 	}
-	return isDirectSearchCommand(obj.Command)
-}
-
-// isDirectSearchCommand is the one command boundary every reader shares: the
-// raw command text must start with the bare `backscroll search` tokens.
-// Absolute paths, env/shell wrappers, and other subcommands are not echoes.
-func isDirectSearchCommand(command string) bool {
-	fields := strings.Fields(command)
-	return len(fields) >= 2 && fields[0] == "backscroll" && fields[1] == "search"
+	return directsearch.IsDirectSearchCommand(obj.Command)
 }
 
 func classifyText(text string) string {
