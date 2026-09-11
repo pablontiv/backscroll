@@ -986,6 +986,9 @@ func (d *Database) StalePaths(currentVersion int) ([]string, error) {
 
 // PendingSearchEchoPaths distinguishes the v15 backlog from older extraction
 // epochs so already-classified perennial rows cannot consume its replay budget.
+// It also requeues surviving sources whose tool rows were stored as search_echo=0
+// with a serialized direct search call (pre-#80 Codex/OpenCode writes), so
+// identity pairing can mark the paired result. Output-only rows stay unmatched.
 func (d *Database) PendingSearchEchoPaths() ([]string, error) {
 	return d.stalePaths(0, true)
 }
@@ -997,7 +1000,12 @@ func (d *Database) stalePaths(currentVersion int, echoOnly bool) ([]string, erro
 		LEFT JOIN indexed_files ON search_items.source_path = indexed_files.path
 		WHERE search_items.source = 'session'
 		  AND ((? AND (search_items.extraction_version IS NULL OR search_items.extraction_version < ?))
-		       OR search_items.search_echo IS NULL)
+		       OR search_items.search_echo IS NULL`
+	if echoOnly {
+		query += `
+		       OR (` + unmarkedDirectSearchCallSQL("search_items") + `)`
+	}
+	query += `)
 		ORDER BY indexed_files.last_indexed ASC, search_items.source_path ASC
 	`
 

@@ -91,6 +91,48 @@ func TestV15EchoBackfillPreservesPerennialIdentity(t *testing.T) {
 	}
 }
 
+func TestPendingSearchEchoPathsRequeuesZeroValuedDirectCalls(t *testing.T) {
+	db, err := Open(filepath.Join(t.TempDir(), "index.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	files := []IndexedFile{
+		{Source: "session", SourcePath: "codex.jsonl", Hash: "h1", Messages: []IndexedMessage{
+			{Ordinal: 0, Role: "assistant", Text: "exec_command cmd=backscroll search --text orchard", ContentType: "tool", SearchEcho: true},
+			{Ordinal: 1, Role: "tool", Text: "result_0_snippet=orchard", ContentType: "tool", SearchEcho: true},
+		}},
+		{Source: "session", SourcePath: "opencode.db", Hash: "h2", Messages: []IndexedMessage{
+			{Ordinal: 0, Role: "assistant", Text: "bash command=backscroll search --text orchard", ContentType: "tool", SearchEcho: true},
+			{Ordinal: 1, Role: "assistant", Text: "result_0_snippet=orchard", ContentType: "tool", SearchEcho: true},
+		}},
+		{Source: "session", SourcePath: "rg.jsonl", Hash: "h3", Messages: []IndexedMessage{
+			{Ordinal: 0, Role: "assistant", Text: "exec_command cmd=rg orchard", ContentType: "tool"},
+		}},
+		{Source: "session", SourcePath: "unknown.jsonl", Hash: "h4", Messages: []IndexedMessage{
+			{Ordinal: 0, Role: "assistant", Text: "result_0_snippet=orchard", ContentType: "tool"},
+		}},
+	}
+	files[3].Messages[0].SearchEcho = false
+	if err := db.SyncFiles(files); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.db.Exec(`UPDATE search_items SET search_echo=0 WHERE source_path IN ('codex.jsonl','opencode.db','rg.jsonl')`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.db.Exec(`UPDATE search_items SET search_echo=NULL WHERE source_path='unknown.jsonl'`); err != nil {
+		t.Fatal(err)
+	}
+	got, err := db.PendingSearchEchoPaths()
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []string{"codex.jsonl", "opencode.db", "unknown.jsonl"}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("pending=%v want %v", got, want)
+	}
+}
+
 func TestEchoProvenanceDoesNotAffectProse(t *testing.T) {
 	db, err := Open(filepath.Join(t.TempDir(), "index.db"))
 	if err != nil {

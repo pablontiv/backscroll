@@ -127,7 +127,8 @@ func extractPiMessages(rec piRecord, indexReasoning bool) []models.Message {
 			}
 		case "toolCall":
 			if t := SerializeToolInput(b.Name, b.Arguments); strings.TrimSpace(t) != "" {
-				out = append(out, models.Message{Role: role, Content: t, ContentType: "tool", Timestamp: ts})
+				out = append(out, models.Message{Role: role, Content: t, ContentType: "tool", Timestamp: ts,
+					SearchEcho: isDirectSearchInput(b.Name, b.Arguments)})
 			}
 		case "thinking":
 			if indexReasoning {
