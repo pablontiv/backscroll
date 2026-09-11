@@ -78,6 +78,38 @@ func TestPiReader_SkipsNonMessageNonCustomTypes(t *testing.T) {
 	}
 }
 
+func TestPiReader_MarksDirectBashSearchCalls(t *testing.T) {
+	line := `{"type":"message","timestamp":"2026-05-10T22:19:34.694Z","message":{"role":"assistant","content":[{"type":"toolCall","name":"bash","arguments":{"command":"backscroll search --text orchard"}},{"type":"toolCall","name":"bash","arguments":{"command":"rg orchard"}}]}}` + "\n" +
+		`{"type":"message","timestamp":"2026-05-10T22:19:35.694Z","message":{"role":"toolResult","content":[{"type":"text","text":"result_0_snippet=orchard"}]}}` + "\n"
+	pf, err := (&PiReader{}).Parse(writePiFixture(t, line), input_config.InputDefinition{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var sawSearch, sawRg, sawResult bool
+	for _, m := range pf.Records {
+		switch {
+		case m.SearchEcho && contains(m.Content, "backscroll search"):
+			sawSearch = true
+		case m.ContentType == "tool" && contains(m.Content, "rg orchard"):
+			sawRg = true
+			if m.SearchEcho {
+				t.Fatal("rg call marked as search echo")
+			}
+		case contains(m.Content, "result_0_snippet"):
+			sawResult = true
+		}
+	}
+	if !sawSearch {
+		t.Fatalf("direct bash search was not marked; records=%+v", pf.Records)
+	}
+	if !sawRg {
+		t.Fatal("missing rg toolCall")
+	}
+	if sawResult {
+		t.Fatal("toolResult rows must stay unindexed")
+	}
+}
+
 func TestPiReader_CapturesCustomResult(t *testing.T) {
 	lines := `{"type":"message","timestamp":"2026-05-10T22:19:34.694Z","message":{"role":"assistant","content":[{"type":"toolCall","name":"web_search","arguments":{"queries":["q"]}}]}}` + "\n" +
 		`{"type":"custom","customType":"web-search-results","timestamp":"2026-05-10T22:19:44.292Z","data":{"queries":[{"query":"q","answer":"pizzqx_answer_token"}]}}` + "\n"

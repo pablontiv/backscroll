@@ -429,6 +429,23 @@ func directBackscrollSearchEchoSQL(alias string) string {
 		trimmed + " GLOB (" + prefix + " || " + sep + " || '*'))"
 }
 
+// unmarkedDirectSearchCallSQL matches tool rows stored as search_echo=0 whose
+// serialized text is a direct Backscroll search call. Pre-#80 Codex/OpenCode
+// readers wrote false as 0, so those rows are not in the v15 NULL backlog.
+// Requeueing the call's source file lets identity pairing mark the result;
+// output shape is never matched here.
+func unmarkedDirectSearchCallSQL(alias string) string {
+	trimmed := "ltrim(" + alias + ".text, " + asciiWhitespaceSQL + ")"
+	sep := "'[' || " + asciiWhitespaceSQL + " || ']'"
+	bash := "'[Bb][Aa][Ss][Hh]' || " + sep + " || 'command=backscroll' || " + sep + " || 'search'"
+	execCmd := "'exec_command' || " + sep + " || 'cmd=backscroll' || " + sep + " || 'search'"
+	glob := func(prefix string) string {
+		return trimmed + " GLOB (" + prefix + ") OR " + trimmed + " GLOB (" + prefix + " || " + sep + " || '*')"
+	}
+	return alias + ".content_type = 'tool' AND COALESCE(" + alias + ".search_echo, 0) = 0 AND (" +
+		glob(bash) + " OR " + glob(execCmd) + ")"
+}
+
 // mergeRRF uses Reciprocal Rank Fusion to merge two ranked lists by position,
 // immune to score-scale differences between tokenizers (trigram vs porter).
 // k=60 is the standard RRF constant.

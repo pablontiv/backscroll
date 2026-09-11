@@ -171,8 +171,10 @@ Migration v15 adds nullable `search_echo` provenance. Already-indexed Claude
 session rows with surviving sources reparse through the existing bounded
 incremental backfill, even when hashes and file metadata match. This updates
 provenance without replacing perennial IDs or stored text. Codex and OpenCode
-rows use the UUID-less per-file reload path, so an index built before their
-provenance existed converges the next time each surviving source is reparsed.
+rows use the UUID-less per-file reload path. An index that stored those calls as
+`search_echo=0` before their readers marked echoes re-enters the same bounded
+replay while the surviving source still has a serialized direct search call;
+paired outputs are marked by identity on that reparse, not by output shape.
 Subsequent source expiry, `rebuild`, and supported canonical recovery preserve
 proven pairing evidence. The general extraction epoch is unchanged.
 
