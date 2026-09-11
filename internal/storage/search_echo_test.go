@@ -360,7 +360,7 @@ func TestPendingSearchEchoPathsRequeuesCodexShellRoundTrip(t *testing.T) {
 	// the legacy `text LIKE 'shell command=[%'` prefilter would miss it.
 	cases := []struct {
 		name, argsJSON string
-		requeue       bool
+		requeue        bool
 	}{
 		{"control", `{"command":["sh","-c","backscroll search --text orchard"]}`, true},
 		{"workdir_timeout_ms", `{"command":["sh","-c","backscroll search"],"workdir":"/tmp","timeout_ms":10000}`, true},
