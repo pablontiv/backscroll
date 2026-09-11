@@ -439,11 +439,33 @@ func unmarkedDirectSearchCallSQL(alias string) string {
 	sep := "'[' || " + asciiWhitespaceSQL + " || ']'"
 	bash := "'[Bb][Aa][Ss][Hh]' || " + sep + " || 'command=backscroll' || " + sep + " || 'search'"
 	execCmd := "'exec_command' || " + sep + " || 'cmd=backscroll' || " + sep + " || 'search'"
+	// Codex shell wrapper form: argv is exactly [<shell>, -c|-lc, "backscroll search ..."]
+	// serialized as shell<ws>command=[*sh","-c|-lc","backscroll search"] (bare) or
+	// shell<ws>command=[*sh","-c|-lc","backscroll search<ws>..."] (with extra args).
+	shellC := "'shell' || " + sep + " || 'command=[[]*sh' || '\",\"' || '-c' || '\",\"' || 'backscroll search'"
+	shellLC := "'shell' || " + sep + " || 'command=[[]*sh' || '\",\"' || '-lc' || '\",\"' || 'backscroll search'"
 	glob := func(prefix string) string {
 		return trimmed + " GLOB (" + prefix + ") OR " + trimmed + " GLOB (" + prefix + " || " + sep + " || '*')"
 	}
+	// shellGlob matches the bare form (prefix + '"]') or the with-args form
+	// (prefix + sep + '*' + '"]'). The trailing '"]' anchors the closing of the
+	// JSON string for argv[2] and the array.
+	shellGlob := func(prefix string) string {
+		return trimmed + " GLOB (" + prefix + ` || '"]') OR ` +
+			trimmed + " GLOB (" + prefix + " || " + sep + ` || '*"]')`
+	}
+	// shellExtra excludes 4+ argv-element shell calls (e.g. argv[2]="backscroll search ",
+	// argv[3]="bar") that the with-args '*"]' would otherwise over-match. The reader's
+	// isCodexDirectSearchCall rejects them via len(Command)==3, so requeueing them
+	// would loop forever: the SQL matches every sync and the reader never marks.
+	shellExtra := func(flag string) string {
+		notPattern := "'shell' || " + sep + " || 'command=[[]*sh' || '\",\"' || '" + flag + "' || '\",\"' || 'backscroll search*' || '\",\"*'"
+		return alias + ".text NOT GLOB (" + notPattern + ")"
+	}
 	return alias + ".content_type = 'tool' AND COALESCE(" + alias + ".search_echo, 0) = 0 AND (" +
-		glob(bash) + " OR " + glob(execCmd) + ")"
+		glob(bash) + " OR " + glob(execCmd) + " OR " +
+		shellGlob(shellC) + " OR " + shellGlob(shellLC) + ")" +
+		" AND " + shellExtra("-c") + " AND " + shellExtra("-lc")
 }
 
 // mergeRRF uses Reciprocal Rank Fusion to merge two ranked lists by position,

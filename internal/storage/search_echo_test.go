@@ -133,6 +133,66 @@ func TestPendingSearchEchoPathsRequeuesZeroValuedDirectCalls(t *testing.T) {
 	}
 }
 
+func TestPendingSearchEchoPathsRequeuesZeroValuedCodexShellCall(t *testing.T) {
+	db, err := Open(filepath.Join(t.TempDir(), "index.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	// Each fixture stores one tool row at search_echo=0 to simulate a pre-#80
+	// Codex writer. The requeue expectation mirrors isCodexDirectSearchCall's
+	// argv shape: argv is exactly [<shell>, -c|-lc, "backscroll search ..."].
+	files := []IndexedFile{
+		// Requeued: bare 3-element -c shell direct search.
+		{Source: "session", SourcePath: "shell_bare_c.jsonl", Hash: "h1", Messages: []IndexedMessage{
+			{Ordinal: 0, Role: "assistant", Text: `shell command=["sh","-c","backscroll search"]`, ContentType: "tool"},
+		}},
+		// Requeued: 3-element -c with extra args.
+		{Source: "session", SourcePath: "shell_args_c.jsonl", Hash: "h2", Messages: []IndexedMessage{
+			{Ordinal: 0, Role: "assistant", Text: `shell command=["sh","-c","backscroll search --text orchard"]`, ContentType: "tool"},
+		}},
+		// Requeued: 3-element -lc with /bin/bash path.
+		{Source: "session", SourcePath: "shell_args_lc.jsonl", Hash: "h3", Messages: []IndexedMessage{
+			{Ordinal: 0, Role: "assistant", Text: `shell command=["/bin/bash","-lc","backscroll search --text orchard"]`, ContentType: "tool"},
+		}},
+		// NOT requeued: different command (argv[2]="ls").
+		{Source: "session", SourcePath: "shell_ls.jsonl", Hash: "h4", Messages: []IndexedMessage{
+			{Ordinal: 0, Role: "assistant", Text: `shell command=["sh","-c","ls"]`, ContentType: "tool"},
+		}},
+		// NOT requeued: wrong flag (argv[1]="-x").
+		{Source: "session", SourcePath: "shell_xflag.jsonl", Hash: "h5", Messages: []IndexedMessage{
+			{Ordinal: 0, Role: "assistant", Text: `shell command=["sh","-x","backscroll search"]`, ContentType: "tool"},
+		}},
+		// NOT requeued: 4-element argv with trailing 4th element.
+		{Source: "session", SourcePath: "shell_four.jsonl", Hash: "h6", Messages: []IndexedMessage{
+			{Ordinal: 0, Role: "assistant", Text: `shell command=["sh","-c","backscroll search","bar"]`, ContentType: "tool"},
+		}},
+		// NOT requeued: 4-element argv with trailing whitespace + 4th element (over-match guard).
+		{Source: "session", SourcePath: "shell_four_ws.jsonl", Hash: "h7", Messages: []IndexedMessage{
+			{Ordinal: 0, Role: "assistant", Text: `shell command=["sh","-c","backscroll search ","bar"]`, ContentType: "tool"},
+		}},
+		// NOT requeued: 4-element argv with -lc flag.
+		{Source: "session", SourcePath: "shell_four_lc.jsonl", Hash: "h8", Messages: []IndexedMessage{
+			{Ordinal: 0, Role: "assistant", Text: `shell command=["bash","-lc","backscroll search","bar"]`, ContentType: "tool"},
+		}},
+	}
+	if err := db.SyncFiles(files); err != nil {
+		t.Fatal(err)
+	}
+	// Force every row to search_echo=0 so only the new SQL clause can requeue them.
+	if _, err := db.db.Exec(`UPDATE search_items SET search_echo=0`); err != nil {
+		t.Fatal(err)
+	}
+	got, err := db.PendingSearchEchoPaths()
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []string{"shell_args_c.jsonl", "shell_args_lc.jsonl", "shell_bare_c.jsonl"}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("pending=%v want %v", got, want)
+	}
+}
+
 func TestEchoProvenanceDoesNotAffectProse(t *testing.T) {
 	db, err := Open(filepath.Join(t.TempDir(), "index.db"))
 	if err != nil {
