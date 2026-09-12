@@ -343,7 +343,13 @@ func TestRecallFrequencySQLEchoPredicatePreservesBoundaries(t *testing.T) {
 		{name: "canonical shell", contentType: "tool", text: shellText(t, "bash", "-lc", "backscroll search --text boundtok20"), unique: "boundtok20", wantEcho: true, wantSQL: &sqlMiss},
 		{name: "shell extra sorted keys", contentType: "tool", text: shellFull([]string{"sh", "-c", "backscroll search --text boundtok21"}), unique: "boundtok21", wantEcho: true, wantSQL: &sqlMiss},
 		{name: "shell /bin/bash path", contentType: "tool", text: shellText(t, "/bin/bash", "-lc", "backscroll search --text boundtok22"), unique: "boundtok22", wantEcho: true, wantSQL: &sqlMiss},
-		{name: "shell NBSP separator", contentType: "tool", text: shellText(t, "sh", "-c", "backscroll search --text boundtok23"), unique: "boundtok23", wantEcho: true, wantSQL: &sqlMiss},
+		{name: "shell NBSP separator", contentType: "tool", text: shellText(t, "sh", "-c", "backscroll search --text boundtok23"), unique: "boundtok23", wantEcho: true, wantSQL: &sqlMiss},
+		// JSON control escapes (\t here) stay two-byte sequences in the
+		// serialized text, so with no other argv whitespace the whole row has
+		// only two strings.Fields tokens — it must not fall below a token-count
+		// floor before the shell check, or pages would keep a row the IDF path
+		// (which has no such floor) excludes.
+		{name: "shell JSON-escaped tab separators", contentType: "tool", text: shellText(t, "sh", "-c", "backscroll\tsearch\t--text\tboundtok31"), unique: "boundtok31", wantEcho: true, wantSQL: &sqlMiss},
 		{name: "null echo shell fallback", contentType: "tool", text: shellText(t, "bash", "-lc", "backscroll search --text boundtok24"), nullEcho: true, unique: "boundtok24", wantEcho: true, wantSQL: &sqlMiss},
 		{name: "shell wrong command", contentType: "tool", text: shellText(t, "sh", "-c", "rg boundtok25 /tmp"), unique: "boundtok25"},
 		{name: "shell wrong flag", contentType: "tool", text: shellText(t, "sh", "-x", "backscroll search --text boundtok26"), unique: "boundtok26"},

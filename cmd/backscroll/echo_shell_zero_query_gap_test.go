@@ -52,11 +52,26 @@ func TestZeroValuedCodexShellEchoExcludedBeforeReplay(t *testing.T) {
 	}
 	e.run("status", "--json")
 
+	// Same gap with every separator JSON-escaped (control characters like
+	// U+0009 must escape as two-byte \t in JSON, so the serialized text has
+	// no argv whitespace at all and only two strings.Fields tokens). These
+	// rows exercised a page/IDF disagreement: recallFrequency's shell
+	// prefilter has no token-count floor, but the result-page predicate did.
+	for i := 0; i < 2; i++ {
+		id := fmt.Sprintf("codex-tab-%d", i)
+		args, _ := json.Marshal(map[string]any{
+			"command": []string{"sh", "-c", "backscroll\tsearch\t--text\tviolet\thandshake"},
+		})
+		writeCodexRollout(t, filepath.Join(codexRoot, id+".jsonl"), id, 30+i,
+			map[string]any{"type": "function_call", "name": "shell", "call_id": id, "arguments": string(args)})
+	}
+	e.run("status", "--json")
+
 	db, err := sql.Open("sqlite", e.database)
 	if err != nil {
 		t.Fatal(err)
 	}
-	var serialized string
+	var serialized, tabSerialized string
 	if err := db.QueryRow(`SELECT text FROM search_items WHERE source_path LIKE ? AND content_type='tool' LIMIT 1`, "%codex-shell-0.jsonl").Scan(&serialized); err != nil {
 		_ = db.Close()
 		t.Fatal(err)
@@ -65,6 +80,19 @@ func TestZeroValuedCodexShellEchoExcludedBeforeReplay(t *testing.T) {
 	if serialized != wantSerialized {
 		_ = db.Close()
 		t.Fatalf("Codex shell SerializeToolInput shape=%q want %q", serialized, wantSerialized)
+	}
+	if err := db.QueryRow(`SELECT text FROM search_items WHERE source_path LIKE ? AND content_type='tool' LIMIT 1`, "%codex-tab-0.jsonl").Scan(&tabSerialized); err != nil {
+		_ = db.Close()
+		t.Fatal(err)
+	}
+	const wantTabSerialized = `shell command=["sh","-c","backscroll\tsearch\t--text\tviolet\thandshake"]`
+	if tabSerialized != wantTabSerialized {
+		_ = db.Close()
+		t.Fatalf("Codex tab shell SerializeToolInput shape=%q want %q", tabSerialized, wantTabSerialized)
+	}
+	if got := len(strings.Fields(tabSerialized)); got != 2 {
+		_ = db.Close()
+		t.Fatalf("tab-escaped shell row must have exactly two whitespace-separated tokens to exercise the guard, got %d", got)
 	}
 	if _, err := db.Exec(`UPDATE search_items SET search_echo=0 WHERE content_type='tool' AND source_path LIKE ?`, "%codex-%.jsonl"); err != nil {
 		_ = db.Close()

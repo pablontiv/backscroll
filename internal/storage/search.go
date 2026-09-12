@@ -402,22 +402,26 @@ func isDirectBackscrollSearchEcho(result SearchResult) bool {
 		return true
 	}
 	fields := strings.Fields(result.Text)
+	if len(fields) == 0 {
+		return false
+	}
+	// Codex shell wrapper: checked before the three-token guard because the
+	// argv is JSON-encoded — when every separator inside the command string
+	// is a JSON control escape (\t, \n, …) the serialized text has only two
+	// whitespace-separated fields. The SQL prefilter in recallFrequency has
+	// no such floor, so a guard here would make pages and IDF disagree.
+	// Token-shape matching on the argv itself is unbounded; reuse the exact
+	// strict predicate the requeue path (PR #87) already applies.
+	if strings.EqualFold(fields[0], "shell") {
+		return pendingSearchEchoShellMatches(result.Text)
+	}
 	if len(fields) < 3 {
 		return false
 	}
 	if strings.EqualFold(fields[0], "bash") {
 		return fields[1] == "command=backscroll" && fields[2] == "search"
 	}
-	if fields[0] == "exec_command" {
-		return fields[1] == "cmd=backscroll" && fields[2] == "search"
-	}
-	if fields[0] == "shell" {
-		// Codex shell wrapper: the argv is JSON-encoded, so token-shape
-		// matching is unbounded. Reuse the exact strict predicate the
-		// requeue path (PR #87) already applies.
-		return pendingSearchEchoShellMatches(result.Text)
-	}
-	return false
+	return fields[0] == "exec_command" && fields[1] == "cmd=backscroll" && fields[2] == "search"
 }
 
 // asciiWhitespaceSQL is the ASCII subset of unicode.IsSpace. SQL-side echo
