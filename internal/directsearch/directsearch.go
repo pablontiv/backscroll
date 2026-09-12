@@ -84,9 +84,13 @@ func IsCodexDirectSearchCall(tool, arguments string) bool {
 // shape, not just bash/exec_command: the shell argv is stored as raw,
 // un-decoded JSON bytes, so without the guard a JSON \u-escaped letter of
 // "backscroll" (accepted after decoding) would be missed by the prefilter.
-// LIKE folds ASCII case, so the guard folds case too.
+// The match is deliberately case-SENSITIVE: literal-lowercase-substring
+// present implies LIKE matches, full stop. Folding case would go the wrong
+// way — Go's ToLower folds strictly more than LIKE's ASCII-only fold
+// (U+212A KELVIN SIGN lowercases to 'k' under ToLower but is invisible to
+// LIKE), which would reopen exactly the divergence this guard closes.
 func IsSerializedDirectSearchCall(text string) bool {
-	if !strings.Contains(strings.ToLower(text), "backscroll") {
+	if !strings.Contains(text, "backscroll") {
 		return false
 	}
 	fields := strings.Fields(text)

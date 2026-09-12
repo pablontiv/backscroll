@@ -123,6 +123,13 @@ func echoParityCorpus(t *testing.T) []echoParityFixture {
 		// to keep the SQL prefilter a provable superset (all three paths agree
 		// on NOT excluding the row).
 		{"shell/json-escaped-letter", `shell command=["sh","-c","\u0062ackscroll search --text X"]`},
+		// Same escaped-letter argv, plus a BAC<U+212A>SCROLL near-miss
+		// elsewhere in the row: Go's ToLower folds U+212A KELVIN SIGN to 'k',
+		// turning this into the literal "backscroll", but SQLite LIKE folds
+		// only ASCII A-Z, so a case-folding guard would pass a row the SQL
+		// prefilter cannot see. The guard is case-sensitive precisely so this
+		// class cannot exist.
+		{"shell/json-escaped-letter-kelvin-near-miss", `shell command=["sh","-c","\u0062ackscroll search --text X"] note=BACKSCROLL`},
 	}
 	for _, neg := range negatives {
 		tok := next("paritok")
