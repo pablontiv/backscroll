@@ -117,6 +117,12 @@ func echoParityCorpus(t *testing.T) []echoParityFixture {
 		{"exec/status", "exec_command cmd=backscroll status"},
 		{"prose-mention", "run backscroll search from your shell"},
 		{"bash-other-tool", "Bash command=rg backscroll ."},
+		// Shell argv stored as raw JSON bytes with a \u-escaped letter of
+		// "backscroll": decodes to an accepted command, but the stored text
+		// lacks the literal substring, so the strict predicate must reject it
+		// to keep the SQL prefilter a provable superset (all three paths agree
+		// on NOT excluding the row).
+		{"shell/json-escaped-letter", `shell command=["sh","-c","\u0062ackscroll search --text X"]`},
 	}
 	for _, neg := range negatives {
 		tok := next("paritok")

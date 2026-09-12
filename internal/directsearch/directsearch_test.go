@@ -215,6 +215,12 @@ func TestIsSerializedDirectSearchCall(t *testing.T) {
 		{"shell_env_wrapper_in_argv", `shell command=["sh","-c","env backscroll search"]`, false},
 		{"shell_no_command_key", "shell workdir=/tmp", false},
 		{"shell_malformed_json", "shell command=notjson", false},
+		// The argv is stored as raw, un-decoded JSON bytes: a JSON \u-escaped
+		// letter of "backscroll" decodes to an accepted command but the stored
+		// text lacks the literal substring, so the broad SQL prefilter would
+		// miss what the Go predicate accepted. The literal-substring guard
+		// keeps the prefilter a provable superset of this predicate.
+		{"shell_json_escaped_letter", `shell command=["sh","-c","\u0062ackscroll search --text orchard"]`, false},
 		// non-shapes
 		{"prose_mention", "run backscroll search from your shell", false},
 		{"other_tool", "Bash command=rg backscroll .", false},

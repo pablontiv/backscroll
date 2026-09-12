@@ -78,7 +78,17 @@ func IsCodexDirectSearchCall(tool, arguments string) bool {
 // Separators are whatever strings.Fields accepts, in every shape. The shell
 // decode deliberately has no token-count floor: an argv whose separators are
 // all JSON control escapes serializes to just two whitespace-separated tokens.
+//
+// The literal-substring guard below is what makes the SQL prefilter
+// (text LIKE '%backscroll%') a provable superset of this predicate for every
+// shape, not just bash/exec_command: the shell argv is stored as raw,
+// un-decoded JSON bytes, so without the guard a JSON \u-escaped letter of
+// "backscroll" (accepted after decoding) would be missed by the prefilter.
+// LIKE folds ASCII case, so the guard folds case too.
 func IsSerializedDirectSearchCall(text string) bool {
+	if !strings.Contains(strings.ToLower(text), "backscroll") {
+		return false
+	}
 	fields := strings.Fields(text)
 	if len(fields) == 0 {
 		return false
