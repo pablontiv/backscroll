@@ -1145,7 +1145,10 @@ func (d *Database) filterShellEchoZeroPaths(paths []string) ([]string, error) {
 }
 
 // pendingSearchEchoShellMatches is the Go-side check for whether a stored
-// Codex shell tool row is a direct `backscroll search` call.
+// Codex shell tool row is a direct `backscroll search` call. It is shared by
+// the requeue path (filterShellEchoZeroPaths) and by the query-time exclusion
+// paths (isDirectBackscrollSearchEcho and recallFrequency's IDF counting), so
+// all three accept exactly the same shell rows.
 //
 // SerializeToolInput emits the rollout's `arguments` as a space-joined
 // `key=value` token list with keys sorted alphabetically. Real Codex shell

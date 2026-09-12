@@ -408,7 +408,16 @@ func isDirectBackscrollSearchEcho(result SearchResult) bool {
 	if strings.EqualFold(fields[0], "bash") {
 		return fields[1] == "command=backscroll" && fields[2] == "search"
 	}
-	return fields[0] == "exec_command" && fields[1] == "cmd=backscroll" && fields[2] == "search"
+	if fields[0] == "exec_command" {
+		return fields[1] == "cmd=backscroll" && fields[2] == "search"
+	}
+	if fields[0] == "shell" {
+		// Codex shell wrapper: the argv is JSON-encoded, so token-shape
+		// matching is unbounded. Reuse the exact strict predicate the
+		// requeue path (PR #87) already applies.
+		return pendingSearchEchoShellMatches(result.Text)
+	}
+	return false
 }
 
 // asciiWhitespaceSQL is the ASCII subset of unicode.IsSpace. SQL-side echo
@@ -424,6 +433,12 @@ const asciiWhitespaceSQL = "char(9, 10, 11, 12, 13, 32)"
 // fold the exact tokens. The patterns are prefix-only: lookalikes that do not
 // start with either prefix, including path collisions and "searcher", must not
 // match.
+//
+// The Codex shell wrapper form is deliberately NOT matched here: its argv is
+// JSON-encoded and the separator byte-sequences strings.Fields accepts are
+// unbounded for SQL GLOB. recallFrequency excludes those rows with the same
+// broad-SQL-prefilter plus strict-Go-predicate split the requeue path uses
+// (see pendingSearchEchoShellMatches).
 func directBackscrollSearchEchoSQL(alias string) string {
 	trimmed := "ltrim(" + alias + ".text, " + asciiWhitespaceSQL + ")"
 	sep := "'[' || " + asciiWhitespaceSQL + " || ']'"
