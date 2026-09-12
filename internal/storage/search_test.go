@@ -103,7 +103,7 @@ func TestMergeRRF_NoOverlap(t *testing.T) {
 	}
 }
 
-func TestExcludeDirectBackscrollSearchEchoesPreservesBoundaries(t *testing.T) {
+func TestRefillCandidatesWithoutDirectEchoesPreservesBoundaries(t *testing.T) {
 	results := []SearchResult{
 		{ID: 1, ContentType: "tool", Text: "Bash command=backscroll search --text needle"},
 		{ID: 2, ContentType: "tool", Text: "bash command=backscroll search --text needle"},
@@ -118,7 +118,19 @@ func TestExcludeDirectBackscrollSearchEchoesPreservesBoundaries(t *testing.T) {
 		{ID: 11, ContentType: "text", Text: "Bash command=backscroll search --text needle"},
 	}
 
-	filtered := excludeDirectBackscrollSearchEchoes(results)
+	filtered, err := refillCandidatesWithoutDirectEchoes(models.SearchOptions{Limit: len(results)}, func(opts models.SearchOptions) ([]SearchResult, error) {
+		if opts.Offset >= len(results) {
+			return nil, nil
+		}
+		end := opts.Offset + opts.Limit
+		if end > len(results) {
+			end = len(results)
+		}
+		return results[opts.Offset:end], nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
 	var got []int
 	for _, result := range filtered {
 		got = append(got, result.ID)

@@ -3,7 +3,6 @@ package storage
 import (
 	"context"
 	"database/sql"
-	"encoding/json"
 	"fmt"
 	"sort"
 	"strings"
@@ -992,15 +991,14 @@ func (d *Database) StalePaths(currentVersion int) ([]string, error) {
 // with a serialized direct search call (pre-#80 Codex/OpenCode writes), so
 // identity pairing can mark the paired result. Output-only rows stay unmatched.
 //
-// The bash and exec_cmd cases are filtered in SQL — their stored text is the
-// simple `name key=value` token form with no JSON encoding, so a GLOB prefix
-// is faithful. The Codex shell case is filtered in Go (see
-// filterShellEchoZeroPaths / pendingSearchEchoShellMatches): its arguments
-// are JSON-encoded and the on-disk separator between 'backscroll' and
-// 'search' can be any form strings.Fields accepts but the JSON encoder
-// leaves in the wild (literal space, \t/\n/\f/\r, \uXXXX, or raw UTF-8 bytes
-// for non-control whitespace). Trying to enumerate every byte sequence in
-// SQL GLOB is provably unbounded; decoding the JSON argv in Go is not.
+// Candidate discovery uses a broad SQL prefilter (searchEchoZeroPrefilterSQL:
+// any echo-zero tool row containing the literal substring "backscroll") and
+// the strict per-shape decision happens in Go via
+// directsearch.IsSerializedDirectSearchCall (filterEchoZeroPaths). Enumerating
+// the accepted separator byte-sequences in SQL is provably unbounded —
+// strings.Fields accepts every unicode.IsSpace rune and the shell argv adds
+// JSON escaping on top — so no SQL-side shape matching exists to drift out of
+// sync.
 func (d *Database) PendingSearchEchoPaths() ([]string, error) {
 	return d.stalePaths(0, true)
 }
@@ -1014,16 +1012,12 @@ func (d *Database) stalePaths(currentVersion int, echoOnly bool) ([]string, erro
 		  AND ((? AND (search_items.extraction_version IS NULL OR search_items.extraction_version < ?))
 		       OR search_items.search_echo IS NULL`
 	if echoOnly {
-		// Broad filter for shell candidates (any tool row whose text starts
-		// with the bare `shell` tool-name token). The strict
-		// isCodexDirectSearchCall check happens in Go via
-		// pendingSearchEchoShellMatches, which locates the `command=` token
-		// boundary inside the sorted key=value list (it may not be the first
-		// key — e.g. `additional_permissions` sorts before `command`) and
-		// decodes just the JSON array that follows.
+		// Broad prefilter for echo-zero candidates: any tool row whose stored
+		// text contains the literal "backscroll" substring. The strict
+		// per-shape check happens in Go (filterEchoZeroPaths) via
+		// directsearch.IsSerializedDirectSearchCall.
 		query += `
-		       OR (` + unmarkedDirectSearchCallSQL("search_items") + `)
-		       OR (search_items.content_type = 'tool' AND COALESCE(search_items.search_echo, 0) = 0 AND search_items.text LIKE 'shell %')`
+		       OR (` + searchEchoZeroPrefilterSQL("search_items") + `)`
 	}
 	query += `)
 		ORDER BY indexed_files.last_indexed ASC, search_items.source_path ASC
@@ -1049,7 +1043,7 @@ func (d *Database) stalePaths(currentVersion int, echoOnly bool) ([]string, erro
 	}
 
 	if echoOnly {
-		filtered, err := d.filterShellEchoZeroPaths(paths)
+		filtered, err := d.filterEchoZeroPaths(paths)
 		if err != nil {
 			return nil, err
 		}
@@ -1059,13 +1053,12 @@ func (d *Database) stalePaths(currentVersion int, echoOnly bool) ([]string, erro
 	return paths, nil
 }
 
-// filterShellEchoZeroPaths drops paths whose only echo-zero shell candidate
-// row is rejected by directsearch.IsCodexDirectSearchCall. A path survives if
-// it has a v15 NULL search_echo row (those are always kept), a non-shell
-// echo-zero candidate (bash / exec_cmd) that already passed the SQL filter,
-// or at least one echo-zero shell row that the strict reader predicate
-// accepts.
-func (d *Database) filterShellEchoZeroPaths(paths []string) ([]string, error) {
+// filterEchoZeroPaths drops paths whose only echo-zero candidate rows are
+// rejected by the strict serialized-text predicate. A path survives if it has
+// a v15 NULL search_echo row (those are always kept), or at least one
+// echo-zero row that directsearch.IsSerializedDirectSearchCall accepts — for
+// any of the three stored shapes (bash, exec_command, shell).
+func (d *Database) filterEchoZeroPaths(paths []string) ([]string, error) {
 	if len(paths) == 0 {
 		return paths, nil
 	}
@@ -1085,51 +1078,31 @@ func (d *Database) filterShellEchoZeroPaths(paths []string) ([]string, error) {
 			keep[path] = true
 			continue
 		}
-		// Reason 2: non-shell echo-zero survivor (bash / exec_cmd GLOB).
-		var globHit int
-		err = d.db.QueryRow(`
-			SELECT 1 FROM search_items
-			WHERE source_path = ?
-			  AND content_type = 'tool'
-			  AND COALESCE(search_echo, 0) = 0
-			  AND text NOT LIKE 'shell %'
-			  AND (`+unmarkedDirectSearchCallSQL("search_items")+`)
-			LIMIT 1
-		`, path).Scan(&globHit)
-		if err != nil && err != sql.ErrNoRows {
-			return nil, fmt.Errorf("check non-shell echo-zero for %s: %w", path, err)
-		}
-		if globHit == 1 {
-			keep[path] = true
-			continue
-		}
-		// Reason 3: echo-zero shell candidate. Apply the strict reader
-		// predicate — keep the path if ANY row matches.
+		// Reason 2: echo-zero serialized candidate. Apply the strict
+		// chokepoint predicate — keep the path if ANY row matches.
 		rows, err := d.db.Query(`
 			SELECT text FROM search_items
 			WHERE source_path = ?
-			  AND content_type = 'tool'
-			  AND COALESCE(search_echo, 0) = 0
-			  AND text LIKE 'shell %'
+			  AND `+searchEchoZeroPrefilterSQL("search_items")+`
 		`, path)
 		if err != nil {
-			return nil, fmt.Errorf("query shell rows for %s: %w", path, err)
+			return nil, fmt.Errorf("query echo-zero rows for %s: %w", path, err)
 		}
 		matched := false
 		for rows.Next() {
 			var text string
 			if err := rows.Scan(&text); err != nil {
 				_ = rows.Close()
-				return nil, fmt.Errorf("scan shell row for %s: %w", path, err)
+				return nil, fmt.Errorf("scan echo-zero row for %s: %w", path, err)
 			}
-			if pendingSearchEchoShellMatches(text) {
+			if directsearch.IsSerializedDirectSearchCall(text) {
 				matched = true
 				break
 			}
 		}
 		_ = rows.Close()
 		if err := rows.Err(); err != nil {
-			return nil, fmt.Errorf("iterate shell rows for %s: %w", path, err)
+			return nil, fmt.Errorf("iterate echo-zero rows for %s: %w", path, err)
 		}
 		if matched {
 			keep[path] = true
@@ -1142,47 +1115,6 @@ func (d *Database) filterShellEchoZeroPaths(paths []string) ([]string, error) {
 		}
 	}
 	return out, nil
-}
-
-// pendingSearchEchoShellMatches is the Go-side check for whether a stored
-// Codex shell tool row is a direct `backscroll search` call. It is shared by
-// the requeue path (filterShellEchoZeroPaths) and by the query-time exclusion
-// paths (isDirectBackscrollSearchEcho and recallFrequency's IDF counting).
-// Each call site first gates on the serialized text starting with the `shell`
-// tool-name token — whitespace-delimited and case-insensitive in Go, `text
-// LIKE 'shell %'` in SQL — and then applies this decode, with no token-count
-// floor anywhere: an argv whose separators are all JSON control escapes
-// serializes to just two whitespace-separated tokens, and a floor on only one
-// path made pages and IDF disagree. Serializer-produced rows are therefore
-// accepted identically by all three.
-//
-// SerializeToolInput emits the rollout's `arguments` as a space-joined
-// `key=value` token list with keys sorted alphabetically. Real Codex shell
-// calls carry not just `command` but also `workdir`, `timeout_ms`, and
-// potentially `additional_permissions` or `sandbox` — so `command=` is not
-// guaranteed to be the first key. We locate the ` command=` token boundary
-// anywhere in the text and feed only what follows to a json.Decoder, which
-// stops after reading one complete JSON value (the array). Whatever
-// (already-serialized, non-JSON) `key=value` text follows the array is
-// ignored. The decoded array is then wrapped into the object shape
-// directsearch.IsCodexDirectSearchCall expects and fed to the exact same
-// predicate the reader uses at ingest time.
-func pendingSearchEchoShellMatches(text string) bool {
-	const token = " command="
-	idx := strings.Index(text, token)
-	if idx < 0 {
-		return false
-	}
-	remainder := text[idx+len(token):]
-	var commandArray []string
-	if err := json.NewDecoder(strings.NewReader(remainder)).Decode(&commandArray); err != nil {
-		return false
-	}
-	args, err := json.Marshal(map[string][]string{"command": commandArray})
-	if err != nil {
-		return false
-	}
-	return directsearch.IsCodexDirectSearchCall("shell", string(args))
 }
 
 // ReresolveProjects iterates all distinct source_paths where project='unknown' or project IS NULL,

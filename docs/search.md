@@ -177,15 +177,20 @@ replay while the surviving source still has a serialized direct search call;
 paired outputs are marked by identity on that reparse, not by output shape.
 While such a source awaits replay, the query-time exclusion already keeps its
 zero-valued call rows out of unfiltered result pages and unfiltered `--relax`
-IDF counting, recognizing the same serialized forms. Result pages are filtered
-in Go: the `bash` and `exec_command` forms by their three-token prefix shape,
-and the Codex `shell` form by a `shell` first-token gate followed by decoding
-the JSON-encoded argv (its separator byte-sequences are unbounded for
-text-shape matching, and no token-count floor may precede the gate — an
-all-escaped argv serializes to just two whitespace-separated tokens). IDF
-counting evaluates the `bash`/`exec_command` prefixes in SQL and applies the
-same `shell` decode in Go over a broad `text LIKE 'shell %'` prefilter, so
-both paths exclude the same rows.
+IDF counting, recognizing the same serialized forms. The serialized-text
+boundary has exactly one owner: `directsearch.IsSerializedDirectSearchCall`
+recognizes all three stored shapes (`bash`, `exec_command`, and the Codex
+`shell` wrapper, whose JSON-encoded argv is decoded and fed to the same
+predicate the reader applies at ingest, with no token-count floor — an
+all-escaped argv serializes to just two whitespace-separated tokens). Result
+pages apply it directly in Go. IDF counting and requeue detection apply it in
+Go over the rows returned by a broad SQL prefilter (`content_type='tool'`,
+`search_echo` zero, text containing the literal substring `backscroll`) that
+is a provable superset of every accepted shape, so no SQL-side pattern needs
+to stay in sync with Go logic. Enumerating the accepted separator
+byte-sequences in SQL was provably unbounded (every `unicode.IsSpace` rune
+plus JSON escaping) and caused the page/IDF divergences fixed by this
+structure.
 Subsequent source expiry, `rebuild`, and supported canonical recovery preserve
 proven pairing evidence. The general extraction epoch is unchanged.
 
@@ -221,7 +226,7 @@ backscroll search --text '"violet handshake" quartz marker adaptation' --relax -
 The deterministic sequence is:
 
 1. Run strict AND search. Unmarked queries keep the existing sanitizer, ranking and snippets. Leading `+term` marks a term that cannot be dropped; quoted spans are protected phrase units. For queries containing these protected units, strict matching keeps every unit without dynamic stopword removal. Quotes preserve FTS phrase order; ordinary unquoted terms retain Porter stemming/prefix matching (trigram matching for tools).
-2. Only if that stage has zero eligible rows, drop one **unprotected** term at a time, lowest IDF first. For a fixed corpus, this is highest document frequency first. Frequencies are counted with the actual tokenizer's MATCH expression over the applicable index(es), globally rather than within the result scope (project, path, dates, tags). Unfiltered IDF uses the same echo eligibility as unfiltered result pages: direct Backscroll retrieval-call tool rows (`search_echo=1`, a serialized `bash command=backscroll search ...` or `exec_command cmd=backscroll search ...` invocation, each matched as that three-token prefix regardless of what follows, or a serialized Codex `shell` call whose JSON-encoded argv is exactly `[<shell>, "-c" | "-lc", "backscroll search ..."]`, selected by a `shell` text-prefix gate and then matched by decoding the argv, since the JSON separator byte-sequences are unbounded for SQL pattern matching) do not inflate document frequency. Explicit `--content-type tool` keeps those rows in both the page and the IDF count. Equal frequencies drop in original query order. Zero-frequency terms have highest IDF and are not specially discarded. A term that appears only in those excluded echo rows is absent from the unfiltered corpus, so its document frequency is 0 and `--relax` drops it last — the same as any other zero-frequency extra term that can prevent recovery at the two-term floor. Each retry still requires every retained unit, bypassing dynamic stopwords so the retained core cannot silently disappear.
+2. Only if that stage has zero eligible rows, drop one **unprotected** term at a time, lowest IDF first. For a fixed corpus, this is highest document frequency first. Frequencies are counted with the actual tokenizer's MATCH expression over the applicable index(es), globally rather than within the result scope (project, path, dates, tags). Unfiltered IDF uses the same echo eligibility as unfiltered result pages: direct Backscroll retrieval-call tool rows (`search_echo=1`, or any serialized invocation accepted by `directsearch.IsSerializedDirectSearchCall` — a `bash command=backscroll search ...` or `exec_command cmd=backscroll search ...` prefix, or a serialized Codex `shell` call whose JSON-encoded argv is exactly `[<shell>, "-c" | "-lc", "backscroll search ..."]`, all recognized in Go over a broad substring prefilter since the accepted separator byte-sequences are unbounded for SQL pattern matching) do not inflate document frequency. Explicit `--content-type tool` keeps those rows in both the page and the IDF count. Equal frequencies drop in original query order. Zero-frequency terms have highest IDF and are not specially discarded. A term that appears only in those excluded echo rows is absent from the unfiltered corpus, so its document frequency is 0 and `--relax` drops it last — the same as any other zero-frequency extra term that can prevent recovery at the two-term floor. Each retry still requires every retained unit, bypassing dynamic stopwords so the retained core cannot silently disappear.
 3. Stop at the first stage with results, or before fewer than **two distinct unprotected terms** remain. Protected terms are additional to that floor. Case-insensitive repeated spellings count once, and a keep marker on any occurrence protects that unit. Queries with at most two unprotected terms perform strict search only. There is no single-term/empty fallback and no global OR.
 
 Stemming/phrase-expansion stages are skipped: stemming is already available and protected phrases must not weaken. Scope widening is always skipped. Project (including cwd-inferred project), source, source-path, content-type, role, dates, and tags are retained at every stage. Tool searches remain on their trigram index even when relaxation is explicitly requested. Existing unfiltered echo exclusion and cross-index RRF still apply.
@@ -243,7 +248,7 @@ result_0_dropped_terms=["adaptation"]
 
 This addresses **recoverable term overload**, not vocabulary invention. In the native regression, the target contains `violet handshake`, while unrelated records make `adaptation` a common term; strict search misses and dropping that term recovers the target. In contrast, the existing synthetic `s2_conversational_paraphrase` and `s5_progressive_refinement` targets share no surviving content terms with their original queries. The refinement `violet handshake` adds new vocabulary; this feature does not promise to recover those zero-overlap cases. An absent, high-IDF extra term can also prevent recovery at the two-term floor. No production p95 or broad semantic-recall gain is claimed from the small fixture corpus.
 
-Regression owners: `cmd/backscroll/search_relaxation_test.go` (native input-to-output recovery and unchanged strict controls), `cmd/backscroll/search_relaxation_echo_idf_e2e_test.go` (unfiltered IDF ignores query-echo rows), `cmd/backscroll/echo_shell_zero_query_gap_test.go` (zero-valued Codex `shell` echoes excluded from unfiltered pages and IDF before replay), `cmd/backscroll/search_relaxation_output_test.go` (budgeted provenance and early validation), `internal/storage/relaxation_test.go` (IDF order, protected core, scope and paging), and `internal/storage/relaxation_echo_idf_test.go` (echo-eligibility of unfiltered IDF, including echo-only DF=0 and the Codex `shell` argv boundary cases).
+Regression owners: `cmd/backscroll/search_relaxation_test.go` (native input-to-output recovery and unchanged strict controls), `cmd/backscroll/search_relaxation_echo_idf_e2e_test.go` (unfiltered IDF ignores query-echo rows), `cmd/backscroll/echo_shell_zero_query_gap_test.go` (zero-valued Codex `shell` echoes excluded from unfiltered pages and IDF before replay), `cmd/backscroll/search_relaxation_output_test.go` (budgeted provenance and early validation), `internal/storage/relaxation_test.go` (IDF order, protected core, scope and paging), `internal/storage/relaxation_echo_idf_test.go` (echo-eligibility of unfiltered IDF, including echo-only DF=0 and the boundary-case corpus), and `internal/storage/echo_parity_test.go` (three-way page/IDF/requeue parity over shape × separator-alphabet × leading/trailing runs).
 
 ## Exit Codes
 
