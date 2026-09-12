@@ -6,6 +6,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/pablontiv/backscroll/internal/directsearch"
 	"github.com/pablontiv/backscroll/internal/hybrid"
 	"github.com/pablontiv/backscroll/internal/models"
 )
@@ -381,19 +382,6 @@ func refillCandidatesWithoutDirectEchoes(opts models.SearchOptions, loadPage fun
 	return filtered, nil
 }
 
-// excludeDirectBackscrollSearchEchoes removes direct Backscroll retrieval calls
-// from the tool candidates used for unfiltered recall. Explicit tool-only search
-// bypasses this function and retains the commands.
-func excludeDirectBackscrollSearchEchoes(results []SearchResult) []SearchResult {
-	filtered := make([]SearchResult, 0, len(results))
-	for _, result := range results {
-		if !isDirectBackscrollSearchEcho(result) {
-			filtered = append(filtered, result)
-		}
-	}
-	return filtered
-}
-
 func isDirectBackscrollSearchEcho(result SearchResult) bool {
 	if result.ContentType != "tool" {
 		return false
@@ -401,86 +389,28 @@ func isDirectBackscrollSearchEcho(result SearchResult) bool {
 	if result.SearchEcho {
 		return true
 	}
-	fields := strings.Fields(result.Text)
-	if len(fields) == 0 {
-		return false
-	}
-	// Codex shell wrapper: checked before the three-token guard because the
-	// argv is JSON-encoded — when every separator inside the command string
-	// is a JSON control escape (\t, \n, …) the serialized text has only two
-	// whitespace-separated fields. The SQL prefilter in recallFrequency has
-	// no such floor, so a guard here would make pages and IDF disagree.
-	// Token-shape matching on the argv itself is unbounded; reuse the exact
-	// strict predicate the requeue path (PR #87) already applies.
-	if strings.EqualFold(fields[0], "shell") {
-		return pendingSearchEchoShellMatches(result.Text)
-	}
-	if len(fields) < 3 {
-		return false
-	}
-	if strings.EqualFold(fields[0], "bash") {
-		return fields[1] == "command=backscroll" && fields[2] == "search"
-	}
-	return fields[0] == "exec_command" && fields[1] == "cmd=backscroll" && fields[2] == "search"
+	// The serialized-text boundary is owned by exactly one predicate,
+	// shared with the --relax IDF counting and the requeue detection.
+	return directsearch.IsSerializedDirectSearchCall(result.Text)
 }
 
-// asciiWhitespaceSQL is the ASCII subset of unicode.IsSpace. SQL-side echo
-// matching trims a leading run and treats one separator between tokens.
-const asciiWhitespaceSQL = "char(9, 10, 11, 12, 13, 32)"
-
-// directBackscrollSearchEchoSQL is the SQL equivalent of
-// isDirectBackscrollSearchEcho for the given search_items alias. Keep them in
-// lockstep: tool rows with search_echo != 0, or a three-token prefix of
-// case-insensitive "bash", exact "command=backscroll", exact "search"; or
-// exact "exec_command", exact "cmd=backscroll", exact "search". GLOB is
-// case-sensitive, so only the bash token uses a character class; LIKE would
-// fold the exact tokens. The patterns are prefix-only: lookalikes that do not
-// start with either prefix, including path collisions and "searcher", must not
-// match.
-//
-// The Codex shell wrapper form is deliberately NOT matched here: its argv is
-// JSON-encoded and the separator byte-sequences strings.Fields accepts are
-// unbounded for SQL GLOB. recallFrequency excludes those rows with the same
-// broad-SQL-prefilter plus strict-Go-predicate split the requeue path uses
-// (see pendingSearchEchoShellMatches).
-func directBackscrollSearchEchoSQL(alias string) string {
-	trimmed := "ltrim(" + alias + ".text, " + asciiWhitespaceSQL + ")"
-	sep := "'[' || " + asciiWhitespaceSQL + " || ']'"
-	bash := "'[Bb][Aa][Ss][Hh]' || " + sep + " || 'command=backscroll' || " + sep + " || 'search'"
-	execCmd := "'exec_command' || " + sep + " || 'cmd=backscroll' || " + sep + " || 'search'"
-	glob := func(prefix string) string {
-		return trimmed + " GLOB (" + prefix + ") OR " + trimmed + " GLOB (" + prefix + " || " + sep + " || '*')"
-	}
-	return alias + ".content_type = 'tool' AND (COALESCE(" + alias + ".search_echo, 0) != 0 OR " +
-		glob(bash) + " OR " + glob(execCmd) + ")"
+// directSearchEchoSQL is the SQL-exact half of the echo boundary: rows with
+// proven provenance. Serialized-text fallback rows are never recognized in
+// SQL — see searchEchoZeroPrefilterSQL.
+func directSearchEchoSQL(alias string) string {
+	return alias + ".content_type = 'tool' AND COALESCE(" + alias + ".search_echo, 0) != 0"
 }
 
-// unmarkedDirectSearchCallSQL matches tool rows stored as search_echo=0 whose
-// serialized text is a direct Backscroll search call. Pre-#80 Codex/OpenCode
-// readers wrote false as 0, so those rows are not in the v15 NULL backlog.
-// Requeueing the call's source file lets identity pairing mark the result;
-// output shape is never matched here.
-//
-// Only the bash and exec_cmd cases are matched in SQL: their stored text uses
-// simple `name key=value` tokens with no JSON encoding, so a GLOB prefix is
-// faithful. The Codex shell case has its own predicate in Go (see
-// PendingSearchEchoPaths and directsearch.IsCodexDirectSearchCall) because
-// its arguments are JSON-encoded and the on-disk separator between
-// 'backscroll' and 'search' can be any form strings.Fields accepts but the
-// JSON encoder leaves in the wild (literal space, \t/\n/\f/\r, \uXXXX, or
-// raw UTF-8 bytes for non-control whitespace). Trying to enumerate every
-// byte sequence in SQL GLOB is provably unbounded; decoding the JSON argv
-// in Go is not.
-func unmarkedDirectSearchCallSQL(alias string) string {
-	trimmed := "ltrim(" + alias + ".text, " + asciiWhitespaceSQL + ")"
-	sep := "'[' || " + asciiWhitespaceSQL + " || ']'"
-	bash := "'[Bb][Aa][Ss][Hh]' || " + sep + " || 'command=backscroll' || " + sep + " || 'search'"
-	execCmd := "'exec_command' || " + sep + " || 'cmd=backscroll' || " + sep + " || 'search'"
-	glob := func(prefix string) string {
-		return trimmed + " GLOB (" + prefix + ") OR " + trimmed + " GLOB (" + prefix + " || " + sep + " || '*')"
-	}
-	return alias + ".content_type = 'tool' AND COALESCE(" + alias + ".search_echo, 0) = 0 AND (" +
-		glob(bash) + " OR " + glob(execCmd) + ")"
+// searchEchoZeroPrefilterSQL is the broad SQL prefilter for rows whose
+// serialized text MIGHT be a direct search call, used by recallFrequency and
+// the requeue detection before the strict Go predicate
+// (directsearch.IsSerializedDirectSearchCall) makes the final decision. It is
+// a provable superset of every accepted shape: an accepted bash,
+// exec_command, or shell row always carries the literal substring
+// "backscroll" in its stored text, and substring LIKE has no separator
+// alphabet, no anchor, and no token-count floor to keep in sync with Go.
+func searchEchoZeroPrefilterSQL(alias string) string {
+	return alias + ".content_type = 'tool' AND COALESCE(" + alias + ".search_echo, 0) = 0 AND " + alias + ".text LIKE '%backscroll%'"
 }
 
 // mergeRRF uses Reciprocal Rank Fusion to merge two ranked lists by position,

@@ -14,9 +14,11 @@ import (
 // Spike/regression for the Codex `shell` wrapper form of the zero-valued
 // search_echo query-time gap. The exec_command half of this gap was fixed in
 // PR #86; the requeue side learned the shell form in PR #87, but
-// isDirectBackscrollSearchEcho / directBackscrollSearchEchoSQL (the functions
-// that exclude a row from unfiltered result pages and --relax IDF counting
+// isDirectBackscrollSearchEcho and the IDF-counting path (the code that
+// excludes a row from unfiltered result pages and --relax IDF counting
 // RIGHT NOW, before reparse converges it) never gained shell handling.
+// Since the chokepoint refactor, both paths share
+// directsearch.IsSerializedDirectSearchCall behind a broad SQL prefilter.
 //
 // The fixture is a real CodexReader.Parse round-trip: the rollout below is
 // ingested by the actual Codex reader, its serialized shape is asserted, and
