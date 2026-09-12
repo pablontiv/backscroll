@@ -225,5 +225,31 @@ func (d *Database) recallFrequency(term recallTerm, contentType string) (int, er
 	if err != nil {
 		return 0, fmt.Errorf("measure relaxation term frequency: %w", err)
 	}
+	// directBackscrollSearchEchoSQL cannot recognize the Codex shell wrapper
+	// form: its argv is JSON-encoded and the separator byte-sequences are
+	// unbounded for SQL GLOB. Subtract those rows with the same
+	// broad-SQL-prefilter plus strict-Go-predicate split the requeue path
+	// uses (see pendingSearchEchoShellMatches), so unfiltered IDF counts the
+	// exact row set isDirectBackscrollSearchEcho keeps.
+	shellRows, err := d.db.Query(
+		"SELECT si.text FROM ("+matched+") matched JOIN search_items si ON si.id = matched.rowid WHERE si.content_type = 'tool' AND COALESCE(si.search_echo, 0) = 0 AND si.text LIKE 'shell %'",
+		args...,
+	)
+	if err != nil {
+		return 0, fmt.Errorf("measure relaxation term frequency: %w", err)
+	}
+	defer func() { _ = shellRows.Close() }()
+	for shellRows.Next() {
+		var text string
+		if err := shellRows.Scan(&text); err != nil {
+			return 0, fmt.Errorf("measure relaxation term frequency: %w", err)
+		}
+		if pendingSearchEchoShellMatches(text) {
+			count--
+		}
+	}
+	if err := shellRows.Err(); err != nil {
+		return 0, fmt.Errorf("measure relaxation term frequency: %w", err)
+	}
 	return count, nil
 }

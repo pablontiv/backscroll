@@ -402,6 +402,19 @@ func isDirectBackscrollSearchEcho(result SearchResult) bool {
 		return true
 	}
 	fields := strings.Fields(result.Text)
+	if len(fields) == 0 {
+		return false
+	}
+	// Codex shell wrapper: checked before the three-token guard because the
+	// argv is JSON-encoded — when every separator inside the command string
+	// is a JSON control escape (\t, \n, …) the serialized text has only two
+	// whitespace-separated fields. The SQL prefilter in recallFrequency has
+	// no such floor, so a guard here would make pages and IDF disagree.
+	// Token-shape matching on the argv itself is unbounded; reuse the exact
+	// strict predicate the requeue path (PR #87) already applies.
+	if strings.EqualFold(fields[0], "shell") {
+		return pendingSearchEchoShellMatches(result.Text)
+	}
 	if len(fields) < 3 {
 		return false
 	}
@@ -424,6 +437,12 @@ const asciiWhitespaceSQL = "char(9, 10, 11, 12, 13, 32)"
 // fold the exact tokens. The patterns are prefix-only: lookalikes that do not
 // start with either prefix, including path collisions and "searcher", must not
 // match.
+//
+// The Codex shell wrapper form is deliberately NOT matched here: its argv is
+// JSON-encoded and the separator byte-sequences strings.Fields accepts are
+// unbounded for SQL GLOB. recallFrequency excludes those rows with the same
+// broad-SQL-prefilter plus strict-Go-predicate split the requeue path uses
+// (see pendingSearchEchoShellMatches).
 func directBackscrollSearchEchoSQL(alias string) string {
 	trimmed := "ltrim(" + alias + ".text, " + asciiWhitespaceSQL + ")"
 	sep := "'[' || " + asciiWhitespaceSQL + " || ']'"

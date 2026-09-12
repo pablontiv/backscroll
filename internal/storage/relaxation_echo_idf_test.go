@@ -1,12 +1,14 @@
 package storage
 
 import (
+	"encoding/json"
 	"fmt"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/pablontiv/backscroll/internal/models"
+	"github.com/pablontiv/backscroll/internal/readers"
 )
 
 func TestRelaxationUnfilteredIDFExcludesQueryEchoes(t *testing.T) {
@@ -120,6 +122,78 @@ func TestRelaxationUnfilteredIDFExcludesTextFallbackEchoes(t *testing.T) {
 	}
 }
 
+func TestRelaxationUnfilteredIDFExcludesZeroValuedCodexShellEchoes(t *testing.T) {
+	db, cleanup := newTestDB(t)
+	t.Cleanup(cleanup)
+
+	files := []IndexedFile{
+		{
+			SourcePath: "/target.jsonl", Source: "session", Project: "alpha", Hash: "target",
+			Messages: []IndexedMessage{{
+				Ordinal: 0, UUID: "target", Role: "assistant", ContentType: "text",
+				Text: "violet handshake quartz marker", Timestamp: "2026-01-01T00:00:00Z",
+			}},
+		},
+	}
+	for i := 0; i < 4; i++ {
+		files = append(files, IndexedFile{
+			SourcePath: fmt.Sprintf("/noise-%d.jsonl", i), Source: "session", Project: "alpha", Hash: "noise",
+			Messages: []IndexedMessage{{
+				Ordinal: 0, UUID: fmt.Sprintf("noise-%d", i), Role: "assistant", ContentType: "text",
+				Text: "adaptation rollout distractor", Timestamp: "2026-01-01T00:00:00Z",
+			}},
+		})
+	}
+	// Pre-#80 Codex writers stored search_echo=0 with the JSON-encoded shell
+	// argv as text. The pure-SQL echo predicate cannot see this form; both the
+	// Go predicate and recallFrequency's strict-Go subtraction must exclude it.
+	for i := 0; i < 8; i++ {
+		files = append(files, IndexedFile{
+			SourcePath: fmt.Sprintf("/shell-echo-%d.jsonl", i), Source: "session", Project: "alpha", Hash: fmt.Sprintf("shell-echo-%d", i),
+			Messages: []IndexedMessage{{
+				Ordinal: 0, UUID: fmt.Sprintf("shell-echo-%d", i), Role: "assistant", ContentType: "tool",
+				Text:      shellText(t, "bash", "-lc", "backscroll search --text 'violet handshake'"),
+				Timestamp: "2026-01-01T00:00:00Z",
+			}},
+		})
+	}
+	if err := db.SyncFiles(files); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.db.Exec(`UPDATE search_items SET search_echo=0 WHERE content_type='tool'`); err != nil {
+		t.Fatal(err)
+	}
+
+	violet, err := db.recallFrequency(recallTerm{text: "violet"}, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	handshake, err := db.recallFrequency(recallTerm{text: "handshake"}, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	adaptation, err := db.recallFrequency(recallTerm{text: "adaptation"}, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if violet != 1 || handshake != 1 || adaptation != 4 {
+		t.Fatalf("unfiltered IDF counted zero-valued shell echoes: violet=%d handshake=%d adaptation=%d", violet, handshake, adaptation)
+	}
+
+	got, stages, err := db.SearchRelaxed("violet handshake adaptation", models.SearchOptions{AllProjects: true, Limit: 20})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, row := range got {
+		if isDirectBackscrollSearchEcho(row) {
+			t.Fatalf("shell echo leaked into unfiltered relaxed results: stages=%v row=%+v", stages, row)
+		}
+	}
+	if len(got) != 1 || got[0].SourcePath != "/target.jsonl" || fmt.Sprint(got[0].DroppedTerms) != "[adaptation]" {
+		t.Fatalf("zero-valued shell echoes inverted --relax IDF: stages=%v results=%+v", stages, got)
+	}
+}
+
 func TestRelaxationUnfilteredIDFStillCountsLegitimateTools(t *testing.T) {
 	db, cleanup := newTestDB(t)
 	t.Cleanup(cleanup)
@@ -224,7 +298,27 @@ func TestRecallFrequencySQLEchoPredicatePreservesBoundaries(t *testing.T) {
 		nullEcho    bool
 		unique      string
 		wantEcho    bool
+		// wantSQL overrides the directBackscrollSearchEchoSQL expectation when
+		// it legitimately differs from the Go predicate: the Codex shell
+		// wrapper form is JSON-encoded and unbounded for SQL GLOB, so the SQL
+		// predicate cannot see it and recallFrequency excludes those rows via
+		// the broad prefilter + strict Go predicate instead.
+		wantSQL *bool
 	}
+	// Shell fixtures go through a real json.Marshal + SerializeToolInput
+	// round-trip so the stored text carries the encoder's actual escaping.
+	shellFull := func(argv []string) string {
+		raw, err := json.Marshal(map[string]any{
+			"additional_permissions": "read",
+			"command":                argv,
+			"timeout_ms":             1000,
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return readers.SerializeToolInput("shell", raw)
+	}
+	sqlMiss := false
 	cases := []row{
 		{name: "canonical Bash", contentType: "tool", text: "Bash command=backscroll search --text boundtok00", unique: "boundtok00", wantEcho: true},
 		{name: "lowercase bash", contentType: "tool", text: "bash command=backscroll search --text boundtok01", unique: "boundtok01", wantEcho: true},
@@ -244,6 +338,25 @@ func TestRecallFrequencySQLEchoPredicatePreservesBoundaries(t *testing.T) {
 		{name: "folded command=", contentType: "tool", text: "Bash Command=backscroll search --text boundtok15", unique: "boundtok15"},
 		{name: "folded Search", contentType: "tool", text: "Bash command=backscroll Search --text boundtok16", unique: "boundtok16"},
 		{name: "canonical exec_command", contentType: "tool", text: `exec_command cmd=backscroll search --text boundtok17 command=[["unused"]]`, unique: "boundtok17", wantEcho: true},
+		// Codex shell wrapper form: excluded by the Go predicate and by
+		// recallFrequency, but invisible to the pure-SQL predicate.
+		{name: "canonical shell", contentType: "tool", text: shellText(t, "bash", "-lc", "backscroll search --text boundtok20"), unique: "boundtok20", wantEcho: true, wantSQL: &sqlMiss},
+		{name: "shell extra sorted keys", contentType: "tool", text: shellFull([]string{"sh", "-c", "backscroll search --text boundtok21"}), unique: "boundtok21", wantEcho: true, wantSQL: &sqlMiss},
+		{name: "shell /bin/bash path", contentType: "tool", text: shellText(t, "/bin/bash", "-lc", "backscroll search --text boundtok22"), unique: "boundtok22", wantEcho: true, wantSQL: &sqlMiss},
+		{name: "shell NBSP separator", contentType: "tool", text: shellText(t, "sh", "-c", "backscroll search --text boundtok23"), unique: "boundtok23", wantEcho: true, wantSQL: &sqlMiss},
+		// JSON control escapes (\t here) stay two-byte sequences in the
+		// serialized text, so with no other argv whitespace the whole row has
+		// only two strings.Fields tokens — it must not fall below a token-count
+		// floor before the shell check, or pages would keep a row the IDF path
+		// (which has no such floor) excludes.
+		{name: "shell JSON-escaped tab separators", contentType: "tool", text: shellText(t, "sh", "-c", "backscroll\tsearch\t--text\tboundtok31"), unique: "boundtok31", wantEcho: true, wantSQL: &sqlMiss},
+		{name: "null echo shell fallback", contentType: "tool", text: shellText(t, "bash", "-lc", "backscroll search --text boundtok24"), nullEcho: true, unique: "boundtok24", wantEcho: true, wantSQL: &sqlMiss},
+		{name: "shell wrong command", contentType: "tool", text: shellText(t, "sh", "-c", "rg boundtok25 /tmp"), unique: "boundtok25"},
+		{name: "shell wrong flag", contentType: "tool", text: shellText(t, "sh", "-x", "backscroll search --text boundtok26"), unique: "boundtok26"},
+		{name: "shell extra argv element", contentType: "tool", text: shellTextN(t, "sh", "-c", "backscroll search --text boundtok27", "bar"), unique: "boundtok27"},
+		{name: "shell non-search call", contentType: "tool", text: shellText(t, "sh", "-c", "backscroll status boundtok28"), unique: "boundtok28"},
+		{name: "shell env wrapper inside argv", contentType: "tool", text: shellText(t, "sh", "-c", "env backscroll search --text boundtok29"), unique: "boundtok29"},
+		{name: "shell absolute path inside argv", contentType: "tool", text: shellText(t, "sh", "-c", "/usr/local/bin/backscroll search --text boundtok30"), unique: "boundtok30"},
 	}
 
 	var files []IndexedFile
@@ -286,8 +399,12 @@ func TestRecallFrequencySQLEchoPredicatePreservesBoundaries(t *testing.T) {
 			if gotGo != tc.wantEcho {
 				t.Fatalf("Go predicate = %v, want %v (echo=%d text=%q)", gotGo, tc.wantEcho, echo, result.Text)
 			}
-			if (sqlEcho == 1) != tc.wantEcho {
-				t.Fatalf("SQL predicate = %d, want echo=%v (echo=%d text=%q)", sqlEcho, tc.wantEcho, echo, result.Text)
+			wantSQL := tc.wantEcho
+			if tc.wantSQL != nil {
+				wantSQL = *tc.wantSQL
+			}
+			if (sqlEcho == 1) != wantSQL {
+				t.Fatalf("SQL predicate = %d, want echo=%v (echo=%d text=%q)", sqlEcho, wantSQL, echo, result.Text)
 			}
 
 			got, err := db.recallFrequency(recallTerm{text: tc.unique}, "")
@@ -315,7 +432,12 @@ func TestRecallFrequencyUnfilteredSQLMatchesGoScan(t *testing.T) {
 	for i := 0; i < n; i++ {
 		text := "Bash command=rg commonterm /tmp\n" + filler
 		echo := false
-		if i%10 == 0 {
+		if i%20 == 0 {
+			// Zero-valued Codex shell echo (pre-#80 state): excluded by the Go
+			// predicate and by recallFrequency's strict-Go subtraction, but not
+			// by the pure-SQL predicate — proving both paths agree at scale.
+			text = shellText(t, "bash", "-lc", "backscroll search --text commonterm") + "\n" + filler
+		} else if i%10 == 0 {
 			text = "Bash command=backscroll search --text commonterm\n" + filler
 			echo = true
 		}
