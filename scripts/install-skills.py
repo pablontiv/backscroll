@@ -75,16 +75,16 @@ def source_info(root):
     safe_parents(source)
     tree = snapshot(source)
     if tree["kind"] != "directory" or not (source / "SKILL.md").is_file():
-        raise ValueError("canonical SKILL.md missing")
+        raise ValueError("skill shim missing")
     # Keep distribution entirely product-owned; reject local overlays/links.
     def check_tree(node):
         if node["kind"] == "link":
-            raise ValueError("canonical skill tree must not contain symlinks")
+            raise ValueError("skill shim tree must not contain symlinks")
         for child in node.get("entries", {}).values():
             check_tree(child)
     check_tree(tree)
     if git("status", "--porcelain", "--untracked-files=all", "--ignored", "--", str(SKILL)):
-        raise ValueError("canonical skill must be clean and fully tracked")
+        raise ValueError("skill shim must be clean and fully tracked")
     git("ls-files", "--error-unmatch", str(SKILL / "SKILL.md"))
     commit = git("rev-parse", "HEAD")
     # status alone can miss assume-unchanged / skip-worktree edits. Compare
@@ -99,7 +99,7 @@ def source_info(root):
             raise ValueError("canonical source contains non-file Git entries")
         content = subprocess.check_output([*command, "cat-file", "blob", oid.decode()], env=env)
         if (root / os.fsdecode(name)).read_bytes() != content:
-            raise ValueError("canonical skill bytes differ from the source commit")
+            raise ValueError("skill shim bytes differ from the source commit")
     return {"root": str(root), "path": str(source), "commit": commit,
             "tree_sha256": digest(tree)}
 

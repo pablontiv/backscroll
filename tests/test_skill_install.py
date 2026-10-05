@@ -98,6 +98,9 @@ class SkillInstallTest(unittest.TestCase):
             self.assertEqual(os.readlink(target), str(self.skill))
             self.assertEqual(target.resolve(strict=True), self.skill)
             self.assertEqual((target / "SKILL.md").read_bytes(), (self.skill / "SKILL.md").read_bytes())
+            shim = (target / "SKILL.md").read_text()
+            self.assertIn("`backscroll --skill`", shim)
+            self.assertIn("follow the complete instructions printed to stdout", shim)
         self.assertEqual(self.apply(self.plan())["changed"], 0)
         restored = self.installer("restore", "--home", str(self.home), "--receipt", receipt["receipt"],
                                   "--approve", receipt["restore_approval"])
@@ -251,11 +254,20 @@ class SkillInstallTest(unittest.TestCase):
                        "--config-home", str(self.targets[0]), ok=False)
 
     @unittest.skipUnless(os.environ.get("BACKSCROLL_TEST_BINARY"), "set BACKSCROLL_TEST_BINARY to a dev build")
-    def test_installed_recipe_retrieves_known_fixture(self):
+    def test_installed_shim_loads_recipe_that_retrieves_known_fixture(self):
         binary = Path(os.environ["BACKSCROLL_TEST_BINARY"]).resolve()
         self.assertIn("dev", self.command([str(binary), "--version"]).stdout,
                       "release identities may autoupdate; use a dev build")
         self.apply(self.plan())
+        for target in self.targets:
+            with self.subTest(target=target):
+                shim = (target / "SKILL.md").read_text()
+                self.assertIn("`backscroll --skill`", shim)
+                self.assertNotIn('backscroll search "QUERY"', shim)
+
+        payload = self.command([str(binary), "--skill"]).stdout
+        line = next(line for line in payload.splitlines() if line.startswith('backscroll search "QUERY" --robot'))
+
         cwd = self.base / "application"
         cwd.mkdir()
         sessions = self.base / "sessions"
@@ -269,15 +281,11 @@ class SkillInstallTest(unittest.TestCase):
         (config / "projects.toml").write_text('[[projects]]\nid = "skill-fixture"\nroots = [' + json.dumps(str(cwd)) + ']\n')
         self.env["BACKSCROLL_SESSION_DIRS"] = str(sessions)
         self.env["BACKSCROLL_DATABASE_PATH"] = str(self.base / "index.db")
-        for target in self.targets:
-            with self.subTest(target=target):
-                recipe = (target / "SKILL.md").read_text()
-                line = next(line for line in recipe.splitlines() if line.startswith('backscroll search "QUERY" --robot'))
-                argv = shlex.split(line.replace('"QUERY"', '"installationoraclecobalt"'))
-                result = self.command([str(binary), *argv[1:]], cwd=cwd)
-                fields = dict(line.split("=", 1) for line in result.stdout.splitlines() if "=" in line)
-                self.assertEqual(fields.get("result_0_filepath"), str(document), result.stdout + result.stderr)
-                self.assertNotIn("result_0_source_path", fields)
+        argv = shlex.split(line.replace('"QUERY"', '"installationoraclecobalt"'))
+        result = self.command([str(binary), *argv[1:]], cwd=cwd)
+        fields = dict(line.split("=", 1) for line in result.stdout.splitlines() if "=" in line)
+        self.assertEqual(fields.get("result_0_filepath"), str(document), result.stdout + result.stderr)
+        self.assertNotIn("result_0_source_path", fields)
 
     def test_skip_worktree_does_not_hide_uncommitted_source(self):
         self.command(["git", "update-index", "--skip-worktree", ".claude/skills/backscroll/SKILL.md"], cwd=self.source)
@@ -327,13 +335,17 @@ m.apply(root, home, home / ".config", "install", p["approval"])
         self.restore({"receipt": str(receipt_path), "restore_approval": event["restore_approval"]})
         self.assertTrue(all((t / "local-note").exists() for t in self.targets))
 
-    def test_installed_recipe_has_observed_robot_keys(self):
+    def test_installed_shim_delegates_and_payload_has_observed_robot_keys(self):
         self.apply(self.plan())
         for target in self.targets:
-            text = (target / "SKILL.md").read_text()
-            self.assertIn("result_N_filepath", text)
-            self.assertNotIn("result_N_source_path", text)
-            self.assertNotIn("--project <cwd-or-inferred>", text)
+            shim = (target / "SKILL.md").read_text()
+            self.assertIn("`backscroll --skill`", shim)
+            self.assertNotIn("result_N_filepath", shim)
+
+        payload = (ROOT / "cmd/backscroll/backscroll_skill.md").read_text()
+        self.assertIn("result_N_filepath", payload)
+        self.assertNotIn("result_N_source_path", payload)
+        self.assertNotIn("--project <cwd-or-inferred>", payload)
 
 
 if __name__ == "__main__":

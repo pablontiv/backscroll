@@ -203,6 +203,7 @@ query merges both by rank position (RRF).`,
 	}
 	root.SetOut(stdout)
 	root.SetErr(stderr)
+	root.Flags().Bool("skill", false, "Print the authoritative Backscroll skill payload")
 
 	registerStartupCommand(root, startupSnapshotRead, newSearchCmd(stdout, stderr))
 	registerStartupCommand(root, startupSnapshotRead, newListCmd(stdout, stderr))
