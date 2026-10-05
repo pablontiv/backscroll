@@ -1,9 +1,15 @@
 # Installing the Backscroll skill
 
-Backscroll owns one canonical skill tree: `.claude/skills/backscroll/` in this
-repository. On macOS/Linux, `scripts/install-skills.py` installs absolute symlinks
-to that tree in an **operator-selected stable ordinary clone**. It requires Python
-3.9+ and Git; these are not dependencies of the Backscroll binary.
+Backscroll has two deliberately separate skill artifacts:
+
+- `.claude/skills/backscroll/SKILL.md` is a minimal discovery shim. It instructs
+  the runtime to execute `backscroll --skill` and follow stdout.
+- The complete, authoritative instruction payload is embedded in the Backscroll
+  binary. `backscroll --skill` prints it without installing or modifying files.
+
+On macOS/Linux, `scripts/install-skills.py` installs absolute symlinks to the shim
+tree in an **operator-selected stable ordinary clone**. It requires Python 3.9+
+and Git; these are not dependencies of the Backscroll binary.
 
 | Supported target | Installed entry |
 | --- | --- |
@@ -29,7 +35,7 @@ side effect of a push or merge.
 
 Choose an ordinary product clone that you intend to keep. Do not choose a task
 copy or a directory scheduled for cleanup. The installer rejects linked Git
-worktrees, missing or dirty canonical skills, untracked/ignored overlays, skill-tree
+worktrees, a missing or dirty shim source, untracked/ignored overlays, skill-tree
 symlinks, and source/destination overlap. An ordinary clone can still be deleted
 by its owner: filesystem inspection cannot prove your retention intent.
 
@@ -40,8 +46,8 @@ python3 scripts/install-skills.py plan \
   --source-root /absolute/stable/backscroll --home /absolute/destination/home
 ```
 
-Inspect the full JSON: source root, canonical path, source commit, tree SHA-256,
-all three exact destination paths, and recursive `before` preimages. The digest
+Inspect the full JSON: source root, shim path, source commit, tree SHA-256, all
+three exact destination paths, and recursive `before` preimages. The digest
 covers filenames, file contents, modes and lexical symlink targets, not access
 times, ACLs or extended attributes. Backups preserve the original filesystem
 objects by rename rather than copying their contents. No symlink is traversed
@@ -77,13 +83,17 @@ it cannot lock your editor or Git. Do not use it on shared/network filesystems.
 Repeat `plan` with the same paths: every target should report `change: false`,
 `before.kind: link`, and `before.target` equal to `source.path`. Inspect both the
 lexical link (`readlink <installed-entry>`) and the resolved `SKILL.md` contents.
-The three entries resolve to the same source, not separately copied versions.
+The three entries resolve to the same shim source, not separately copied
+versions. Confirm that the resolved shim names `backscroll --skill`; it should not
+contain the full instruction manual.
 
 Update the stable clone through your normal reviewed Git workflow. All three
-links then expose the new source without reinstalling. Do not move/delete the
-source while links depend on it. Restart runtimes that cache skills. Local edits
-to that source are immediately visible too; the links are not immutable release
-snapshots. A new `plan` validates the current committed source again.
+links then expose the new shim without reinstalling. The instructions followed at
+runtime come from the installed binary, so update the binary to update the
+authoritative payload. Do not move/delete the shim source while links depend on
+it. Restart runtimes that cache skills. Local edits to the shim source are
+immediately visible too; the links are not immutable release snapshots. A new
+`plan` validates the current committed shim again.
 
 Runtime checks are distinct from link checks:
 
@@ -100,9 +110,10 @@ Runtime checks are distinct from link checks:
   also scans Claude/Agents-compatible paths; checking only a name can mask a broken
   OpenCode-specific entry. Verify the returned location and content.
 
-The installed recipe uses cwd inference first, semantic IDs for explicit
-`--project`, and robot `result_N_filepath` / `result_N_content` keys. JSON's
-`source_path` / `snippet` keys are not robot field names.
+The authoritative payload printed by `backscroll --skill` uses cwd inference
+first, semantic IDs for explicit `--project`, and robot `result_N_filepath` /
+`result_N_content` keys. JSON's `source_path` / `snippet` keys are not robot field
+names.
 
 ## Receipts, rollback and restoration
 

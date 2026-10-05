@@ -202,7 +202,7 @@ On `search`, `--fields minimal|full` controls density and `--max-tokens N` caps 
 
 Backscroll is a CLI. Nothing requires an agent, and there is no MCP server — a CLI call costs a fraction of the tokens an MCP tool schema does.
 
-Agents use the same commands with `--robot --fields minimal --max-tokens N`. The canonical Backscroll skill ships in `.claude/skills/backscroll/`. The optional [skill installer](docs/skill-installation.md) links Claude, Agents (Codex), and OpenCode to that single source in an explicitly selected stable clone. Installation requires a reviewed inventory digest; existing destinations are backed up and can be restored. Git hooks and binary installers never replace skills implicitly.
+Agents use the same commands with `--robot --fields minimal --max-tokens N`. The discoverable `.claude/skills/backscroll/SKILL.md` is a minimal shim: it tells the runtime to execute `backscroll --skill` and follow stdout. The complete, authoritative instructions are embedded in the binary and printed by that flag without reading configuration or modifying files. The optional [skill installer](docs/skill-installation.md) links Claude, Agents (Codex), and OpenCode to the shim in an explicitly selected stable clone. Installation requires a reviewed inventory digest; existing destinations are backed up and can be restored. Git hooks and binary installers never replace skills implicitly.
 
 ---
 

@@ -1,9 +1,33 @@
 package main
 
 import (
+	"bytes"
 	"encoding/json"
+	"strings"
 	"testing"
 )
+
+func TestListHelpDescribesDefaultProjectScope(t *testing.T) {
+	var stdout, stderr bytes.Buffer
+	cmd := buildRootCmd(&stdout, &stderr)
+	cmd.SetArgs([]string{"list", "--help"})
+	if err := cmd.Execute(); err != nil {
+		t.Fatalf("list --help: %v", err)
+	}
+	if stderr.Len() != 0 {
+		t.Fatalf("list --help stderr = %q, want empty", stderr.String())
+	}
+	help := stdout.String()
+	for _, want := range []string{
+		"project inferred from the current working directory",
+		"Use --all-projects to list across all projects",
+		"List sessions across all projects",
+	} {
+		if !strings.Contains(help, want) {
+			t.Errorf("list --help missing %q:\n%s", want, help)
+		}
+	}
+}
 
 func TestListJSONSeeded(t *testing.T) {
 	_, cleanup := testEnv(t)

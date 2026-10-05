@@ -5,9 +5,8 @@ import (
 	"testing"
 )
 
-func TestBackscrollSkillManualPresetCopyIncludesCodex(t *testing.T) {
-	_, skill := readTrackedSkillMarkdown(t, ".claude/skills/backscroll/SKILL.md")
-	for _, line := range strings.Split(skill, "\n") {
+func TestBackscrollSkillPayloadManualPresetCopyIncludesCodex(t *testing.T) {
+	for _, line := range strings.Split(embeddedBackscrollSkill, "\n") {
 		if !strings.HasPrefix(line, "cp -n inputs/") {
 			continue
 		}

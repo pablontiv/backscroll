@@ -35,6 +35,18 @@ func newUpdater() *autoupdate.Updater {
 }
 
 func run(stdout, stderr io.Writer, args []string) error {
+	// The skill is informational, self-contained output. Validate and handle its
+	// global option before constructing the updater or command tree, while
+	// preserving arguments after the POSIX -- separator as command literals.
+	printSkill, err := validateSkillInvocation(args)
+	if err != nil {
+		return err
+	}
+	if printSkill {
+		_, err := io.WriteString(stdout, embeddedBackscrollSkill)
+		return err
+	}
+
 	u := newUpdater()
 	u.CurrentVersion = version
 	_ = u.ApplyStagedIfAvailable()
@@ -50,7 +62,7 @@ func run(stdout, stderr io.Writer, args []string) error {
 		rootCmd.SilenceUsage = true
 	}
 	rootCmd.SetArgs(args)
-	err := rootCmd.Execute()
+	err = rootCmd.Execute()
 
 	// Wait for staging to complete so short-lived commands don't kill the
 	// download before it finishes. Output is already on screen; process lingers

@@ -40,4 +40,4 @@ Present usage counts as approximate signals, not exact metrics. Lead with the hi
 
 - `assets/gather.sh` — categorized query batches (`errors|gaps|usage|all`) over the live index.
 - `docs/roadmap/`, `AGENTS.md` — known/deferred/dropped work to exclude.
-- `.claude/skills/backscroll/SKILL.md` — the base retrieval recipe (commands, flags, noise rules).
+- `.claude/skills/backscroll/SKILL.md` — the discovery shim that directs the runtime to execute `backscroll --skill`; the payload printed by that flag is the authority for commands, flags, and noise rules.

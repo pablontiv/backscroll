@@ -26,11 +26,11 @@ func newListCmd(stdout, stderr io.Writer) *cobra.Command {
 
 	cmd := &cobra.Command{
 		Use:          "list",
-		Short:        "List all indexed sessions",
+		Short:        "List indexed sessions for the current project",
 		SilenceUsage: true,
-		Long: `List displays all indexed sessions, optionally filtered by project.
+		Long: `List displays indexed sessions for the project inferred from the current working directory.
 
-Use --project to filter to a single project.
+Use --project to select a single project explicitly.
 Use --all-projects to list across all projects.
 Use --order to sort results (e.g., timestamp:desc).
 Use --limit to restrict result count.
@@ -56,7 +56,7 @@ Use --json to output as JSON.`,
 	}
 
 	cmd.Flags().StringVar(&project, "project", "", "Filter to project")
-	cmd.Flags().BoolVar(&allProjects, "all-projects", false, "List all projects")
+	cmd.Flags().BoolVar(&allProjects, "all-projects", false, "List sessions across all projects")
 	cmd.Flags().IntVar(&recent, "recent", 20, "Show N most recent sessions (0 = all)")
 	cmd.Flags().BoolVar(&jsonFormat, "json", false, "Output as JSON")
 	cmd.Flags().BoolVar(&robotFormat, "robot", false, "Output in robot format")

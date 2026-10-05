@@ -303,11 +303,9 @@ func TestBackscrollSkillContractRejectsStaleAutoupdateOptOut(t *testing.T) {
 	)
 }
 
-func TestBackscrollSkillCommandsMatchCLI(t *testing.T) {
+func TestBackscrollSkillPayloadCommandsMatchCLI(t *testing.T) {
 	root := buildRootCmd(io.Discard, io.Discard)
-	path, content := readTrackedSkillMarkdown(t, ".claude/skills/backscroll/SKILL.md")
-
-	violations := validateSkillMarkdown(root, path, content)
+	violations := validateSkillMarkdown(root, "cmd/backscroll/backscroll_skill.md", embeddedBackscrollSkill)
 	if len(violations) > 0 {
 		t.Fatalf("documented backscroll commands must match the Cobra CLI:\n%s", formatSkillContractViolations(violations))
 	}
@@ -325,8 +323,24 @@ func TestBackscrollLivingDocsMatchCLI(t *testing.T) {
 	}
 }
 
-func TestBackscrollSkillContainsSearchDiscipline(t *testing.T) {
-	_, content := readTrackedSkillMarkdown(t, ".claude/skills/backscroll/SKILL.md")
+func TestBackscrollSkillPayloadPreservesIndexedHistoryAndListScopeBoundaries(t *testing.T) {
+	content := embeddedBackscrollSkill
+
+	anchors := []string{
+		"the source of indexed history",
+		"`backscroll list` without an explicit scope uses the project inferred from the current working directory",
+		"For global recovery or inventory, repeat with `backscroll list --all-projects`",
+		"An empty list does not prove indexed history is absent or lost",
+	}
+	for _, anchor := range anchors {
+		if !strings.Contains(content, anchor) {
+			t.Errorf("missing retrieval-boundary guarantee %q", anchor)
+		}
+	}
+}
+
+func TestBackscrollSkillPayloadContainsSearchDiscipline(t *testing.T) {
+	content := embeddedBackscrollSkill
 
 	anchors := []string{
 		"Search discipline (hard rules)",
@@ -346,10 +360,10 @@ func TestBackscrollSkillContainsSearchDiscipline(t *testing.T) {
 	}
 
 	if strings.Contains(content, "--indexed-only") {
-		t.Error("shipped skill must not document removed --indexed-only flag")
+		t.Error("skill payload must not document removed --indexed-only flag")
 	}
 	if containsBackscrollReadInvocation(content) {
-		t.Error("shipped skill must not invoke removed backscroll read command")
+		t.Error("skill payload must not invoke removed backscroll read command")
 	}
 
 	rawBoundaryAnchors := []string{
