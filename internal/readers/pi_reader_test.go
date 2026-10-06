@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/pablontiv/backscroll/internal/input_config"
+	"github.com/pablontiv/backscroll/internal/models"
 )
 
 func writePiFixture(t *testing.T, lines string) string {
@@ -265,6 +266,47 @@ func TestPiReader_SkipsReasoningWhenDisabled(t *testing.T) {
 	}
 	if gotReasoning {
 		t.Error("reasoning block captured when index_reasoning=false (should be skipped)")
+	}
+}
+
+func TestPiReader_CapturesMessageOrigins(t *testing.T) {
+	lines := `{"type":"message","message":{"role":"user","content":"human origin token"}}` + "\n" +
+		`{"recordType":"message","message":{"role":"assistant","content":[{"type":"text","text":"assistant text token"},{"type":"toolCall","name":"assistant_tool","arguments":{"value":"assistant tool token"}},{"type":"thinking","text":"assistant thinking token"}]}}` + "\n" +
+		`{"type":"message","message":{"role":"user","content":[{"type":"toolCall","name":"user_supplied_tool","arguments":{"value":"user tool token"}}]}}` + "\n" +
+		`{"type":"custom","customType":"result","data":{"value":"automation origin token"}}` + "\n" +
+		`{"recordType":"custom","customType":"result","data":{"value":"unsupported Pion custom"}}` + "\n" +
+		`{"recordType":"tool_start","message":{"role":"user","content":"unsupported tool start"}}` + "\n" +
+		`{"recordType":"tool_end","message":{"role":"assistant","content":"unsupported tool end"}}` + "\n" +
+		`{"recordType":"text","message":{"role":"user","content":"unsupported text envelope"}}` + "\n"
+
+	parsed, err := (&PiReader{}).Parse(writePiFixture(t, lines), input_config.InputDefinition{
+		Decode: input_config.DecodeConfig{IndexReasoning: true},
+	})
+	if err != nil {
+		t.Fatalf("Parse: %v", err)
+	}
+	if len(parsed.Records) != 6 {
+		t.Fatalf("records = %+v, want six supported records", parsed.Records)
+	}
+
+	for _, record := range parsed.Records {
+		var want models.MessageOrigin
+		switch {
+		case contains(record.Content, "human origin token"):
+			want = models.OriginHuman
+		case contains(record.Content, "assistant text token"),
+			contains(record.Content, "assistant tool token"),
+			contains(record.Content, "assistant thinking token"),
+			contains(record.Content, "user tool token"):
+			want = models.OriginAssistant
+		case contains(record.Content, "automation origin token"):
+			want = models.OriginAutomation
+		default:
+			t.Fatalf("unexpected record from unsupported envelope: %+v", record)
+		}
+		if record.Origin != want {
+			t.Errorf("origin for %q = %q, want %q", record.Content, record.Origin, want)
+		}
 	}
 }
 

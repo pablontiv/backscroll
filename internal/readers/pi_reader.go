@@ -150,7 +150,7 @@ func extractPiMessages(rec piRecord, indexReasoning bool) []models.Message {
 		if text == "" {
 			return nil
 		}
-		return []models.Message{{Role: role, Content: text, ContentType: classifyText(text), Timestamp: ts}}
+		return []models.Message{{Role: role, Origin: piMessageOrigin(role), Content: text, ContentType: classifyText(text), Timestamp: ts}}
 	}
 
 	// content as an array of blocks
@@ -168,7 +168,7 @@ func extractPiMessages(rec piRecord, indexReasoning bool) []models.Message {
 			}
 		case "toolCall":
 			if t := SerializeToolInput(b.Name, b.Arguments); strings.TrimSpace(t) != "" {
-				out = append(out, models.Message{Role: role, Content: t, ContentType: "tool", Timestamp: ts,
+				out = append(out, models.Message{Role: role, Origin: models.OriginAssistant, Content: t, ContentType: "tool", Timestamp: ts,
 					SearchEcho: isDirectSearchInput(b.Name, b.Arguments)})
 			}
 		case "thinking":
@@ -181,9 +181,16 @@ func extractPiMessages(rec piRecord, indexReasoning bool) []models.Message {
 	}
 	if len(textParts) > 0 {
 		text := strings.TrimSpace(strings.Join(textParts, " "))
-		out = append([]models.Message{{Role: role, Content: text, ContentType: classifyText(text), Timestamp: ts}}, out...)
+		out = append([]models.Message{{Role: role, Origin: piMessageOrigin(role), Content: text, ContentType: classifyText(text), Timestamp: ts}}, out...)
 	}
 	return out
+}
+
+func piMessageOrigin(role string) models.MessageOrigin {
+	if role == "user" {
+		return models.OriginHuman
+	}
+	return models.OriginAssistant
 }
 
 // extractPiReasoning converts a thinking block into a searchable reasoning message.
@@ -194,6 +201,7 @@ func extractPiReasoning(block piBlock, ts time.Time) *models.Message {
 	}
 	return &models.Message{
 		Role:        "reasoning",
+		Origin:      models.OriginAssistant,
 		Content:     text,
 		ContentType: "reasoning",
 		Timestamp:   ts,
@@ -212,6 +220,7 @@ func extractPiCustom(rec piRecord) (models.Message, bool) {
 	}
 	return models.Message{
 		Role:        "tool",
+		Origin:      models.OriginAutomation,
 		Content:     body,
 		ContentType: "tool",
 		Timestamp:   piTimestamp(rec.Timestamp),
