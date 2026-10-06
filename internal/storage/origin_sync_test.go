@@ -3,7 +3,6 @@ package storage
 import (
 	"database/sql"
 	"path/filepath"
-	"reflect"
 	"strings"
 	"testing"
 
@@ -138,7 +137,161 @@ func TestOriginPerennialReplayClosesRetainedRowsWithoutEvidence(t *testing.T) {
 	}
 }
 
-func TestOriginPerennialReplayWithUUIDLessSessionDoesNotCloseRetainedRows(t *testing.T) {
+func TestOriginPerennialZeroMessageReplayPreservesRowsAndToolEvents(t *testing.T) {
+	db, err := Open(filepath.Join(t.TempDir(), "origin.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = db.Close() }()
+
+	const path = "/sessions/zero.jsonl"
+	file := IndexedFile{SourcePath: path, Source: "session", Hash: "h1", Messages: []IndexedMessage{{
+		Ordinal: 0, UUID: "zero-origin", Role: "assistant", Origin: models.OriginAssistant,
+		Text: "retained zero payload", ContentType: "tool", ToolName: "Bash", CommandHead: "go test", ExtractionVersion: 1,
+	}}}
+	if err := db.SyncFiles([]IndexedFile{file}); err != nil {
+		t.Fatal(err)
+	}
+
+	var itemID, eventID int64
+	if err := db.db.QueryRow(`SELECT id FROM search_items WHERE uuid = 'zero-origin'`).Scan(&itemID); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.db.QueryRow(`SELECT id FROM tool_events WHERE message_uuid = 'zero-origin'`).Scan(&eventID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.db.Exec(`UPDATE search_items SET origin = 'unknown', origin_version = ? WHERE uuid = 'zero-origin'`, CurrentOriginVersion-1); err != nil {
+		t.Fatal(err)
+	}
+	if pending, err := db.PendingOriginPaths(CurrentOriginVersion, 10); err != nil || len(pending) != 1 || pending[0] != path {
+		t.Fatalf("origin queue before zero-message replay = %v, err=%v; want [%s]", pending, err, path)
+	}
+
+	file.Hash = "h2"
+	file.Messages = nil
+	if err := db.SyncFiles([]IndexedFile{file}); err != nil {
+		t.Fatalf("zero-message replay: %v", err)
+	}
+
+	var gotItemID int64
+	var gotUUID, gotText string
+	var gotOrigin models.MessageOrigin
+	var gotVersion int
+	if err := db.db.QueryRow(`
+		SELECT id, uuid, text, origin, origin_version FROM search_items WHERE uuid = 'zero-origin'
+	`).Scan(&gotItemID, &gotUUID, &gotText, &gotOrigin, &gotVersion); err != nil {
+		t.Fatal(err)
+	}
+	if gotItemID != itemID || gotUUID != "zero-origin" || gotText != "retained zero payload" || gotOrigin != models.OriginUnknown || gotVersion != CurrentOriginVersion {
+		t.Fatalf("retained row = (%d, %q, %q, %q, %d), want (%d, zero-origin, retained zero payload, %q, %d)", gotItemID, gotUUID, gotText, gotOrigin, gotVersion, itemID, models.OriginUnknown, CurrentOriginVersion)
+	}
+	var gotEventID int64
+	var toolName, commandHead string
+	if err := db.db.QueryRow(`SELECT id, tool_name, command_head FROM tool_events WHERE message_uuid = 'zero-origin'`).Scan(&gotEventID, &toolName, &commandHead); err != nil {
+		t.Fatal(err)
+	}
+	if gotEventID != eventID || toolName != "Bash" || commandHead != "go test" {
+		t.Fatalf("retained tool event = (%d, %q, %q), want (%d, Bash, go test)", gotEventID, toolName, commandHead, eventID)
+	}
+	if pending, err := db.PendingOriginPaths(CurrentOriginVersion, 10); err != nil || len(pending) != 0 {
+		t.Fatalf("origin queue after zero-message replay = %v, err=%v; want empty", pending, err)
+	}
+}
+
+func TestOriginReplaySyncFailureDoesNotCloseOrDelete(t *testing.T) {
+	db, err := Open(filepath.Join(t.TempDir(), "origin.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = db.Close() }()
+
+	const replayPath = "/sessions/rollback.jsonl"
+	replay := IndexedFile{SourcePath: replayPath, Source: "session", Hash: "h1", Messages: []IndexedMessage{{
+		Ordinal: 0, UUID: "rollback-origin", Role: "assistant", Origin: models.OriginAssistant,
+		Text: "must survive rollback", ContentType: "tool", ToolName: "Bash", ExtractionVersion: 1,
+	}}}
+	conflict := IndexedFile{SourcePath: "/sessions/conflict-existing.jsonl", Source: "session", Hash: "c1", Messages: []IndexedMessage{{
+		Ordinal: 0, UUID: "conflicting-origin", Role: "user", Origin: models.OriginHuman, Text: "human proof", ContentType: "text",
+	}}}
+	if err := db.SyncFiles([]IndexedFile{replay, conflict}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.db.Exec(`UPDATE search_items SET origin = 'unknown', origin_version = NULL WHERE uuid = 'rollback-origin'`); err != nil {
+		t.Fatal(err)
+	}
+
+	replay.Hash = "h2"
+	replay.Messages = nil
+	conflict.SourcePath = "/sessions/conflict-new.jsonl"
+	conflict.Hash = "c2"
+	conflict.Messages[0].Origin = models.OriginAssistant
+	err = db.SyncFiles([]IndexedFile{replay, conflict})
+	if err == nil || !strings.Contains(err.Error(), "conflicting proven origins") {
+		t.Fatalf("replay sync error = %v, want conflicting origin", err)
+	}
+
+	var version sql.NullInt64
+	var itemCount, eventCount int
+	if err := db.db.QueryRow(`SELECT origin_version FROM search_items WHERE uuid = 'rollback-origin'`).Scan(&version); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.db.QueryRow(`SELECT COUNT(*) FROM search_items WHERE uuid = 'rollback-origin' AND text = 'must survive rollback'`).Scan(&itemCount); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.db.QueryRow(`SELECT COUNT(*) FROM tool_events WHERE message_uuid = 'rollback-origin'`).Scan(&eventCount); err != nil {
+		t.Fatal(err)
+	}
+	if version.Valid || itemCount != 1 || eventCount != 1 {
+		t.Fatalf("failed sync mutated replay history: version=%+v items=%d events=%d", version, itemCount, eventCount)
+	}
+}
+
+func TestOriginMutableMixedReplayWipesAndVersionsEveryRow(t *testing.T) {
+	db, err := Open(filepath.Join(t.TempDir(), "origin.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = db.Close() }()
+
+	const path = "/sessions/mutable-mixed.jsonl"
+	file := IndexedFile{SourcePath: path, Source: "session", Hash: "h1", Messages: []IndexedMessage{{
+		Ordinal: 0, Role: "user", Origin: models.OriginHuman, Text: "old mutable row", ContentType: "text",
+	}}}
+	if err := db.SyncFiles([]IndexedFile{file}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.db.Exec(`UPDATE search_items SET origin_version = NULL WHERE source_path = ?`, path); err != nil {
+		t.Fatal(err)
+	}
+
+	file.Hash = "h2"
+	file.Messages = []IndexedMessage{
+		{Ordinal: 0, Role: "user", Origin: models.OriginHuman, Text: "new UUID-less row", ContentType: "text"},
+		{Ordinal: 1, UUID: "mixed-origin", Role: "assistant", Origin: models.OriginAssistant, Text: "new UUID row", ContentType: "text"},
+	}
+	if err := db.SyncFiles([]IndexedFile{file}); err != nil {
+		t.Fatalf("mixed mutable replay: %v", err)
+	}
+
+	var total, stale, oldPayload int
+	if err := db.db.QueryRow(`SELECT COUNT(*) FROM search_items WHERE source_path = ?`, path).Scan(&total); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.db.QueryRow(`SELECT COUNT(*) FROM search_items WHERE source_path = ? AND (origin_version IS NULL OR origin_version < ?)`, path, CurrentOriginVersion).Scan(&stale); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.db.QueryRow(`SELECT COUNT(*) FROM search_items WHERE source_path = ? AND text = 'old mutable row'`, path).Scan(&oldPayload); err != nil {
+		t.Fatal(err)
+	}
+	if total != 2 || stale != 0 || oldPayload != 0 {
+		t.Fatalf("mixed wipe/reload = total %d stale %d old payload %d; want 2, 0, 0", total, stale, oldPayload)
+	}
+	if pending, err := db.PendingOriginPaths(CurrentOriginVersion, 10); err != nil || len(pending) != 0 {
+		t.Fatalf("origin queue after mixed wipe/reload = %v, err=%v; want empty", pending, err)
+	}
+}
+
+func TestOriginPerennialReplayWithUUIDLessSessionClosesRetainedRows(t *testing.T) {
 	db, err := Open(filepath.Join(t.TempDir(), "origin.db"))
 	if err != nil {
 		t.Fatal(err)
@@ -150,6 +303,10 @@ func TestOriginPerennialReplayWithUUIDLessSessionDoesNotCloseRetainedRows(t *tes
 		{Ordinal: 0, UUID: "retained-origin", Role: "user", Origin: models.OriginHuman, Text: "retained", ContentType: "text"},
 	}}
 	if err := db.SyncFiles([]IndexedFile{file}); err != nil {
+		t.Fatal(err)
+	}
+	var retainedID int64
+	if err := db.db.QueryRow(`SELECT id FROM search_items WHERE uuid = 'retained-origin'`).Scan(&retainedID); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := db.db.Exec(`UPDATE search_items SET origin = 'unknown', origin_version = NULL WHERE uuid = 'retained-origin'`); err != nil {
@@ -164,16 +321,17 @@ func TestOriginPerennialReplayWithUUIDLessSessionDoesNotCloseRetainedRows(t *tes
 		t.Fatalf("replay UUID-less session: %v", err)
 	}
 
+	var gotID int64
 	var origin models.MessageOrigin
 	var version sql.NullInt64
-	if err := db.db.QueryRow(`SELECT origin, origin_version FROM search_items WHERE uuid = 'retained-origin'`).Scan(&origin, &version); err != nil {
+	if err := db.db.QueryRow(`SELECT id, origin, origin_version FROM search_items WHERE uuid = 'retained-origin'`).Scan(&gotID, &origin, &version); err != nil {
 		t.Fatal(err)
 	}
-	if origin != models.OriginUnknown || version.Valid {
-		t.Fatalf("UUID-less replay closed retained provenance: origin=%q version=%+v", origin, version)
+	if gotID != retainedID || origin != models.OriginUnknown || !version.Valid || version.Int64 != CurrentOriginVersion {
+		t.Fatalf("UUID-less replay retained row = (id=%d origin=%q version=%+v), want (%d, %q, %d)", gotID, origin, version, retainedID, models.OriginUnknown, CurrentOriginVersion)
 	}
-	if pending, err := db.PendingOriginPaths(CurrentOriginVersion, 10); err != nil || !reflect.DeepEqual(pending, []string{path}) {
-		t.Fatalf("origin queue after UUID-less replay = %v, err=%v; want [%s]", pending, err, path)
+	if pending, err := db.PendingOriginPaths(CurrentOriginVersion, 10); err != nil || len(pending) != 0 {
+		t.Fatalf("origin queue after UUID-less replay = %v, err=%v; want empty", pending, err)
 	}
 }
 

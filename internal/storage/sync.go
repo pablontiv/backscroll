@@ -66,10 +66,10 @@ func (d *Database) SyncFiles(files []IndexedFile) error {
 		// sync append-only — IDs and content are retained; pairing provenance
 		// may be enriched below when the original source supplies evidence.
 		// Flap guard: if the file was previously perennial (DB has uuid-bearing rows),
-		// keep it perennial even if this sync has some uuid-less messages (prevents
-		// wiping rows during temporary parsing drift).
+		// keep it perennial even if this sync has some uuid-less messages or no
+		// messages (prevents wiping rows during temporary parsing drift).
 		// Anything else keeps wipe-and-reload (correct for mutable sources).
-		isSession := file.Source == "session" && len(file.Messages) > 0
+		isSession := file.Source == "session"
 		allCurrentHaveUUIDs := true
 		for _, m := range file.Messages {
 			if m.UUID == "" {
@@ -77,7 +77,7 @@ func (d *Database) SyncFiles(files []IndexedFile) error {
 				break
 			}
 		}
-		perennial := isSession && allCurrentHaveUUIDs
+		perennial := isSession && len(file.Messages) > 0 && allCurrentHaveUUIDs
 
 		// Flap guard: a file that was perennial in an earlier sync (DB has
 		// uuid-bearing rows) stays perennial even if this parse has uuid-less
@@ -198,11 +198,12 @@ func (d *Database) SyncFiles(files []IndexedFile) error {
 			}
 		}
 
-		// A complete UUID-backed parse is also evidence that retained rows which
-		// were not emitted have no actor proof at this origin epoch. Close that
-		// backlog in the same per-file transaction without replacing perennial
-		// payload. Mixed UUID/uuid-less parses are excluded by the flap guard.
-		if perennial && allCurrentHaveUUIDs {
+		// A successful parse of a perennial path is also evidence that retained
+		// rows without current actor proof are unknown at this origin epoch. Close
+		// that backlog in the same per-file transaction without replacing payload.
+		// This includes empty and mixed parses: leaving them pending would replay
+		// the same successful source forever and starve later queue entries.
+		if perennial {
 			if _, err := tx.Exec(`
 				UPDATE search_items
 				SET origin = 'unknown', origin_version = ?

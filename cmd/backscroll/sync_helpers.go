@@ -160,10 +160,6 @@ func maybeAutoSync(cfg *config.Config, progress io.Writer) (retErr error) {
 	if err != nil {
 		return fmt.Errorf("discover pending search echo paths: %w", err)
 	}
-	echoSet := make(map[string]bool, len(echoPaths))
-	for _, path := range echoPaths {
-		echoSet[path] = true
-	}
 
 	// Inspect the complete origin queue that can be backed by this index, then
 	// spend the replay budget only on paths actually discovered below. Limiting
@@ -174,11 +170,6 @@ func maybeAutoSync(cfg *config.Config, progress io.Writer) (retErr error) {
 	if err != nil {
 		return fmt.Errorf("discover pending message origins: %w", err)
 	}
-	originSet := make(map[string]bool, len(originPaths))
-	for _, path := range originPaths {
-		originSet[path] = true
-	}
-
 	// Search-echo and origin enrichment share one total source-replay budget.
 	// A path pending both kinds of provenance is parsed only once.
 	const sourceReplayParsesCap = 200
@@ -198,15 +189,20 @@ func maybeAutoSync(cfg *config.Config, progress io.Writer) (retErr error) {
 	// Load project registry
 	registry := maybeAutoSyncLoadGlobalRegistry()
 
-	// Collect indexed files
-	var indexedFiles []storage.IndexedFile
-
 	// Track diagnostics
 	var discoveryTime, metadataTime, hashingTime, parsingTime time.Duration
 	var bytesHashed int64
 	var filesHashed, filesSkipped int
 
-	// Process sessions via reader registry
+	// Discover every active path before selecting replay work. This preserves
+	// PendingOriginPaths order while allowing inactive paths to consume no cap.
+	type discoveredInput struct {
+		def    input_config.InputDefinition
+		reader readers.SessionReader
+		refs   []string
+	}
+	var discoveredInputs []discoveredInput
+	discoveredPaths := make(map[string]bool)
 	for _, def := range defs {
 		if def.Source == "" {
 			def.Source = "session"
@@ -217,22 +213,43 @@ func maybeAutoSync(cfg *config.Config, progress io.Writer) (retErr error) {
 			return fmt.Errorf("resolve reader for input %q: %w", def.ID, err)
 		}
 
-		// Phase 1: Discovery
 		var discoveryStart time.Time
 		if diag {
 			discoveryStart = time.Now()
 		}
-
 		refs, err := reader.Discover(def)
 		if err != nil {
 			return fmt.Errorf("discover input %q: %w", def.ID, err)
 		}
-
 		if diag {
 			discoveryTime += time.Since(discoveryStart)
 		}
 
+		discoveredInputs = append(discoveredInputs, discoveredInput{def: def, reader: reader, refs: refs})
 		for _, ref := range refs {
+			discoveredPaths[ref] = true
+		}
+	}
+
+	replaySet := make(map[string]bool, sourceReplayParsesCap)
+	for _, path := range originPaths {
+		if discoveredPaths[path] && len(replaySet) < sourceReplayParsesCap {
+			replaySet[path] = true
+		}
+	}
+	for _, path := range echoPaths {
+		if discoveredPaths[path] && len(replaySet) < sourceReplayParsesCap {
+			replaySet[path] = true
+		}
+	}
+
+	// Collect indexed files
+	var indexedFiles []storage.IndexedFile
+
+	// Process sessions via reader registry
+	for _, input := range discoveredInputs {
+		def, reader := input.def, input.reader
+		for _, ref := range input.refs {
 			// Phase 2: Metadata inspection
 			var metadataStart time.Time
 			if diag {
@@ -311,7 +328,7 @@ func maybeAutoSync(cfg *config.Config, progress io.Writer) (retErr error) {
 			// Already-proven rows at an older extraction epoch do not consume this
 			// budget, undiscovered paths never reach this point, and overlapping
 			// search-echo/origin work shares this single parse.
-			if exists && existingMeta.Hash == hash && (echoSet[ref] || originSet[ref]) {
+			if exists && existingMeta.Hash == hash && replaySet[ref] {
 				if sourceReplayParsesDone >= sourceReplayParsesCap {
 					continue
 				}

@@ -16,14 +16,26 @@ import (
 )
 
 type originReplayClaudeReader struct {
-	delegate   readers.ClaudeReader
-	parseCalls int
+	delegate           readers.ClaudeReader
+	parseCalls         int
+	parsePaths         []string
+	reverseDiscovery   bool
+	replayUUIDLessRows bool
+	zeroRecords        bool
+	parseErr           error
 }
 
 func (*originReplayClaudeReader) Name() string { return "claude" }
 
 func (r *originReplayClaudeReader) Discover(def input_config.InputDefinition) ([]string, error) {
-	return r.delegate.Discover(def)
+	refs, err := r.delegate.Discover(def)
+	if err != nil || !r.reverseDiscovery {
+		return refs, err
+	}
+	for left, right := 0, len(refs)-1; left < right; left, right = left+1, right-1 {
+		refs[left], refs[right] = refs[right], refs[left]
+	}
+	return refs, nil
 }
 
 func (r *originReplayClaudeReader) Hash(path string) (string, error) {
@@ -32,7 +44,30 @@ func (r *originReplayClaudeReader) Hash(path string) (string, error) {
 
 func (r *originReplayClaudeReader) Parse(path string, def input_config.InputDefinition) (models.ParsedFile, error) {
 	r.parseCalls++
-	return r.delegate.Parse(path, def)
+	r.parsePaths = append(r.parsePaths, path)
+	if r.parseErr != nil {
+		return models.ParsedFile{}, r.parseErr
+	}
+	parsed, err := r.delegate.Parse(path, def)
+	if err != nil {
+		return models.ParsedFile{}, err
+	}
+	if r.zeroRecords {
+		parsed.Records = nil
+		return parsed, nil
+	}
+	if r.replayUUIDLessRows {
+		var index int
+		if _, err := fmt.Sscanf(filepath.Base(path), "session-%d.jsonl", &index); err == nil && index < 200 {
+			uuidLess := models.Message{Role: "user", Origin: models.OriginHuman, Content: "current parser row without identity", ContentType: "text"}
+			if index%2 == 0 {
+				parsed.Records = append(parsed.Records, uuidLess)
+			} else {
+				parsed.Records = []models.Message{uuidLess}
+			}
+		}
+	}
+	return parsed, nil
 }
 
 func TestOriginParserSyncReplayIsBoundedAndConverges(t *testing.T) {
@@ -169,16 +204,32 @@ func TestOriginParserSyncReplayIsBoundedAndConverges(t *testing.T) {
 	if err := tx.Commit(); err != nil {
 		t.Fatal(err)
 	}
+	if _, err := db.DB().Exec(`UPDATE indexed_files SET last_indexed = '2098-01-01T00:00:00Z' WHERE path LIKE ?`, liveRoot+"%"); err != nil {
+		t.Fatal(err)
+	}
 	if err := db.Close(); err != nil {
 		t.Fatal(err)
 	}
 
+	// Discovery intentionally runs in the opposite order from the durable queue.
+	// The first 200 paths also keep emitting UUID-less or mixed output; a
+	// successful replay must close them so the final live path can advance.
+	reader.reverseDiscovery = true
+	reader.replayUUIDLessRows = true
+	reader.parsePaths = nil
 	beforeReplay := reader.parseCalls
 	if err := maybeAutoSync(&cfg, &bytes.Buffer{}); err != nil {
 		t.Fatalf("first origin replay: %v", err)
 	}
 	if got := reader.parseCalls - beforeReplay; got != 200 {
 		t.Fatalf("first origin replay parsed %d files, want total cap 200", got)
+	}
+	selected := make(map[string]bool, len(reader.parsePaths))
+	for _, path := range reader.parsePaths {
+		selected[path] = true
+	}
+	if !selected[filepath.Join(liveRoot, "session-000.jsonl")] || selected[filepath.Join(liveRoot, "session-200.jsonl")] {
+		t.Fatalf("origin selection followed discovery instead of queue order: first=%v final=%v", selected[filepath.Join(liveRoot, "session-000.jsonl")], selected[filepath.Join(liveRoot, "session-200.jsonl")])
 	}
 
 	db, err = storage.Open(cfg.DatabasePath)
@@ -193,8 +244,15 @@ func TestOriginParserSyncReplayIsBoundedAndConverges(t *testing.T) {
 		}
 		return got
 	}
-	if got := count(`SELECT COUNT(*) FROM search_items WHERE source_path LIKE ? AND origin_version IS NULL`, liveRoot+"%"); got != 1 {
+	if got := count(`SELECT COUNT(*) FROM search_items WHERE source_path LIKE ? AND (origin_version IS NULL OR origin_version < ?)`, liveRoot+"%", storage.CurrentOriginVersion); got != 1 {
 		t.Fatalf("live origin backlog after first replay = %d, want 1", got)
+	}
+	var pendingPath string
+	if err := db.DB().QueryRow(`SELECT DISTINCT source_path FROM search_items WHERE source_path LIKE ? AND (origin_version IS NULL OR origin_version < ?)`, liveRoot+"%", storage.CurrentOriginVersion).Scan(&pendingPath); err != nil {
+		t.Fatal(err)
+	}
+	if want := filepath.Join(liveRoot, "session-200.jsonl"); pendingPath != want {
+		t.Fatalf("pending path after reverse discovery = %q, want queue tail %q", pendingPath, want)
 	}
 	if got := count(`SELECT COUNT(*) FROM search_items WHERE uuid LIKE 'origin-retained-%' AND (origin != 'unknown' OR origin_version != ?)`, storage.CurrentOriginVersion); got != 0 {
 		t.Fatalf("retained rows not closed as current unknown after first replay = %d", got)
@@ -209,6 +267,7 @@ func TestOriginParserSyncReplayIsBoundedAndConverges(t *testing.T) {
 		t.Fatal(err)
 	}
 
+	reader.parsePaths = nil
 	beforeReplay = reader.parseCalls
 	if err := maybeAutoSync(&cfg, &bytes.Buffer{}); err != nil {
 		t.Fatalf("second origin replay: %v", err)
@@ -221,8 +280,8 @@ func TestOriginParserSyncReplayIsBoundedAndConverges(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got := count(`SELECT COUNT(*) FROM search_items WHERE uuid LIKE 'origin-live-%' AND (origin != 'human' OR origin_version != ?)`, storage.CurrentOriginVersion); got != 0 {
-		t.Fatalf("live parser rows without persisted origin after convergence = %d", got)
+	if got := count(`SELECT COUNT(*) FROM search_items WHERE uuid LIKE 'origin-live-%' AND origin_version != ?`, storage.CurrentOriginVersion); got != 0 {
+		t.Fatalf("live parser rows without current origin version after convergence = %d", got)
 	}
 	if got := count(`SELECT COUNT(*) FROM search_items WHERE uuid LIKE 'origin-retained-%' AND (origin != 'unknown' OR origin_version != ?)`, storage.CurrentOriginVersion); got != 0 {
 		t.Fatalf("retained rows without closed unknown origin after convergence = %d", got)
@@ -246,5 +305,144 @@ func TestOriginParserSyncReplayIsBoundedAndConverges(t *testing.T) {
 	}
 	if got := reader.parseCalls - beforeReplay; got != 0 {
 		t.Fatalf("converged origin replay parsed %d files, want 0", got)
+	}
+}
+
+func TestOriginPerennialZeroMessageReplayPreservesHistoryAndConverges(t *testing.T) {
+	tmp := t.TempDir()
+	liveRoot := filepath.Join(tmp, "live")
+	if err := os.MkdirAll(liveRoot, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(liveRoot, "zero.jsonl")
+	record := `{"type":"user","uuid":"zero-origin","timestamp":"2026-01-01T00:00:00Z","message":{"role":"user","content":"retained zero replay payload"}}`
+	if err := os.WriteFile(path, []byte(record+"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	oldTime := time.Now().Add(-time.Hour)
+	if err := os.Chtimes(path, oldTime, oldTime); err != nil {
+		t.Fatal(err)
+	}
+
+	reader := &originReplayClaudeReader{}
+	oldActiveInputs, oldNewRegistry := maybeAutoSyncActiveInputs, maybeAutoSyncNewRegistry
+	t.Cleanup(func() {
+		maybeAutoSyncActiveInputs = oldActiveInputs
+		maybeAutoSyncNewRegistry = oldNewRegistry
+	})
+	maybeAutoSyncActiveInputs = func([]string) ([]input_config.InputDefinition, input_config.InputMode, error) {
+		return []input_config.InputDefinition{{
+			ID:     "origin-zero-claude",
+			Source: "session",
+			Active: true,
+			Discover: input_config.DiscoverConfig{
+				Roots:   []string{liveRoot},
+				Include: []string{"*.jsonl"},
+			},
+			Decode: input_config.DecodeConfig{Format: "claude"},
+		}}, input_config.ModeDeclarative, nil
+	}
+	maybeAutoSyncNewRegistry = func() *readers.Registry {
+		registry := readers.NewRegistry()
+		registry.Register(reader)
+		return registry
+	}
+
+	cfg := config.Config{DatabasePath: filepath.Join(tmp, "index.db")}
+	if err := maybeAutoSync(&cfg, &bytes.Buffer{}); err != nil {
+		t.Fatalf("initial sync: %v", err)
+	}
+
+	db, err := storage.Open(cfg.DatabasePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var originalID int64
+	if err := db.DB().QueryRow(`SELECT id FROM search_items WHERE uuid = 'zero-origin'`).Scan(&originalID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.DB().Exec(`
+		INSERT INTO tool_events(message_uuid, source_path, ordinal, tool_name, command_head, is_error, extraction_version)
+		VALUES ('zero-origin', ?, 0, 'Bash', 'go test', 0, ?)
+	`, path, storage.CurrentExtractionVersion); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.DB().Exec(`UPDATE search_items SET origin = 'unknown', origin_version = 0 WHERE uuid = 'zero-origin'`); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	reader.parseErr = fmt.Errorf("injected parse failure")
+	if err := maybeAutoSync(&cfg, &bytes.Buffer{}); err == nil {
+		t.Fatal("parse failure unexpectedly succeeded")
+	}
+	db, err = storage.Open(cfg.DatabasePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var failedVersion int
+	var failedItems, failedEvents int
+	if err := db.DB().QueryRow(`SELECT origin_version FROM search_items WHERE uuid = 'zero-origin'`).Scan(&failedVersion); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.DB().QueryRow(`SELECT COUNT(*) FROM search_items WHERE uuid = 'zero-origin'`).Scan(&failedItems); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.DB().QueryRow(`SELECT COUNT(*) FROM tool_events WHERE message_uuid = 'zero-origin'`).Scan(&failedEvents); err != nil {
+		t.Fatal(err)
+	}
+	if failedVersion != 0 || failedItems != 1 || failedEvents != 1 {
+		t.Fatalf("parse failure mutated history: version=%d items=%d events=%d", failedVersion, failedItems, failedEvents)
+	}
+	if err := db.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	reader.parseErr = nil
+	reader.zeroRecords = true
+	reader.parsePaths = nil
+	beforeReplay := reader.parseCalls
+	if err := maybeAutoSync(&cfg, &bytes.Buffer{}); err != nil {
+		t.Fatalf("zero-message replay: %v", err)
+	}
+	if got := reader.parseCalls - beforeReplay; got != 1 {
+		t.Fatalf("zero-message replay parser calls = %d, want 1", got)
+	}
+
+	db, err = storage.Open(cfg.DatabasePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var gotID int64
+	var gotText, gotOrigin string
+	var gotVersion int
+	if err := db.DB().QueryRow(`SELECT id, text, origin, origin_version FROM search_items WHERE uuid = 'zero-origin'`).Scan(&gotID, &gotText, &gotOrigin, &gotVersion); err != nil {
+		t.Fatal(err)
+	}
+	if gotID != originalID || gotText != "retained zero replay payload" || gotOrigin != "unknown" || gotVersion != storage.CurrentOriginVersion {
+		t.Fatalf("retained row = (%d, %q, %q, %d), want (%d, %q, unknown, %d)", gotID, gotText, gotOrigin, gotVersion, originalID, "retained zero replay payload", storage.CurrentOriginVersion)
+	}
+	var toolName, commandHead string
+	if err := db.DB().QueryRow(`SELECT tool_name, command_head FROM tool_events WHERE message_uuid = 'zero-origin'`).Scan(&toolName, &commandHead); err != nil {
+		t.Fatal(err)
+	}
+	if toolName != "Bash" || commandHead != "go test" {
+		t.Fatalf("retained tool event = (%q, %q), want (Bash, go test)", toolName, commandHead)
+	}
+	if pending, err := db.PendingOriginPaths(storage.CurrentOriginVersion, 10); err != nil || len(pending) != 0 {
+		t.Fatalf("origin queue after zero-message replay = %v, err=%v", pending, err)
+	}
+	if err := db.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	beforeReplay = reader.parseCalls
+	if err := maybeAutoSync(&cfg, &bytes.Buffer{}); err != nil {
+		t.Fatalf("converged zero-message replay: %v", err)
+	}
+	if got := reader.parseCalls - beforeReplay; got != 0 {
+		t.Fatalf("converged zero-message path reparsed %d times, want 0", got)
 	}
 }
