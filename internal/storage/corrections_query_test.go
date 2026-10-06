@@ -148,3 +148,143 @@ func TestAggregateCorrectionNullUUID(t *testing.T) {
 		t.Fatalf("pending legacy corrections = %+v, want none", pending)
 	}
 }
+
+func TestAggregateCorrectionsUUIDLessSignalFallbacks(t *testing.T) {
+	db, err := Open(filepath.Join(t.TempDir(), "test.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = db.Close() }()
+
+	for _, row := range []struct {
+		path       string
+		uuid       string
+		signalUUID any
+	}{
+		{path: "/p/fallback-null.jsonl", uuid: "null-signal-target", signalUUID: nil},
+		{path: "/p/fallback-empty.jsonl", uuid: "empty-signal-target", signalUUID: ""},
+	} {
+		if _, err := db.db.Exec(`
+			INSERT INTO search_items
+				(source, source_path, ordinal, role, text, uuid, project, content_type)
+			VALUES ('session', ?, 3, 'user', ?, ?, 'proj', 'text')
+		`, row.path, row.uuid+" text", row.uuid); err != nil {
+			t.Fatalf("insert search item %q: %v", row.uuid, err)
+		}
+		if _, err := db.db.Exec(`
+			INSERT INTO correction_signals
+				(item_uuid, source_path, ordinal, detector, confidence, extraction_version)
+			VALUES (?, ?, 3, 'test', 0.8, 1)
+		`, row.signalUUID, row.path); err != nil {
+			t.Fatalf("insert signal for %q: %v", row.uuid, err)
+		}
+	}
+
+	got, err := db.AggregateCorrections(CorrectionAggOpts{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 2 {
+		t.Fatalf("UUID-less fallback corrections = %+v, want two", got)
+	}
+	seen := map[string]bool{}
+	for _, candidate := range got {
+		seen[candidate.UUID] = true
+	}
+	for _, uuid := range []string{"null-signal-target", "empty-signal-target"} {
+		if !seen[uuid] {
+			t.Errorf("UUID-less fallback omitted %q: %+v", uuid, got)
+		}
+	}
+}
+
+func TestAggregateCorrectionsUUIDLessSignalOmitsAmbiguousCoordinates(t *testing.T) {
+	db, err := Open(filepath.Join(t.TempDir(), "test.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = db.Close() }()
+
+	for _, row := range []struct {
+		path       string
+		signalUUID any
+		uuids      []any
+	}{
+		{path: "/p/ambiguous-null.jsonl", signalUUID: nil, uuids: []any{nil, "current-null"}},
+		{path: "/p/ambiguous-empty.jsonl", signalUUID: "", uuids: []any{"", "current-empty"}},
+	} {
+		for i, uuid := range row.uuids {
+			if _, err := db.db.Exec(`
+				INSERT INTO search_items
+					(source, source_path, ordinal, role, text, uuid, project, content_type)
+				VALUES ('session', ?, 7, 'user', ?, ?, 'proj', 'text')
+			`, row.path, row.path+string(rune('a'+i)), uuid); err != nil {
+				t.Fatalf("insert ambiguous search item at %q: %v", row.path, err)
+			}
+		}
+		if _, err := db.db.Exec(`
+			INSERT INTO correction_signals
+				(item_uuid, source_path, ordinal, detector, confidence, extraction_version)
+			VALUES (?, ?, 7, 'test', 0.8, 1)
+		`, row.signalUUID, row.path); err != nil {
+			t.Fatalf("insert ambiguous signal at %q: %v", row.path, err)
+		}
+	}
+
+	got, err := db.AggregateCorrections(CorrectionAggOpts{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 0 {
+		t.Fatalf("ambiguous UUID-less corrections = %+v, want none", got)
+	}
+}
+
+func TestAggregateCorrectionsStableTiePagination(t *testing.T) {
+	db, err := Open(filepath.Join(t.TempDir(), "test.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = db.Close() }()
+
+	rows := []struct {
+		path     string
+		ordinal  int
+		uuid     string
+		detector string
+	}{
+		{path: "/b.jsonl", ordinal: 0, uuid: "x", detector: "d-x"},
+		{path: "/a.jsonl", ordinal: 1, uuid: "z", detector: "d-z"},
+		{path: "/a.jsonl", ordinal: 0, uuid: "b", detector: "d-b"},
+		{path: "/a.jsonl", ordinal: 0, uuid: "a", detector: "d-a"},
+	}
+	for _, row := range rows {
+		if _, err := db.db.Exec(`
+			INSERT INTO search_items
+				(source, source_path, ordinal, role, text, uuid, project, content_type)
+			VALUES ('session', ?, ?, 'user', ?, ?, 'proj', 'text')
+		`, row.path, row.ordinal, row.uuid+" text", row.uuid); err != nil {
+			t.Fatalf("insert search item %q: %v", row.uuid, err)
+		}
+		if _, err := db.db.Exec(`
+			INSERT INTO correction_signals
+				(item_uuid, source_path, ordinal, detector, confidence, extraction_version)
+			VALUES (?, ?, ?, ?, 0.8, 1)
+		`, row.uuid, row.path, row.ordinal, row.detector); err != nil {
+			t.Fatalf("insert signal %q: %v", row.uuid, err)
+		}
+	}
+
+	want := []string{"a", "b", "z", "x"}
+	for pass := 0; pass < 2; pass++ {
+		for offset, wantUUID := range want {
+			got, err := db.AggregateCorrections(CorrectionAggOpts{Limit: 1, Offset: offset})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if len(got) != 1 || got[0].UUID != wantUUID {
+				t.Fatalf("pass %d page %d = %+v, want UUID %q", pass, offset, got, wantUUID)
+			}
+		}
+	}
+}

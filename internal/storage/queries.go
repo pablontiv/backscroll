@@ -793,15 +793,12 @@ func (d *Database) AggregateCorrections(opts CorrectionAggOpts) ([]CorrectionCan
 				NULLIF(cs.item_uuid, '') IS NULL
 				AND cs.source_path = si.source_path
 				AND cs.ordinal = si.ordinal
-				AND (
-					NULLIF(si.uuid, '') IS NULL
-					OR NOT EXISTS (
-						SELECT 1
-						FROM search_items peer
-						WHERE peer.source_path = si.source_path
-							AND peer.ordinal = si.ordinal
-							AND peer.id <> si.id
-					)
+				AND NOT EXISTS (
+					SELECT 1
+					FROM search_items peer
+					WHERE peer.source_path = si.source_path
+						AND peer.ordinal = si.ordinal
+						AND peer.id <> si.id
 				)
 			)
 		)
@@ -809,16 +806,9 @@ func (d *Database) AggregateCorrections(opts CorrectionAggOpts) ([]CorrectionCan
 	if opts.PendingOnly {
 		query += `
 		LEFT JOIN annotations a ON (
-			a.kind = 'correction'
-			AND (
-				(NULLIF(si.uuid, '') IS NOT NULL AND a.item_uuid = si.uuid)
-				OR (
-					NULLIF(si.uuid, '') IS NULL
-					AND NULLIF(a.item_uuid, '') IS NULL
-					AND si.source_path = a.source_path
-					AND si.ordinal = a.ordinal
-				)
-			)
+			si.source_path = a.source_path
+			AND si.ordinal = a.ordinal
+			AND a.kind = 'correction'
 		)
 		`
 	}
@@ -841,7 +831,7 @@ func (d *Database) AggregateCorrections(opts CorrectionAggOpts) ([]CorrectionCan
 
 	query += ` GROUP BY si.source_path, si.ordinal, si.uuid, si.origin
 		HAVING MAX(cs.confidence) >= ?
-		ORDER BY max_confidence DESC
+		ORDER BY max_confidence DESC, si.source_path ASC, si.ordinal ASC, COALESCE(si.uuid, '') ASC
 	`
 	args = append(args, opts.MinConfidence)
 

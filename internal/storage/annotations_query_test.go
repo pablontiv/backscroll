@@ -140,7 +140,7 @@ func TestAggregateCorrectionsWithPendingFilter(t *testing.T) {
 	}
 }
 
-func TestPendingCorrectionsMatchesAnnotationIdentity(t *testing.T) {
+func TestPendingCorrectionsExcludesByAnnotationCoordinates(t *testing.T) {
 	db, err := Open(filepath.Join(t.TempDir(), "test.db"))
 	if err != nil {
 		t.Fatal(err)
@@ -178,19 +178,46 @@ func TestPendingCorrectionsMatchesAnnotationIdentity(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(pending) != 1 || pending[0].UUID != "old-automation" {
-		t.Fatalf("pending after wrong-identity annotation = %+v, want old-automation", pending)
+	if len(pending) != 0 {
+		t.Fatalf("pending after same-coordinate annotation with another UUID = %+v, want none", pending)
 	}
+}
 
-	if err := db.UpsertAnnotation("old-automation", sourcePath, 0, "correction", "reviewed"); err != nil {
+func TestPendingCorrectionsLegacyAnnotationSurvivesUUIDTransition(t *testing.T) {
+	db, err := Open(filepath.Join(t.TempDir(), "test.db"))
+	if err != nil {
 		t.Fatal(err)
 	}
-	pending, err = db.AggregateCorrections(CorrectionAggOpts{PendingOnly: true})
+	defer func() { _ = db.Close() }()
+
+	const sourcePath = "/p/legacy-transition.jsonl"
+	if _, err := db.db.Exec(`
+		INSERT INTO search_items
+			(source, source_path, ordinal, role, text, uuid, project, content_type)
+		VALUES ('session', ?, 0, 'user', 'legacy correction', NULL, 'proj', 'text')
+	`, sourcePath); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.db.Exec(`
+		INSERT INTO correction_signals
+			(item_uuid, source_path, ordinal, detector, confidence, extraction_version)
+		VALUES (NULL, ?, 0, 'test', 0.9, 1)
+	`, sourcePath); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.UpsertAnnotation("", sourcePath, 0, "correction", "reviewed"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.db.Exec(`UPDATE search_items SET uuid = 'current-uuid' WHERE source_path = ? AND ordinal = 0`, sourcePath); err != nil {
+		t.Fatal(err)
+	}
+
+	pending, err := db.AggregateCorrections(CorrectionAggOpts{PendingOnly: true})
 	if err != nil {
 		t.Fatal(err)
 	}
 	if len(pending) != 0 {
-		t.Fatalf("pending after matching annotation = %+v, want none", pending)
+		t.Fatalf("pending after legacy annotation and UUID transition = %+v, want none", pending)
 	}
 }
 
