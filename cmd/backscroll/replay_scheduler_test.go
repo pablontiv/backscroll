@@ -192,9 +192,19 @@ func TestReplaySchedulerEmptyPiOverlapDoesNotDuplicate(t *testing.T) {
 	}
 
 	states[path].existingMeta.Hash = emptyPiHashPrefix + "same"
-	states[path].hash = states[path].existingMeta.Hash
+	states[path].hash = "same" // racy-clean hashing returns the unmarked content hash
 	if got := selectReplayPaths(states, replayQueues{emptyPi: []string{path}}, 200); len(got) != 0 {
-		t.Fatalf("marked empty Pi path replayed again: %v", got)
+		t.Fatalf("marked empty Pi path replayed again after forced hash: %v", got)
+	}
+}
+
+func TestCanonicalContentHashIsScopedToPi(t *testing.T) {
+	marked := emptyPiHashPrefix + "same"
+	if !contentHashesEqual("pi", marked, "same") {
+		t.Fatal("Pi marker changed canonical content identity")
+	}
+	if contentHashesEqual("claude", marked, "same") {
+		t.Fatal("Pi marker normalization leaked into another reader")
 	}
 }
 

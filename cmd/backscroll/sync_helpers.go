@@ -24,6 +24,19 @@ func diagnosticsEnabled() bool {
 
 const emptyPiHashPrefix = "pi-empty-v1:"
 
+// canonicalContentHash removes persisted parser-state markers when comparing
+// content identity. The marker is Pi-specific and remains intact in storage.
+func canonicalContentHash(readerName, hash string) string {
+	if readerName == "pi" {
+		return strings.TrimPrefix(hash, emptyPiHashPrefix)
+	}
+	return hash
+}
+
+func contentHashesEqual(readerName, persistedHash, observedHash string) bool {
+	return canonicalContentHash(readerName, persistedHash) == canonicalContentHash(readerName, observedHash)
+}
+
 var (
 	maybeAutoSyncOpen               = storage.Open
 	maybeAutoSyncActiveInputs       = input_config.ActiveInputs
@@ -190,7 +203,8 @@ func selectReplayPaths(states map[string]*syncPathState, queues replayQueues, li
 			break
 		}
 		state := states[path]
-		if state == nil || !state.exists || state.naturalParse || state.existingMeta.Hash != state.hash {
+		if state == nil || !state.exists || state.naturalParse ||
+			!contentHashesEqual(state.claim.reader.Name(), state.existingMeta.Hash, state.hash) {
 			continue
 		}
 		reason := reasons[path]
@@ -377,7 +391,7 @@ func maybeAutoSync(cfg *config.Config, progress io.Writer) (retErr error) {
 			hashingTime += time.Since(hashingStart)
 		}
 
-		state.naturalParse = !exists || existingMeta.Hash != state.hash
+		state.naturalParse = !exists || !contentHashesEqual(reader.Name(), existingMeta.Hash, state.hash)
 		states[ref] = state
 	}
 

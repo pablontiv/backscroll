@@ -18,6 +18,7 @@ import (
 type emptyPiReplayReader struct {
 	paths      []string
 	hashes     map[string]string
+	hashCalls  int
 	parseCalls int
 }
 
@@ -28,12 +29,123 @@ func (r *emptyPiReplayReader) Discover(input_config.InputDefinition) ([]string, 
 }
 
 func (r *emptyPiReplayReader) Hash(path string) (string, error) {
+	r.hashCalls++
 	return r.hashes[path], nil
 }
 
 func (r *emptyPiReplayReader) Parse(path string, _ input_config.InputDefinition) (models.ParsedFile, error) {
 	r.parseCalls++
 	return models.ParsedFile{Path: path, Hash: r.hashes[path]}, nil
+}
+
+func TestMarkedEmptyPiRacyCleanComparesCanonicalContentHash(t *testing.T) {
+	tmpDir := t.TempDir()
+	path := filepath.Join(tmpDir, "empty.jsonl")
+	initialContent := []byte("aaaa")
+	if err := os.WriteFile(path, initialContent, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	stat, err := os.Stat(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	initialMtime := stat.ModTime()
+	initialHash := "raw-initial"
+	reader := &emptyPiReplayReader{
+		paths:  []string{path},
+		hashes: map[string]string{path: initialHash},
+	}
+
+	oldActiveInputs, oldNewRegistry := maybeAutoSyncActiveInputs, maybeAutoSyncNewRegistry
+	t.Cleanup(func() {
+		maybeAutoSyncActiveInputs = oldActiveInputs
+		maybeAutoSyncNewRegistry = oldNewRegistry
+	})
+	maybeAutoSyncActiveInputs = func([]string) ([]input_config.InputDefinition, input_config.InputMode, error) {
+		return []input_config.InputDefinition{{
+			ID:     "marked-empty-pi",
+			Source: "session",
+			Active: true,
+			Decode: input_config.DecodeConfig{Format: "pi"},
+		}}, input_config.ModeDeclarative, nil
+	}
+	maybeAutoSyncNewRegistry = func() *readers.Registry {
+		registry := readers.NewRegistry()
+		registry.Register(reader)
+		return registry
+	}
+
+	cfg := config.Config{DatabasePath: filepath.Join(tmpDir, "index.db")}
+	db, err := storage.Open(cfg.DatabasePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	fileMtime := initialMtime.Format(time.RFC3339)
+	if !isRacyCleanFile(fileMtime, fileMtime) {
+		t.Fatal("test setup error: matching file_mtime and last_indexed must force racy-clean hashing")
+	}
+	if _, err := db.DB().Exec(`
+		INSERT INTO indexed_files (path, hash, last_indexed, file_size, file_mtime)
+		VALUES (?, ?, ?, ?, ?)
+	`, path, emptyPiHashPrefix+initialHash, fileMtime, stat.Size(), fileMtime); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := maybeAutoSync(&cfg, &bytes.Buffer{}); err != nil {
+		t.Fatalf("immutable racy-clean sync: %v", err)
+	}
+	if reader.hashCalls != 1 || reader.parseCalls != 0 {
+		t.Fatalf("immutable racy-clean calls = hash %d parse %d, want 1/0", reader.hashCalls, reader.parseCalls)
+	}
+
+	db, err = storage.Open(cfg.DatabasePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var persistedHash string
+	if err := db.DB().QueryRow(`SELECT hash FROM indexed_files WHERE path = ?`, path).Scan(&persistedHash); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if want := emptyPiHashPrefix + initialHash; persistedHash != want {
+		t.Fatalf("immutable skip changed persisted marker to %q, want %q", persistedHash, want)
+	}
+
+	changedContent := []byte("bbbb")
+	if len(changedContent) != len(initialContent) {
+		t.Fatal("test setup error: changed content must retain file size")
+	}
+	if err := os.WriteFile(path, changedContent, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chtimes(path, initialMtime, initialMtime); err != nil {
+		t.Fatal(err)
+	}
+	reader.hashes[path] = "raw-changed"
+
+	if err := maybeAutoSync(&cfg, &bytes.Buffer{}); err != nil {
+		t.Fatalf("changed racy-clean sync: %v", err)
+	}
+	if reader.hashCalls != 2 || reader.parseCalls != 1 {
+		t.Fatalf("changed racy-clean calls = hash %d parse %d, want 2/1", reader.hashCalls, reader.parseCalls)
+	}
+
+	db, err = storage.Open(cfg.DatabasePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	if err := db.DB().QueryRow(`SELECT hash FROM indexed_files WHERE path = ?`, path).Scan(&persistedHash); err != nil {
+		t.Fatal(err)
+	}
+	if want := emptyPiHashPrefix + reader.hashes[path]; persistedHash != want {
+		t.Fatalf("changed parse persisted hash = %q, want %q", persistedHash, want)
+	}
 }
 
 func TestEmptyPiReplayCapDrainsAndConverges(t *testing.T) {
