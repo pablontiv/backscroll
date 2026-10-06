@@ -81,7 +81,7 @@ func TestV15EchoBackfillPreservesPerennialIdentity(t *testing.T) {
 	if err != nil || diag != nil {
 		t.Fatalf("inspect: %v %v", err, diag)
 	}
-	if err := db.ApplyMigrationPlan(context.Background(), plan); err != nil {
+	if err := applyMigrationPlanForTest(context.Background(), db, plan); err != nil {
 		t.Fatal(err)
 	}
 	paths, err := db.StalePaths(CurrentExtractionVersion)

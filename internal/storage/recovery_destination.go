@@ -97,7 +97,9 @@ func CreateRecoveryDestination(ctx context.Context, dir string, plan compat.Reco
 		}
 	}()
 
-	db, err := Open(path)
+	// The private path was allocated above and is known to be a new empty file.
+	// Use the creation-only helper rather than the public existing-database path.
+	db, err := createDatabase(path)
 	if err != nil {
 		return "", fmt.Errorf("initialize fresh recovery destination: %w", err)
 	}

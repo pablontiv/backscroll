@@ -26,15 +26,46 @@ var (
 	openCompatibleSnapshotDatabase = func(ctx context.Context, path string, plan compat.MigrationPlan) (string, error) {
 		return SnapshotDatabase(ctx, path, plan)
 	}
-	openCompatibleApplyMigrationPlan = func(db *Database, ctx context.Context, plan compat.MigrationPlan) error {
-		return db.ApplyMigrationPlan(ctx, plan)
-	}
+	openCompatibleApplyMigrationPlan = applyMigrationPlanLocked
 )
 
 var ErrImmutableReadOnlyWALUnsafe = errors.New("non-empty WAL makes immutable read-only content unsafe")
 
-// Open opens or creates a new SQLite database at the given path with FTS5 and WAL mode enabled.
+// Open opens or creates a SQLite database at the given path with FTS5 and WAL mode enabled.
+// Existing databases always pass through compatibility inspection and backed-up migration.
 func Open(path string) (*Database, error) {
+	db, created, err := createDatabaseExclusively(path)
+	if err != nil || created {
+		return db, err
+	}
+
+	db, diag, openErr := OpenCompatible(context.Background(), path)
+	if diag != nil {
+		if db != nil {
+			_ = db.Close()
+		}
+		return nil, fmt.Errorf("%s: %s", diag.Code, diag.Summary)
+	}
+	return db, openErr
+}
+
+func createDatabaseExclusively(path string) (*Database, bool, error) {
+	reserved, err := os.OpenFile(path, os.O_RDWR|os.O_CREATE|os.O_EXCL, 0o600)
+	if errors.Is(err, fs.ErrExist) {
+		return nil, false, nil
+	}
+	if err != nil {
+		return nil, false, fmt.Errorf("reserve database path %s: %w", path, err)
+	}
+	if err := reserved.Close(); err != nil {
+		_ = os.Remove(path)
+		return nil, false, fmt.Errorf("close newly reserved database path %s: %w", path, err)
+	}
+	db, err := createDatabase(path)
+	return db, true, err
+}
+
+func createDatabase(path string) (*Database, error) {
 	d, err := openWithoutSetup(path)
 	if err != nil {
 		return nil, err
@@ -88,8 +119,13 @@ func openWriteConnection(path string, migrationImmediate bool) (*Database, error
 func OpenCompatible(ctx context.Context, path string) (*Database, *compat.Diagnostic, error) {
 	inspect, err := OpenReadOnly(path)
 	if errors.Is(err, fs.ErrNotExist) {
-		db, openErr := Open(path)
-		return db, nil, openErr
+		db, created, createErr := createDatabaseExclusively(path)
+		if createErr != nil || created {
+			return db, nil, createErr
+		}
+		// Another opener won the exclusive creation race. Treat its path as an
+		// existing database and inspect it rather than setting up over it.
+		inspect, err = OpenReadOnly(path)
 	}
 	if err != nil {
 		return nil, nil, err
@@ -108,24 +144,47 @@ func OpenCompatible(ctx context.Context, path string) (*Database, *compat.Diagno
 		return db, nil, openErr
 	}
 
-	if _, err := openCompatibleSnapshotDatabase(ctx, canonicalPath, plan); err != nil {
-		return nil, nil, fmt.Errorf("snapshot database before migration: %w", err)
-	}
-
 	migrationDB, err := openMigrationWithoutSetup(canonicalPath)
 	if err != nil {
 		return nil, nil, err
 	}
-	if err := openCompatibleApplyMigrationPlan(migrationDB, ctx, plan); err != nil {
-		_ = migrationDB.Close()
+	migrationClosed := false
+	defer func() {
+		if !migrationClosed {
+			_ = migrationDB.Close()
+		}
+	}()
+
+	tx, err := beginMigrationTx(ctx, migrationDB.db)
+	if err != nil {
+		return nil, nil, fmt.Errorf("begin migration plan transaction: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	if err := validateMigrationPlanLocked(ctx, tx, plan); err != nil {
 		return nil, nil, err
+	}
+	if _, err := openCompatibleSnapshotDatabase(ctx, canonicalPath, plan); err != nil {
+		return nil, nil, fmt.Errorf("snapshot database before migration: %w", err)
+	}
+	if err := openCompatibleApplyMigrationPlan(ctx, tx, plan); err != nil {
+		return nil, nil, err
+	}
+	if err := tx.Commit(); err != nil {
+		return nil, nil, fmt.Errorf("commit migration plan: %w", err)
 	}
 	if err := migrationDB.Close(); err != nil {
 		return nil, nil, err
 	}
+	migrationClosed = true
+
 	db, err := openWithoutSetup(canonicalPath)
 	if err != nil {
 		return nil, nil, err
+	}
+	if err := compat.VerifyCurrentShape(ctx, db.DB()); err != nil {
+		_ = db.Close()
+		return nil, nil, fmt.Errorf("verify committed schema: %w", err)
 	}
 	return db, nil, nil
 }

@@ -32,6 +32,7 @@ type retainedSnapshot struct {
 type parsedSnapshotName struct {
 	fromVersion     int
 	signaturePrefix string
+	historical      bool
 }
 
 // SnapshotDatabase creates and validates a durable sibling backup of srcPath.
@@ -45,6 +46,9 @@ func SnapshotDatabase(ctx context.Context, srcPath string, plan compat.Migration
 		return "", err
 	}
 	directory := filepath.Dir(srcPath)
+	if err := cleanupSnapshotTempDirectories(directory, filepath.Base(srcPath)); err != nil {
+		return "", err
+	}
 
 	existing, nextSuffix, err := inspectRetainedSnapshots(ctx, srcPath, stem)
 	if err != nil {
@@ -161,7 +165,10 @@ func inspectRetainedSnapshots(ctx context.Context, srcPath, currentStem string) 
 			continue
 		}
 		shape, err := inspectSnapshot(ctx, path)
-		if err != nil || shape.AppliedVersion != parsed.fromVersion || !strings.HasPrefix(strings.TrimPrefix(shape.Signature, "sha256:"), parsed.signaturePrefix) {
+		if err != nil {
+			continue
+		}
+		if !parsed.historical && (shape.AppliedVersion != parsed.fromVersion || !strings.HasPrefix(strings.TrimPrefix(shape.Signature, "sha256:"), parsed.signaturePrefix)) {
 			continue
 		}
 		after, err := os.Lstat(path)
@@ -186,24 +193,59 @@ func inspectRetainedSnapshots(ctx context.Context, srcPath, currentStem string) 
 }
 
 func parseSnapshotName(databaseBase, name string) (parsedSnapshotName, bool) {
-	pattern := "^" + regexp.QuoteMeta(databaseBase) + `\.snapshot-v(0|[1-9][0-9]*)-([0-9a-f]{12})-to-v([1-9][0-9]*)(?:\.([1-9][0-9]*))?$`
-	matches := regexp.MustCompile(pattern).FindStringSubmatch(name)
-	if matches == nil {
+	hardenedPattern := "^" + regexp.QuoteMeta(databaseBase) + `\.snapshot-v(0|[1-9][0-9]*)-([0-9a-f]{12})-to-v([1-9][0-9]*)(?:\.([1-9][0-9]*))?$`
+	matches := regexp.MustCompile(hardenedPattern).FindStringSubmatch(name)
+	if matches != nil {
+		fromVersion, fromErr := strconv.Atoi(matches[1])
+		_, toErr := strconv.Atoi(matches[3])
+		var suffixErr error
+		if matches[4] != "" {
+			_, suffixErr = strconv.Atoi(matches[4])
+		}
+		if fromErr != nil || toErr != nil || suffixErr != nil {
+			return parsedSnapshotName{}, false
+		}
+		return parsedSnapshotName{
+			fromVersion:     fromVersion,
+			signaturePrefix: matches[2],
+		}, true
+	}
+
+	historicalPattern := "^" + regexp.QuoteMeta(databaseBase) + `\.snapshot(?:\.([1-9][0-9]*))?$`
+	if !regexp.MustCompile(historicalPattern).MatchString(name) {
 		return parsedSnapshotName{}, false
 	}
-	fromVersion, fromErr := strconv.Atoi(matches[1])
-	_, toErr := strconv.Atoi(matches[3])
-	var suffixErr error
-	if matches[4] != "" {
-		_, suffixErr = strconv.Atoi(matches[4])
+	return parsedSnapshotName{historical: true}, true
+}
+
+func cleanupSnapshotTempDirectories(directory, databaseBase string) error {
+	entries, err := os.ReadDir(directory)
+	if err != nil {
+		return fmt.Errorf("list snapshot temporary directories: %w", err)
 	}
-	if fromErr != nil || toErr != nil || suffixErr != nil {
-		return parsedSnapshotName{}, false
+	pattern := regexp.MustCompile(`^\.` + regexp.QuoteMeta(databaseBase) + `\.snapshot-tmp-[0-9]+$`)
+	removed := false
+	for _, entry := range entries {
+		if !pattern.MatchString(entry.Name()) {
+			continue
+		}
+		path := filepath.Join(directory, entry.Name())
+		info, err := os.Lstat(path)
+		if err != nil {
+			return fmt.Errorf("inspect snapshot temporary directory %s: %w", path, err)
+		}
+		if info.Mode()&os.ModeSymlink != 0 || !info.IsDir() || (supportsPOSIXModes() && info.Mode().Perm() != 0o700) {
+			continue
+		}
+		if err := os.RemoveAll(path); err != nil {
+			return fmt.Errorf("remove stale snapshot temporary directory %s: %w", path, err)
+		}
+		removed = true
 	}
-	return parsedSnapshotName{
-		fromVersion:     fromVersion,
-		signaturePrefix: matches[2],
-	}, true
+	if removed {
+		return fsyncDirectory(directory)
+	}
+	return nil
 }
 
 func snapshotSuffix(base, name string) (int, bool) {
@@ -322,28 +364,7 @@ func pruneSnapshots(snapshots []retainedSnapshot, keep int) error {
 	return nil
 }
 
-// ApplyMigrationPlan applies a checked compatibility migration plan atomically.
-func (d *Database) ApplyMigrationPlan(ctx context.Context, plan compat.MigrationPlan) error {
-	if len(plan.Steps) == 0 {
-		return nil
-	}
-	if d.path == "" {
-		return fmt.Errorf("database path is not bound to receiver")
-	}
-
-	if planIncludesVersion(plan, 9) {
-		if err := prepareV9ToolEventDuplicates(ctx, d.db); err != nil {
-			return err
-		}
-	}
-
-	v6Recorded := plan.From.AppliedVersion >= 6 || planIncludesVersion(plan, 6)
-	tx, err := beginMigrationTx(ctx, d.db)
-	if err != nil {
-		return fmt.Errorf("begin migration plan transaction: %w", err)
-	}
-	defer func() { _ = tx.Rollback() }()
-
+func validateMigrationPlanLocked(ctx context.Context, tx *sql.Tx, plan compat.MigrationPlan) error {
 	livePlan, diag, err := compat.InspectIndex(ctx, tx)
 	if err != nil {
 		return fmt.Errorf("re-inspect schema in migration transaction: %w", err)
@@ -354,12 +375,24 @@ func (d *Database) ApplyMigrationPlan(ctx context.Context, plan compat.Migration
 	if diag != nil && !planStartsFromEmptySchema(plan) {
 		return fmt.Errorf("re-inspect schema in migration transaction: %s: %s", diag.Code, diag.Summary)
 	}
+	return nil
+}
+
+// applyMigrationPlanLocked applies a checked plan using a transaction whose
+// write reservation is already held by the caller. It neither begins nor ends
+// the transaction, so OpenCompatible can keep the reservation across backup
+// creation and all migration writes.
+func applyMigrationPlanLocked(ctx context.Context, tx *sql.Tx, plan compat.MigrationPlan) error {
+	if len(plan.Steps) == 0 {
+		return nil
+	}
 	if planIncludesVersion(plan, 9) {
 		if err := prepareV9ToolEventDuplicates(ctx, tx); err != nil {
 			return err
 		}
 	}
 
+	v6Recorded := plan.From.AppliedVersion >= 6 || planIncludesVersion(plan, 6)
 	for _, step := range plan.Steps {
 		if step.Version > 6 && !v6Recorded {
 			if err := recordMigration(ctx, tx, 6, "V6 drop phantom source_metadata column", sqlV6Drop, "record migration v6"); err != nil {
@@ -379,18 +412,6 @@ func (d *Database) ApplyMigrationPlan(ctx context.Context, plan compat.Migration
 
 	if err := compat.VerifyCurrentShape(ctx, tx); err != nil {
 		return fmt.Errorf("verify final schema before commit: %w", err)
-	}
-	if err := tx.Commit(); err != nil {
-		return fmt.Errorf("commit migration plan: %w", err)
-	}
-
-	verify, err := OpenReadOnly(d.path)
-	if err != nil {
-		return fmt.Errorf("reopen migrated database read-only: %w", err)
-	}
-	defer func() { _ = verify.Close() }()
-	if err := compat.VerifyCurrentShape(ctx, verify.DB()); err != nil {
-		return fmt.Errorf("verify committed schema: %w", err)
 	}
 	return nil
 }
