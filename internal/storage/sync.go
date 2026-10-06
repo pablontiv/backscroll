@@ -19,6 +19,7 @@ const CurrentExtractionVersion = 3
 type IndexedMessage struct {
 	Ordinal     int
 	Role        string
+	Origin      models.MessageOrigin
 	Text        string
 	UUID        string
 	Timestamp   string
@@ -125,6 +126,11 @@ func (d *Database) SyncFiles(files []IndexedFile) error {
 				continue
 			}
 
+			origin := normalizedOrigin(msg.Origin)
+			if err := rejectConflictingOrigin(tx, msg.UUID, origin); err != nil {
+				return fmt.Errorf("validate message origin for %s: %w", file.SourcePath, err)
+			}
+
 			var uuidVal interface{}
 			if msg.UUID != "" {
 				uuidVal = msg.UUID
@@ -135,13 +141,14 @@ func (d *Database) SyncFiles(files []IndexedFile) error {
 			}
 			_, err := tx.Exec(`
 				INSERT OR IGNORE INTO search_items
-				(source, source_path, ordinal, role, text, timestamp, uuid, project, content_type, extraction_version, was_interrupted, search_echo)
-				VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+				(source, source_path, ordinal, role, origin, text, timestamp, uuid, project, content_type, extraction_version, was_interrupted, search_echo, origin_version)
+				VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 			`,
 				file.Source,
 				file.SourcePath,
 				msg.Ordinal,
 				msg.Role,
+				origin,
 				msg.Text,
 				msg.Timestamp,
 				uuidVal,
@@ -150,6 +157,7 @@ func (d *Database) SyncFiles(files []IndexedFile) error {
 				msg.ExtractionVersion,
 				msg.WasInterrupted,
 				msg.SearchEcho,
+				CurrentOriginVersion,
 			)
 			if err != nil {
 				return fmt.Errorf("insert search_item for %s: %w", file.SourcePath, err)
@@ -165,6 +173,9 @@ func (d *Database) SyncFiles(files []IndexedFile) error {
 					AND (search_echo IS NULL OR (search_echo = 0 AND ? = 1))`,
 					msg.SearchEcho, file.SourcePath, msg.UUID, msg.Text, msg.ContentType, msg.SearchEcho); err != nil {
 					return fmt.Errorf("update search echo provenance for %s: %w", file.SourcePath, err)
+				}
+				if err := enrichOrigin(tx, msg.UUID, origin); err != nil {
+					return fmt.Errorf("update message origin provenance for %s: %w", file.SourcePath, err)
 				}
 			}
 
@@ -242,6 +253,7 @@ func (d *Database) SyncFiles(files []IndexedFile) error {
 		for i, im := range file.Messages {
 			detectionMsgs[i] = models.Message{
 				Role:           im.Role,
+				Origin:         normalizedOrigin(im.Origin),
 				Content:        im.Text,
 				ContentType:    im.ContentType,
 				Timestamp:      time.Time{}, // not needed for detection
