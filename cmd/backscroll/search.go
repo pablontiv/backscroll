@@ -396,7 +396,7 @@ type minimalSearchResult struct {
 }
 
 func searchModelResults(results []storage.SearchResult) []models.SearchResult {
-	modelResults := make([]models.SearchResult, 0, len(results))
+	var modelResults []models.SearchResult
 	for i, result := range results {
 		modelResults = append(modelResults, models.SearchResult{
 			Source:       result.Source,

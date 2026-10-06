@@ -30,6 +30,27 @@ func TestSearchModelConversionPreservesExactIdentity(t *testing.T) {
 	if got[2].UUID != nil || got[2].Ordinal != 43 {
 		t.Fatalf("empty UUID must be published as null without losing ordinal: %+v", got[2])
 	}
+	for name, results := range map[string][]storage.SearchResult{
+		"nil":   nil,
+		"empty": {},
+	} {
+		t.Run(name, func(t *testing.T) {
+			if got := searchModelResults(results); got != nil {
+				t.Fatalf("zero model results = %#v, want nil", got)
+			}
+		})
+	}
+}
+
+func TestSearchEmptyJSONPreservesFieldContracts(t *testing.T) {
+	cfg := newSearchIdentityContractIndex(t)
+
+	if got := strings.TrimSpace(runSearchContract(t, cfg, "no-such-identity-result", "full", true, false)); got != "null" {
+		t.Fatalf("empty full JSON = %q, want null", got)
+	}
+	if got := strings.TrimSpace(runSearchContract(t, cfg, "no-such-identity-result", "minimal", true, false)); got != "[]" {
+		t.Fatalf("empty minimal JSON = %q, want []", got)
+	}
 }
 
 func TestSearchRobotIdentityEscapesUUIDInMinimalAndFull(t *testing.T) {
