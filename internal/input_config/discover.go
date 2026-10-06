@@ -83,15 +83,12 @@ func walkGlob(root, pattern string, excludes []string, followSymlinks bool, seen
 		if err != nil {
 			return err
 		}
-		matched, err := filepath.Match(flattenDoublestar(pattern, rel), rel)
+		matched, err := matchDoublestar(pattern, rel)
 		if err != nil {
 			return err
 		}
 		if !matched {
-			// Try doublestar match
-			if !matchDoublestar(pattern, rel) {
-				return nil
-			}
+			return nil
 		}
 
 		// Validate path stays within root and resolves symlinks securely
@@ -108,81 +105,54 @@ func walkGlob(root, pattern string, excludes []string, followSymlinks bool, seen
 	return results, err
 }
 
-// matchPattern matches a path against a glob pattern, supporting ** for any depth.
+// matchPattern matches an exclusion against a path, supporting ** for any depth.
 func matchPattern(path, pattern string) (bool, error) {
-	// Normalize separators
-	path = filepath.ToSlash(path)
-	pattern = filepath.ToSlash(pattern)
-
 	if strings.Contains(pattern, "**") {
-		return matchDoublestarFull(path, pattern), nil
+		return matchDoublestar(pattern, path)
 	}
 	return filepath.Match(pattern, filepath.Base(path))
 }
 
-// matchDoublestar matches path relative to root against a **-containing pattern.
-func matchDoublestar(pattern, rel string) bool {
-	rel = filepath.ToSlash(rel)
-	pattern = filepath.ToSlash(pattern)
-	return matchDoublestarFull(rel, pattern)
+// matchDoublestar matches a slash-separated path against a glob. A ** path
+// segment matches zero or more complete path segments; all other segments use
+// filepath.Match semantics.
+func matchDoublestar(pattern, path string) (bool, error) {
+	pathSegments := strings.Split(filepath.ToSlash(path), "/")
+	patternSegments := strings.Split(filepath.ToSlash(pattern), "/")
+	return matchGlobSegments(patternSegments, pathSegments)
 }
 
-// matchDoublestarFull implements simple ** glob matching.
-// ** matches zero or more path segments.
-func matchDoublestarFull(path, pattern string) bool {
-	if !strings.Contains(pattern, "**") {
-		matched, _ := filepath.Match(pattern, path)
-		return matched
+func matchGlobSegments(pattern, path []string) (bool, error) {
+	if len(pattern) == 0 {
+		return len(path) == 0, nil
 	}
 
-	parts := strings.SplitN(pattern, "**", 2)
-	prefix := strings.TrimSuffix(parts[0], "/")
-	suffix := strings.TrimPrefix(parts[1], "/")
-
-	if prefix != "" && !strings.HasPrefix(path, prefix) {
-		return false
-	}
-	rest := strings.TrimPrefix(path, prefix)
-	rest = strings.TrimPrefix(rest, "/")
-
-	if suffix == "" {
-		return true
-	}
-
-	// suffix may itself contain **, recurse
-	if strings.Contains(suffix, "**") {
-		// simple: check that any trailing segment matches suffix
-		segments := strings.Split(rest, "/")
-		for i := range segments {
-			candidate := strings.Join(segments[i:], "/")
-			if matchDoublestarFull(candidate, suffix) {
-				return true
+	if pattern[0] == "**" {
+		// Adjacent doublestars are equivalent to one and avoiding them here keeps
+		// recursive matching bounded to the number of path segments.
+		for len(pattern) > 1 && pattern[1] == "**" {
+			pattern = pattern[1:]
+		}
+		if len(pattern) == 1 {
+			return true, nil
+		}
+		for i := 0; i <= len(path); i++ {
+			matched, err := matchGlobSegments(pattern[1:], path[i:])
+			if err != nil || matched {
+				return matched, err
 			}
 		}
-		return false
+		return false, nil
 	}
 
-	// suffix is a simple glob — match against each trailing segment combination
-	segments := strings.Split(rest, "/")
-	for i := range segments {
-		candidate := strings.Join(segments[i:], "/")
-		matched, _ := filepath.Match(suffix, candidate)
-		if matched {
-			return true
-		}
+	if len(path) == 0 {
+		return false, nil
 	}
-	return false
-}
-
-// flattenDoublestar converts a **-pattern to a simple glob for filepath.Match
-// when the relative path has no directory components that ** would skip.
-func flattenDoublestar(pattern, rel string) string {
-	if !strings.Contains(pattern, "**") {
-		return pattern
+	matched, err := filepath.Match(pattern[0], path[0])
+	if err != nil || !matched {
+		return false, err
 	}
-	// Return the base name pattern so filepath.Match can at least filter by extension
-	parts := strings.Split(filepath.ToSlash(pattern), "/")
-	return parts[len(parts)-1]
+	return matchGlobSegments(pattern[1:], path[1:])
 }
 
 func expandTilde(path, home string) string {

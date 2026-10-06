@@ -19,6 +19,36 @@ func mkfile(t *testing.T, dir, rel string) string {
 	return path
 }
 
+func TestMatchDoublestarPreservesPathSegments(t *testing.T) {
+	tests := []struct {
+		name    string
+		pattern string
+		path    string
+		want    bool
+	}{
+		{name: "root jsonl", pattern: "**/*.jsonl", path: "session.jsonl", want: true},
+		{name: "nested jsonl", pattern: "**/*.jsonl", path: "project/session.jsonl", want: true},
+		{name: "valid Pi subagent", pattern: "**/run-*/session.jsonl", path: "project/run-7/session.jsonl", want: true},
+		{name: "root session is not Pi subagent", pattern: "**/run-*/session.jsonl", path: "session.jsonl", want: false},
+		{name: "nonmatching immediate parent", pattern: "**/run-*/session.jsonl", path: "run-7/nested/session.jsonl", want: false},
+		{name: "Claude subagent exclusion", pattern: "**/subagents/**", path: "project/subagents/child/session.jsonl", want: true},
+		{name: "ordinary Claude session", pattern: "**/subagents/**", path: "project/session.jsonl", want: false},
+		{name: "nested markdown", pattern: "**/*.md", path: "adr/accepted.md", want: true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, err := matchDoublestar(tt.pattern, tt.path)
+			if err != nil {
+				t.Fatalf("matchDoublestar(%q, %q): %v", tt.pattern, tt.path, err)
+			}
+			if got != tt.want {
+				t.Fatalf("matchDoublestar(%q, %q) = %t, want %t", tt.pattern, tt.path, got, tt.want)
+			}
+		})
+	}
+}
+
 func TestDiscoverFiles_includeExclude(t *testing.T) {
 	dir := t.TempDir()
 	a := mkfile(t, dir, "proj/session.jsonl")

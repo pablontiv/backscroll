@@ -46,6 +46,13 @@ Describe "Input preset functions" -Tag "Static" {
         Get-Command Get-ConfigDir | Should -Not -BeNullOrEmpty
         Get-Command Install-InputPresets | Should -Not -BeNullOrEmpty
     }
+
+    It "ships the Pi preset without expanding the Windows preset set" {
+        $InputPresets.Count | Should -Be 3
+        $InputPresets | Should -Contain "claude.inputs.toml"
+        $InputPresets | Should -Contain "pi.inputs.toml"
+        $InputPresets | Should -Contain "codex.inputs.toml"
+    }
 }
 
 Describe "Get-Arch" -Tag "Runtime" {
@@ -150,6 +157,7 @@ Describe "Install-InputPresets" -Tag "Runtime" {
             Install-InputPresets -Version "v0.2.3" -SourceDir $InputsSource
             Test-Path (Join-Path (Join-Path $configDir "backscroll") "inputs") | Should -BeTrue
             Test-Path (Join-Path (Join-Path (Join-Path $configDir "backscroll") "inputs") "claude.inputs.toml") | Should -BeTrue
+            Test-Path (Join-Path (Join-Path (Join-Path $configDir "backscroll") "inputs") "pi.inputs.toml") | Should -BeTrue
         } finally {
             Remove-Item Env:\BACKSCROLL_CONFIG_DIR -ErrorAction SilentlyContinue
         }
@@ -165,6 +173,21 @@ Describe "Install-InputPresets" -Tag "Runtime" {
         try {
             Install-InputPresets -Version "v0.2.3" -SourceDir $InputsSource
             Get-Content $claudePreset -Raw | Should -Match "user edit"
+        } finally {
+            Remove-Item Env:\BACKSCROLL_CONFIG_DIR -ErrorAction SilentlyContinue
+        }
+    }
+
+    It "preserves an existing Pi preset by default" {
+        $configDir = Join-Path $TestDrive "config-pi-skip"
+        $inputsDir = Join-Path (Join-Path $configDir "backscroll") "inputs"
+        New-Item -ItemType Directory -Path $inputsDir -Force | Out-Null
+        $piPreset = Join-Path $inputsDir "pi.inputs.toml"
+        Set-Content -Path $piPreset -Value "pi user edit"
+        $env:BACKSCROLL_CONFIG_DIR = $configDir
+        try {
+            Install-InputPresets -Version "v0.2.3" -SourceDir $InputsSource
+            Get-Content $piPreset -Raw | Should -Match "pi user edit"
         } finally {
             Remove-Item Env:\BACKSCROLL_CONFIG_DIR -ErrorAction SilentlyContinue
         }

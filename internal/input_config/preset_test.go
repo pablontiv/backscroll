@@ -127,6 +127,7 @@ func TestPiPresetDiscoveryAndSubagentOptIn(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
 	sessionsRoot := filepath.Join(home, ".pi", "agent", "sessions")
+	rootSessionPath := mkfile(t, sessionsRoot, "session.jsonl")
 	ordinaryPath := mkfile(t, sessionsRoot, "project/main.jsonl")
 	unrelatedNestedPath := mkfile(t, sessionsRoot, "project/other/deep.jsonl")
 	childPath := mkfile(t, sessionsRoot, "project/parent/child/run-7/session.jsonl")
@@ -137,7 +138,7 @@ func TestPiPresetDiscoveryAndSubagentOptIn(t *testing.T) {
 		t.Fatalf("discover ordinary Pi files: %v", err)
 	}
 	sort.Strings(ordinaryFiles)
-	wantOrdinary := []string{ordinaryPath, unrelatedNestedPath}
+	wantOrdinary := []string{rootSessionPath, ordinaryPath, unrelatedNestedPath}
 	sort.Strings(wantOrdinary)
 	if !reflect.DeepEqual(ordinaryFiles, wantOrdinary) {
 		t.Fatalf("ordinary discovery = %v, want %v", ordinaryFiles, wantOrdinary)
@@ -157,6 +158,16 @@ func TestPiPresetDiscoveryAndSubagentOptIn(t *testing.T) {
 	for _, path := range subagentFiles {
 		if _, overlap := ordinarySet[path]; overlap {
 			t.Fatalf("ordinary and subagent discovery overlap at %s", path)
+		}
+		ordinarySet[path] = struct{}{}
+	}
+	allSupported := []string{rootSessionPath, ordinaryPath, unrelatedNestedPath, childPath}
+	if len(ordinarySet) != len(allSupported) {
+		t.Fatalf("combined discovery has %d files, want complete corpus of %d: %v", len(ordinarySet), len(allSupported), ordinarySet)
+	}
+	for _, path := range allSupported {
+		if _, discovered := ordinarySet[path]; !discovered {
+			t.Fatalf("combined discovery omitted supported path %s", path)
 		}
 	}
 
