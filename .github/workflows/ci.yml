@@ -5,6 +5,7 @@ on:
     branches: [main, master]
   pull_request:
     branches: [main, master]
+    types: [opened, synchronize, reopened, labeled]
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
@@ -54,6 +55,152 @@ jobs:
               -u BACKSCROLL_CONFIG_DIR \
               -u BACKSCROLL_INPUTS_SOURCE_DIR \
               bash tests/test-install-isolation.sh
+
+  candidate:
+    needs: [ci, gitleaks, skill-install]
+    if: >-
+      github.event_name == 'pull_request' &&
+      contains(github.event.pull_request.labels.*.name, 'build-candidate')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Check out the exact PR revision
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          repository: ${{ github.event.pull_request.head.repo.full_name }}
+          ref: ${{ github.event.pull_request.head.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Load trusted base repository tags
+        run: |
+          while IFS= read -r tag; do
+            git tag --delete -- "$tag"
+          done < <(git tag --list)
+          git fetch --force --no-recurse-submodules \
+            'https://github.com/${{ github.repository }}.git' \
+            '+refs/tags/*:refs/tags/*'
+      - name: Set up Go
+        uses: actions/setup-go@d35c59abb061a4a6fb18e82ac0862c26744d6ab5 # v5.5.0
+        with:
+          go-version-file: go.mod
+      - name: Build snapshot archives
+        uses: goreleaser/goreleaser-action@e435ccd777264be153ace6237001ef4d979d3a7a # v6.4.0
+        with:
+          distribution: goreleaser
+          version: '~> v2'
+          args: release --snapshot --clean
+        env:
+          PR_NUMBER: ${{ github.event.number }}
+      - name: Verify candidate and smoke Linux amd64
+        env:
+          PR_NUMBER: ${{ github.event.number }}
+          PR_SHA: ${{ github.event.pull_request.head.sha }}
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+        run: |
+          set -euo pipefail
+
+          test "$(git rev-parse HEAD)" = "$PR_SHA"
+          base_tag="$(git describe --tags --abbrev=0)"
+          base_version="${base_tag#v}"
+          if [[ ! "$base_version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "invalid base version: $base_version" >&2
+            exit 1
+          fi
+          IFS=. read -r major minor patch <<EOF
+          $base_version
+          EOF
+          next_version="$major.$minor.$((patch + 1))"
+          short_sha="$(git rev-parse --short=7 HEAD)"
+          candidate_version="$next_version-pr.$PR_NUMBER.$short_sha"
+          case "$candidate_version" in
+            *dev*) echo "candidate version contains dev: $candidate_version" >&2; exit 1 ;;
+          esac
+
+          expected_archives=(
+            "backscroll_${candidate_version}_linux_amd64.tar.gz"
+            "backscroll_${candidate_version}_linux_arm64.tar.gz"
+            "backscroll_${candidate_version}_darwin_amd64.tar.gz"
+            "backscroll_${candidate_version}_darwin_arm64.tar.gz"
+            "backscroll_${candidate_version}_windows_amd64.zip"
+            "backscroll_${candidate_version}_windows_arm64.zip"
+          )
+          shopt -s nullglob
+          archives=(dist/backscroll_*.tar.gz dist/backscroll_*.zip)
+          test "${#archives[@]}" -eq 6
+          for archive in "${expected_archives[@]}"; do
+            test -f "dist/$archive"
+            grep -Fq "  $archive" dist/checksums.txt
+          done
+          test "$(wc -l < dist/checksums.txt)" -eq 6
+          (cd dist && sha256sum --check checksums.txt)
+
+          smoke_root="$(mktemp -d)"
+          trap 'rm -rf "$smoke_root"' EXIT
+          tar -xzf "dist/backscroll_${candidate_version}_linux_amd64.tar.gz" \
+            -C "$smoke_root"
+          binary="$smoke_root/backscroll"
+          test -x "$binary"
+
+          revision="$(go version -m "$binary" | sed -n \
+            's/^[[:space:]]*build[[:space:]]*vcs.revision=//p')"
+          test "$revision" = "$PR_SHA"
+
+          version_home="$smoke_root/version-home"
+          mkdir -p "$version_home/config" "$version_home/cache"
+          version_output="$(HOME="$version_home" \
+            XDG_CONFIG_HOME="$version_home/config" \
+            XDG_CACHE_HOME="$version_home/cache" \
+            "$binary" --version)"
+          case "$version_output" in
+            *"$candidate_version"*) ;;
+            *) echo "unexpected runtime version: $version_output" >&2; exit 1 ;;
+          esac
+          case "$version_output" in
+            *dev*) echo "runtime version contains dev: $version_output" >&2; exit 1 ;;
+          esac
+
+          smoke_home="$smoke_root/smoke-home"
+          smoke_config="$smoke_root/smoke-config"
+          smoke_db="$smoke_root/smoke.db"
+          mkdir -p "$smoke_home" "$smoke_config"
+          HOME="$smoke_home" \
+            XDG_CONFIG_HOME="$smoke_config" \
+            XDG_CACHE_HOME="$smoke_root/smoke-cache" \
+            BACKSCROLL_CONFIG_DIR="$smoke_config" \
+            BACKSCROLL_DATABASE_PATH="$smoke_db" \
+            "$binary" validate --json | grep -Fq '"valid":true'
+          test -s "$smoke_db"
+
+          jq -n \
+            --argjson pr "$PR_NUMBER" \
+            --arg sha "$PR_SHA" \
+            --arg base_sha "$BASE_SHA" \
+            --arg base_version "$base_version" \
+            --arg version "$candidate_version" \
+            '{schema_version: 1, pr: $pr, sha: $sha, base_sha: $base_sha,
+              base_version: $base_version, version: $version}' \
+            > dist/candidate.json
+          jq -e \
+            --argjson pr "$PR_NUMBER" \
+            --arg sha "$PR_SHA" \
+            --arg base_sha "$BASE_SHA" \
+            --arg base_version "$base_version" \
+            --arg version "$candidate_version" \
+            '.pr == $pr and .sha == $sha and .base_sha == $base_sha and
+             .base_version == $base_version and .version == $version' \
+            dist/candidate.json >/dev/null
+      - name: Upload PR candidate artifact
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: backscroll-pr-${{ github.event.number }}-${{ github.event.pull_request.head.sha }}
+          path: |
+            dist/backscroll_*.tar.gz
+            dist/backscroll_*.zip
+            dist/checksums.txt
+            dist/candidate.json
+          if-no-files-found: error
+          retention-days: 7
 
   release:
     uses: pablontiv/crossbeam/.github/workflows/go-release.yml@v2

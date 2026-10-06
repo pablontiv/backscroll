@@ -39,6 +39,8 @@ Run `just --list` to see all available recipes. Key ones:
 5. Commit using [Conventional Commits](https://www.conventionalcommits.org/)
 6. Open a Pull Request
 
+For an opt-in pre-release build, follow the [PR candidate artifact runbook](docs/runbooks/pr-candidate.md).
+
 ## Releasing
 
 Releases are fully automated via CI. On push to `main`, CI analyzes conventional commit prefixes, calculates the next semver version, builds multi-platform binaries (Linux, macOS, Windows), and creates a GitHub Release. No manual release steps needed.
