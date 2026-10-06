@@ -91,6 +91,7 @@ func parseMarkdownFile(path, source string, parser markdownParser) (models.Parse
 	for _, item := range items {
 		messages = append(messages, models.Message{
 			Role:        "document",
+			Origin:      models.OriginUnknown,
 			Content:     item.Content,
 			ContentType: "text",
 			Timestamp:   info.ModTime(),
