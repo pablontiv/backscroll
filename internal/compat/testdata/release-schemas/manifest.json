@@ -627,6 +627,14 @@
       "AppliedVersion": 15,
       "HasSourceMetadata": false,
       "Provenance": "Migration v15 applied to the retained v14 fixture; adds nullable paired-search echo provenance without deleting indexed content."
+    },
+    {
+      "Fixture": "v16.sql",
+      "ProvenanceSHA256": "039c9210de23a46cf47a99d9d344e12ab5415acd70aadbc633ffd458480de7da",
+      "Signature": "sha256:f80969fb4b51b0336431f512f42d49ee88dd9fed494adc188161119621cdea70",
+      "AppliedVersion": 16,
+      "HasSourceMetadata": false,
+      "Provenance": "Migration v16 applied to the retained v15 fixture; adds parser-backed message origin with an explicit historical unknown fallback."
     }
   ]
 }

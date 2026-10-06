@@ -404,6 +404,7 @@ var allMigrationSteps = []MigrationStep{
 	{Version: 13, Name: "V13 backfill discovery indexes"},
 	{Version: 14, Name: "V14 file metadata prefilter"},
 	{Version: 15, Name: "V15 search echo provenance"},
+	{Version: 16, Name: "V16 parser-backed message origin"},
 }
 
 func hasObject(objects []sqliteObject, typ, name string) bool {

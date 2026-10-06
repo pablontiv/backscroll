@@ -197,6 +197,16 @@ func (d *Database) SetupSchema() error {
 		}
 	}
 
+	err = d.db.QueryRow("SELECT COUNT(*) FROM schema_migrations WHERE version = 16").Scan(&count)
+	if err != nil {
+		return fmt.Errorf("check migration version 16: %w", err)
+	}
+	if count == 0 {
+		if err := d.applySingleMigration(applyV16); err != nil {
+			return err
+		}
+	}
+
 	return nil
 }
 

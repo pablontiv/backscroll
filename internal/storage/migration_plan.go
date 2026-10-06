@@ -157,6 +157,7 @@ var migrationPlanDispatch = map[compat.MigrationStep]migrationApplier{
 	{Version: 13, Name: "V13 backfill discovery indexes"}:                                applyV13,
 	{Version: 14, Name: "V14 file metadata prefilter"}:                                   applyV14,
 	{Version: 15, Name: "V15 search echo provenance"}:                                    applyV15,
+	{Version: 16, Name: "V16 parser-backed message origin"}:                              applyV16,
 }
 
 func isDestructiveMigration(step compat.MigrationStep) bool {
@@ -443,6 +444,19 @@ func applyV15(ctx context.Context, tx *sql.Tx, _ compat.SchemaShape) error {
 		return fmt.Errorf("apply v15 search echo provenance: %w", err)
 	}
 	return recordMigration(ctx, tx, 15, "V15 search echo provenance", sqlV15, "record migration v15")
+}
+
+const sqlV16 = `
+ALTER TABLE search_items ADD COLUMN origin TEXT NOT NULL DEFAULT 'unknown'
+    CHECK (origin IN ('human', 'assistant', 'system', 'automation', 'unknown'));
+ALTER TABLE search_items ADD COLUMN origin_version INTEGER;
+`
+
+func applyV16(ctx context.Context, tx *sql.Tx, _ compat.SchemaShape) error {
+	if _, err := tx.ExecContext(ctx, sqlV16); err != nil {
+		return fmt.Errorf("apply v16 message origin: %w", err)
+	}
+	return recordMigration(ctx, tx, 16, "V16 parser-backed message origin", sqlV16, "record migration v16")
 }
 
 func recordMigration(ctx context.Context, tx *sql.Tx, version int, name string, body string, errorPrefix string) error {
