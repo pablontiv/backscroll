@@ -130,7 +130,8 @@ not from loop state: there is nothing to checkpoint.
 - Historical supply: rich capture exists for rows synced after migration
   v8; `rebuild` backfills expired-file derived data from stored text (lossy for tool
   events, marked `extraction_version=0`) and stale on-disk files re-parse
-  at full fidelity during sync (capped per run, FIFO). V16 origin provenance is
-  enriched only when a configured source is still available to its reader;
-  expired-source rows stay `unknown` rather than being inferred from stored text
-  or role.
+  at full fidelity during sync (capped per run, FIFO). During startup reparse, V16
+  origin provenance is enriched only when a configured source is still available
+  to its reader; unavailable or expired sources remain `unknown`. Recovery can
+  enrich an `unknown` duplicate from compatible proven evidence without the
+  original source; contradictory proven origins are rejected.
