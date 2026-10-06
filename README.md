@@ -189,7 +189,11 @@ Correction candidates are detected deterministically, never by a model, and are 
 
 ```bash
 backscroll patterns --kind corrections --origin human --pending --batch 50 --robot
-backscroll annotate --uuid "$UUID" --kind correction --label "$LABEL"
+if [ -n "${UUID:-}" ] && [ "$UUID" != "null" ]; then
+  backscroll annotate --uuid "$UUID" --kind correction --label "$LABEL"
+else
+  backscroll annotate --path "$SOURCE_PATH" --ordinal "$ORDINAL" --kind correction --label "$LABEL"
+fi
 ```
 
 Labelled candidates drop out of `--pending`, so the loop resumes wherever it stopped.
