@@ -285,6 +285,7 @@ output=$(run_main_linux "$testable" "$INSTALL_DIR" "$CONFIG_DIR") && rc=$? || rc
 rm -f "$testable"
 
 if [ -f "$CONFIG_DIR/backscroll/inputs/claude.inputs.toml" ] &&
+    cmp -s "$INPUTS_DIR/pi.inputs.toml" "$CONFIG_DIR/backscroll/inputs/pi.inputs.toml" &&
     cmp -s "$INPUTS_DIR/codex.inputs.toml" "$CONFIG_DIR/backscroll/inputs/codex.inputs.toml"; then
     pass "installs input presets under BACKSCROLL_CONFIG_DIR/backscroll/inputs"
 else
@@ -298,6 +299,7 @@ testable=$(make_testable)
 CONFIG_DIR=$(mktemp -d)
 mkdir -p "$CONFIG_DIR/backscroll/inputs"
 echo "user edit" >"$CONFIG_DIR/backscroll/inputs/claude.inputs.toml"
+echo "pi user edit" >"$CONFIG_DIR/backscroll/inputs/pi.inputs.toml"
 echo "codex user edit" >"$CONFIG_DIR/backscroll/inputs/codex.inputs.toml"
 output=$(BACKSCROLL_CONFIG_DIR="$CONFIG_DIR" BACKSCROLL_INPUTS_SOURCE_DIR="$INPUTS_DIR" bash -c "
     source '$testable'
@@ -306,6 +308,7 @@ output=$(BACKSCROLL_CONFIG_DIR="$CONFIG_DIR" BACKSCROLL_INPUTS_SOURCE_DIR="$INPU
 rm -f "$testable"
 
 if grep -q "user edit" "$CONFIG_DIR/backscroll/inputs/claude.inputs.toml" &&
+    grep -q "pi user edit" "$CONFIG_DIR/backscroll/inputs/pi.inputs.toml" &&
     grep -q "codex user edit" "$CONFIG_DIR/backscroll/inputs/codex.inputs.toml" &&
     echo "$output" | grep -q "exists, skipping"; then
     pass "existing input preset is skipped by default"

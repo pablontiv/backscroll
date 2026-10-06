@@ -38,20 +38,19 @@ func TestUnmarshalClaudePreset(t *testing.T) {
 }
 
 func TestUnmarshalPiPreset(t *testing.T) {
-	data, err := os.ReadFile("../../tests/fixtures/pi.inputs.toml")
+	data, err := os.ReadFile("../../inputs/pi.inputs.toml")
 	if err != nil {
-		t.Fatalf("read pi.inputs.toml: %v", err)
+		t.Fatalf("read shipped pi.inputs.toml: %v", err)
 	}
 	var f InputFile
 	if err := toml.Unmarshal(data, &f); err != nil {
 		t.Fatalf("unmarshal: %v", err)
 	}
-	if len(f.Inputs) == 0 {
-		t.Fatal("no inputs parsed")
+	if len(f.Inputs) != 2 {
+		t.Fatalf("inputs parsed = %d, want 2", len(f.Inputs))
 	}
-	in := f.Inputs[0]
-	if in.ID != "pi" {
-		t.Errorf("id = %q, want %q", in.ID, "pi")
+	if f.Inputs[0].ID != "pi" || f.Inputs[1].ID != "pi-subagents" {
+		t.Errorf("input IDs = %q, %q; want pi, pi-subagents", f.Inputs[0].ID, f.Inputs[1].ID)
 	}
 }
 

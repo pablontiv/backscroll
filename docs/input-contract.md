@@ -187,6 +187,21 @@ active = true
 [inputs.discover]
 roots = ["~/.pi/agent/sessions", "~/.pi/agent/sessions-archive"]
 include = ["**/*.jsonl"]
+exclude = ["**/run-*/session.jsonl"]
+follow_symlinks = false
+
+[inputs.decode]
+format = "pi"
+index_reasoning = false
+
+[[inputs]]
+id = "pi-subagents"
+source = "session"
+active = false
+
+[inputs.discover]
+roots = ["~/.pi/agent/sessions", "~/.pi/agent/sessions-archive"]
+include = ["**/run-*/session.jsonl"]
 exclude = []
 follow_symlinks = false
 
@@ -195,12 +210,29 @@ format = "pi"
 index_reasoning = false
 ```
 
-The Pi reader selects user/assistant text from Pi and Pion sessions. It indexes
-supported tool activity. It includes reasoning only when `index_reasoning = true`.
-Legacy Pi records use `type`. Pion message records may use `recordType`. If both
-fields exist, they must match. Conflicts and unknown record kinds are skipped. A
-lone `recordType` supports only `message`. It does not map Pion `tool_start` or
-`tool_end` records onto Pi `custom` records.
+Ordinary Pi sessions are active by default. Nested delegated runs matching
+`**/run-*/session.jsonl` are a separate, disjoint input because they can repeat
+parent context and contain sensitive delegated prompts. To opt in, change only
+`pi-subagents` to `active = true` in the installed `pi.inputs.toml`, then run
+`backscroll config` and verify that both `pi` and `pi-subagents` are listed.
+Reasoning remains independently disabled for both inputs unless its definition
+explicitly sets `index_reasoning = true`. A missing `sessions-archive` root is
+non-fatal.
+
+The Pi reader selects user/assistant text from discovered Pi and Pion sessions.
+Path inclusion is separate from record parsing: opting into a child path does not
+make unsupported records searchable. Legacy Pi records use `type`; Pion message
+records may use `recordType` as supported by [issue #98](https://github.com/pablontiv/backscroll/issues/98).
+If both fields exist, they must match. Conflicts and unknown record kinds are
+skipped. A lone `recordType` supports only `message`; it does not map Pion
+`tool_start` or `tool_end` records onto Pi `custom` records.
+
+Installers preserve an existing manifest by default. Existing users whose Pi
+input still has `exclude = []` keep that behavior until they intentionally add
+the `**/run-*/session.jsonl` exclusion and companion definition above, or
+explicitly refresh the shipped preset. Excluding a path later is not retroactive:
+rows already indexed remain in the perennial SQLite store, and `rebuild` does
+not remove them. Use the explicit `purge` command for retention-based deletion.
 
 ## Complete Codex example
 

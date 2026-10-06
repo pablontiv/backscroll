@@ -5,7 +5,7 @@
 #
 # Installation:
 #   cp inputs/pi.inputs.toml ~/.config/backscroll/inputs/
-#   backscroll sync
+#   backscroll config
 version = 1
 
 [[inputs]]
@@ -16,6 +16,21 @@ active = true
 [inputs.discover]
 roots = ["~/.pi/agent/sessions", "~/.pi/agent/sessions-archive"]
 include = ["**/*.jsonl"]
+exclude = ["**/run-*/session.jsonl"]
+follow_symlinks = false
+
+[inputs.decode]
+format = "pi"
+index_reasoning = false
+
+[[inputs]]
+id = "pi-subagents"
+source = "session"
+active = false
+
+[inputs.discover]
+roots = ["~/.pi/agent/sessions", "~/.pi/agent/sessions-archive"]
+include = ["**/run-*/session.jsonl"]
 exclude = []
 follow_symlinks = false
 

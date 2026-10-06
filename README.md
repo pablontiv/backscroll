@@ -50,7 +50,7 @@ Installs the binary to `%LOCALAPPDATA%\backscroll\bin\`, adds it to your PATH, a
 
 ### Install input presets
 
-Backscroll ships Claude, Pi, OpenCode, and Codex input presets at `inputs/claude.inputs.toml`, `inputs/pi.inputs.toml`, `inputs/opencode.inputs.toml`, and `inputs/codex.inputs.toml`. Existing manifests are preserved by default; set `BACKSCROLL_FORCE_INPUTS=1` only when you intentionally want to replace edited presets. For Codex roots, supported records and limits, see the [Codex input contract](docs/input-contract.md#complete-codex-example).
+Backscroll ships Claude, Pi, OpenCode, and Codex input presets at `inputs/claude.inputs.toml`, `inputs/pi.inputs.toml`, `inputs/opencode.inputs.toml`, and `inputs/codex.inputs.toml`. Existing manifests are preserved by default; set `BACKSCROLL_FORCE_INPUTS=1` only when you intentionally want to replace edited presets. Pi subagent sessions are excluded by default and available through an explicit per-input opt-in; see the [Pi input contract](docs/input-contract.md#complete-pi-example). For Codex roots, supported records and limits, see the [Codex input contract](docs/input-contract.md#complete-codex-example).
 Runtime input config directories:
 
 | OS | Input manifest directory |

@@ -1371,6 +1371,92 @@ func TestSearchFindsPionRecordTypeAfterEmptyIndex(t *testing.T) {
 	}
 }
 
+func TestShippedPiPresetSubagentsRequireOptIn(t *testing.T) {
+	dbPath, cleanup := testEnv(t)
+	defer cleanup()
+
+	home := os.Getenv("HOME")
+	sessionsRoot := filepath.Join(home, ".pi", "agent", "sessions")
+	ordinaryPath := filepath.Join(sessionsRoot, "project", "ordinary.jsonl")
+	childPath := filepath.Join(sessionsRoot, "project", "parent", "child", "run-3", "session.jsonl")
+	for _, path := range []string{ordinaryPath, childPath} {
+		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+			t.Fatalf("mkdir Pi fixture path: %v", err)
+		}
+	}
+	ordinary := `{"recordType":"message","timestamp":"2026-01-02T03:04:05Z","cwd":"/tmp/pi-main","message":{"role":"user","content":"ordinarycobalt shipped preset token"}}` + "\n"
+	child := `{"recordType":"tool_start","data":{"secret":"unsupportedneighbor"}}` + "\n" +
+		`{"recordType":"message","timestamp":"2026-01-02T03:04:06Z","cwd":"/tmp/pi-child","message":{"role":"assistant","content":[{"type":"thinking","text":"reasoningviolet must stay private"},{"type":"text","text":"childsaffron shipped preset token"}]}}` + "\n"
+	if err := os.WriteFile(ordinaryPath, []byte(ordinary), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(childPath, []byte(child), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	preset, err := os.ReadFile(filepath.Join("..", "..", "inputs", "pi.inputs.toml"))
+	if err != nil {
+		t.Fatalf("read shipped Pi preset: %v", err)
+	}
+	manifestPath := filepath.Join(os.Getenv("BACKSCROLL_CONFIG_DIR"), "backscroll", "inputs", "pi.inputs.toml")
+	if err := os.MkdirAll(filepath.Dir(manifestPath), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(manifestPath, preset, 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	searchCount := func(query string) int {
+		t.Helper()
+		out, stderr, err := runCmd("search", "--text", query, "--all-projects", "--lexical-only", "--json")
+		if err != nil {
+			t.Fatalf("search %q: %v\nstdout=%s\nstderr=%s", query, err, out, stderr)
+		}
+		var results []map[string]interface{}
+		if err := json.Unmarshal([]byte(out), &results); err != nil {
+			t.Fatalf("decode search %q: %v; output=%s", query, err, out)
+		}
+		return len(results)
+	}
+
+	if got := searchCount("ordinarycobalt"); got != 1 {
+		t.Fatalf("ordinary Pi results before opt-in = %d, want 1", got)
+	}
+	if got := searchCount("childsaffron"); got != 0 {
+		t.Fatalf("Pi subagent results before opt-in = %d, want 0", got)
+	}
+
+	activated := strings.Replace(string(preset), "id = \"pi-subagents\"\nsource = \"session\"\nactive = false", "id = \"pi-subagents\"\nsource = \"session\"\nactive = true", 1)
+	if activated == string(preset) {
+		t.Fatal("could not activate pi-subagents in shipped preset")
+	}
+	if err := os.WriteFile(manifestPath, []byte(activated), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	if got := searchCount("childsaffron"); got != 1 {
+		t.Fatalf("Pion recordType subagent results after opt-in = %d, want 1", got)
+	}
+	if got := searchCount("reasoningviolet"); got != 0 {
+		t.Fatalf("Pi subagent reasoning results with index_reasoning=false = %d, want 0", got)
+	}
+
+	db, err := storage.Open(dbPath)
+	if err != nil {
+		t.Fatalf("open index: %v", err)
+	}
+	defer db.Close()
+	for _, path := range []string{ordinaryPath, childPath} {
+		var count int
+		if err := db.DB().QueryRow(`SELECT COUNT(*) FROM search_items WHERE source_path = ?`, path).Scan(&count); err != nil {
+			t.Fatalf("count rows for %s: %v", path, err)
+		}
+		if count != 1 {
+			t.Fatalf("rows for %s = %d, want exactly 1", path, count)
+		}
+	}
+}
+
 func TestIntegration_SyncWithCrosshostEquivalence(t *testing.T) {
 	_, cleanup := testEnv(t)
 	defer cleanup()

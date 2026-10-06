@@ -32,6 +32,13 @@ func TestLivingInputManifestExamplesIngestThroughCommandBoundary(t *testing.T) {
 			wholeFile: true,
 		},
 		{
+			name:      "supported shipped Pi preset",
+			path:      "inputs/pi.inputs.toml",
+			fixture:   piFixture,
+			query:     "docpisaffron",
+			wholeFile: true,
+		},
+		{
 			name:    "input contract file shape",
 			path:    "docs/input-contract.md",
 			anchor:  "## File shape",
@@ -193,8 +200,8 @@ func replaceManifestRoots(t *testing.T, path, manifest, root string) string {
 			replaced++
 		}
 	}
-	if replaced != 1 {
-		t.Fatalf("%s manifest example has %d roots declarations, want 1", path, replaced)
+	if replaced == 0 {
+		t.Fatalf("%s manifest example has no roots declaration", path)
 	}
 	return strings.Join(lines, "\n")
 }
