@@ -977,6 +977,37 @@ func (d *Database) LoadToolSequences(opts LoadSequencesOpts) ([]sequences.Sequen
 	return result, nil
 }
 
+// EmptyIndexedPaths returns files recorded in indexed_files without any indexed
+// rows. It starts from indexed_files because row-backed stale queries cannot see
+// files whose prior parser produced no messages.
+func (d *Database) EmptyIndexedPaths() ([]string, error) {
+	rows, err := d.db.Query(`
+		SELECT indexed_files.path
+		FROM indexed_files
+		LEFT JOIN search_items ON search_items.source_path = indexed_files.path
+		WHERE search_items.id IS NULL
+		  AND indexed_files.hash <> ?
+		ORDER BY indexed_files.last_indexed ASC, indexed_files.path ASC
+	`, recoveredSourceHash)
+	if err != nil {
+		return nil, fmt.Errorf("query empty indexed paths: %w", err)
+	}
+	defer func() { _ = rows.Close() }()
+
+	var paths []string
+	for rows.Next() {
+		var path string
+		if err := rows.Scan(&path); err != nil {
+			return nil, fmt.Errorf("scan empty indexed path: %w", err)
+		}
+		paths = append(paths, path)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate empty indexed paths: %w", err)
+	}
+	return paths, nil
+}
+
 // StalePaths returns source paths from session rows whose extraction_version is NULL
 // or older than currentVersion, or whose v15 pairing provenance is still unknown.
 // Rows are ordered by last_indexed ASC (FIFO draining). Only surviving source

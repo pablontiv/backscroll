@@ -89,6 +89,30 @@ func TestStalePathsOrderedByLastIndexed(t *testing.T) {
 	}
 }
 
+func TestEmptyIndexedPathsFindsFilesWithoutSearchRows(t *testing.T) {
+	db, err := Open(filepath.Join(t.TempDir(), "test.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = db.Close() }()
+
+	_, _ = db.db.Exec(`INSERT INTO indexed_files (path, hash, last_indexed) VALUES
+		('/p/empty.jsonl', 'empty-hash', '2026-01-01T00:00:00Z'),
+		('/p/nonempty.jsonl', 'nonempty-hash', '2026-01-02T00:00:00Z'),
+		('/p/recovered.jsonl', ?, '2026-01-03T00:00:00Z')`, recoveredSourceHash)
+	_, _ = db.db.Exec(`INSERT INTO search_items
+		(source, source_path, ordinal, role, text, project, content_type)
+		VALUES ('session', '/p/nonempty.jsonl', 0, 'user', 'indexed', 'proj', 'text')`)
+
+	paths, err := db.EmptyIndexedPaths()
+	if err != nil {
+		t.Fatalf("empty indexed paths: %v", err)
+	}
+	if len(paths) != 1 || paths[0] != "/p/empty.jsonl" {
+		t.Fatalf("empty indexed paths = %v, want [/p/empty.jsonl]", paths)
+	}
+}
+
 func TestOpenReadOnlyDBNotFound(t *testing.T) {
 	// OpenReadOnly should fail fast if DB file doesn't exist
 	_, err := OpenReadOnly("/nonexistent/path/to/db.db")

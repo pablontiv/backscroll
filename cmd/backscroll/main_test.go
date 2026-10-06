@@ -1305,6 +1305,72 @@ func TestSearchFindsPiToolCallContent(t *testing.T) {
 	}
 }
 
+func TestSearchFindsPionRecordTypeAfterEmptyIndex(t *testing.T) {
+	dbPath, cleanup := testEnv(t)
+	defer cleanup()
+
+	sessionDir := t.TempDir()
+	sessionFile := filepath.Join(sessionDir, "pion-record-type.jsonl")
+	fixture, err := os.ReadFile(filepath.Join(fixturesDir(), "pion-record-type.jsonl"))
+	if err != nil {
+		t.Fatalf("read Pion fixture: %v", err)
+	}
+	if err := os.WriteFile(sessionFile, fixture, 0o644); err != nil {
+		t.Fatalf("write Pion session: %v", err)
+	}
+
+	cfgDir := t.TempDir()
+	setupPiPreset(t, cfgDir, sessionDir)
+	t.Setenv("BACKSCROLL_CONFIG_DIR", cfgDir)
+
+	// Reproduce the pre-fix state: the file hash is recorded, but no search row
+	// exists. Matching metadata would normally skip both hashing and parsing.
+	hash, err := hashfile.HashFile(sessionFile)
+	if err != nil {
+		t.Fatalf("hash Pion session: %v", err)
+	}
+	stat, err := os.Stat(sessionFile)
+	if err != nil {
+		t.Fatalf("stat Pion session: %v", err)
+	}
+	mtime := stat.ModTime().Format("2006-01-02T15:04:05Z07:00")
+	db, err := storage.Open(dbPath)
+	if err != nil {
+		t.Fatalf("open index: %v", err)
+	}
+	if _, err := db.DB().Exec(`
+		INSERT INTO indexed_files (path, hash, last_indexed, file_size, file_mtime)
+		VALUES (?, ?, '2099-01-01T00:00:00Z', ?, ?)
+	`, sessionFile, hash, stat.Size(), mtime); err != nil {
+		_ = db.Close()
+		t.Fatalf("seed empty indexed file: %v", err)
+	}
+	if err := db.Close(); err != nil {
+		t.Fatalf("close seeded index: %v", err)
+	}
+
+	out, _, err := runCmd("search", "pion_recordtype_search_token", "--all-projects", "--lexical-only")
+	if err != nil {
+		t.Fatalf("search Pion recordType: %v", err)
+	}
+	if !strings.Contains(out, "pion_recordtype_search_token") {
+		t.Fatalf("Pion recordType message not searchable after replay; output: %s", out)
+	}
+
+	db, err = storage.Open(dbPath)
+	if err != nil {
+		t.Fatalf("reopen index: %v", err)
+	}
+	defer db.Close()
+	var count int
+	if err := db.DB().QueryRow(`SELECT COUNT(*) FROM search_items WHERE source_path = ?`, sessionFile).Scan(&count); err != nil {
+		t.Fatalf("count Pion rows: %v", err)
+	}
+	if count != 1 {
+		t.Fatalf("Pion rows = %d, want 1 supported message", count)
+	}
+}
+
 func TestIntegration_SyncWithCrosshostEquivalence(t *testing.T) {
 	_, cleanup := testEnv(t)
 	defer cleanup()

@@ -1,0 +1,2 @@
+{"recordType":"tool_start","timestamp":"2026-01-02T03:04:04Z","cwd":"/tmp/pion-fixture","data":{"label":"ignored neighbor"}}
+{"recordType":"message","timestamp":"2026-01-02T03:04:05Z","cwd":"/tmp/pion-fixture","message":{"role":"user","content":"pion_recordtype_search_token"}}

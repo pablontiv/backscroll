@@ -3,7 +3,9 @@ package readers
 import (
 	"os"
 	"path/filepath"
+	"reflect"
 	"testing"
+	"time"
 
 	"github.com/pablontiv/backscroll/internal/input_config"
 )
@@ -36,6 +38,82 @@ func TestPiReader_TextAndCwd(t *testing.T) {
 	}
 	if len(pf.Records) != 1 || pf.Records[0].Content != "hello pi" || pf.Records[0].ContentType != "text" {
 		t.Fatalf("records = %+v", pf.Records)
+	}
+}
+
+func TestPiReader_RecordTypeMatchesLegacyEnvelope(t *testing.T) {
+	const timestamp = "2026-05-10T22:19:34.694Z"
+	legacy := `{"type":"message","timestamp":"` + timestamp + `","cwd":"/home/shared/proj","message":{"role":"assistant","content":[{"type":"text","text":"pion text token"},{"type":"toolCall","name":"web_search","arguments":{"queries":["pion tool token"]}},{"type":"thinking","text":"pion reasoning token"}]}}` + "\n"
+	pion := `{"recordType":"message","timestamp":"` + timestamp + `","cwd":"/home/shared/proj","message":{"role":"assistant","content":[{"type":"text","text":"pion text token"},{"type":"toolCall","name":"web_search","arguments":{"queries":["pion tool token"]}},{"type":"thinking","text":"pion reasoning token"}]}}` + "\n"
+	def := input_config.InputDefinition{Decode: input_config.DecodeConfig{IndexReasoning: true}}
+
+	legacyFile, err := (&PiReader{}).Parse(writePiFixture(t, legacy), def)
+	if err != nil {
+		t.Fatalf("parse legacy envelope: %v", err)
+	}
+	pionFile, err := (&PiReader{}).Parse(writePiFixture(t, pion), def)
+	if err != nil {
+		t.Fatalf("parse Pion envelope: %v", err)
+	}
+
+	if legacyFile.Cwd != pionFile.Cwd {
+		t.Fatalf("cwd differs: legacy %q, Pion %q", legacyFile.Cwd, pionFile.Cwd)
+	}
+	if !reflect.DeepEqual(legacyFile.Records, pionFile.Records) {
+		t.Fatalf("normalized records differ:\nlegacy: %+v\nPion:  %+v", legacyFile.Records, pionFile.Records)
+	}
+	if len(pionFile.Records) != 3 {
+		t.Fatalf("Pion records = %d, want text, tool, and reasoning", len(pionFile.Records))
+	}
+	wantTimestamp, err := time.Parse(time.RFC3339, timestamp)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, record := range pionFile.Records {
+		if !record.Timestamp.Equal(wantTimestamp) {
+			t.Errorf("timestamp = %s, want %s", record.Timestamp, wantTimestamp)
+		}
+	}
+}
+
+func TestPiReader_EnvelopePolicy(t *testing.T) {
+	tests := []struct {
+		name    string
+		line    string
+		wantLen int
+	}{
+		{name: "legacy type", line: `{"type":"message","message":{"role":"user","content":"legacy"}}`, wantLen: 1},
+		{name: "Pion recordType", line: `{"recordType":"message","message":{"role":"user","content":"pion"}}`, wantLen: 1},
+		{name: "dual agreement", line: `{"type":"message","recordType":"message","message":{"role":"user","content":"agreed"}}`, wantLen: 1},
+		{name: "dual conflict", line: `{"type":"message","recordType":"tool_start","message":{"role":"user","content":"conflict"}}`},
+		{name: "conflict cannot become custom", line: `{"type":"custom","recordType":"tool_end","customType":"result","data":{"text":"conflict"}}`},
+		{name: "unknown recordType", line: `{"recordType":"tool_start","message":{"role":"user","content":"unknown"}}`},
+		{name: "unknown dual agreement", line: `{"type":"tool_end","recordType":"tool_end","message":{"role":"user","content":"unknown"}}`},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			parsed, err := (&PiReader{}).Parse(writePiFixture(t, tt.line+"\n"), input_config.InputDefinition{})
+			if err != nil {
+				t.Fatalf("Parse: %v", err)
+			}
+			if len(parsed.Records) != tt.wantLen {
+				t.Fatalf("records = %+v, want length %d", parsed.Records, tt.wantLen)
+			}
+		})
+	}
+}
+
+func TestPiReader_RecordTypeSkipsMalformedAndUnknownNeighbors(t *testing.T) {
+	lines := "{not-json}\n" +
+		`{"recordType":"tool_start","data":{"secret":"must not be indexed"}}` + "\n" +
+		`{"recordType":"message","message":{"role":"user","content":"searchable Pion neighbor"}}` + "\n"
+	parsed, err := (&PiReader{}).Parse(writePiFixture(t, lines), input_config.InputDefinition{})
+	if err != nil {
+		t.Fatalf("Parse: %v", err)
+	}
+	if len(parsed.Records) != 1 || parsed.Records[0].Content != "searchable Pion neighbor" {
+		t.Fatalf("records = %+v, want only the supported neighbor", parsed.Records)
 	}
 }
 
@@ -169,7 +247,7 @@ func TestPiReader_CapturesReasoningWhenEnabled(t *testing.T) {
 }
 
 func TestPiReader_SkipsReasoningWhenDisabled(t *testing.T) {
-	line := `{"type":"message","timestamp":"2026-05-10T22:19:34.694Z","message":{"role":"assistant","content":[{"type":"thinking","text":"internal reasoning"},{"type":"text","text":"visible text"}]}}` + "\n"
+	line := `{"recordType":"message","timestamp":"2026-05-10T22:19:34.694Z","message":{"role":"assistant","content":[{"type":"thinking","text":"internal reasoning"},{"type":"text","text":"visible text"}]}}` + "\n"
 	pf, err := (&PiReader{}).Parse(writePiFixture(t, line), input_config.InputDefinition{
 		Decode: input_config.DecodeConfig{Format: "pi", IndexReasoning: false},
 	})

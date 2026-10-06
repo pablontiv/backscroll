@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"strings"
 	"time"
 
 	"github.com/pablontiv/backscroll/internal/config"
@@ -19,6 +20,8 @@ import (
 func diagnosticsEnabled() bool {
 	return os.Getenv("BACKSCROLL_STARTUP_DIAGNOSTICS") == "1"
 }
+
+const emptyPiHashPrefix = "pi-empty-v1:"
 
 var (
 	maybeAutoSyncOpen               = storage.Open
@@ -141,6 +144,18 @@ func maybeAutoSync(cfg *config.Config, progress io.Writer) (retErr error) {
 		staleSet[p] = true
 	}
 
+	// Files parsed to zero rows are absent from StalePaths because that query
+	// starts from search_items. Track them from indexed_files so the Pi reader can
+	// recover Pion envelopes skipped by older versions.
+	emptyPaths, err := db.EmptyIndexedPaths()
+	if err != nil {
+		return fmt.Errorf("discover empty indexed paths: %w", err)
+	}
+	emptySet := make(map[string]bool, len(emptyPaths))
+	for _, path := range emptyPaths {
+		emptySet[path] = true
+	}
+
 	echoPaths, err := db.PendingSearchEchoPaths()
 	if err != nil {
 		return fmt.Errorf("discover pending search echo paths: %w", err)
@@ -152,6 +167,8 @@ func maybeAutoSync(cfg *config.Config, progress io.Writer) (retErr error) {
 
 	const staleParsesCap = 200
 	staleParsesDone := 0
+	const emptyPiParsesCap = 200
+	emptyPiParsesDone := 0
 
 	// Build reader registry
 	reg := maybeAutoSyncNewRegistry()
@@ -285,6 +302,15 @@ func maybeAutoSync(cfg *config.Config, progress io.Writer) (retErr error) {
 				shouldParse = true
 				_, _ = fmt.Fprintf(progress, "Re-parsing stale file %d/%d: %s\n", staleParsesDone, len(echoPaths), ref)
 			}
+			if exists && existingMeta.Hash == hash && reader.Name() == "pi" && emptySet[ref] &&
+				!strings.HasPrefix(existingMeta.Hash, emptyPiHashPrefix) {
+				if emptyPiParsesDone >= emptyPiParsesCap {
+					continue
+				}
+				emptyPiParsesDone++
+				shouldParse = true
+				_, _ = fmt.Fprintf(progress, "Re-parsing empty Pi file %d: %s\n", emptyPiParsesDone, ref)
+			}
 			if !shouldParse && (!exists || existingMeta.Hash == hash) {
 				continue
 			}
@@ -335,10 +361,18 @@ func maybeAutoSync(cfg *config.Config, progress io.Writer) (retErr error) {
 			// Get file metadata for v14 prefilter
 			fileSize, fileMtime, _ := maybeAutoSyncGetFileMetadata(ref)
 
+			indexedHash := pf.Hash
+			if reader.Name() == "pi" && len(pf.Records) == 0 {
+				// Mark a zero-row parse with the Pi parser epoch. Old unmarked hashes
+				// replay once. Supported-empty files then converge instead of replaying
+				// on every startup. Bump the prefix when zero-row Pi semantics change.
+				indexedHash = emptyPiHashPrefix + pf.Hash
+			}
+
 			indexedFiles = append(indexedFiles, storage.IndexedFile{
 				SourcePath: ref,
 				Source:     def.Source,
-				Hash:       pf.Hash,
+				Hash:       indexedHash,
 				Project:    ident.ProjectID,
 				Messages:   indexedMsgs,
 				Tags:       sessionTags.Tags(),

@@ -149,8 +149,12 @@ format = "pi"
 index_reasoning = false
 ```
 
-The Pi reader selects user/assistant text from Pi sessions, indexes supported
-tool activity, and includes reasoning only when `index_reasoning = true`.
+The Pi reader selects user/assistant text from Pi and Pion sessions. It indexes
+supported tool activity. It includes reasoning only when `index_reasoning = true`.
+Legacy Pi records use `type`. Pion message records may use `recordType`. If both
+fields exist, they must match. Conflicts and unknown record kinds are skipped. A
+lone `recordType` supports only `message`. It does not map Pion `tool_start` or
+`tool_end` records onto Pi `custom` records.
 
 ## Complete Codex example
 

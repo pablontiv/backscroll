@@ -27,7 +27,8 @@ func (r *PiReader) Hash(path string) (string, error) {
 }
 
 type piRecord struct {
-	Type       string          `json:"type"`
+	Type       *string         `json:"type"`
+	RecordType *string         `json:"recordType"`
 	Timestamp  string          `json:"timestamp"`
 	CWD        string          `json:"cwd"`
 	CustomType string          `json:"customType"`
@@ -47,9 +48,9 @@ type piBlock struct {
 	Arguments json.RawMessage `json:"arguments"`
 }
 
-// Parse reads a Pi JSONL session and returns its messages as a ParsedFile.
-// Only `message` records (text + toolCall) and `custom` records (tool results)
-// produce messages; other record types are skipped.
+// Parse reads a Pi or Pion JSONL session and returns its messages as a ParsedFile.
+// Legacy `type` envelopes support message and custom records. Pion `recordType`
+// envelopes support message records. If both fields exist, they must agree.
 func (r *PiReader) Parse(path string, def input_config.InputDefinition) (models.ParsedFile, error) {
 	hash, err := hashfile.HashFile(path)
 	if err != nil {
@@ -67,7 +68,11 @@ func (r *PiReader) Parse(path string, def input_config.InputDefinition) (models.
 		if cwd == "" && rec.CWD != "" {
 			cwd = rec.CWD
 		}
-		switch rec.Type {
+		recordType, ok := piEnvelopeType(rec)
+		if !ok {
+			return nil
+		}
+		switch recordType {
 		case "message":
 			msgs = append(msgs, extractPiMessages(rec, indexReasoning)...)
 		case "custom":
@@ -82,6 +87,22 @@ func (r *PiReader) Parse(path string, def input_config.InputDefinition) (models.
 	}
 
 	return models.ParsedFile{Path: path, Hash: hash, Records: msgs, Cwd: cwd}, nil
+}
+
+// piEnvelopeType resolves the record discriminator. The legacy type field owns
+// the established message/custom contract. A lone recordType field supports
+// only Pion messages. Dual fields must agree before the legacy contract applies.
+func piEnvelopeType(rec piRecord) (string, bool) {
+	if rec.Type != nil {
+		if rec.RecordType != nil && *rec.Type != *rec.RecordType {
+			return "", false
+		}
+		return *rec.Type, true
+	}
+	if rec.RecordType != nil && *rec.RecordType == "message" {
+		return *rec.RecordType, true
+	}
+	return "", false
 }
 
 func piTimestamp(s string) time.Time {
