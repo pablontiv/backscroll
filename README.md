@@ -106,8 +106,15 @@ backscroll search --text "migration plan" --all-projects
 # What did that command actually return?
 backscroll search --text "go test ./..." --all-projects --content-type tool
 
-# Once a result supplies exact identity, recover its immediate neighborhood
-backscroll context --uuid "$UUID" --before 5 --after 5
+# Search supplies the selectors for exact context
+backscroll search --text "$QUERY" --all-projects --json --fields minimal
+
+# Use a non-null UUID; for uuid:null use the exact source path and ordinal
+if [ "$UUID" != "null" ] && [ -n "$UUID" ]; then
+  backscroll context --uuid "$UUID" --before 5 --after 5
+else
+  backscroll context --source-path "$SOURCE_PATH" --ordinal $ORDINAL --before 5 --after 5
+fi
 
 # Which errors keep coming back?
 backscroll patterns --kind templates --min-support 5 --all-projects
@@ -147,21 +154,24 @@ How a file is re-synced depends on whether its messages carry identity. Sessions
 Every operational command validates active manifests and attempts one incremental
 sync before executing. Session, plan, and Markdown files are ingestion inputs;
 SQLite is the perennial record used by search, context, list, patterns, status, and validate.
-Use `search` to discover relevant records. Once a result or downstream record supplies exact identity, use `context` for the anchor's immediate database-backed neighborhood.
+Use `search` to discover relevant records. Every search result exposes its stored path, nullable UUID, and ordinal. If `uuid`/`UUID` is not null, pass that UUID to `context`. If it is null, pass the exact stored path and ordinal instead.
 
 ```bash
-backscroll search --text "QUERY" --project <name>     # this project
-backscroll search --text "QUERY" --all-projects       # everywhere
-backscroll search --text "QUERY" --content-type tool  # commands, paths, errors
-backscroll list --order timestamp:desc --limit 10     # recent sessions
-backscroll search --text "artifact literal" --source-path "*SESSION-ID*" --all-projects --json  # discovery filter
-backscroll context --uuid "$UUID" --before 5 --after 5 --json
-backscroll context --source-path "$SOURCE_PATH" --ordinal "$ORDINAL" --robot
+backscroll search --text "$QUERY" --project "$PROJECT"     # this project
+backscroll search --text "$QUERY" --all-projects            # everywhere
+backscroll search --text "$QUERY" --content-type tool       # commands, paths, errors
+backscroll list --order timestamp:desc --limit 10             # recent sessions
+backscroll search --text "$QUERY" --source-path "$SOURCE_PATH" --all-projects --json --fields minimal
+if [ "$UUID" != "null" ] && [ -n "$UUID" ]; then
+  backscroll context --uuid "$UUID" --before 5 --after 5 --json
+else
+  backscroll context --source-path "$SOURCE_PATH" --ordinal $ORDINAL --before 5 --after 5 --robot
+fi
 ```
 
-A context UUID is opaque. The alternate selector requires the exact stored source path and ordinal. Defaults are five records on each side (maximum 50 each); record text is capped at 4000 Unicode code points. The complete successful payload defaults to a 2000-token budget (`--max-tokens`, 64–16384). See the [exact context contract](docs/context.md).
+A context UUID is opaque and is never synthesized for a result that lacks one. The alternate selector requires the exact stored source path and ordinal; duplicate rows at that coordinate fail with `context_ambiguous`. Defaults are five records on each side (maximum 50 each); record text is capped at 4000 Unicode code points. The complete successful payload defaults to a 2000-token budget (`--max-tokens`, 64–16384). See the [exact context contract](docs/context.md).
 
-Filters worth knowing: `--after` / `--before` for a date window, `--tag` for auto-detected session categories (debugging, refactoring, testing…), `--source-path` to pin one stored input path, `--source` to keep one source class, and `--role` to keep only what you said.
+Filters worth knowing: `--after` / `--before` for a date window, `--tag` for auto-detected session categories (debugging, refactoring, testing…), `--source-path` to pin one stored input path, `--source` to keep one source class, and `--role` to filter the stored role field. The role field is not a semantic-origin guarantee.
 
 ### Discover what recurs
 
@@ -179,7 +189,7 @@ Correction candidates are detected deterministically, never by a model, and are 
 
 ```bash
 backscroll patterns --kind corrections --origin human --pending --batch 50 --robot
-backscroll annotate --uuid <UUID> --kind correction --label "<your label>"
+backscroll annotate --uuid "$UUID" --kind correction --label "$LABEL"
 ```
 
 Labelled candidates drop out of `--pending`, so the loop resumes wherever it stopped.
@@ -190,7 +200,7 @@ Labelled candidates drop out of `--pending`, so the loop resumes wherever it sto
 backscroll status            # size, counts, last sync
 backscroll validate --json   # parseable integrity check
 backscroll rebuild           # re-derive search indexes from the database
-backscroll purge --before <DATE>   # the only deletion path
+backscroll purge --before "$DATE"   # the only deletion path
 ```
 
 `rebuild` operates after the mandatory root startup sync has already prepared the database. The handler does not perform a second sync: it re-derives search indexes from stored rows, re-derives templates/correction signals/tool-event satellites where possible, and re-resolves project identities. Sessions that vanished from disk survive it untouched.
@@ -201,7 +211,9 @@ Default output is human-readable text. Machine modes keep stdout parseable: huma
 
 `--json` is available on `search`, `context`, `list`, `patterns`, `status`, `validate`, and `config`. JSON mode on context emits one complete envelope with `anchor`, `records`, `truncated`, and `omitted`. `--robot` is available on `search`, `context`, `list`, and `patterns`; context robot mode emits line-oriented anchor, envelope, and record fields. `rebuild`, `purge`, and `annotate` report in plain text only.
 
-On `search`, `--fields minimal|full` controls density and `--max-tokens N` caps output. On `context`, `--max-tokens N` budgets the complete successful payload; diagnostics are exempt.
+Search identity is present in every density and output mode. Text uses `Path`, `UUID`, and `Ordinal`; minimal JSON uses `source_path`, `uuid`, and `ordinal`; full JSON keeps the model casing `FilePath`, `UUID`, and `Ordinal`; robot output uses `result_N_filepath`, `result_N_uuid`, and `result_N_ordinal` for both `--fields minimal` and `--fields full`. A missing UUID is `null`, not a generated value.
+
+On `search`, `--fields minimal|full` controls machine-output density and `--max-tokens N` caps output. On `context`, `--max-tokens N` budgets the complete successful payload; diagnostics are exempt.
 
 ---
 
