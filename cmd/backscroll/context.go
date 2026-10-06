@@ -106,7 +106,7 @@ func newContextCmd(stdout, stderr io.Writer) *cobra.Command {
 	cmd.Flags().Int64Var(&opts.ordinal, "ordinal", 0, "Exact record ordinal anchor (with --source-path)")
 	cmd.Flags().IntVar(&opts.before, "before", contextDefaultWindow, "Records before the anchor (0-50)")
 	cmd.Flags().IntVar(&opts.after, "after", contextDefaultWindow, "Records after the anchor (0-50)")
-	cmd.Flags().IntVar(&opts.maxTokens, "max-tokens", contextDefaultMaxTokens, "Maximum tokens in the complete output (64-16384)")
+	cmd.Flags().IntVar(&opts.maxTokens, "max-tokens", contextDefaultMaxTokens, "Maximum Picokit tokens in the complete successful payload; diagnostics are exempt (64-16384)")
 	cmd.Flags().BoolVar(&opts.jsonFormat, "json", false, "Output as JSON")
 	cmd.Flags().BoolVar(&opts.robotFormat, "robot", false, "Output as line-oriented robot data")
 
@@ -185,11 +185,11 @@ func runContext(ctx context.Context, stdout, stderr io.Writer, cfg *config.Confi
 	} else if opts.robotFormat {
 		format = contextRobotFormat
 	}
-	payload, fits, err := contextPayloadWithinBudget(records, format, opts.maxTokens)
+	payload, successfulPayloadFits, err := contextSuccessfulPayloadWithinBudget(records, format, opts.maxTokens)
 	if err != nil {
 		return fmt.Errorf("format context records: %w", err)
 	}
-	if !fits {
+	if !successfulPayloadFits {
 		return writeContextDiagnostic(stdout, stderr, "context_budget_too_small",
 			fmt.Sprintf("--max-tokens %d cannot fit the anchor and required metadata", opts.maxTokens), opts)
 	}
@@ -203,7 +203,7 @@ func writeContextDiagnostic(stdout, stderr io.Writer, code, summary string, opts
 	return refuseIndex(stdout, stderr, compat.Diagnostic{Code: compat.Code(code), Summary: summary}, opts.jsonFormat, opts.robotFormat)
 }
 
-func contextPayloadWithinBudget(records []storage.ContextRecord, format contextOutputFormat, maxTokens int) ([]byte, bool, error) {
+func contextSuccessfulPayloadWithinBudget(records []storage.ContextRecord, format contextOutputFormat, maxTokens int) ([]byte, bool, error) {
 	normalized := make([]contextRecordOutput, len(records))
 	anchorIndex := -1
 	for i, record := range records {
@@ -237,8 +237,10 @@ func contextPayloadWithinBudget(records []storage.ContextRecord, format contextO
 		if err != nil {
 			return nil, false, err
 		}
-		// Estimate the complete, escaped payload as one unit. Per-line or
-		// per-record estimates round independently and can undercount.
+		// Count the complete, escaped successful payload as one unit. Per-line
+		// or per-record estimates round independently and can undercount.
+		// Structured diagnostics are emitted separately and are intentionally
+		// exempt from this successful-payload budget.
 		if picokitoutput.TokenCount(string(payload)) <= maxTokens {
 			return payload, true, nil
 		}

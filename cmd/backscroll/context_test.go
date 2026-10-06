@@ -29,7 +29,7 @@ func TestContextFormatsGoldenAndStructuralFields(t *testing.T) {
 		Anchor:      true,
 	}}
 
-	jsonPayload, fits, err := contextPayloadWithinBudget(records, contextJSONFormat, contextMaxMaxTokens)
+	jsonPayload, fits, err := contextSuccessfulPayloadWithinBudget(records, contextJSONFormat, contextMaxMaxTokens)
 	if err != nil || !fits {
 		t.Fatalf("JSON payload: fits=%t err=%v", fits, err)
 	}
@@ -49,7 +49,7 @@ func TestContextFormatsGoldenAndStructuralFields(t *testing.T) {
 		t.Fatalf("provenance/anchor fields = %+v", got)
 	}
 
-	robotPayload, fits, err := contextPayloadWithinBudget(records, contextRobotFormat, contextMaxMaxTokens)
+	robotPayload, fits, err := contextSuccessfulPayloadWithinBudget(records, contextRobotFormat, contextMaxMaxTokens)
 	if err != nil || !fits {
 		t.Fatalf("robot payload: fits=%t err=%v", fits, err)
 	}
@@ -79,7 +79,7 @@ func TestContextFormatsGoldenAndStructuralFields(t *testing.T) {
 		}
 	}
 
-	textPayload, fits, err := contextPayloadWithinBudget(records, contextTextFormat, contextMaxMaxTokens)
+	textPayload, fits, err := contextSuccessfulPayloadWithinBudget(records, contextTextFormat, contextMaxMaxTokens)
 	if err != nil || !fits {
 		t.Fatalf("text payload: fits=%t err=%v", fits, err)
 	}
@@ -152,7 +152,7 @@ func TestContextBudgetRemovesWholeEdgeRecordsDeterministically(t *testing.T) {
 	}
 	budget := picokitoutput.TokenCount(string(desired))
 
-	payload, fits, err := contextPayloadWithinBudget(records, contextJSONFormat, budget)
+	payload, fits, err := contextSuccessfulPayloadWithinBudget(records, contextJSONFormat, budget)
 	if err != nil || !fits {
 		t.Fatalf("budgeted payload: fits=%t err=%v", fits, err)
 	}
@@ -183,9 +183,98 @@ func TestContextBudgetRemovesWholeEdgeRecordsDeterministically(t *testing.T) {
 		t.Fatal(err)
 	}
 	exactBudget := picokitoutput.TokenCount(string(full))
-	exactPayload, fits, err := contextPayloadWithinBudget(records, contextJSONFormat, exactBudget)
+	exactPayload, fits, err := contextSuccessfulPayloadWithinBudget(records, contextJSONFormat, exactBudget)
 	if err != nil || !fits || string(exactPayload) != string(full) {
 		t.Fatalf("exact token limit did not retain complete payload: fits=%t err=%v", fits, err)
+	}
+}
+
+func TestContextTextAndRobotSuccessfulPayloadBudgetBoundaries(t *testing.T) {
+	cfg := newContextTestIndex(t)
+	anchorUUID := "anchor"
+	anchorRecord := storage.ContextRecord{
+		UUID:        &anchorUUID,
+		SourcePath:  "/session",
+		Ordinal:     2,
+		Role:        "assistant",
+		Origin:      models.OriginAssistant,
+		ContentType: "text",
+		Source:      "session",
+		Text:        strings.Repeat("anchor payload ", 30),
+		Anchor:      true,
+	}
+
+	tests := []struct {
+		name   string
+		format contextOutputFormat
+		robot  bool
+	}{
+		{name: "text", format: contextTextFormat},
+		{name: "robot", format: contextRobotFormat, robot: true},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			expected, fits, err := contextSuccessfulPayloadWithinBudget(
+				[]storage.ContextRecord{anchorRecord}, tc.format, contextMaxMaxTokens,
+			)
+			if err != nil || !fits {
+				t.Fatalf("build expected successful payload: fits=%t err=%v", fits, err)
+			}
+			exactBudget := picokitoutput.TokenCount(string(expected))
+			if exactBudget <= contextMinMaxTokens || exactBudget > contextMaxMaxTokens {
+				t.Fatalf("boundary fixture token count = %d, want within (%d, %d]", exactBudget, contextMinMaxTokens, contextMaxMaxTokens)
+			}
+
+			opts := contextCommandOptions{
+				uuid: "anchor", uuidSet: true, before: 0, after: 0,
+				maxTokens: exactBudget, robotFormat: tc.robot,
+			}
+			var stdout, stderr bytes.Buffer
+			if err := runContext(context.Background(), &stdout, &stderr, cfg, opts); err != nil {
+				t.Fatalf("run exact-budget context: %v", err)
+			}
+			if stderr.Len() != 0 {
+				t.Fatalf("exact-budget stderr = %q", stderr.String())
+			}
+			if got := stdout.String(); got != string(expected) {
+				t.Fatalf("exact-budget payload did not preserve the complete record\n got: %q\nwant: %q", got, expected)
+			}
+			if tokens := picokitoutput.TokenCount(stdout.String()); tokens > exactBudget {
+				t.Fatalf("successful payload tokens = %d, budget = %d", tokens, exactBudget)
+			}
+			anchorMarker := "is_anchor: true"
+			if tc.robot {
+				anchorMarker = "record_0_is_anchor=true"
+			}
+			for _, marker := range []string{"truncated=false", "omitted=0", anchorMarker} {
+				if !strings.Contains(stdout.String(), marker) {
+					t.Fatalf("successful payload missing complete anchor marker %q: %q", marker, stdout.String())
+				}
+			}
+
+			opts.maxTokens = exactBudget - 1
+			stdout.Reset()
+			stderr.Reset()
+			err = runContext(context.Background(), &stdout, &stderr, cfg, opts)
+			if err == nil {
+				t.Fatal("one-token-smaller budget returned a successful payload")
+			}
+			if tc.robot {
+				if stderr.Len() != 0 || !strings.Contains(stdout.String(), "diagnostic_code=context_budget_too_small\n") {
+					t.Fatalf("robot budget diagnostic: err=%v stdout=%q stderr=%q", err, stdout.String(), stderr.String())
+				}
+				if strings.Contains(stdout.String(), "record_0_") {
+					t.Fatalf("robot budget diagnostic leaked a partial record: %q", stdout.String())
+				}
+			} else {
+				if stdout.Len() != 0 || !strings.Contains(stderr.String(), "diagnostic: context_budget_too_small:") {
+					t.Fatalf("text budget diagnostic: err=%v stdout=%q stderr=%q", err, stdout.String(), stderr.String())
+				}
+				if strings.Contains(stderr.String(), "Record 0") {
+					t.Fatalf("text budget diagnostic leaked a partial record: %q", stderr.String())
+				}
+			}
+		})
 	}
 }
 
@@ -239,6 +328,12 @@ func TestContextValidationLimitsAndSelectors(t *testing.T) {
 	for name, want := range map[string]string{"before": "5", "after": "5", "max-tokens": "2000"} {
 		if got := cmd.Flags().Lookup(name).DefValue; got != want {
 			t.Fatalf("--%s default = %q, want %q", name, got, want)
+		}
+	}
+	maxTokensUsage := cmd.Flags().Lookup("max-tokens").Usage
+	for _, want := range []string{"complete successful payload", "diagnostics are exempt"} {
+		if !strings.Contains(maxTokensUsage, want) {
+			t.Fatalf("--max-tokens help = %q, want substring %q", maxTokensUsage, want)
 		}
 	}
 }
@@ -319,6 +414,66 @@ func TestContextCommandUsesIndexedAPIAndEmitsDiagnostics(t *testing.T) {
 			t.Fatalf("partial context payload leaked into diagnostic: %v", diagnostic)
 		}
 	})
+}
+
+func TestContextDiagnosticsAreIntentionallyExemptFromSuccessfulPayloadBudget(t *testing.T) {
+	cfg := newContextTestIndex(t)
+	missing := strings.Repeat("missing diagnostic detail ", 100)
+
+	tests := []struct {
+		name string
+		opts contextCommandOptions
+	}{
+		{
+			name: "text",
+			opts: contextCommandOptions{uuid: missing, uuidSet: true, before: 0, after: 0,
+				maxTokens: contextMinMaxTokens},
+		},
+		{
+			name: "json",
+			opts: contextCommandOptions{uuid: missing, uuidSet: true, before: 0, after: 0,
+				maxTokens: contextMinMaxTokens, jsonFormat: true},
+		},
+		{
+			name: "robot",
+			opts: contextCommandOptions{uuid: missing, uuidSet: true, before: 0, after: 0,
+				maxTokens: contextMinMaxTokens, robotFormat: true},
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			var stdout, stderr bytes.Buffer
+			err := runContext(context.Background(), &stdout, &stderr, cfg, tc.opts)
+			if err == nil {
+				t.Fatal("missing context returned nil error")
+			}
+
+			emitted := stdout.String()
+			if tc.name == "text" {
+				if stdout.Len() != 0 || !strings.Contains(stderr.String(), "diagnostic: context_not_found:") {
+					t.Fatalf("text diagnostic: stdout=%q stderr=%q", stdout.String(), stderr.String())
+				}
+				emitted = stderr.String()
+			} else {
+				if stderr.Len() != 0 {
+					t.Fatalf("machine diagnostic stderr = %q", stderr.String())
+				}
+				if tc.name == "json" {
+					var diagnostic struct {
+						Code string `json:"code"`
+					}
+					if decodeErr := json.Unmarshal(stdout.Bytes(), &diagnostic); decodeErr != nil || diagnostic.Code != "context_not_found" {
+						t.Fatalf("JSON diagnostic: code=%q decode_err=%v output=%q", diagnostic.Code, decodeErr, stdout.String())
+					}
+				} else if !strings.Contains(stdout.String(), "diagnostic_code=context_not_found\n") {
+					t.Fatalf("robot diagnostic = %q", stdout.String())
+				}
+			}
+			if tokens := picokitoutput.TokenCount(emitted); tokens <= contextMinMaxTokens {
+				t.Fatalf("%s diagnostic uses %d tokens; fixture did not prove intentional budget exemption", tc.name, tokens)
+			}
+		})
+	}
 }
 
 func newContextTestIndex(t *testing.T) *config.Config {
