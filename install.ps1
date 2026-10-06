@@ -92,16 +92,15 @@ function Get-ConfigDir {
         return $env:BACKSCROLL_CONFIG_DIR
     }
 
-    if ($env:APPDATA) {
-        return $env:APPDATA
+    $homeDir = $HOME
+    if (-not $homeDir) {
+        $homeDir = [Environment]::GetFolderPath("UserProfile")
+    }
+    if ($homeDir) {
+        return (Join-Path $homeDir ".config")
     }
 
-    $appData = [Environment]::GetFolderPath("ApplicationData")
-    if ($appData) {
-        return $appData
-    }
-
-    throw "Could not determine config directory. Set BACKSCROLL_CONFIG_DIR."
+    throw "Could not determine user home directory. Set BACKSCROLL_CONFIG_DIR."
 }
 
 function Get-LocalInputsDir {

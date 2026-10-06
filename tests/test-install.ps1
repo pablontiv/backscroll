@@ -134,14 +134,14 @@ Describe "Get-ConfigDir" -Tag "Runtime" {
         }
     }
 
-    It "uses APPDATA by default" {
+    It "uses the runtime home .config convention by default" {
         $originalConfigDir = $env:BACKSCROLL_CONFIG_DIR
         $originalAppData = $env:APPDATA
-        $appData = Join-Path $TestDrive "appdata"
         $env:BACKSCROLL_CONFIG_DIR = ""
-        $env:APPDATA = $appData
+        $env:APPDATA = Join-Path $TestDrive "appdata-must-not-be-used"
         try {
-            Get-ConfigDir | Should -Be $appData
+            Get-ConfigDir | Should -Be (Join-Path $HOME ".config")
+            Get-ConfigDir | Should -Not -Be $env:APPDATA
         } finally {
             $env:BACKSCROLL_CONFIG_DIR = $originalConfigDir
             $env:APPDATA = $originalAppData
@@ -150,44 +150,34 @@ Describe "Get-ConfigDir" -Tag "Runtime" {
 }
 
 Describe "Install-InputPresets" -Tag "Runtime" {
-    It "copies presets to BACKSCROLL_CONFIG_DIR\backscroll\inputs" {
+    It "installs a fresh preset set under the runtime override convention" {
         $configDir = Join-Path $TestDrive "config-copy"
+        $inputsDir = Join-Path (Join-Path $configDir "backscroll") "inputs"
         $env:BACKSCROLL_CONFIG_DIR = $configDir
         try {
             Install-InputPresets -Version "v0.2.3" -SourceDir $InputsSource
-            Test-Path (Join-Path (Join-Path $configDir "backscroll") "inputs") | Should -BeTrue
-            Test-Path (Join-Path (Join-Path (Join-Path $configDir "backscroll") "inputs") "claude.inputs.toml") | Should -BeTrue
-            Test-Path (Join-Path (Join-Path (Join-Path $configDir "backscroll") "inputs") "pi.inputs.toml") | Should -BeTrue
+            Test-Path $inputsDir | Should -BeTrue
+            foreach ($preset in $InputPresets) {
+                Test-Path (Join-Path $inputsDir $preset) | Should -BeTrue
+            }
         } finally {
             Remove-Item Env:\BACKSCROLL_CONFIG_DIR -ErrorAction SilentlyContinue
         }
     }
 
-    It "does not overwrite existing presets by default" {
+    It "preserves existing Claude, Pi, and Codex presets by default" {
         $configDir = Join-Path $TestDrive "config-skip"
         $inputsDir = Join-Path (Join-Path $configDir "backscroll") "inputs"
         New-Item -ItemType Directory -Path $inputsDir -Force | Out-Null
-        $claudePreset = Join-Path $inputsDir "claude.inputs.toml"
-        Set-Content -Path $claudePreset -Value "user edit"
-        $env:BACKSCROLL_CONFIG_DIR = $configDir
-        try {
-            Install-InputPresets -Version "v0.2.3" -SourceDir $InputsSource
-            Get-Content $claudePreset -Raw | Should -Match "user edit"
-        } finally {
-            Remove-Item Env:\BACKSCROLL_CONFIG_DIR -ErrorAction SilentlyContinue
+        foreach ($preset in $InputPresets) {
+            Set-Content -Path (Join-Path $inputsDir $preset) -Value "$preset user edit"
         }
-    }
-
-    It "preserves an existing Pi preset by default" {
-        $configDir = Join-Path $TestDrive "config-pi-skip"
-        $inputsDir = Join-Path (Join-Path $configDir "backscroll") "inputs"
-        New-Item -ItemType Directory -Path $inputsDir -Force | Out-Null
-        $piPreset = Join-Path $inputsDir "pi.inputs.toml"
-        Set-Content -Path $piPreset -Value "pi user edit"
         $env:BACKSCROLL_CONFIG_DIR = $configDir
         try {
             Install-InputPresets -Version "v0.2.3" -SourceDir $InputsSource
-            Get-Content $piPreset -Raw | Should -Match "pi user edit"
+            foreach ($preset in $InputPresets) {
+                Get-Content (Join-Path $inputsDir $preset) -Raw | Should -Match ([regex]::Escape("$preset user edit"))
+            }
         } finally {
             Remove-Item Env:\BACKSCROLL_CONFIG_DIR -ErrorAction SilentlyContinue
         }

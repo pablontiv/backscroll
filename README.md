@@ -46,7 +46,7 @@ Detects your platform (Linux x86_64 / macOS aarch64), installs the binary to `~/
 irm https://raw.githubusercontent.com/pablontiv/backscroll/master/install.ps1 | iex
 ```
 
-Installs the binary to `%LOCALAPPDATA%\backscroll\bin\`, adds it to your PATH, and installs the shipped Claude and Codex input presets into `%APPDATA%\backscroll\inputs\` without overwriting existing manifests. Compatible with Windows PowerShell 5.1+.
+Installs the binary to `%LOCALAPPDATA%\backscroll\bin\`, adds it to your PATH, and installs the shipped Claude, Pi, and Codex input presets into `<user-home>\.config\backscroll\inputs\` without overwriting existing manifests. `BACKSCROLL_CONFIG_DIR` overrides the config base when set. Compatible with Windows PowerShell 5.1+.
 
 ### Install input presets
 
@@ -58,7 +58,7 @@ Runtime input config directories:
 | Linux / macOS | `$HOME/.config/backscroll/inputs/` |
 | Windows | `<user-home>\.config\backscroll\inputs\` |
 
-Set `BACKSCROLL_CONFIG_DIR` to override the `<config_dir>` base; manifests are then read from `$BACKSCROLL_CONFIG_DIR/backscroll/inputs/`. Set this explicitly when using an installer/hook with a different OS-specific default (for example the Windows installer above).
+Set `BACKSCROLL_CONFIG_DIR` to override the `<config_dir>` base; manifests are then read from `$BACKSCROLL_CONFIG_DIR/backscroll/inputs/`. Both install scripts follow this same runtime convention.
 
 If you install from a source checkout, copy presets without clobbering existing files:
 
