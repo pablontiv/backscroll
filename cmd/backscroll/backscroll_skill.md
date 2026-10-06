@@ -224,23 +224,33 @@ Search answers “find what I can already name.” For discovery — “what rec
 | --- | --- |
 | What errors recur? | `backscroll patterns --kind templates --min-support 3` |
 | What breaks, and is it growing? | `backscroll patterns --kind failures --trend` |
-| Where did the user correct me/us? | `backscroll patterns --kind corrections --min-confidence 0.6` |
+| Where did the user correct me/us? | `backscroll patterns --kind corrections --origin human --min-confidence 0.6` |
 | What workflows repeat? | `backscroll patterns --kind sequences --min-support 20 --min-length 3` |
 | What runs most for a project? | `backscroll patterns --kind commands --project backscroll` |
 
 Agent-grade census output:
 
 ```bash
-backscroll patterns --kind corrections --pending --batch 50 --robot
+backscroll patterns --kind corrections --origin human --pending --batch 50 --robot
 backscroll patterns --kind commands --all-projects --robot
 ```
 
 Interpret the complete table returned. The census did the counting; the agent's job is judgment, not sampling.
 
+For corrections, `--origin human|assistant|system|automation|unknown` is opt-in,
+valid only with `--kind corrections`, and filters before pagination. Use
+`--origin human` whenever the question is about what the human said. Origin is
+parser-backed from native structured records; never infer it from text or a
+historical role. Missing native evidence is `unknown`, and historical rows can
+be enriched only while their configured source remains available. With the
+flag, text adds `Origin: <value>`, robot adds `result_N_origin=<value>`, and JSON
+candidates add `"Origin":"<value>"`; without it, all three omit that field and
+retain their previous shape.
+
 ### Classification loop (resumable by construction)
 
 ```bash
-backscroll patterns --kind corrections --pending --batch 50 --robot
+backscroll patterns --kind corrections --origin human --pending --batch 50 --robot
 backscroll annotate --uuid <u> --kind correction --label "<free-form>"
 # Re-run fetch: labeled candidates vanish, so no loop state is needed.
 ```

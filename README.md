@@ -129,7 +129,7 @@ Found 20 templates (min_support=5):
 
 How a file is re-synced depends on whether its messages carry identity. Sessions whose messages have a uuid — Claude Code, from schema v8 onward — sync append-only: rows already keyed by uuid are left alone and their ids stay stable. The one exception is a one-time cleanup. If the same file was indexed before v8, those older rows carry no uuid, and re-parsing would duplicate the whole file; they are deleted once, on the first re-sync after the upgrade, and never again. Sessions without one, which today is most of the corpus, are wiped and reloaded on every re-sync, so their row ids are not stable and edits to a live file replace its rows wholesale. Either way the deletion only ever happens while the file still exists; `backscroll purge --before` is the only command that removes anything on your behalf.
 
-**Every assistant, one index.** Claude Code, Pi and OpenCode each store sessions differently. A dedicated reader per format normalizes them behind one schema, so you search content, not file layouts. Input manifests select a registered reader and its discovery roots; adding a new provider format requires a reader implementation, not only a manifest.
+**Every assistant, one index.** Claude Code, Pi, OpenCode, and Codex each store sessions differently. A dedicated reader per format normalizes them behind one schema, so you search content, not file layouts. Input manifests select a registered reader and its discovery roots; adding a new provider format requires a reader implementation, not only a manifest. Message origin is likewise parser-backed: Backscroll uses native structured actor and tool boundaries, never message text or a historical stored role. Missing evidence is `unknown`, and historical rows are enriched only when their configured source is still available to its reader.
 
 **Conversation and tool activity are indexed separately, on purpose.** Prose goes to an FTS5 index with a Porter stemmer, so "migrating" finds "migration". Tool text — commands, paths, errors — goes to a trigram index, where an exact substring like `internal/storage/sync.go` matches. An unfiltered query merges both by rank position, which is why a search never has to pick one.
 
@@ -163,15 +163,15 @@ backscroll patterns --kind commands     # what runs most
 backscroll patterns --kind failures     # what breaks, with exit codes
 backscroll patterns --kind templates    # recurring error shapes
 backscroll patterns --kind sequences    # workflows that repeat
-backscroll patterns --kind corrections  # where you corrected course
+backscroll patterns --kind corrections --origin human  # where you corrected course
 ```
 
 `--trend` buckets commands and failures by week. `--min-support N` sets how many occurrences make a pattern. Sequences also take `--min-length` / `--max-length`.
 
-Correction candidates are detected deterministically, never by a model, and are meant to be labelled:
+Correction candidates are detected deterministically, never by a model, and are meant to be labelled. `--origin human|assistant|system|automation|unknown` is an opt-in corrections-only filter; it is applied before pagination, and omitting it preserves the existing population and output shape:
 
 ```bash
-backscroll patterns --kind corrections --pending --batch 50 --robot
+backscroll patterns --kind corrections --origin human --pending --batch 50 --robot
 backscroll annotate --uuid <UUID> --kind correction --label "<your label>"
 ```
 

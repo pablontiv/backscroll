@@ -104,6 +104,51 @@ An active input with an unregistered decoder fails startup with an actionable
 reader implementation and registration; a manifest alone cannot define a new
 provider schema.
 
+## Parser-backed message origin
+
+Readers attach one of five origins to each indexed message: `human`,
+`assistant`, `system`, `automation`, or `unknown`. This provenance comes only
+from the reader's native structured records. Backscroll does not inspect prose,
+headings, frontmatter, quoted labels, or a historical stored `role` to invent an
+origin. Missing, unsupported, or internally inconsistent fields in one native
+record fall back to `unknown`.
+
+The built-in readers map native records as follows:
+
+| Decoder | Native evidence | Stored origin |
+| --- | --- | --- |
+| `claude` | Matching record envelope and nested role: `user`, `assistant`, `reasoning`, or `system` | `human`, `assistant`, `assistant`, or `system`, respectively |
+| `claude` | `tool_use` block | Origin proved by the enclosing record; `unknown` if its envelope and role disagree |
+| `claude` | `tool_result` block | `automation`, even though Claude carries the block in a user-role record |
+| `pi` (Pi/Pion) | Supported message role `user` or `assistant` | `human` or `assistant` |
+| `pi` (Pi/Pion) | `toolCall` or optional `thinking` block | `assistant` |
+| `pi` (Pi) | Supported `custom` tool-result record | `automation` |
+| `codex` | Supported message role `user` or `assistant` | `human` or `assistant` |
+| `codex` | Function/custom tool call or readable reasoning | `assistant` |
+| `codex` | Function/custom tool output | `automation` |
+| `opencode` | Native message role `user` or `assistant` | `human` or `assistant`; other roles are `unknown` |
+| `opencode` | Tool input or explicit tool output | Input inherits the validated message origin; output is `automation` |
+| `markdown_document`, `markdown_sections` | Document text, headings, or frontmatter | Always `unknown` |
+
+Codex wrapper removal affects content only: a supported native user message
+remains `human`; wrapper-like text is never treated as actor evidence. Pion's
+`recordType` rules remain as described below and do not turn unsupported tool
+records into automation evidence.
+
+V16 adds the constrained origin fields and migrates older rows to `unknown`
+without deriving provenance from their text or role. Startup sync can reparse a
+bounded set of stale paths and enrich `unknown` only when the configured source
+still exists and its reader provides evidence. An unavailable or expired source
+therefore remains `unknown`. For stable identities, a later partial parse cannot
+erase a proven origin or replace the retained payload, while contradictory
+proven origins are rejected.
+
+Recovery follows the same evidence rule. It preserves matching proven origins,
+enriches an `unknown` duplicate from a compatible proven duplicate, and retains
+independent compatible provenance. Two different proven origins for the same
+identity are a recovery conflict, so the union is rejected rather than choosing
+one.
+
 ## Complete Claude example
 
 ```toml
@@ -220,7 +265,8 @@ Limits (observed format boundary and RED/GREEN evidence: [Codex input evidence](
   are skipped; valid neighboring records still ingest. File I/O errors are returned.
 - Text is normalized by existing cleaning/classification; tool text is capped at
   4,000 Unicode code points. Native item/session IDs and Git metadata are not new
-  storage fields. No database migration or direct Codex database access is needed.
+  storage fields. No Codex-specific migration or direct Codex database access is
+  needed; the shared V16 message-origin migration applies to every indexed format.
 - Like Pi/OpenCode, changed files use the UUID-less per-file reload path; unchanged
   hashes skip work, and missing source files keep their indexed history. Moving an
   already-indexed file into the archive can retain both path identities; there is

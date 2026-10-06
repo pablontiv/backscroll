@@ -23,7 +23,8 @@ backscroll patterns --kind commands|failures|templates|corrections|sequences
 ```
 
 Base flags for every kind: `--project` / `--all-projects`, `--tag`,
-`--limit` / `--offset`, `--json` / `--robot`.
+`--limit` / `--offset`, `--json` / `--robot`. Corrections alone also accept
+`--origin human|assistant|system|automation|unknown`.
 
 ### commands — what runs most
 
@@ -57,6 +58,25 @@ calibration in `docs/eval/corrections-calibration.md`). Detectors run on
 prose only (`role='user'`, content_type text/code) — tool output quoting
 correction phrases does not fire them. Filter with `--min-confidence F`.
 
+For human-authored corrections, opt in explicitly:
+
+```bash
+backscroll patterns --kind corrections --origin human
+```
+
+`--origin` is valid only for corrections and accepts exactly `human`,
+`assistant`, `system`, `automation`, or `unknown`. It filters the candidate
+population before `--limit` / `--offset`, so pagination applies within the
+selected origin. Origin is parser-backed provenance, not a guess from message
+text or a historical stored `role`; rows without native parser evidence remain
+`unknown`. The default is deliberately unchanged: without `--origin`, no
+origin filter is applied and no origin field is added to output.
+
+When the flag is present, text output adds `Origin: <value>`, robot output adds
+`result_N_origin=<value>`, and each JSON candidate adds the case-sensitive
+field `"Origin":"<value>"`. Those fields are omitted in all three formats
+when the flag is absent.
+
 ### sequences — frequent workflows (exploratory)
 
 PrefixSpan over per-session category sequences (`inputs/categories.toml`,
@@ -85,7 +105,7 @@ The resumable funnel that turns correction candidates into labeled data:
 
 ```bash
 # 1. Agent fetches a batch of unlabeled candidates (uuid included in robot output)
-backscroll patterns --kind corrections --pending --batch 50 --robot
+backscroll patterns --kind corrections --origin human --pending --batch 50 --robot
 
 # 2. Agent classifies each window and writes the label back
 backscroll annotate --uuid <u> --kind correction --label "scope-exceeded"
@@ -110,4 +130,7 @@ not from loop state: there is nothing to checkpoint.
 - Historical supply: rich capture exists for rows synced after migration
   v8; `rebuild` backfills expired-file derived data from stored text (lossy for tool
   events, marked `extraction_version=0`) and stale on-disk files re-parse
-  at full fidelity during sync (capped per run, FIFO).
+  at full fidelity during sync (capped per run, FIFO). V16 origin provenance is
+  enriched only when a configured source is still available to its reader;
+  expired-source rows stay `unknown` rather than being inferred from stored text
+  or role.
