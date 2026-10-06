@@ -27,26 +27,28 @@ Before running the F3b agent-classification loop, we must establish baseline pre
    **CRITICAL**: The worksheet contains private session text. Write it **OUTSIDE the repository** (e.g., `~/calibration/` or `/tmp/`), never inside `docs/eval/`.
 
 3. For each candidate in the CSV:
-   - Note `uuid`, `source_path`, `ordinal`, `detectors` (array), and `max_confidence`.
-   - Retrieve the exact labeling window with `context` (see Labeling Windows below). Use the opaque UUID when present; otherwise use the exact stored source path and ordinal.
+   - Note `uuid`, `source_path`, `ordinal`, `detectors`, and `max_confidence`.
+   - Retrieve the exact window with `context`. Use the opaque UUID when present; otherwise use the exact `source_path` and `ordinal`.
+   - For **lexicon**, request `--before 0 --after 0`. For **rephrase**, **interrupt**, and **denial**, start with `--before 5 --after 5`.
    ```bash
-   backscroll context --uuid "$UUID" --before 1 --after 1 --json --max-tokens 2000
-   backscroll context --source-path "$SOURCE_PATH" --ordinal "$ORDINAL" --before 1 --after 1 --json --max-tokens 2000
+   backscroll context --uuid "$UUID" --before 5 --after 5 --json --max-tokens 2000
+   backscroll context --source-path "$SOURCE_PATH" --ordinal "$ORDINAL" --before 5 --after 5 --json --max-tokens 2000
    ```
-   Do not use ranked search or raw session files once exact identity exists.
 
-### Labeling Windows (Detection Context)
+### Labeling Windows
 
-Each correction candidate requires a labeling window to establish judgment context. Window definitions vary by detector:
+`backscroll context` returns contiguous positions from the indexed sequence, ordered by `(ordinal, id)`. It does not search for the last assistant message or the next user message, and it does not filter by `role`, `content_type`, tool rows, or short stubs.
 
-| Detector | Window Definition | Includes |
-|----------|-------------------|----------|
-| **Lexicon** | Current message only | The user message flagged by lexicon match |
-| **Rephrase** | Current message only | The user message with Jaccard ≥0.6 rephrase |
-| **Interrupt** | Preceding (assistant) + current (user) + following (user) | Last assistant message before interrupt; the resumed user message; user's next message (if exists) to see if correction follows |
-| **Denial** | Preceding (assistant/tool) + current (user) + following (user) | The permission denial or error message; the user's response; follow-up if present |
+| Detector | Initial window | Manual selection |
+|----------|----------------|------------------|
+| **Lexicon** | `0/0` | Evaluate the record with `is_anchor=true`. |
+| **Rephrase** | `5/5` | Locate the rephrase and its antecedent using `role`, `content_type`, and `is_anchor`. |
+| **Interrupt** | `5/5` | Locate the interrupted message and resumption using `role`, `content_type`, and `is_anchor`. |
+| **Denial** | `5/5` | Locate the denial and response using `role`, `content_type`, and `is_anchor`. |
 
-**Window Retrieval**: `backscroll context` is the authoritative read surface. For lexicon/rephrase, request `--before 0 --after 0`. For interrupt/denial, request `--before 1 --after 1` and apply the detector-specific interpretation above. Context reads perennial SQLite rows, including compatible recovery rows, and never falls back to raw source files. The extraction tool's `labeling_window_before` and `labeling_window_after` columns are worksheet conveniences, not a separate retrieval contract.
+If a required message is missing, expand progressively up to `--before 50 --after 50`. Record **insufficient context** if it still does not appear or the token budget omits it (`truncated=true` or `omitted>0`); do not fill the gap from raw session files.
+
+`backscroll context` is the only authoritative source for manual review: it reads indexed SQLite rows and never falls back to source files. The extractor's `labeling_window_before` and `labeling_window_after` columns are heuristic previews only; they are neither authoritative nor equivalent to a `context` window.
 
 ### Phase 2: Hand Labeling (manual)
 
@@ -57,7 +59,7 @@ Each correction candidate requires a labeling window to establish judgment conte
    - **Ordinal** (message index)
    - **Detectors Fired** (comma-separated)
    - **Max Confidence** (v1 prior)
-   - **Context** (3-message window as text)
+   - **Context** (indexed window used for judgment)
    - **True Correction?** (yes/no) — YOUR JUDGMENT: did the user actually correct the agent?
    - **Correction Type** (if yes): lexicon|interrupt|denial|rephrase|unknown
    - **Notes** (any ambiguity, edge case, or false-positive reason)
@@ -70,7 +72,7 @@ Each correction candidate requires a labeling window to establish judgment conte
 |----------|---------------------------|-----------|--------------|---------------|
 | **Lexicon** | User explicitly steers toward **different action** due to agent misunderstanding. Es ej., "no, not X, do Y instead." | User expresses preference, disagreement, or heated tone without changing instruction. Example: "no, eso no es un bug, es esperado" (user says it's NOT a bug—information, not correction). | Message: "No, I need you to search for files named X, not Y" | Message: "No thanks, I prefer X to Y" |
 | **Rephrase** | User re-phrased **because agent misunderstood**, and follow-up shows changed instruction or clarification of intent. | User restates same preference, asks the same question again, or polishes wording without changing substance. | Initial: "Fix auth"; Agent: "fixed it"; User rephrase: "Actually, I mean fix the JWT validation in the login endpoint" (clarification, different scope). | Initial: "Fix auth"; Agent: "fixing..."; User: "Please fix auth again" (same intent, just repeated). |
-| **Denial** | Context window shows permission/access denial from agent, **followed by user pivot to alternative approach** (signals user corrected strategy). Requires manual session lookup to disambiguate. | Context shows procedural denial (e.g., "I cannot execute root commands") without user strategy change, or user message is unrelated to denial. | Assistant: "That command requires sudo, denied."; User: "OK, let me try a non-root alternative instead." | Assistant: "That requires admin permission, denied."; User: "OK" (acceptance, not correction). |
+| **Denial** | Context window shows permission/access denial from agent, **followed by user pivot to alternative approach** (signals user corrected strategy). Expand the indexed window manually to disambiguate. | Context shows procedural denial (e.g., "I cannot execute root commands") without user strategy change, or user message is unrelated to denial. | Assistant: "That command requires sudo, denied."; User: "OK, let me try a non-root alternative instead." | Assistant: "That requires admin permission, denied."; User: "OK" (acceptance, not correction). |
 | **Interrupt** | User's resumed message (after interrupt) **changes instruction or strategy** compared to the paused message. Co-occurrence measure: interruption + new direction = correction signal. | Message resumes same instruction unchanged, or interrupt flag is noise. | Paused: "Implement feature X"; Resumed: "Actually, let me try a different approach for feature Y instead." (changed scope/strategy). | Paused: "Implement feature X"; Resumed: "OK, let me implement feature X now" (same instruction, just resumed). |
 
 ### Phase 3: Analysis (automated + manual)
