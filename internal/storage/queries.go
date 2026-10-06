@@ -10,6 +10,7 @@ import (
 
 	"github.com/pablontiv/backscroll/internal/categories"
 	"github.com/pablontiv/backscroll/internal/directsearch"
+	"github.com/pablontiv/backscroll/internal/models"
 	"github.com/pablontiv/backscroll/internal/projects"
 	"github.com/pablontiv/backscroll/internal/sequences"
 )
@@ -750,6 +751,7 @@ func (d *Database) AggregateTemplates(opts TemplateQueryOpts) ([]TemplateRow, er
 // CorrectionAggOpts filters and paginates correction aggregation.
 type CorrectionAggOpts struct {
 	Project       string
+	Origin        models.MessageOrigin
 	MinConfidence float64
 	Limit         int
 	Offset        int
@@ -764,12 +766,17 @@ type CorrectionCandidate struct {
 	Detectors     []string
 	MaxConfidence float64
 	TextSnippet   string
+	Origin        models.MessageOrigin `json:",omitempty"`
 }
 
 // AggregateCorrections returns correction candidates grouped by ordinal,
 // ordered by max confidence descending. Detectors are sorted by name within
 // each ordinal for determinism.
 func (d *Database) AggregateCorrections(opts CorrectionAggOpts) ([]CorrectionCandidate, error) {
+	if opts.Origin != "" && !models.ValidMessageOrigin(opts.Origin) {
+		return nil, fmt.Errorf("invalid correction origin %q", opts.Origin)
+	}
+
 	query := `
 		SELECT
 			cs.source_path,
@@ -777,7 +784,8 @@ func (d *Database) AggregateCorrections(opts CorrectionAggOpts) ([]CorrectionCan
 			si.text,
 			MAX(cs.confidence) as max_confidence,
 			GROUP_CONCAT(DISTINCT cs.detector ORDER BY cs.detector) as detectors,
-			COALESCE(si.uuid, '')
+			COALESCE(si.uuid, ''),
+			si.origin
 		FROM correction_signals cs
 		JOIN search_items si ON (cs.source_path = si.source_path AND cs.ordinal = si.ordinal)
 	`
@@ -802,8 +810,12 @@ func (d *Database) AggregateCorrections(opts CorrectionAggOpts) ([]CorrectionCan
 		query += " AND si.project = ?"
 		args = append(args, opts.Project)
 	}
+	if opts.Origin != "" {
+		query += " AND si.origin = ?"
+		args = append(args, opts.Origin)
+	}
 
-	query += ` GROUP BY cs.source_path, cs.ordinal, si.uuid
+	query += ` GROUP BY cs.source_path, cs.ordinal, si.uuid, si.origin
 		HAVING MAX(cs.confidence) >= ?
 		ORDER BY max_confidence DESC
 	`
@@ -828,10 +840,14 @@ func (d *Database) AggregateCorrections(opts CorrectionAggOpts) ([]CorrectionCan
 	for rows.Next() {
 		var c CorrectionCandidate
 		var detectorsStr, uuid string
-		if err := rows.Scan(&c.SourcePath, &c.Ordinal, &c.TextSnippet, &c.MaxConfidence, &detectorsStr, &uuid); err != nil {
+		var origin models.MessageOrigin
+		if err := rows.Scan(&c.SourcePath, &c.Ordinal, &c.TextSnippet, &c.MaxConfidence, &detectorsStr, &uuid, &origin); err != nil {
 			return nil, fmt.Errorf("scan correction: %w", err)
 		}
 		c.UUID = uuid
+		if opts.Origin != "" {
+			c.Origin = origin
+		}
 		if detectorsStr != "" {
 			c.Detectors = strings.Split(detectorsStr, ",")
 		}
@@ -1004,6 +1020,41 @@ func (d *Database) EmptyIndexedPaths() ([]string, error) {
 	}
 	if err := rows.Err(); err != nil {
 		return nil, fmt.Errorf("iterate empty indexed paths: %w", err)
+	}
+	return paths, nil
+}
+
+// PendingOriginPaths returns a bounded queue of source-backed paths whose
+// historical rows have not been re-read by an origin-aware parser. It never
+// derives origin from stored role or text.
+func (d *Database) PendingOriginPaths(limit int) ([]string, error) {
+	if limit <= 0 {
+		return nil, nil
+	}
+
+	rows, err := d.db.Query(`
+		SELECT DISTINCT search_items.source_path
+		FROM search_items
+		JOIN indexed_files ON search_items.source_path = indexed_files.path
+		WHERE search_items.origin_version IS NULL
+		ORDER BY indexed_files.last_indexed DESC, search_items.source_path ASC
+		LIMIT ?
+	`, limit)
+	if err != nil {
+		return nil, fmt.Errorf("query pending origin paths: %w", err)
+	}
+	defer func() { _ = rows.Close() }()
+
+	var paths []string
+	for rows.Next() {
+		var path string
+		if err := rows.Scan(&path); err != nil {
+			return nil, fmt.Errorf("scan pending origin path: %w", err)
+		}
+		paths = append(paths, path)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate pending origin paths: %w", err)
 	}
 	return paths, nil
 }
