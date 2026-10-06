@@ -241,9 +241,12 @@ For corrections, `--origin human|assistant|system|automation|unknown` is opt-in,
 valid only with `--kind corrections`, and filters before pagination. Use
 `--origin human` whenever the question is about what the human said. Origin is
 parser-backed from native structured records; never infer it from text or a
-historical role. Missing native evidence is `unknown`, and historical rows can
-be enriched only while their configured source remains available. With the
-flag, text adds `Origin: <value>`, robot adds `result_N_origin=<value>`, and JSON
+historical role. An indexed message without sufficient native evidence is
+`unknown`. Startup reparse can enrich a historical `unknown` only while its
+configured source remains available. Recovery can also enrich `unknown` by
+merging a compatible duplicate with proven origin; contradictory proven origins
+are rejected. With the flag, text adds `Origin: <value>`, robot adds
+`result_N_origin=<value>`, and JSON
 candidates add `"Origin":"<value>"`; without it, all three omit that field and
 retain their previous shape.
 

@@ -110,8 +110,9 @@ Readers attach one of five origins to each indexed message: `human`,
 `assistant`, `system`, `automation`, or `unknown`. This provenance comes only
 from the reader's native structured records. Backscroll does not inspect prose,
 headings, frontmatter, quoted labels, or a historical stored `role` to invent an
-origin. Missing, unsupported, or internally inconsistent fields in one native
-record fall back to `unknown`.
+origin. A message that is indexed without sufficient native evidence uses
+`unknown`. Depending on the reader, malformed records, incompatible
+discriminators, and unsupported record types or roles may instead be omitted.
 
 The built-in readers map native records as follows:
 
