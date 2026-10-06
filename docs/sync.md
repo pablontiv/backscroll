@@ -8,13 +8,13 @@ Backscroll has no public `sync` command. Ingestion is integrated into ordinary o
 Startup behavior is command-classed, not one-size-fits-all:
 
 ```text
-snapshot-read: search, list, patterns, status, validate
+snapshot-read: search, context, list, patterns, status, validate
 metadata-read: config
 mutation: annotate, purge, rebuild
 remediation: recover
 ```
 
-Snapshot-read, metadata-read, and mutation owners validate active manifests and attempt one incremental sync before executing. Remediation (`recover`) is different: it acquires and retains the mutation-grade startup lock, skips ordinary compatible-open/index preparation and pre-handler sync, and lets the recovery handler inspect or replace an index that ordinary startup might reject. Session, plan, and Markdown files are ingestion inputs; SQLite is the perennial record used by search, list, patterns, status, and validate. Use `--source-path` on search as a filter, paired with query text, for database-backed retrieval scoped to a known input path.
+Snapshot-read, metadata-read, and mutation owners validate active manifests and attempt one incremental sync before executing. Remediation (`recover`) is different: it acquires and retains the mutation-grade startup lock, skips ordinary compatible-open/index preparation and pre-handler sync, and lets the recovery handler inspect or replace an index that ordinary startup might reject. Session, plan, and Markdown files are ingestion inputs; SQLite is the perennial record used by search, context, list, patterns, status, and validate. Search is ranked discovery; context retrieves an exact neighborhood from SQLite once an opaque UUID or exact source-path-plus-ordinal identity exists.
 
 ## Coordinated startup pipeline
 
@@ -41,6 +41,7 @@ backscroll config
 
 # Snapshot-read, metadata-read, and mutation owners perform startup sync before the handler.
 backscroll search --text "migration plan"
+backscroll context --uuid "$UUID" --before 5 --after 5
 backscroll list --order timestamp:desc --limit 20
 backscroll patterns --kind templates --min-support 5
 backscroll status --json
@@ -49,11 +50,12 @@ backscroll validate --json
 
 Human startup sync writes progress and warnings to stderr. JSON/robot startup progress is discarded so stdout remains machine-readable, and invalid active manifests fail during preflight instead of being silently ignored. Busy followers emit `sync_in_progress` warnings to stderr; read-safe followers use the last committed WAL snapshot, config followers print validated configuration without opening the database, and mutation/remediation followers wait up to five seconds before returning a retryable failure. `backscroll recover --dry-run` reports without post-install sync; `backscroll recover` apply runs post-install sync under the same retained remediation lease before printing its report.
 
-A search scoped to a known input path stays database-backed:
+Search may filter discovery to a known input path, but it remains ranked and requires query text. Once a result supplies exact identity, use context for the anchor's SQLite-backed neighborhood. Prefer its non-null UUID; only when the UUID is null, use its exact stored source path and ordinal:
 
 ```bash
 backscroll search --text "artifact literal" --source-path "*session-id*" --all-projects --json
-backscroll search --text "permission denied" --source-path "*/example/*.jsonl" --all-projects --json
+backscroll context --uuid "$UUID" --before 5 --after 5 --json
+backscroll context --source-path "$SOURCE_PATH" --ordinal "$ORDINAL" --before 5 --after 5 --json
 ```
 
 ## Rebuild semantics
