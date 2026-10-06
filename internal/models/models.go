@@ -33,6 +33,7 @@ type ParsedFile struct {
 // Message represents a message in a session.
 type Message struct {
 	Role        string
+	Origin      MessageOrigin
 	Content     string
 	ContentType string
 	Timestamp   time.Time

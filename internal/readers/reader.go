@@ -70,3 +70,21 @@ func (r *Registry) ForDef(def input_config.InputDefinition) (SessionReader, erro
 	}
 	return sr, nil
 }
+
+// messageOriginForRole is used only after a reader has established that its
+// native structured role field is an actor contract. Stored historical roles
+// never pass through this function.
+func messageOriginForRole(role string) models.MessageOrigin {
+	switch role {
+	case "user":
+		return models.OriginHuman
+	case "assistant", "reasoning":
+		return models.OriginAssistant
+	case "system":
+		return models.OriginSystem
+	case "tool":
+		return models.OriginAutomation
+	default:
+		return models.OriginUnknown
+	}
+}

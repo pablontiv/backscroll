@@ -6,6 +6,7 @@ type IndexedRecord struct {
 	SourcePath  string
 	Ordinal     int64
 	Role        string
+	Origin      MessageOrigin
 	Text        string
 	Project     *string
 	UUID        *string
