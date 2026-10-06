@@ -140,6 +140,7 @@ func codexMessage(item codexItem, ts time.Time, reasoning bool) (models.Message,
 			return msg, false
 		}
 		msg.Role = item.Role
+		msg.Origin = messageOriginForRole(item.Role)
 		parts := codexTextParts(item.Content, "input_text", "output_text")
 		if item.Role == "user" {
 			for i, text := range parts {
@@ -154,7 +155,7 @@ func codexMessage(item codexItem, ts time.Time, reasoning bool) (models.Message,
 		if strings.TrimSpace(item.Name) == "" || json.Unmarshal([]byte(item.Arguments), &args) != nil || args == nil {
 			return msg, false
 		}
-		msg.Role, msg.ContentType = "assistant", "tool"
+		msg.Role, msg.Origin, msg.ContentType = "assistant", models.OriginAssistant, "tool"
 		msg.Content = SerializeToolInput(item.Name, json.RawMessage(item.Arguments))
 		msg.SearchEcho = isCodexDirectSearchCall(item.Name, item.Arguments)
 	case "custom_tool_call":
@@ -162,7 +163,7 @@ func codexMessage(item codexItem, ts time.Time, reasoning bool) (models.Message,
 			return msg, false
 		}
 		raw, _ := json.Marshal(item.Input)
-		msg.Role, msg.ContentType = "assistant", "tool"
+		msg.Role, msg.Origin, msg.ContentType = "assistant", models.OriginAssistant, "tool"
 		msg.Content = SerializeToolInput(item.Name, raw)
 	case "function_call_output", "custom_tool_call_output":
 		var text string
@@ -171,13 +172,13 @@ func codexMessage(item codexItem, ts time.Time, reasoning bool) (models.Message,
 		}
 		// Never serialize unknown output objects or image/audio payloads into FTS.
 		raw, _ := json.Marshal(text)
-		msg.Role, msg.ContentType = "tool", "tool"
+		msg.Role, msg.Origin, msg.ContentType = "tool", models.OriginAutomation, "tool"
 		msg.Content = SerializeToolOutput(raw)
 	case "reasoning":
 		if !reasoning {
 			return msg, false
 		}
-		msg.Role, msg.ContentType = "reasoning", "reasoning"
+		msg.Role, msg.Origin, msg.ContentType = "reasoning", models.OriginAssistant, "reasoning"
 		msg.Content = sync.CleanContent(strings.Join([]string{
 			codexTextBlocks(item.Summary, "summary_text"),
 			codexTextBlocks(item.Content, "reasoning_text", "text"),
