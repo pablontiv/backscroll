@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"sort"
 	"strings"
 	"time"
 
@@ -74,6 +75,133 @@ func getFileMetadata(path string) (*int64, *string, error) {
 	return &size, &mtime, nil
 }
 
+// The replay scheduler uses one discovered claim and one classification per
+// unique source path, independent of input and discovery ordering.
+type discoveredPathClaim struct {
+	path   string
+	def    input_config.InputDefinition
+	reader readers.SessionReader
+}
+
+type syncInputSemantics struct {
+	source         string
+	format         string
+	indexReasoning bool
+}
+
+func semanticsForClaim(claim discoveredPathClaim) syncInputSemantics {
+	return syncInputSemantics{
+		source:         claim.def.Source,
+		format:         claim.reader.Name(),
+		indexReasoning: claim.def.Decode.IndexReasoning,
+	}
+}
+
+func claimDescription(claim discoveredPathClaim) string {
+	semantics := semanticsForClaim(claim)
+	return fmt.Sprintf("%q (source=%q, format=%q, index_reasoning=%t)",
+		claim.def.ID, semantics.source, semantics.format, semantics.indexReasoning)
+}
+
+// deduplicatePathClaims establishes one canonical parser contract per path.
+// Discovery settings and input IDs do not affect parsing, so equivalent inputs
+// may overlap. Source, effective reader format, and parser options must agree.
+func deduplicatePathClaims(claims []discoveredPathClaim) ([]discoveredPathClaim, error) {
+	byPath := make(map[string][]discoveredPathClaim)
+	for _, claim := range claims {
+		byPath[claim.path] = append(byPath[claim.path], claim)
+	}
+
+	paths := make([]string, 0, len(byPath))
+	for path := range byPath {
+		paths = append(paths, path)
+	}
+	sort.Strings(paths)
+
+	unique := make([]discoveredPathClaim, 0, len(paths))
+	for _, path := range paths {
+		pathClaims := byPath[path]
+		sort.Slice(pathClaims, func(i, j int) bool {
+			return claimDescription(pathClaims[i]) < claimDescription(pathClaims[j])
+		})
+		want := semanticsForClaim(pathClaims[0])
+		for _, claim := range pathClaims[1:] {
+			if semanticsForClaim(claim) != want {
+				descriptions := make([]string, 0, len(pathClaims))
+				for _, conflicting := range pathClaims {
+					descriptions = append(descriptions, claimDescription(conflicting))
+				}
+				return nil, fmt.Errorf("path %q is claimed by incompatible inputs: %s", path, strings.Join(descriptions, ", "))
+			}
+		}
+		unique = append(unique, pathClaims[0])
+	}
+	return unique, nil
+}
+
+type replayReason uint8
+
+const (
+	replayOrigin replayReason = 1 << iota
+	replayEcho
+	replayStale
+	replayEmptyPi
+)
+
+type replayQueues struct {
+	origin  []string
+	echo    []string
+	stale   []string
+	emptyPi []string
+}
+
+type syncPathState struct {
+	claim        discoveredPathClaim
+	existingMeta storage.FileMetadata
+	exists       bool
+	hash         string
+	naturalParse bool
+}
+
+// selectReplayPaths combines all parser-backed maintenance queues. Queue order
+// is durable (origin, echo, pure stale, empty Pi), while duplicate paths retain
+// all reasons and consume at most one slot. Only discovered, hash-immutable
+// paths spend the replay budget; natural parses perform the same maintenance
+// for free.
+func selectReplayPaths(states map[string]*syncPathState, queues replayQueues, limit int) map[string]replayReason {
+	reasons := make(map[string]replayReason)
+	ordered := make([]string, 0)
+	addQueue := func(paths []string, reason replayReason) {
+		for _, path := range paths {
+			if reasons[path] == 0 {
+				ordered = append(ordered, path)
+			}
+			reasons[path] |= reason
+		}
+	}
+	addQueue(queues.origin, replayOrigin)
+	addQueue(queues.echo, replayEcho)
+	addQueue(queues.stale, replayStale)
+	addQueue(queues.emptyPi, replayEmptyPi)
+
+	selected := make(map[string]replayReason)
+	for _, path := range ordered {
+		if len(selected) >= limit {
+			break
+		}
+		state := states[path]
+		if state == nil || !state.exists || state.naturalParse || state.existingMeta.Hash != state.hash {
+			continue
+		}
+		reason := reasons[path]
+		if reason == replayEmptyPi && (state.claim.reader.Name() != "pi" || strings.HasPrefix(state.existingMeta.Hash, emptyPiHashPrefix)) {
+			continue
+		}
+		selected[path] = reason
+	}
+	return selected
+}
+
 // isRacyCleanFile reports whether a file's mtime suggests it could be racy clean.
 // A file is racy clean if its mtime is not strictly older than the recorded
 // last_indexed time (within a 2-second granularity margin). Such files could have
@@ -134,48 +262,25 @@ func maybeAutoSync(cfg *config.Config, progress io.Writer) (retErr error) {
 		return fmt.Errorf("get file metadata: %w", err)
 	}
 
-	// Build stale-set once per run (files needing re-parse for rich metadata backfill)
+	// Load every durable parser-backed maintenance queue. Selection happens only
+	// after natural new/modified work has been classified.
 	stalePaths, err := db.StalePaths(storage.CurrentExtractionVersion)
 	if err != nil {
 		return fmt.Errorf("discover stale paths: %w", err)
 	}
-	staleSet := make(map[string]bool)
-	for _, p := range stalePaths {
-		staleSet[p] = true
-	}
-
-	// Files parsed to zero rows are absent from StalePaths because that query
-	// starts from search_items. Track them from indexed_files so the Pi reader can
-	// recover Pion envelopes skipped by older versions.
 	emptyPaths, err := db.EmptyIndexedPaths()
 	if err != nil {
 		return fmt.Errorf("discover empty indexed paths: %w", err)
 	}
-	emptySet := make(map[string]bool, len(emptyPaths))
-	for _, path := range emptyPaths {
-		emptySet[path] = true
-	}
-
 	echoPaths, err := db.PendingSearchEchoPaths()
 	if err != nil {
 		return fmt.Errorf("discover pending search echo paths: %w", err)
 	}
-
-	// Inspect the complete origin queue that can be backed by this index, then
-	// spend the replay budget only on paths actually discovered below. Limiting
-	// the query to the indexed-file cardinality is explicit and sufficient: the
-	// queue returns distinct paths joined to indexed_files. This prevents expired
-	// or inactive sources at the head of the queue from starving surviving ones.
 	originPaths, err := db.PendingOriginPaths(storage.CurrentOriginVersion, len(existingMetadata))
 	if err != nil {
 		return fmt.Errorf("discover pending message origins: %w", err)
 	}
-	// Search-echo and origin enrichment share one total source-replay budget.
-	// A path pending both kinds of provenance is parsed only once.
-	const sourceReplayParsesCap = 200
-	sourceReplayParsesDone := 0
-	const emptyPiParsesCap = 200
-	emptyPiParsesDone := 0
+	const replayParsesCap = 200
 
 	// Build reader registry
 	reg := maybeAutoSyncNewRegistry()
@@ -194,20 +299,13 @@ func maybeAutoSync(cfg *config.Config, progress io.Writer) (retErr error) {
 	var bytesHashed int64
 	var filesHashed, filesSkipped int
 
-	// Discover every active path before selecting replay work. This preserves
-	// PendingOriginPaths order while allowing inactive paths to consume no cap.
-	type discoveredInput struct {
-		def    input_config.InputDefinition
-		reader readers.SessionReader
-		refs   []string
-	}
-	var discoveredInputs []discoveredInput
-	discoveredPaths := make(map[string]bool)
+	// Discover first, then establish a single parser contract for every path.
+	// This makes hashing, parsing, and replay selection global rather than input-local.
+	var claims []discoveredPathClaim
 	for _, def := range defs {
 		if def.Source == "" {
 			def.Source = "session"
 		}
-
 		reader, err := reg.ForDef(def)
 		if err != nil {
 			return fmt.Errorf("resolve reader for input %q: %w", def.ID, err)
@@ -224,197 +322,153 @@ func maybeAutoSync(cfg *config.Config, progress io.Writer) (retErr error) {
 		if diag {
 			discoveryTime += time.Since(discoveryStart)
 		}
-
-		discoveredInputs = append(discoveredInputs, discoveredInput{def: def, reader: reader, refs: refs})
 		for _, ref := range refs {
-			discoveredPaths[ref] = true
+			claims = append(claims, discoveredPathClaim{path: ref, def: def, reader: reader})
 		}
 	}
-
-	replaySet := make(map[string]bool, sourceReplayParsesCap)
-	for _, path := range originPaths {
-		if discoveredPaths[path] && len(replaySet) < sourceReplayParsesCap {
-			replaySet[path] = true
-		}
-	}
-	for _, path := range echoPaths {
-		if discoveredPaths[path] && len(replaySet) < sourceReplayParsesCap {
-			replaySet[path] = true
-		}
+	uniqueClaims, err := deduplicatePathClaims(claims)
+	if err != nil {
+		return err
 	}
 
-	// Collect indexed files
-	var indexedFiles []storage.IndexedFile
+	// Classify every unique path before choosing replay work. New and modified
+	// files are natural parses and therefore never spend the maintenance cap.
+	states := make(map[string]*syncPathState, len(uniqueClaims))
+	for _, claim := range uniqueClaims {
+		ref, reader := claim.path, claim.reader
+		existingMeta, exists := existingMetadata[ref]
+		state := &syncPathState{claim: claim, existingMeta: existingMeta, exists: exists}
 
-	// Process sessions via reader registry
-	for _, input := range discoveredInputs {
-		def, reader := input.def, input.reader
-		for _, ref := range input.refs {
-			// Phase 2: Metadata inspection
-			var metadataStart time.Time
-			if diag {
-				metadataStart = time.Now()
+		var metadataStart time.Time
+		if diag {
+			metadataStart = time.Now()
+		}
+		if usesFileMetadataPrefilter(reader) && exists && existingMeta.Size != nil && existingMeta.Mtime != nil &&
+			existingMeta.LastIndexed != nil {
+			if fileSize, fileMtime, metadataErr := maybeAutoSyncGetFileMetadata(ref); metadataErr == nil &&
+				fileSize != nil && fileMtime != nil && *fileSize == *existingMeta.Size && *fileMtime == *existingMeta.Mtime &&
+				!isRacyCleanFile(*fileMtime, *existingMeta.LastIndexed) {
+				state.hash = existingMeta.Hash
 			}
+		}
+		if diag {
+			metadataTime += time.Since(metadataStart)
+		}
 
-			// v14 metadata prefilter with racy-clean guard:
-			// Files modified within the same timestamp tick as indexing could have matching
-			// size+mtime but different content. Git calls these "racy clean" files.
-			// We use last_indexed as the reference point: if file.mtime >= last_indexed,
-			// do not trust the metadata (could be racy). Otherwise, skip hashing if both match.
-			var hash string
-			var shouldParse bool
-
-			existingMeta, exists := existingMetadata[ref]
-			if usesFileMetadataPrefilter(reader) && exists && existingMeta.Size != nil && existingMeta.Mtime != nil &&
-				existingMeta.LastIndexed != nil {
-				// All metadata fields must be non-NULL to use the prefilter
-				// Check if current file matches recorded metadata
-				if fileSize, fileMtime, err := maybeAutoSyncGetFileMetadata(ref); err == nil {
-					if fileSize != nil && fileMtime != nil &&
-						*fileSize == *existingMeta.Size &&
-						*fileMtime == *existingMeta.Mtime {
-						// Metadata matches; check if file is racy-clean
-						// (mtime within ~2s of last_indexed means could be in same tick)
-						isRacyClean := isRacyCleanFile(*fileMtime, *existingMeta.LastIndexed)
-						if !isRacyClean {
-							// File metadata unchanged and not racy: use cached hash, skip re-hashing
-							hash = existingMeta.Hash
-							shouldParse = staleSet[ref] && sourceReplayParsesDone < sourceReplayParsesCap
-						}
-						// else: racy-clean file falls through to hash anyway
-					}
-				}
-			}
-
-			if diag {
-				metadataTime += time.Since(metadataStart)
-			}
-
-			// Phase 3: Hashing
-			var hashingStart time.Time
-			if diag {
-				hashingStart = time.Now()
-			}
-
-			// If prefilter didn't match or wasn't available, compute the hash
-			if hash == "" {
-				var err error
-				hash, err = reader.Hash(ref)
-				if err != nil {
-					return fmt.Errorf("hash %s: %w", ref, err)
-				}
-				shouldParse = true
-				if !usesFileMetadataPrefilter(reader) && exists && existingMeta.Hash == hash {
-					shouldParse = staleSet[ref] && sourceReplayParsesDone < sourceReplayParsesCap
-				}
-				if diag {
-					filesHashed++
-					// Get file size for bytes hashed metric
-					if fileSize, _, err := maybeAutoSyncGetFileMetadata(ref); err == nil && fileSize != nil {
-						bytesHashed += *fileSize
-					}
-				}
-			} else {
-				if diag {
-					filesSkipped++
-				}
-			}
-
-			if diag {
-				hashingTime += time.Since(hashingStart)
-			}
-
-			// Bound parser-backed provenance replay even on metadata-prefilter hits.
-			// Already-proven rows at an older extraction epoch do not consume this
-			// budget, undiscovered paths never reach this point, and overlapping
-			// search-echo/origin work shares this single parse.
-			if exists && existingMeta.Hash == hash && replaySet[ref] {
-				if sourceReplayParsesDone >= sourceReplayParsesCap {
-					continue
-				}
-				sourceReplayParsesDone++
-				shouldParse = true
-				_, _ = fmt.Fprintf(progress, "Re-parsing stale file %d/%d: %s\n", sourceReplayParsesDone, sourceReplayParsesCap, ref)
-			}
-			if exists && existingMeta.Hash == hash && reader.Name() == "pi" && emptySet[ref] &&
-				!strings.HasPrefix(existingMeta.Hash, emptyPiHashPrefix) {
-				if emptyPiParsesDone >= emptyPiParsesCap {
-					continue
-				}
-				emptyPiParsesDone++
-				shouldParse = true
-				_, _ = fmt.Fprintf(progress, "Re-parsing empty Pi file %d: %s\n", emptyPiParsesDone, ref)
-			}
-			if !shouldParse && (!exists || existingMeta.Hash == hash) {
-				continue
-			}
-
-			// Phase 4: Parsing
-			var parsingStart time.Time
-			if diag {
-				parsingStart = time.Now()
-			}
-
-			pf, err := reader.Parse(ref, def)
+		var hashingStart time.Time
+		if diag {
+			hashingStart = time.Now()
+		}
+		if state.hash == "" {
+			state.hash, err = reader.Hash(ref)
 			if err != nil {
-				return fmt.Errorf("parse %s: %w", ref, err)
+				return fmt.Errorf("hash %s: %w", ref, err)
 			}
-
 			if diag {
-				parsingTime += time.Since(parsingStart)
+				filesHashed++
+				if fileSize, _, metadataErr := maybeAutoSyncGetFileMetadata(ref); metadataErr == nil && fileSize != nil {
+					bytesHashed += *fileSize
+				}
 			}
+		} else if diag {
+			filesSkipped++
+		}
+		if diag {
+			hashingTime += time.Since(hashingStart)
+		}
 
-			// Use session cwd for project identification; fall back to file path if cwd is empty
-			identPath := pf.Cwd
-			if identPath == "" {
-				identPath = ref
+		state.naturalParse = !exists || existingMeta.Hash != state.hash
+		states[ref] = state
+	}
+
+	replaySet := selectReplayPaths(states, replayQueues{
+		origin:  originPaths,
+		echo:    echoPaths,
+		stale:   stalePaths,
+		emptyPi: emptyPaths,
+	}, replayParsesCap)
+
+	// Collect indexed files. uniqueClaims is path-sorted, so natural work and
+	// selected replays are deterministic even when discovery order changes.
+	var indexedFiles []storage.IndexedFile
+	staleReplaysDone, emptyPiReplaysDone := 0, 0
+	for _, claim := range uniqueClaims {
+		ref, def, reader := claim.path, claim.def, claim.reader
+		state := states[ref]
+		reason, replaySelected := replaySet[ref]
+		if !state.naturalParse && !replaySelected {
+			continue
+		}
+		if replaySelected {
+			if reason == replayEmptyPi {
+				emptyPiReplaysDone++
+				_, _ = fmt.Fprintf(progress, "Re-parsing empty Pi file %d: %s\n", emptyPiReplaysDone, ref)
+			} else {
+				staleReplaysDone++
+				_, _ = fmt.Fprintf(progress, "Re-parsing stale file %d/%d: %s\n", staleReplaysDone, replayParsesCap, ref)
 			}
-			ident := projects.Identify(identPath, registry)
+		}
 
-			var sessionTags tagging.Accumulator
-			var indexedMsgs []storage.IndexedMessage
-			for ordinal, msg := range pf.Records {
-				sessionTags.Add(msg.Content)
-				indexedMsgs = append(indexedMsgs, storage.IndexedMessage{
-					Ordinal:           ordinal,
-					Role:              msg.Role,
-					Origin:            msg.Origin,
-					Text:              msg.Content,
-					UUID:              msg.UUID,
-					Timestamp:         msg.Timestamp.Format("2006-01-02T15:04:05Z07:00"),
-					ContentType:       msg.ContentType,
-					ToolName:          msg.ToolName,
-					CommandHead:       msg.CommandHead,
-					IsError:           msg.IsError,
-					WasInterrupted:    msg.WasInterrupted,
-					ExitCode:          msg.ExitCode,
-					SearchEcho:        msg.SearchEcho,
-					ExtractionVersion: storage.CurrentExtractionVersion,
-				})
-			}
+		var parsingStart time.Time
+		if diag {
+			parsingStart = time.Now()
+		}
+		pf, err := reader.Parse(ref, def)
+		if err != nil {
+			return fmt.Errorf("parse %s: %w", ref, err)
+		}
+		if diag {
+			parsingTime += time.Since(parsingStart)
+		}
 
-			// Get file metadata for v14 prefilter
-			fileSize, fileMtime, _ := maybeAutoSyncGetFileMetadata(ref)
+		// Use session cwd for project identification; fall back to file path if cwd is empty
+		identPath := pf.Cwd
+		if identPath == "" {
+			identPath = ref
+		}
+		ident := projects.Identify(identPath, registry)
 
-			indexedHash := pf.Hash
-			if reader.Name() == "pi" && len(pf.Records) == 0 {
-				// Mark a zero-row parse with the Pi parser epoch. Old unmarked hashes
-				// replay once. Supported-empty files then converge instead of replaying
-				// on every startup. Bump the prefix when zero-row Pi semantics change.
-				indexedHash = emptyPiHashPrefix + pf.Hash
-			}
-
-			indexedFiles = append(indexedFiles, storage.IndexedFile{
-				SourcePath: ref,
-				Source:     def.Source,
-				Hash:       indexedHash,
-				Project:    ident.ProjectID,
-				Messages:   indexedMsgs,
-				Tags:       sessionTags.Tags(),
-				FileSize:   fileSize,
-				FileMtime:  fileMtime,
+		var sessionTags tagging.Accumulator
+		var indexedMsgs []storage.IndexedMessage
+		for ordinal, msg := range pf.Records {
+			sessionTags.Add(msg.Content)
+			indexedMsgs = append(indexedMsgs, storage.IndexedMessage{
+				Ordinal:           ordinal,
+				Role:              msg.Role,
+				Origin:            msg.Origin,
+				Text:              msg.Content,
+				UUID:              msg.UUID,
+				Timestamp:         msg.Timestamp.Format("2006-01-02T15:04:05Z07:00"),
+				ContentType:       msg.ContentType,
+				ToolName:          msg.ToolName,
+				CommandHead:       msg.CommandHead,
+				IsError:           msg.IsError,
+				WasInterrupted:    msg.WasInterrupted,
+				ExitCode:          msg.ExitCode,
+				SearchEcho:        msg.SearchEcho,
+				ExtractionVersion: storage.CurrentExtractionVersion,
 			})
 		}
+
+		fileSize, fileMtime, _ := maybeAutoSyncGetFileMetadata(ref)
+		indexedHash := pf.Hash
+		if reader.Name() == "pi" && len(pf.Records) == 0 {
+			// Mark a zero-row parse with the Pi parser epoch. Old unmarked hashes
+			// replay once. Supported-empty files then converge instead of replaying
+			// on every startup. Bump the prefix when zero-row Pi semantics change.
+			indexedHash = emptyPiHashPrefix + pf.Hash
+		}
+
+		indexedFiles = append(indexedFiles, storage.IndexedFile{
+			SourcePath: ref,
+			Source:     def.Source,
+			Hash:       indexedHash,
+			Project:    ident.ProjectID,
+			Messages:   indexedMsgs,
+			Tags:       sessionTags.Tags(),
+			FileSize:   fileSize,
+			FileMtime:  fileMtime,
+		})
 	}
 
 	// Phase 5: Database
