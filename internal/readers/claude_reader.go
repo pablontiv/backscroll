@@ -161,6 +161,7 @@ func extractClaudeMessages(rec claudeRecord) []models.Message {
 		ts = time.Now()
 	}
 	role := rec.Message.Role
+	origin := claudeRecordOrigin(rec.Type, role)
 
 	// content as a plain string
 	var s string
@@ -170,7 +171,7 @@ func extractClaudeMessages(rec claudeRecord) []models.Message {
 		if text == "" {
 			return nil
 		}
-		return []models.Message{{Role: role, Content: text, ContentType: classifyText(text), Timestamp: ts,
+		return []models.Message{{Role: role, Origin: origin, Content: text, ContentType: classifyText(text), Timestamp: ts,
 			UUID: rec.UUID, WasInterrupted: interrupted}}
 	}
 
@@ -197,7 +198,7 @@ func extractClaudeMessages(rec claudeRecord) []models.Message {
 			}
 		case "tool_use":
 			if t := SerializeToolInput(b.Name, b.Input); strings.TrimSpace(t) != "" {
-				out = append(out, models.Message{Role: role, Content: t, ContentType: "tool", Timestamp: ts,
+				out = append(out, models.Message{Role: role, Origin: origin, Content: t, ContentType: "tool", Timestamp: ts,
 					UUID:        blockUUID(rec.UUID, "t", i),
 					ToolName:    b.Name,
 					CommandHead: commandHead(b.Input),
@@ -222,7 +223,7 @@ func extractClaudeMessages(rec claudeRecord) []models.Message {
 				body = "error: " + body
 			}
 			if strings.TrimSpace(body) != "" {
-				out = append(out, models.Message{Role: role, Content: body, ContentType: "tool", Timestamp: ts,
+				out = append(out, models.Message{Role: role, Origin: models.OriginAutomation, Content: body, ContentType: "tool", Timestamp: ts,
 					UUID:      blockUUID(rec.UUID, "r", i),
 					ToolUseID: b.ToolUseID,
 					IsError:   b.IsError,
@@ -233,10 +234,18 @@ func extractClaudeMessages(rec claudeRecord) []models.Message {
 	}
 	if len(textParts) > 0 {
 		text := strings.TrimSpace(strings.Join(textParts, " "))
-		out = append([]models.Message{{Role: role, Content: text, ContentType: classifyText(text), Timestamp: ts,
+		out = append([]models.Message{{Role: role, Origin: origin, Content: text, ContentType: classifyText(text), Timestamp: ts,
 			UUID: rec.UUID, WasInterrupted: interrupted}}, out...)
 	}
 	return out
+}
+
+func claudeRecordOrigin(recordType, role string) models.MessageOrigin {
+	// The envelope and nested role must agree before they prove an actor.
+	if recordType != role {
+		return models.OriginUnknown
+	}
+	return messageOriginForRole(role)
 }
 
 // isDirectSearchInput recognizes only the same direct Bash command boundary as

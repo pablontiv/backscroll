@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	"github.com/pablontiv/backscroll/internal/input_config"
+	"github.com/pablontiv/backscroll/internal/models"
 	"github.com/pablontiv/backscroll/internal/sync"
 )
 
@@ -86,6 +87,83 @@ func TestClaudeReader_CapturesToolUseAndResult(t *testing.T) {
 	}
 	if !gotToolErr {
 		t.Error("missing tool_result error message")
+	}
+}
+
+func TestClaudeMessageOriginRequiresEnvelopeRoleAgreement(t *testing.T) {
+	tests := []struct {
+		name       string
+		recordType string
+		role       string
+		content    string
+		want       models.MessageOrigin
+	}{
+		{name: "user", recordType: "user", role: "user", content: "assistant authored this", want: models.OriginHuman},
+		{name: "assistant", recordType: "assistant", role: "assistant", content: "user authored this", want: models.OriginAssistant},
+		{name: "reasoning", recordType: "reasoning", role: "reasoning", content: "internal analysis", want: models.OriginAssistant},
+		{name: "mismatched user envelope", recordType: "user", role: "assistant", content: "assistant", want: models.OriginUnknown},
+		{name: "mismatched assistant envelope", recordType: "assistant", role: "user", content: "user", want: models.OriginUnknown},
+		{name: "unknown matching actor", recordType: "developer", role: "developer", content: "user", want: models.OriginUnknown},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			content, err := json.Marshal(tt.content)
+			if err != nil {
+				t.Fatal(err)
+			}
+			got := extractClaudeMessages(claudeRecord{
+				Type: tt.recordType,
+				Message: &claudeMessage{
+					Role:    tt.role,
+					Content: content,
+				},
+			})
+			if len(got) != 1 {
+				t.Fatalf("records = %+v, want one", got)
+			}
+			if got[0].Origin != tt.want {
+				t.Fatalf("Origin = %q, want %q", got[0].Origin, tt.want)
+			}
+		})
+	}
+}
+
+func TestClaudeToolOriginPreservesPairingMetadata(t *testing.T) {
+	lines := `{"type":"assistant","uuid":"use","timestamp":"2024-01-01T00:00:00Z","message":{"role":"assistant","content":[{"type":"tool_use","id":"call-1","name":"Bash","input":{"command":"backscroll search orchard"}}]}}` + "\n" +
+		`{"type":"user","uuid":"result","timestamp":"2024-01-01T00:00:01Z","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"call-1","content":"failed\nexit code 7","is_error":true}]}}` + "\n"
+	p := writeClaudeFixture(t, lines)
+	pf, err := (&ClaudeReader{}).Parse(p, input_config.InputDefinition{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(pf.Records) != 2 {
+		t.Fatalf("records = %+v, want tool_use and tool_result", pf.Records)
+	}
+
+	use, result := pf.Records[0], pf.Records[1]
+	if use.Origin != models.OriginAssistant || use.UUID != "use#t0" || use.ToolName != "Bash" ||
+		use.CommandHead != "backscroll" || use.ToolUseID != "call-1" || !use.SearchEcho ||
+		use.IsError == nil || !*use.IsError || use.ExitCode == nil || *use.ExitCode != 7 {
+		t.Errorf("tool_use metadata = %+v", use)
+	}
+	if result.Origin != models.OriginAutomation || result.Role != "user" || result.UUID != "result#r0" ||
+		result.ToolName != "" || result.ToolUseID != "call-1" || !result.SearchEcho ||
+		result.IsError == nil || !*result.IsError || result.ExitCode == nil || *result.ExitCode != 7 {
+		t.Errorf("tool_result metadata = %+v", result)
+	}
+}
+
+func TestClaudeExplicitToolResultOriginOverridesAmbiguousEnvelope(t *testing.T) {
+	got := extractClaudeMessages(claudeRecord{
+		Type: "assistant",
+		Message: &claudeMessage{
+			Role:    "user",
+			Content: json.RawMessage(`[{"type":"tool_result","content":"user said this"}]`),
+		},
+	})
+	if len(got) != 1 || got[0].Origin != models.OriginAutomation {
+		t.Fatalf("tool_result records = %+v, want automation origin", got)
 	}
 }
 
