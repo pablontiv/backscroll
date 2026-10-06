@@ -44,7 +44,7 @@ checksum:
   name_template: checksums.txt
 
 snapshot:
-  version_template: "{{ incpatch .Version }}-pr.{{ .Env.PR_NUMBER }}.{{ .ShortCommit }}"
+  version_template: "{{ incpatch .Version }}-pr.{{ .Env.PR_NUMBER }}.g{{ .ShortCommit }}"
 
 changelog:
   sort: asc
