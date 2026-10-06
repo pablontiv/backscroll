@@ -128,7 +128,7 @@ jobs:
           expected_name = f"go-candidate-pr-{pr_number}-{pr_sha}"
           if not re.fullmatch(r"[1-9][0-9]*", artifact_id):
               raise SystemExit("::error::candidate artifact ID is invalid")
-          if not re.fullmatch(r"sha256:[0-9a-f]{64}", digest):
+          if not re.fullmatch(r"[0-9a-f]{64}", digest):
               raise SystemExit("::error::candidate artifact digest is invalid")
           if not re.fullmatch(r"[0-9a-f]{40}", source_sha):
               raise SystemExit("::error::candidate source SHA is invalid")
@@ -149,7 +149,7 @@ jobs:
               rest_id, rest_name, rest_digest, rest_sha, expired,
           )
           output_identity = (
-              artifact_id, name, digest, source_sha, False,
+              artifact_id, name, f"sha256:{digest}", source_sha, False,
           )
           if rest_identity != output_identity:
               message = "candidate outputs differ from artifact REST metadata"
