@@ -38,10 +38,12 @@ Human-readable output with terminal bold for match highlights. Each result uses 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 Rank: 1 | Source: session | Role: assistant | Score: -3.63
 Path: /home/user/.claude/projects/backscroll/sessions/abc123/session.jsonl
+UUID: 8ad0f474-45e8-4cb1-b708-3f6365f5f298
+Ordinal: 17
 ...the migration plan involves three phases...
 ```
 
-Match markers (`>>>` and `<<<` in the raw snippet) are rendered as bold text in the terminal.
+`UUID` and `Ordinal` appear immediately before the result content. `UUID` is `null` when the indexed row has no UUID. Match markers (`>>>` and `<<<` in the raw snippet) are rendered as bold text in the terminal.
 
 ### JSON
 
@@ -49,7 +51,7 @@ Match markers (`>>>` and `<<<` in the raw snippet) are rendered as bold text in 
 
 ```json
 [
-  {"source_path": "~/.claude/.../session.jsonl", "snippet": "...matched text...", "score": -3.63, "role": "assistant", "timestamp": "2026-08-20T12:34:56Z"}
+  {"source_path": "~/.claude/.../session.jsonl", "uuid": null, "ordinal": 17, "snippet": "...matched text...", "score": -3.63, "role": "assistant", "timestamp": "2026-08-20T12:34:56Z"}
 ]
 ```
 
@@ -60,6 +62,8 @@ With `--fields full`, ordinary results encode the existing `models.SearchResult`
   {
     "Source": "session",
     "Role": "assistant",
+    "UUID": null,
+    "Ordinal": 17,
     "Content": "...matched text...",
     "FilePath": "~/.claude/.../session.jsonl",
     "Timestamp": "2026-08-20T12:34:56Z",
@@ -73,7 +77,9 @@ With `--fields full`, ordinary results encode the existing `models.SearchResult`
 ]
 ```
 
-Ordinary full-mode fields are: `Source`, `Role`, `Content`, `FilePath`, `Timestamp`, `SessionID`, `ProjectPath`, `Score`, `Tags`, `ContentType`, and `Rank`. `ProjectPath` is a legacy field name; its value is the project identifier (for example `backscroll` or `myproj`), not a filesystem path. Minimal mode uses the snake_case payload (`source_path`, `snippet`, `score`, `role`, `timestamp`). After opt-in relaxation, both field sets additionally include `match_stage` and `dropped_terms`; ordinary results omit these keys.
+Ordinary full-mode fields are: `Source`, `Role`, `UUID`, `Ordinal`, `Content`, `FilePath`, `Timestamp`, `SessionID`, `ProjectPath`, `Score`, `Tags`, `ContentType`, and `Rank`. `UUID` is nullable. `ProjectPath` is a legacy field name; its value is the project identifier (for example `backscroll` or `myproj`), not a filesystem path. Minimal mode uses the snake_case payload (`source_path`, `uuid`, `ordinal`, `snippet`, `score`, `role`, `timestamp`), with nullable `uuid`. After opt-in relaxation, both field sets additionally include `match_stage` and `dropped_terms`; ordinary results omit these keys. Thus the complete full projection is the ordinary field set plus those two conditional provenance fields.
+
+An empty minimal response is `[]`. An empty full response remains `null`.
 
 ### Robot
 
@@ -82,6 +88,8 @@ Robot mode emits deterministic `result_N_field=value` lines. Like JSON,
 
 ```
 result_0_filepath=/home/user/.claude/projects/example/session.jsonl
+result_0_uuid=8ad0f474-45e8-4cb1-b708-3f6365f5f298
+result_0_ordinal=17
 result_0_content=bounded matched snippet
 result_0_score=-3.63
 result_0_role=assistant
@@ -95,6 +103,8 @@ metadata:
 result_0_source=session
 result_0_role=assistant
 result_0_filepath=/home/user/.claude/projects/example/session.jsonl
+result_0_uuid=null
+result_0_ordinal=17
 result_0_content=complete content with escaped newlines
 result_0_project=backscroll
 result_0_content_type=text
@@ -103,14 +113,19 @@ result_0_score=-3.63
 result_0_rank=1
 ```
 
+In both robot field sets, `result_N_uuid` is the UUID value or the literal `null`, and `result_N_ordinal` is the indexed ordinal. Both lines belong to the same complete, budgeted result group as the other `result_N_*` lines; they are never emitted separately from that result.
+
 No ANSI escape codes. Search robot string values escape backslash as `\\`, carriage return as `\r`, and newline as `\n`, keeping each field on one line for context windows.
+
+Across text, JSON, and robot output, UUID and ordinal expose exact selectors for `backscroll context`. Prefer the UUID when it is present. When UUID is `null`, use the result path plus ordinal: JSON minimal provides `source_path`, JSON full provides `FilePath`, and robot provides `filepath`; pass that path as `--source-path` together with `--ordinal`.
 
 ## Token Limiting
 
-The `--max-tokens` flag applies Picokit's approximate token estimator (word count
-multiplied by 1.3) to the total output. Once the next complete result would
-exceed the limit, search stops and emits a parseable omission record when that
-record fits the remaining budget:
+For robot output, `--max-tokens` applies Picokit's approximate token estimator
+(word count multiplied by 1.3) to the complete escaped payload. Once the next
+complete result group would exceed the limit, search stops and emits a parseable
+omission record when that record fits the remaining budget. This document does
+not define a `--max-tokens` truncation contract for JSON output.
 
 ```
 result_3_truncated=true
@@ -130,7 +145,7 @@ backscroll search "decisions" --robot --max-tokens 4000
 backscroll search --text "$QUERY" --source-path "$SOURCE_PATH" --robot --fields full --max-tokens 4000
 ```
 
-The limit is approximate — it will not truncate a result mid-output, but will stop before starting a result that would exceed the budget.
+The robot limit is approximate — it will not truncate a result mid-output, but will stop before starting a result that would exceed the budget.
 
 ## Query-Echo Handling
 
