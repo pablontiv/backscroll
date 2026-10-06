@@ -1,6 +1,8 @@
 package main
 
 import (
+	"bytes"
+	"context"
 	"encoding/json"
 	"path/filepath"
 	"strings"
@@ -126,6 +128,98 @@ func TestSearchOutputRespectsTokenLimit(t *testing.T) {
 		t.Error("output should not be empty when results exist")
 	}
 	// If output is empty or present, that's acceptable
+}
+
+func TestSearchTextLinesBudgetsWholeResults(t *testing.T) {
+	uuid := "message-budget-1"
+	results := []models.SearchResult{
+		{
+			Source:   "session",
+			Role:     "assistant",
+			UUID:     &uuid,
+			Ordinal:  11,
+			Content:  "first complete result",
+			FilePath: "/tmp/first.jsonl",
+			Rank:     1,
+			Score:    0.91,
+		},
+		{
+			Source:   "session",
+			Role:     "user",
+			UUID:     nil,
+			Ordinal:  12,
+			Content:  "second complete result",
+			FilePath: "/tmp/second.jsonl",
+			Rank:     2,
+			Score:    0.82,
+		},
+	}
+
+	allLines := resultsToLines(results, picokitoutput.FormatText)
+	allPayload := strings.Join(allLines, "\n")
+	for _, maxTokens := range []int{0, -1} {
+		if got := strings.Join(searchTextLines(results, maxTokens), "\n"); got != allPayload {
+			t.Fatalf("unlimited budget %d changed text output\ngot:  %q\nwant: %q", maxTokens, got, allPayload)
+		}
+	}
+
+	firstLines := resultsToLines(results[:1], picokitoutput.FormatText)
+	firstBudget := searchTextTestTokenCount(firstLines)
+	if got := searchTextLines(results, firstBudget-1); len(got) != 0 {
+		t.Fatalf("budget below first complete result emitted partial output: %q", strings.Join(got, "\n"))
+	}
+
+	firstPayload := strings.Join(firstLines, "\n")
+	if got := strings.Join(searchTextLines(results, firstBudget), "\n"); got != firstPayload {
+		t.Fatalf("exact first-result budget did not emit exactly one complete group\ngot:  %q\nwant: %q", got, firstPayload)
+	} else if !strings.Contains(got, "UUID: message-budget-1") || !strings.Contains(got, "Ordinal: 11") {
+		t.Fatalf("complete first result lacks identity: %q", got)
+	}
+
+	totalBudget := searchTextTestTokenCount(allLines)
+	if got := strings.Join(searchTextLines(results, totalBudget), "\n"); got != allPayload {
+		t.Fatalf("total budget did not emit all complete groups\ngot:  %q\nwant: %q", got, allPayload)
+	} else if !strings.Contains(got, "UUID: null") || !strings.Contains(got, "Ordinal: 12") {
+		t.Fatalf("complete nullable-UUID result lacks fallback identity: %q", got)
+	}
+}
+
+func TestRunSearchTextBudgetBoundary(t *testing.T) {
+	cfg := newSearchIdentityContractIndex(t)
+	run := func(maxTokens int) string {
+		t.Helper()
+		var stdout, stderr bytes.Buffer
+		err := runSearch(context.Background(), &stdout, &stderr, cfg,
+			"presentselector", "", true, false, false,
+			"", "", "", "", "", 20, 0, "text", "",
+			"minimal", maxTokens, true, 0.3, false)
+		if err != nil {
+			t.Fatalf("runSearch with budget %d: %v\nstderr: %s", maxTokens, err, stderr.String())
+		}
+		return stdout.String()
+	}
+
+	unlimited := run(0)
+	if unlimited == "" {
+		t.Fatal("unlimited runSearch returned no fixture result")
+	}
+	budget := searchTextTestTokenCount(strings.Split(unlimited, "\n"))
+	if got := run(budget - 1); got != "" {
+		t.Fatalf("runSearch emitted a partial first result below its boundary: %q", got)
+	}
+	if got := run(budget); got != unlimited {
+		t.Fatalf("runSearch exact boundary changed the complete result\ngot:  %q\nwant: %q", got, unlimited)
+	} else if !strings.Contains(got, "UUID: contract-uuid") || !strings.Contains(got, "Ordinal: 4") {
+		t.Fatalf("runSearch exact boundary omitted identity: %q", got)
+	}
+}
+
+func searchTextTestTokenCount(lines []string) int {
+	total := 0
+	for _, line := range lines {
+		total += picokitoutput.TokenCount(line)
+	}
+	return total
 }
 
 func TestSearchTextFormatStructure(t *testing.T) {

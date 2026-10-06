@@ -230,8 +230,8 @@ func runSearch(ctx context.Context, stdout, stderr io.Writer, cfg *config.Config
 	}
 
 	// Format and output
-	formatter := picokitoutput.NewFormatter(format, maxTokens)
 	if format == picokitoutput.FormatJSON {
+		formatter := picokitoutput.NewFormatter(format, maxTokens)
 		// For JSON, --fields selects the payload: minimal (v0 default) or full struct
 		if fields == "minimal" {
 			minimal := make([]minimalSearchResult, len(results))
@@ -264,14 +264,38 @@ func runSearch(ctx context.Context, stdout, stderr io.Writer, cfg *config.Config
 			}
 		}
 	} else {
-		// Text format: use formatter (applies token truncation, etc.)
-		lines := resultsToLines(modelResults, format)
+		// Budget complete text results before formatting so identity and content
+		// cannot be split. The formatter must not apply a second line limit.
+		lines := searchTextLines(modelResults, maxTokens)
+		formatter := picokitoutput.NewFormatter(format, 0)
 		if err := formatter.WriteLines(stdout, lines); err != nil {
 			return fmt.Errorf("write results: %w", err)
 		}
 	}
 
 	return nil
+}
+
+func searchTextLines(results []models.SearchResult, maxTokens int) []string {
+	if maxTokens <= 0 {
+		return resultsToLines(results, picokitoutput.FormatText)
+	}
+
+	var lines []string
+	tokens := 0
+	for _, result := range results {
+		group := resultsToLines([]models.SearchResult{result}, picokitoutput.FormatText)
+		groupTokens := 0
+		for _, line := range group {
+			groupTokens += picokitoutput.TokenCount(line)
+		}
+		if tokens+groupTokens > maxTokens {
+			break
+		}
+		lines = append(lines, group...)
+		tokens += groupTokens
+	}
+	return lines
 }
 
 func searchRobotLines(results []storage.SearchResult, fields string, maxTokens int) []string {
