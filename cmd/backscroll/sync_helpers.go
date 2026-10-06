@@ -165,8 +165,24 @@ func maybeAutoSync(cfg *config.Config, progress io.Writer) (retErr error) {
 		echoSet[path] = true
 	}
 
-	const staleParsesCap = 200
-	staleParsesDone := 0
+	// Inspect the complete origin queue that can be backed by this index, then
+	// spend the replay budget only on paths actually discovered below. Limiting
+	// the query to the indexed-file cardinality is explicit and sufficient: the
+	// queue returns distinct paths joined to indexed_files. This prevents expired
+	// or inactive sources at the head of the queue from starving surviving ones.
+	originPaths, err := db.PendingOriginPaths(len(existingMetadata))
+	if err != nil {
+		return fmt.Errorf("discover pending message origins: %w", err)
+	}
+	originSet := make(map[string]bool, len(originPaths))
+	for _, path := range originPaths {
+		originSet[path] = true
+	}
+
+	// Search-echo and origin enrichment share one total source-replay budget.
+	// A path pending both kinds of provenance is parsed only once.
+	const sourceReplayParsesCap = 200
+	sourceReplayParsesDone := 0
 	const emptyPiParsesCap = 200
 	emptyPiParsesDone := 0
 
@@ -246,7 +262,7 @@ func maybeAutoSync(cfg *config.Config, progress io.Writer) (retErr error) {
 						if !isRacyClean {
 							// File metadata unchanged and not racy: use cached hash, skip re-hashing
 							hash = existingMeta.Hash
-							shouldParse = staleSet[ref] && staleParsesDone < staleParsesCap
+							shouldParse = staleSet[ref] && sourceReplayParsesDone < sourceReplayParsesCap
 						}
 						// else: racy-clean file falls through to hash anyway
 					}
@@ -272,7 +288,7 @@ func maybeAutoSync(cfg *config.Config, progress io.Writer) (retErr error) {
 				}
 				shouldParse = true
 				if !usesFileMetadataPrefilter(reader) && exists && existingMeta.Hash == hash {
-					shouldParse = staleSet[ref] && staleParsesDone < staleParsesCap
+					shouldParse = staleSet[ref] && sourceReplayParsesDone < sourceReplayParsesCap
 				}
 				if diag {
 					filesHashed++
@@ -291,16 +307,17 @@ func maybeAutoSync(cfg *config.Config, progress io.Writer) (retErr error) {
 				hashingTime += time.Since(hashingStart)
 			}
 
-			// Bound the v15 replay even on metadata-prefilter hits. Already-proven
-			// rows at an older extraction epoch must not consume this budget and
-			// starve remaining NULL provenance; other extraction behavior is unchanged.
-			if exists && existingMeta.Hash == hash && echoSet[ref] {
-				if staleParsesDone >= staleParsesCap {
+			// Bound parser-backed provenance replay even on metadata-prefilter hits.
+			// Already-proven rows at an older extraction epoch do not consume this
+			// budget, undiscovered paths never reach this point, and overlapping
+			// search-echo/origin work shares this single parse.
+			if exists && existingMeta.Hash == hash && (echoSet[ref] || originSet[ref]) {
+				if sourceReplayParsesDone >= sourceReplayParsesCap {
 					continue
 				}
-				staleParsesDone++
+				sourceReplayParsesDone++
 				shouldParse = true
-				_, _ = fmt.Fprintf(progress, "Re-parsing stale file %d/%d: %s\n", staleParsesDone, len(echoPaths), ref)
+				_, _ = fmt.Fprintf(progress, "Re-parsing stale file %d/%d: %s\n", sourceReplayParsesDone, sourceReplayParsesCap, ref)
 			}
 			if exists && existingMeta.Hash == hash && reader.Name() == "pi" && emptySet[ref] &&
 				!strings.HasPrefix(existingMeta.Hash, emptyPiHashPrefix) {
@@ -344,6 +361,7 @@ func maybeAutoSync(cfg *config.Config, progress io.Writer) (retErr error) {
 				indexedMsgs = append(indexedMsgs, storage.IndexedMessage{
 					Ordinal:           ordinal,
 					Role:              msg.Role,
+					Origin:            msg.Origin,
 					Text:              msg.Content,
 					UUID:              msg.UUID,
 					Timestamp:         msg.Timestamp.Format("2006-01-02T15:04:05Z07:00"),
