@@ -320,7 +320,7 @@ func TestSnapshotDatabaseUsesIncrementalRecoverableNames(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if info.Mode().Perm() != 0o600 {
+		if supportsPOSIXModes() && info.Mode().Perm() != 0o600 {
 			t.Fatalf("snapshot %s mode = %o, want 0600", path, info.Mode().Perm())
 		}
 		if err := validateSnapshot(ctx, path, plan.From); err != nil {
@@ -363,6 +363,92 @@ func TestSnapshotDatabaseRetainsAtMostTwoValidatedBackups(t *testing.T) {
 	}
 }
 
+func TestSnapshotDatabaseRetentionSpansSuccessivePlanStems(t *testing.T) {
+	ctx := context.Background()
+	dbPath := createFixtureDatabase(t, "v15.sql")
+	firstPlan := inspectPlanForTest(t, ctx, dbPath)
+	secondPlan := firstPlan
+	secondPlan.Steps = append([]compat.MigrationStep(nil), firstPlan.Steps...)
+	secondPlan.Steps[len(secondPlan.Steps)-1].Version++
+
+	first, err := SnapshotDatabase(ctx, dbPath, firstPlan)
+	if err != nil {
+		t.Fatal(err)
+	}
+	second, err := SnapshotDatabase(ctx, dbPath, firstPlan)
+	if err != nil {
+		t.Fatal(err)
+	}
+	foreign := dbPath + ".snapshot-v15-not-a-signature-to-v16"
+	if err := os.WriteFile(foreign, []byte("foreign"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	third, err := SnapshotDatabase(ctx, dbPath, secondPlan)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if filepath.Dir(first) != filepath.Dir(third) || strings.TrimSuffix(second, ".1") == third {
+		t.Fatalf("expected distinct snapshot stems: first=%q second=%q third=%q", first, second, third)
+	}
+	if _, err := os.Lstat(first); !os.IsNotExist(err) {
+		t.Fatalf("oldest snapshot across stems was not pruned: %v", err)
+	}
+	for _, path := range []string{second, third} {
+		if err := validateSnapshot(ctx, path, firstPlan.From); err != nil {
+			t.Fatalf("retained snapshot %s invalid: %v", path, err)
+		}
+	}
+	if contents, err := os.ReadFile(foreign); err != nil || string(contents) != "foreign" {
+		t.Fatalf("foreign similarly named file changed: contents=%q err=%v", contents, err)
+	}
+}
+
+func TestSnapshotDatabasePublicationFailurePreservesPreviousSnapshots(t *testing.T) {
+	ctx := context.Background()
+	dbPath := createFixtureDatabase(t, "v15.sql")
+	plan := inspectPlanForTest(t, ctx, dbPath)
+	first, err := SnapshotDatabase(ctx, dbPath, plan)
+	if err != nil {
+		t.Fatal(err)
+	}
+	second, err := SnapshotDatabase(ctx, dbPath, plan)
+	if err != nil {
+		t.Fatal(err)
+	}
+	firstInfo, err := os.Lstat(first)
+	if err != nil {
+		t.Fatal(err)
+	}
+	secondInfo, err := os.Lstat(second)
+	if err != nil {
+		t.Fatal(err)
+	}
+	blockedTarget := first + ".2"
+	if err := os.WriteFile(blockedTarget, []byte("do not clobber"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := SnapshotDatabase(ctx, dbPath, plan); err == nil {
+		t.Fatal("expected snapshot publication failure")
+	}
+	for path, before := range map[string]os.FileInfo{first: firstInfo, second: secondInfo} {
+		after, err := os.Lstat(path)
+		if err != nil || !os.SameFile(before, after) {
+			t.Fatalf("previous snapshot %s changed: info=%v err=%v", path, after, err)
+		}
+		if err := validateSnapshot(ctx, path, plan.From); err != nil {
+			t.Fatalf("previous snapshot %s invalid: %v", path, err)
+		}
+	}
+	if contents, err := os.ReadFile(blockedTarget); err != nil || string(contents) != "do not clobber" {
+		t.Fatalf("publication target changed: contents=%q err=%v", contents, err)
+	}
+	temporary, err := filepath.Glob(filepath.Join(filepath.Dir(dbPath), "."+filepath.Base(dbPath)+".snapshot-tmp-*"))
+	if err != nil || len(temporary) != 0 {
+		t.Fatalf("snapshot temporary directories remain after failure: %v (err=%v)", temporary, err)
+	}
+}
+
 func TestSnapshotDatabaseRefusesSymlinkWithoutFollowingOrDeletingIt(t *testing.T) {
 	ctx := context.Background()
 	dbPath := createFixtureDatabase(t, "v15.sql")
@@ -376,7 +462,7 @@ func TestSnapshotDatabaseRefusesSymlinkWithoutFollowingOrDeletingIt(t *testing.T
 		t.Fatal(err)
 	}
 	if err := os.Symlink(foreign, stem); err != nil {
-		t.Fatal(err)
+		t.Skipf("symlinks unavailable: %v", err)
 	}
 
 	db, diag, err := OpenCompatible(ctx, dbPath)
@@ -1041,6 +1127,23 @@ func TestApplyMigrationPlanUsesReceiverPathForVerificationOnly(t *testing.T) {
 		t.Fatalf("ApplyMigrationPlan unexpectedly snapshotted unrelated path: %s", snapshotPath)
 	}
 	assertCurrentShape(t, db.DB())
+}
+
+func TestApplyMigrationPlanRechecksAppliedVersionInsideTransaction(t *testing.T) {
+	ctx := context.Background()
+	dbPath := createFixtureDatabase(t, "v7.sql")
+	plan := inspectPlanForTest(t, ctx, dbPath)
+	plan.From.AppliedVersion++
+
+	db, err := openWithoutSetup(dbPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = db.Close() }()
+	if err := db.ApplyMigrationPlan(ctx, plan); err == nil || !strings.Contains(err.Error(), "changed since inspection") {
+		t.Fatalf("ApplyMigrationPlan error = %v, want full shape mismatch", err)
+	}
+	assertMigrationVersionCount(t, db.DB(), 8, 0)
 }
 
 func TestApplyMigrationPlanRechecksShapeInsideTransaction(t *testing.T) {

@@ -8,9 +8,12 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"regexp"
+	"runtime"
 	"sort"
 	"strconv"
 	"strings"
+	"syscall"
 
 	"github.com/pablontiv/backscroll/internal/compat"
 )
@@ -22,17 +25,20 @@ var beginMigrationTx = func(ctx context.Context, db *sql.DB) (*sql.Tx, error) {
 const snapshotRetention = 2
 
 type retainedSnapshot struct {
-	path   string
-	suffix int
-	info   os.FileInfo
+	path string
+	info os.FileInfo
+}
+
+type parsedSnapshotName struct {
+	fromVersion     int
+	signaturePrefix string
 }
 
 // SnapshotDatabase creates and validates a durable sibling backup of srcPath.
 // The backup is published atomically without replacing an existing path.
-func SnapshotDatabase(ctx context.Context, srcPath string, plans ...compat.MigrationPlan) (snapshotPath string, err error) {
-	plan, err := snapshotPlan(ctx, srcPath, plans)
-	if err != nil {
-		return "", err
+func SnapshotDatabase(ctx context.Context, srcPath string, plan compat.MigrationPlan) (snapshotPath string, err error) {
+	if len(plan.Steps) == 0 {
+		return "", fmt.Errorf("snapshot requires a non-empty migration plan")
 	}
 	stem, err := snapshotStem(srcPath, plan)
 	if err != nil {
@@ -40,7 +46,7 @@ func SnapshotDatabase(ctx context.Context, srcPath string, plans ...compat.Migra
 	}
 	directory := filepath.Dir(srcPath)
 
-	existing, nextSuffix, err := inspectRetainedSnapshots(ctx, stem, plan.From)
+	existing, nextSuffix, err := inspectRetainedSnapshots(ctx, srcPath, stem)
 	if err != nil {
 		return "", err
 	}
@@ -49,31 +55,31 @@ func SnapshotDatabase(ctx context.Context, srcPath string, plans ...compat.Migra
 		targetPath = fmt.Sprintf("%s.%d", stem, nextSuffix)
 	}
 
-	tempFile, err := os.CreateTemp(directory, "."+filepath.Base(stem)+".tmp-")
+	tempDirectory, err := os.MkdirTemp(directory, "."+filepath.Base(srcPath)+".snapshot-tmp-")
 	if err != nil {
-		return "", fmt.Errorf("create snapshot temporary name: %w", err)
+		return "", fmt.Errorf("create private snapshot temporary directory: %w", err)
 	}
-	tempPath := tempFile.Name()
-	if closeErr := tempFile.Close(); closeErr != nil {
-		_ = os.Remove(tempPath)
-		return "", fmt.Errorf("close snapshot temporary file: %w", closeErr)
+	if err := securePathMode(tempDirectory, 0o700, true); err != nil {
+		secureErr := fmt.Errorf("secure snapshot temporary directory: %w", err)
+		if removeErr := os.RemoveAll(tempDirectory); removeErr != nil && !os.IsNotExist(removeErr) {
+			secureErr = errors.Join(secureErr, fmt.Errorf("remove insecure snapshot temporary directory: %w", removeErr))
+		}
+		return "", secureErr
 	}
-	if removeErr := os.Remove(tempPath); removeErr != nil {
-		return "", fmt.Errorf("prepare snapshot temporary path: %w", removeErr)
-	}
-
+	tempPath := filepath.Join(tempDirectory, "snapshot.db")
 	published := false
+	publicationDurable := false
 	defer func() {
-		if tempPath != "" {
-			if removeErr := os.Remove(tempPath); removeErr != nil && !os.IsNotExist(removeErr) {
-				err = errors.Join(err, fmt.Errorf("remove snapshot temporary file: %w", removeErr))
+		if tempDirectory != "" {
+			if removeErr := os.RemoveAll(tempDirectory); removeErr != nil && !os.IsNotExist(removeErr) {
+				err = errors.Join(err, fmt.Errorf("remove snapshot temporary directory: %w", removeErr))
 			}
 		}
-		if err != nil && published {
+		if err != nil && published && !publicationDurable {
 			if removeErr := os.Remove(targetPath); removeErr != nil && !os.IsNotExist(removeErr) {
 				err = errors.Join(err, fmt.Errorf("remove failed snapshot publication: %w", removeErr))
 			}
-			if syncErr := fsyncPath(directory); syncErr != nil {
+			if syncErr := fsyncDirectory(directory); syncErr != nil {
 				err = errors.Join(err, syncErr)
 			}
 		}
@@ -82,8 +88,8 @@ func SnapshotDatabase(ctx context.Context, srcPath string, plans ...compat.Migra
 	if err := vacuumSnapshot(ctx, srcPath, tempPath); err != nil {
 		return "", err
 	}
-	if err := os.Chmod(tempPath, 0o600); err != nil {
-		return "", fmt.Errorf("set snapshot permissions: %w", err)
+	if err := securePathMode(tempPath, 0o600, false); err != nil {
+		return "", fmt.Errorf("secure snapshot file: %w", err)
 	}
 	if err := validateSnapshot(ctx, tempPath, plan.From); err != nil {
 		return "", fmt.Errorf("validate new snapshot: %w", err)
@@ -92,59 +98,27 @@ func SnapshotDatabase(ctx context.Context, srcPath string, plans ...compat.Migra
 		return "", err
 	}
 
-	if err := pruneSnapshots(existing, snapshotRetention-1); err != nil {
-		return "", err
-	}
-	if len(existing) > snapshotRetention-1 {
-		if err := fsyncPath(directory); err != nil {
-			return "", err
-		}
-	}
-
 	if err := os.Link(tempPath, targetPath); err != nil {
 		return "", fmt.Errorf("publish snapshot without clobbering %s: %w", targetPath, err)
 	}
 	published = true
-	if err := os.Remove(tempPath); err != nil {
-		return "", fmt.Errorf("remove published snapshot temporary link: %w", err)
+	if err := fsyncDirectory(directory); err != nil {
+		return "", err
 	}
-	tempPath = ""
-	if err := fsyncPath(directory); err != nil {
+	publicationDurable = true
+
+	if err := pruneSnapshots(existing, snapshotRetention-1); err != nil {
+		return "", err
+	}
+	cleanupPath := tempDirectory
+	tempDirectory = ""
+	if err := os.RemoveAll(cleanupPath); err != nil && !os.IsNotExist(err) {
+		return "", fmt.Errorf("remove snapshot temporary directory: %w", err)
+	}
+	if err := fsyncDirectory(directory); err != nil {
 		return "", err
 	}
 	return targetPath, nil
-}
-
-func snapshotPlan(ctx context.Context, srcPath string, plans []compat.MigrationPlan) (compat.MigrationPlan, error) {
-	if len(plans) > 1 {
-		return compat.MigrationPlan{}, fmt.Errorf("snapshot accepts at most one migration plan")
-	}
-	if len(plans) == 1 {
-		if len(plans[0].Steps) == 0 {
-			return compat.MigrationPlan{}, fmt.Errorf("snapshot requires a non-empty migration plan")
-		}
-		return plans[0], nil
-	}
-
-	db, err := OpenReadOnly(srcPath)
-	if err != nil {
-		return compat.MigrationPlan{}, fmt.Errorf("inspect snapshot source: %w", err)
-	}
-	plan, diag, inspectErr := compat.InspectIndex(ctx, db.DB())
-	closeErr := db.Close()
-	if inspectErr != nil {
-		return compat.MigrationPlan{}, fmt.Errorf("inspect snapshot source: %w", inspectErr)
-	}
-	if diag != nil {
-		return compat.MigrationPlan{}, fmt.Errorf("inspect snapshot source: %s: %s", diag.Code, diag.Summary)
-	}
-	if closeErr != nil {
-		return compat.MigrationPlan{}, fmt.Errorf("close snapshot source inspection: %w", closeErr)
-	}
-	if len(plan.Steps) == 0 {
-		plan.Steps = []compat.MigrationStep{{Version: plan.From.AppliedVersion, Name: "current schema backup"}}
-	}
-	return plan, nil
 }
 
 func snapshotStem(srcPath string, plan compat.MigrationPlan) (string, error) {
@@ -164,37 +138,72 @@ func snapshotStem(srcPath string, plan compat.MigrationPlan) (string, error) {
 	return fmt.Sprintf("%s.snapshot-v%d-%s-to-v%d", srcPath, plan.From.AppliedVersion, signature[:12], toVersion), nil
 }
 
-func inspectRetainedSnapshots(ctx context.Context, stem string, expected compat.SchemaShape) ([]retainedSnapshot, int, error) {
-	entries, err := os.ReadDir(filepath.Dir(stem))
+func inspectRetainedSnapshots(ctx context.Context, srcPath, currentStem string) ([]retainedSnapshot, int, error) {
+	directory := filepath.Dir(srcPath)
+	entries, err := os.ReadDir(directory)
 	if err != nil {
 		return nil, 0, fmt.Errorf("list retained snapshots: %w", err)
 	}
-	base := filepath.Base(stem)
+	currentBase := filepath.Base(currentStem)
 	var snapshots []retainedSnapshot
 	maxSuffix := -1
 	for _, entry := range entries {
-		suffix, ok := snapshotSuffix(base, entry.Name())
+		parsed, ok := parseSnapshotName(filepath.Base(srcPath), entry.Name())
 		if !ok {
 			continue
 		}
-		path := filepath.Join(filepath.Dir(stem), entry.Name())
+		path := filepath.Join(directory, entry.Name())
 		info, err := os.Lstat(path)
 		if err != nil {
 			return nil, 0, fmt.Errorf("inspect retained snapshot %s: %w", path, err)
 		}
 		if info.Mode()&os.ModeSymlink != 0 || !info.Mode().IsRegular() {
-			return nil, 0, fmt.Errorf("refuse unsafe retained snapshot %s", path)
+			continue
 		}
-		if err := validateSnapshot(ctx, path, expected); err != nil {
-			return nil, 0, fmt.Errorf("refuse unvalidated retained snapshot %s: %w", path, err)
+		shape, err := inspectSnapshot(ctx, path)
+		if err != nil || shape.AppliedVersion != parsed.fromVersion || !strings.HasPrefix(strings.TrimPrefix(shape.Signature, "sha256:"), parsed.signaturePrefix) {
+			continue
 		}
-		snapshots = append(snapshots, retainedSnapshot{path: path, suffix: suffix, info: info})
-		if suffix > maxSuffix {
+		after, err := os.Lstat(path)
+		if err != nil {
+			return nil, 0, fmt.Errorf("recheck retained snapshot %s: %w", path, err)
+		}
+		if after.Mode()&os.ModeSymlink != 0 || !after.Mode().IsRegular() || !os.SameFile(info, after) {
+			return nil, 0, fmt.Errorf("retained snapshot changed during inspection: %s", path)
+		}
+		snapshots = append(snapshots, retainedSnapshot{path: path, info: after})
+		if suffix, matches := snapshotSuffix(currentBase, entry.Name()); matches && suffix > maxSuffix {
 			maxSuffix = suffix
 		}
 	}
-	sort.Slice(snapshots, func(i, j int) bool { return snapshots[i].suffix < snapshots[j].suffix })
+	sort.Slice(snapshots, func(i, j int) bool {
+		if snapshots[i].info.ModTime().Equal(snapshots[j].info.ModTime()) {
+			return snapshots[i].path < snapshots[j].path
+		}
+		return snapshots[i].info.ModTime().Before(snapshots[j].info.ModTime())
+	})
 	return snapshots, maxSuffix + 1, nil
+}
+
+func parseSnapshotName(databaseBase, name string) (parsedSnapshotName, bool) {
+	pattern := "^" + regexp.QuoteMeta(databaseBase) + `\.snapshot-v(0|[1-9][0-9]*)-([0-9a-f]{12})-to-v([1-9][0-9]*)(?:\.([1-9][0-9]*))?$`
+	matches := regexp.MustCompile(pattern).FindStringSubmatch(name)
+	if matches == nil {
+		return parsedSnapshotName{}, false
+	}
+	fromVersion, fromErr := strconv.Atoi(matches[1])
+	_, toErr := strconv.Atoi(matches[3])
+	var suffixErr error
+	if matches[4] != "" {
+		_, suffixErr = strconv.Atoi(matches[4])
+	}
+	if fromErr != nil || toErr != nil || suffixErr != nil {
+		return parsedSnapshotName{}, false
+	}
+	return parsedSnapshotName{
+		fromVersion:     fromVersion,
+		signaturePrefix: matches[2],
+	}, true
 }
 
 func snapshotSuffix(base, name string) (int, bool) {
@@ -232,18 +241,29 @@ func vacuumSnapshot(ctx context.Context, srcPath, targetPath string) error {
 	return nil
 }
 
-func validateSnapshot(ctx context.Context, path string, expected compat.SchemaShape) (err error) {
+func validateSnapshot(ctx context.Context, path string, expected compat.SchemaShape) error {
+	shape, err := inspectSnapshot(ctx, path)
+	if err != nil {
+		return err
+	}
+	if shape != expected {
+		return fmt.Errorf("snapshot schema shape changed: got %+v want %+v", shape, expected)
+	}
+	return nil
+}
+
+func inspectSnapshot(ctx context.Context, path string) (shape compat.SchemaShape, err error) {
 	info, err := os.Lstat(path)
 	if err != nil {
-		return fmt.Errorf("stat snapshot: %w", err)
+		return compat.SchemaShape{}, fmt.Errorf("stat snapshot: %w", err)
 	}
-	if !info.Mode().IsRegular() || info.Mode().Perm() != 0o600 {
-		return fmt.Errorf("snapshot mode is %s, want regular 0600", info.Mode())
+	if !info.Mode().IsRegular() || (supportsPOSIXModes() && info.Mode().Perm() != 0o600) {
+		return compat.SchemaShape{}, fmt.Errorf("snapshot mode is %s, want regular file with private permissions", info.Mode())
 	}
 
 	db, err := sql.Open("sqlite", "file:"+path+"?mode=ro&immutable=1&_pragma=busy_timeout(5000)")
 	if err != nil {
-		return fmt.Errorf("open snapshot for validation: %w", err)
+		return compat.SchemaShape{}, fmt.Errorf("open snapshot for validation: %w", err)
 	}
 	defer func() {
 		if closeErr := db.Close(); closeErr != nil {
@@ -253,39 +273,36 @@ func validateSnapshot(ctx context.Context, path string, expected compat.SchemaSh
 
 	rows, err := db.QueryContext(ctx, "PRAGMA integrity_check")
 	if err != nil {
-		return fmt.Errorf("run snapshot integrity_check: %w", err)
+		return compat.SchemaShape{}, fmt.Errorf("run snapshot integrity_check: %w", err)
 	}
 	var results []string
 	for rows.Next() {
 		var result string
 		if err := rows.Scan(&result); err != nil {
 			_ = rows.Close()
-			return fmt.Errorf("read snapshot integrity_check: %w", err)
+			return compat.SchemaShape{}, fmt.Errorf("read snapshot integrity_check: %w", err)
 		}
 		results = append(results, result)
 	}
 	if err := rows.Err(); err != nil {
 		_ = rows.Close()
-		return fmt.Errorf("read snapshot integrity_check: %w", err)
+		return compat.SchemaShape{}, fmt.Errorf("read snapshot integrity_check: %w", err)
 	}
 	if err := rows.Close(); err != nil {
-		return fmt.Errorf("close snapshot integrity_check: %w", err)
+		return compat.SchemaShape{}, fmt.Errorf("close snapshot integrity_check: %w", err)
 	}
 	if len(results) != 1 || results[0] != "ok" {
-		return fmt.Errorf("snapshot integrity_check failed: %s", strings.Join(results, "; "))
+		return compat.SchemaShape{}, fmt.Errorf("snapshot integrity_check failed: %s", strings.Join(results, "; "))
 	}
 
 	plan, diag, err := compat.InspectIndex(ctx, db)
 	if err != nil {
-		return fmt.Errorf("inspect snapshot shape: %w", err)
+		return compat.SchemaShape{}, fmt.Errorf("inspect snapshot shape: %w", err)
 	}
 	if diag != nil {
-		return fmt.Errorf("inspect snapshot shape: %s: %s", diag.Code, diag.Summary)
+		return compat.SchemaShape{}, fmt.Errorf("inspect snapshot shape: %s: %s", diag.Code, diag.Summary)
 	}
-	if plan.From != expected {
-		return fmt.Errorf("snapshot schema shape changed: got %+v want %+v", plan.From, expected)
-	}
-	return nil
+	return plan.From, nil
 }
 
 func pruneSnapshots(snapshots []retainedSnapshot, keep int) error {
@@ -331,8 +348,8 @@ func (d *Database) ApplyMigrationPlan(ctx context.Context, plan compat.Migration
 	if err != nil {
 		return fmt.Errorf("re-inspect schema in migration transaction: %w", err)
 	}
-	if livePlan.From.Signature != plan.From.Signature {
-		return fmt.Errorf("index schema changed since inspection: got %s want %s", livePlan.From.Signature, plan.From.Signature)
+	if livePlan.From != plan.From {
+		return fmt.Errorf("index schema changed since inspection: got %+v want %+v", livePlan.From, plan.From)
 	}
 	if diag != nil && !planStartsFromEmptySchema(plan) {
 		return fmt.Errorf("re-inspect schema in migration transaction: %s: %s", diag.Code, diag.Summary)
@@ -431,6 +448,30 @@ func quoteSQLString(value string) string {
 	return "'" + strings.ReplaceAll(value, "'", "''") + "'"
 }
 
+func securePathMode(path string, mode os.FileMode, directory bool) error {
+	if err := os.Chmod(path, mode); err != nil {
+		return fmt.Errorf("chmod %s: %w", path, err)
+	}
+	info, err := os.Lstat(path)
+	if err != nil {
+		return fmt.Errorf("verify mode for %s: %w", path, err)
+	}
+	if directory && !info.IsDir() {
+		return fmt.Errorf("%s is not a directory", path)
+	}
+	if !directory && !info.Mode().IsRegular() {
+		return fmt.Errorf("%s is not a regular file", path)
+	}
+	if supportsPOSIXModes() && info.Mode().Perm() != mode.Perm() {
+		return fmt.Errorf("mode for %s is %o, want %o", path, info.Mode().Perm(), mode.Perm())
+	}
+	return nil
+}
+
+func supportsPOSIXModes() bool {
+	return runtime.GOOS != "windows" && runtime.GOOS != "plan9"
+}
+
 func fsyncPath(path string) error {
 	file, err := os.Open(path)
 	if err != nil {
@@ -439,6 +480,25 @@ func fsyncPath(path string) error {
 	defer file.Close()
 	if err := file.Sync(); err != nil {
 		return fmt.Errorf("fsync %s: %w", path, err)
+	}
+	return nil
+}
+
+func fsyncDirectory(path string) error {
+	if runtime.GOOS == "windows" {
+		return nil
+	}
+	file, err := os.Open(path)
+	if err != nil {
+		return fmt.Errorf("open directory for fsync %s: %w", path, err)
+	}
+	defer file.Close()
+	if err := file.Sync(); err != nil {
+		message := strings.ToLower(err.Error())
+		if errors.Is(err, syscall.EINVAL) || errors.Is(err, syscall.ENOTSUP) || errors.Is(err, syscall.EOPNOTSUPP) || strings.Contains(message, "not supported") {
+			return nil
+		}
+		return fmt.Errorf("fsync directory %s: %w", path, err)
 	}
 	return nil
 }
