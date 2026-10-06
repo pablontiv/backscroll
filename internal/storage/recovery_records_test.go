@@ -124,6 +124,43 @@ func TestReadRecoveryInputPreservesV16OriginIndependentlyFromSearchEcho(t *testi
 	}
 }
 
+func TestReadRecoveryInputPreservesConflictingOriginsForDuplicatePathOrdinalRows(t *testing.T) {
+	dbPath := createFixtureDatabase(t, "v16.sql")
+	mutateRecoveryDatabase(t, dbPath, `
+		INSERT INTO search_items
+			(source, source_path, ordinal, role, origin, text, content_type, search_echo, origin_version)
+		VALUES
+			('session', '/origin/duplicate.jsonl', 7, 'user', 'human', 'duplicate origin sentinel', 'text', 0, 1),
+			('session', '/origin/duplicate.jsonl', 7, 'user', 'assistant', 'duplicate origin sentinel', 'text', 0, 1);
+	`)
+	db, err := OpenReadOnly(dbPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+
+	input, diag, err := ReadRecoveryInput(context.Background(), db)
+	if err != nil || diag != nil {
+		t.Fatalf("ReadRecoveryInput err=%v diagnostic=%+v", err, diag)
+	}
+	if len(input.Records) != 2 || input.Records[0].Origin != models.OriginHuman || input.Records[1].Origin != models.OriginAssistant {
+		t.Fatalf("recovery origins = %+v, want human then assistant", input.Records)
+	}
+
+	plan, diagnostics, err := compat.PlanRecovery([]compat.RecoveryInput{input})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if plan.Records != nil || len(diagnostics) != 2 {
+		t.Fatalf("plan=%+v diagnostics=%+v", plan, diagnostics)
+	}
+	for _, diagnostic := range diagnostics {
+		if diagnostic.Code != compat.CodeRecoveryConflict || !strings.Contains(diagnostic.Summary, "contradictory proven message origins") {
+			t.Fatalf("diagnostic=%+v", diagnostic)
+		}
+	}
+}
+
 func TestReadRecoveryInputRejectsUnknownShape(t *testing.T) {
 	dbPath := buildRecoveryFixtureDatabase(t, "active-v13.sql")
 	mutateRecoveryDatabase(t, dbPath, `CREATE TABLE recovery_unknown_shape (id INTEGER PRIMARY KEY);`)

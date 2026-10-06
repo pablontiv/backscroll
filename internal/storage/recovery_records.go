@@ -129,22 +129,17 @@ func readCanonicalSearchItems(ctx context.Context, q compat.Queryer) ([]models.I
 		return records, nil, nil
 	}
 	originRows, err := q.QueryContext(ctx, `
-		SELECT source, source_path, ordinal, role, text,
-		       COALESCE(project, ''), project IS NOT NULL,
-		       COALESCE(uuid, ''), uuid IS NOT NULL,
-		       COALESCE(timestamp, ''), timestamp IS NOT NULL, content_type, origin
+		SELECT origin
 		FROM search_items
+		ORDER BY source_path, ordinal, id
 	`)
 	if err != nil {
 		return nil, nil, fmt.Errorf("read recovery message origin: %w", err)
 	}
-	origins := make(map[anchor]models.MessageOrigin)
+	origins := make([]models.MessageOrigin, 0, len(records))
 	for originRows.Next() {
-		var a anchor
 		var origin models.MessageOrigin
-		if err := originRows.Scan(&a.source, &a.path, &a.ordinal, &a.role, &a.text,
-			&a.project, &a.projectValid, &a.uuid, &a.uuidValid,
-			&a.timestamp, &a.timestampValid, &a.contentType, &origin); err != nil {
+		if err := originRows.Scan(&origin); err != nil {
 			_ = originRows.Close()
 			return nil, nil, fmt.Errorf("scan recovery message origin: %w", err)
 		}
@@ -152,7 +147,7 @@ func readCanonicalSearchItems(ctx context.Context, q compat.Queryer) ([]models.I
 			_ = originRows.Close()
 			return nil, uninterpretableRecoveryRowDiagnostic(), nil
 		}
-		origins[a] = origin
+		origins = append(origins, origin)
 	}
 	if err := originRows.Err(); err != nil {
 		_ = originRows.Close()
@@ -161,12 +156,11 @@ func readCanonicalSearchItems(ctx context.Context, q compat.Queryer) ([]models.I
 	if err := originRows.Close(); err != nil {
 		return nil, nil, fmt.Errorf("close recovery message origin: %w", err)
 	}
+	if len(origins) != len(records) {
+		return nil, uninterpretableRecoveryRowDiagnostic(), nil
+	}
 	for i := range records {
-		origin, ok := origins[anchorOf(records[i])]
-		if !ok {
-			return nil, uninterpretableRecoveryRowDiagnostic(), nil
-		}
-		records[i].Origin = origin
+		records[i].Origin = origins[i]
 	}
 	return records, nil, nil
 }
