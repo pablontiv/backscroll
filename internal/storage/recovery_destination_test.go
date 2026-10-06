@@ -101,6 +101,7 @@ func seedPublishedReleaseRecoverySentinels(t *testing.T, dbPath, fixture string)
 			SourcePath:  "/published/" + fixture + "/text.jsonl",
 			Ordinal:     0,
 			Role:        "user",
+			Origin:      models.OriginUnknown,
 			Text:        "publishedlineagealpha text survives migration",
 			Project:     stringPtr("published-project"),
 			UUID:        stringPtr("11111111-1111-4111-8111-111111111111"),
@@ -112,6 +113,7 @@ func seedPublishedReleaseRecoverySentinels(t *testing.T, dbPath, fixture string)
 			SourcePath:  "/published/" + fixture + "/tool.jsonl",
 			Ordinal:     1,
 			Role:        "assistant",
+			Origin:      models.OriginUnknown,
 			Text:        "publishedlineagecmd tool survives migration",
 			Project:     stringPtr("published-project"),
 			UUID:        stringPtr("22222222-2222-4222-8222-222222222222"),
@@ -139,8 +141,8 @@ func assertPublishedReleaseSentinels(t *testing.T, db *sql.DB, want publishedRel
 	for _, wantRecord := range want.Records {
 		var got models.IndexedRecord
 		var project, uuid, timestamp string
-		if err := db.QueryRow(`SELECT source, source_path, ordinal, role, text, project, uuid, timestamp, content_type
-			FROM search_items WHERE uuid = ?`, pointerTestString(wantRecord.UUID)).Scan(&got.Source, &got.SourcePath, &got.Ordinal, &got.Role, &got.Text, &project, &uuid, &timestamp, &got.ContentType); err != nil {
+		if err := db.QueryRow(`SELECT source, source_path, ordinal, role, origin, text, project, uuid, timestamp, content_type
+			FROM search_items WHERE uuid = ?`, pointerTestString(wantRecord.UUID)).Scan(&got.Source, &got.SourcePath, &got.Ordinal, &got.Role, &got.Origin, &got.Text, &project, &uuid, &timestamp, &got.ContentType); err != nil {
 			t.Fatalf("query migrated published release sentinel %s: %v", pointerTestString(wantRecord.UUID), err)
 		}
 		got.Project = &project
@@ -277,6 +279,73 @@ func TestRecoverUnionPreservesActiveAndStrandedRecords(t *testing.T) {
 	assertRecoveryDestinationFTS(t, destPath, "sentinelalpha", 1, "strandedtoolomega", 1)
 	assertRecoveryDBSnapshot(t, activePath, activeSnapshot)
 	assertRecoveryDBSnapshot(t, strandedPath, strandedSnapshot)
+}
+
+func TestRecoveryDestinationPreservesOriginVersionAndSearchEchoIndependently(t *testing.T) {
+	ctx := context.Background()
+	records := []models.IndexedRecord{
+		{
+			Source: "session", SourcePath: "/origin/current.jsonl", Ordinal: 0,
+			Role: "user", Origin: models.OriginHuman, Text: "human recovery sentinel",
+			UUID: stringPtr("11111111-1111-4111-8111-111111111111"), ContentType: "text",
+		},
+		{
+			Source: "session", SourcePath: "/origin/current.jsonl", Ordinal: 1,
+			Role: "assistant", Origin: models.OriginAutomation, Text: "automation recovery sentinel",
+			UUID: stringPtr("22222222-2222-4222-8222-222222222222"), ContentType: "tool", SearchEcho: true,
+		},
+		{
+			Source: "session", SourcePath: "/origin/legacy.jsonl", Ordinal: 0,
+			Role: "assistant", Origin: models.OriginUnknown, Text: "unknown recovery sentinel",
+			UUID: stringPtr("33333333-3333-4333-8333-333333333333"), ContentType: "text", SearchEcho: true,
+		},
+	}
+	plan := compat.RecoveryPlan{Records: make([]compat.CanonicalRecord, len(records))}
+	for i, record := range records {
+		plan.Records[i] = compat.CanonicalRecord{Record: record}
+	}
+
+	destPath, err := CreateRecoveryDestination(ctx, t.TempDir(), plan)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = removeRecoveryDestinationTestFiles(destPath) }()
+
+	db, err := OpenReadOnly(destPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for i, record := range records {
+		var origin models.MessageOrigin
+		var version sql.NullInt64
+		var echo bool
+		if err := db.DB().QueryRow(`
+			SELECT origin, origin_version, search_echo FROM search_items WHERE uuid = ?
+		`, *record.UUID).Scan(&origin, &version, &echo); err != nil {
+			t.Fatal(err)
+		}
+		if origin != record.Origin || echo != record.SearchEcho {
+			t.Fatalf("record %d origin/search_echo = %q/%v, want %q/%v", i, origin, echo, record.Origin, record.SearchEcho)
+		}
+		if record.Origin == models.OriginUnknown {
+			if version.Valid {
+				t.Fatalf("record %d unknown origin_version = %+v, want NULL", i, version)
+			}
+		} else if !version.Valid || version.Int64 != CurrentOriginVersion {
+			t.Fatalf("record %d origin_version = %+v, want %d", i, version, CurrentOriginVersion)
+		}
+	}
+	if err := db.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	mutateRecoveryDatabase(t, destPath, `
+		UPDATE search_items SET origin_version = NULL
+		WHERE uuid = '11111111-1111-4111-8111-111111111111';
+	`)
+	if err := VerifyRecoveryDestination(ctx, destPath, plan); err == nil || !strings.Contains(err.Error(), "origin_version") {
+		t.Fatalf("VerifyRecoveryDestination origin-version tamper error = %v", err)
+	}
 }
 
 func TestRecoveryDestinationStartsFreshAtCurrentSchema(t *testing.T) {
@@ -692,7 +761,11 @@ func assertRecoveryDestinationRecords(t *testing.T, path string, plan compat.Rec
 	got := append([]models.IndexedRecord(nil), input.Records...)
 	want := make([]models.IndexedRecord, 0, len(plan.Records))
 	for _, planned := range plan.Records {
-		want = append(want, planned.Record)
+		record := planned.Record
+		if record.Origin == "" {
+			record.Origin = models.OriginUnknown
+		}
+		want = append(want, record)
 	}
 	sortRecoveryDestinationRecords(got)
 	sortRecoveryDestinationRecords(want)

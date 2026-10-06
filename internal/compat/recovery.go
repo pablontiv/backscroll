@@ -33,6 +33,12 @@ func PlanRecovery(inputs []RecoveryInput) (RecoveryPlan, []Diagnostic, error) {
 	for inputIndex, input := range inputs {
 		plan.InputShapes = append(plan.InputShapes, input.Shape)
 		for rowIndex, record := range input.Records {
+			if record.Origin == "" {
+				record.Origin = models.OriginUnknown
+			} else if !models.ValidMessageOrigin(record.Origin) {
+				diagnostics = append(diagnostics, uninterpretablePlanDiagnostic(inputIndex, rowIndex, record, fmt.Errorf("invalid message origin %q", record.Origin)))
+				continue
+			}
 			identity, err := identityOf(record)
 			if err != nil {
 				diagnostics = append(diagnostics, uninterpretablePlanDiagnostic(inputIndex, rowIndex, record, err))
@@ -74,11 +80,25 @@ func PlanRecovery(inputs []RecoveryInput) (RecoveryPlan, []Diagnostic, error) {
 		}
 		for hash, occurrences := range groups {
 			sortOccurrences(occurrences)
-			// Pairing provenance is enrichment, not canonical payload identity.
-			// A legacy duplicate must not erase positive reader evidence.
+			// Provenance enriches an otherwise equal canonical payload. Legacy
+			// unknown evidence never erases proof, and search-echo evidence remains
+			// independent from message-origin evidence.
 			record := occurrences[0].record
+			originConflict := false
 			for _, occurrence := range occurrences {
 				record.SearchEcho = record.SearchEcho || occurrence.record.SearchEcho
+				merged, ok := mergeMessageOrigins(record.Origin, occurrence.record.Origin)
+				if !ok {
+					originConflict = true
+					break
+				}
+				record.Origin = merged
+			}
+			if originConflict {
+				for _, occurrence := range occurrences {
+					diagnostics = append(diagnostics, originConflictPlanDiagnostic(occurrence))
+				}
+				continue
 			}
 			canonical = append(canonical, plannedRecord{
 				identity: identity,
@@ -158,6 +178,16 @@ func payloadHash(record models.IndexedRecord, identity recordIdentity) string {
 	return fmt.Sprintf("%x", sum)
 }
 
+func mergeMessageOrigins(left, right models.MessageOrigin) (models.MessageOrigin, bool) {
+	if left == models.OriginUnknown {
+		return right, true
+	}
+	if right == models.OriginUnknown || left == right {
+		return left, true
+	}
+	return models.OriginUnknown, false
+}
+
 func writeString(buffer *bytes.Buffer, value string) {
 	_ = buffer.WriteByte(1)
 	writeLengthPrefixed(buffer, []byte(value))
@@ -222,6 +252,13 @@ func conflictPlanDiagnostic(occurrence recordOccurrence, payloadCount int) Diagn
 	return Diagnostic{
 		Code:    CodeRecoveryConflict,
 		Summary: fmt.Sprintf("recovery input %d row %d conflicts for %s with %d payload hashes", occurrence.inputIndex, occurrence.rowIndex, describeIdentity(occurrence.identity), payloadCount),
+	}
+}
+
+func originConflictPlanDiagnostic(occurrence recordOccurrence) Diagnostic {
+	return Diagnostic{
+		Code:    CodeRecoveryConflict,
+		Summary: fmt.Sprintf("recovery input %d row %d conflicts for %s with contradictory proven message origins", occurrence.inputIndex, occurrence.rowIndex, describeIdentity(occurrence.identity)),
 	}
 }
 

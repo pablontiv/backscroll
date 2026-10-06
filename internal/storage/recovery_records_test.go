@@ -92,6 +92,38 @@ func TestReadRecoveryInputSupportsCatalogReadableSignatures(t *testing.T) {
 	}
 }
 
+func TestReadRecoveryInputPreservesV16OriginIndependentlyFromSearchEcho(t *testing.T) {
+	dbPath := createFixtureDatabase(t, "v16.sql")
+	mutateRecoveryDatabase(t, dbPath, `
+		INSERT INTO search_items
+			(source, source_path, ordinal, role, origin, text, uuid, content_type, search_echo, origin_version)
+		VALUES
+			('session', '/origin/v16.jsonl', 0, 'user', 'human', 'human origin sentinel',
+			 '11111111-1111-4111-8111-111111111111', 'text', 0, 1),
+			('session', '/origin/v16.jsonl', 1, 'assistant', 'automation', 'automation origin sentinel',
+			 '22222222-2222-4222-8222-222222222222', 'tool', 1, 1);
+	`)
+	db, err := OpenReadOnly(dbPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+
+	input, diag, err := ReadRecoveryInput(context.Background(), db)
+	if err != nil || diag != nil {
+		t.Fatalf("ReadRecoveryInput err=%v diagnostic=%+v", err, diag)
+	}
+	if input.Shape.AppliedVersion != 16 || len(input.Records) != 2 {
+		t.Fatalf("input shape=%+v records=%d", input.Shape, len(input.Records))
+	}
+	if got := input.Records[0]; got.Origin != models.OriginHuman || got.SearchEcho {
+		t.Fatalf("first record origin/search_echo = %q/%v, want human/false", got.Origin, got.SearchEcho)
+	}
+	if got := input.Records[1]; got.Origin != models.OriginAutomation || !got.SearchEcho {
+		t.Fatalf("second record origin/search_echo = %q/%v, want automation/true", got.Origin, got.SearchEcho)
+	}
+}
+
 func TestReadRecoveryInputRejectsUnknownShape(t *testing.T) {
 	dbPath := buildRecoveryFixtureDatabase(t, "active-v13.sql")
 	mutateRecoveryDatabase(t, dbPath, `CREATE TABLE recovery_unknown_shape (id INTEGER PRIMARY KEY);`)
@@ -222,6 +254,7 @@ func expectedRecoveryRecords(fixture string) []models.IndexedRecord {
 			SourcePath:  "/fixtures/recovery/" + slug + "-defaults.jsonl",
 			Ordinal:     42,
 			Role:        "user",
+			Origin:      models.OriginUnknown,
 			Text:        "default sentinel for " + slug,
 			ContentType: "text",
 		},
@@ -230,6 +263,7 @@ func expectedRecoveryRecords(fixture string) []models.IndexedRecord {
 			SourcePath:  "/fixtures/recovery/" + slug + ".jsonl",
 			Ordinal:     41,
 			Role:        "assistant",
+			Origin:      models.OriginUnknown,
 			Text:        "text sentinel for " + slug,
 			Project:     &project,
 			UUID:        &uuid,
@@ -248,6 +282,7 @@ func expectedCatalogRecoveryRecord(slug string) models.IndexedRecord {
 		SourcePath:  "/fixtures/recovery/" + slug + ".jsonl",
 		Ordinal:     7,
 		Role:        "assistant",
+		Origin:      models.OriginUnknown,
 		Text:        "catalog sentinel for " + slug,
 		Project:     &project,
 		UUID:        &uuid,

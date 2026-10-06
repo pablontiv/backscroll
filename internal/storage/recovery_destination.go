@@ -204,10 +204,22 @@ func insertRecoveryDestinationRecord(ctx context.Context, tx *sql.Tx, r models.I
 	// extraction_version and was_interrupted are intentionally NULL here: the
 	// canonical recovery record does not carry that lossy derived metadata, and
 	// recovered rows remain eligible for safe rederivation by future sync/mining.
-	_, err := tx.ExecContext(ctx, `
-		INSERT INTO search_items (source, source_path, ordinal, role, text, timestamp, uuid, project, content_type, extraction_version, was_interrupted, search_echo)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, NULL, ?)
-	`, r.Source, r.SourcePath, r.Ordinal, r.Role, r.Text, recoveryDestinationNullableString(r.Timestamp), recoveryDestinationUUIDValue(r.UUID), recoveryDestinationNullableString(r.Project), r.ContentType, r.SearchEcho)
+	origin, err := recoveryDestinationOrigin(r.Origin)
+	if err != nil {
+		return err
+	}
+	var originVersion any
+	if origin != models.OriginUnknown {
+		originVersion = CurrentOriginVersion
+	}
+	_, err = tx.ExecContext(ctx, `
+		INSERT INTO search_items
+			(source, source_path, ordinal, role, origin, text, timestamp, uuid, project,
+			 content_type, extraction_version, was_interrupted, search_echo, origin_version)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, NULL, ?, ?)
+	`, r.Source, r.SourcePath, r.Ordinal, r.Role, origin, r.Text,
+		recoveryDestinationNullableString(r.Timestamp), recoveryDestinationUUIDValue(r.UUID),
+		recoveryDestinationNullableString(r.Project), r.ContentType, r.SearchEcho, originVersion)
 	if err != nil {
 		return fmt.Errorf("insert search_items: %w", err)
 	}
@@ -312,6 +324,9 @@ func verifyRecoveryDestinationRows(ctx context.Context, q compat.Queryer, plan c
 	if len(records) != len(plan.Records) {
 		return fmt.Errorf("canonical record count = %d, want %d", len(records), len(plan.Records))
 	}
+	if err := verifyRecoveryDestinationOrigins(ctx, q, plan); err != nil {
+		return err
+	}
 
 	wantIdentities := map[string]bool{}
 	wantPayloads := map[string]bool{}
@@ -360,6 +375,43 @@ func verifyRecoveryDestinationRows(ctx context.Context, q compat.Queryer, plan c
 	}
 	if !recoveryDestinationStringIntMapsEqual(gotSources, wantSources) {
 		return fmt.Errorf("destination source accounting does not match plan")
+	}
+	return nil
+}
+
+func verifyRecoveryDestinationOrigins(ctx context.Context, q compat.Queryer, plan compat.RecoveryPlan) error {
+	for i, planned := range plan.Records {
+		record := planned.Record
+		wantOrigin, err := recoveryDestinationOrigin(record.Origin)
+		if err != nil {
+			return fmt.Errorf("planned record %d origin: %w", i, err)
+		}
+
+		var gotOrigin models.MessageOrigin
+		var gotVersion sql.NullInt64
+		if record.UUID != nil && *record.UUID != "" {
+			err = q.QueryRowContext(ctx, `
+				SELECT origin, origin_version FROM search_items WHERE uuid = ?
+			`, *record.UUID).Scan(&gotOrigin, &gotVersion)
+		} else {
+			err = q.QueryRowContext(ctx, `
+				SELECT origin, origin_version FROM search_items
+				WHERE source_path = ? AND ordinal = ? AND COALESCE(uuid, '') = ''
+			`, record.SourcePath, record.Ordinal).Scan(&gotOrigin, &gotVersion)
+		}
+		if err != nil {
+			return fmt.Errorf("read destination origin for record %d: %w", i, err)
+		}
+		if gotOrigin != wantOrigin {
+			return fmt.Errorf("destination origin for record %d = %q, want %q", i, gotOrigin, wantOrigin)
+		}
+		if wantOrigin == models.OriginUnknown {
+			if gotVersion.Valid {
+				return fmt.Errorf("destination origin_version for unknown record %d = %d, want NULL", i, gotVersion.Int64)
+			}
+		} else if !gotVersion.Valid || gotVersion.Int64 != CurrentOriginVersion {
+			return fmt.Errorf("destination origin_version for record %d = %+v, want %d", i, gotVersion, CurrentOriginVersion)
+		}
 	}
 	return nil
 }
@@ -501,6 +553,11 @@ func recoveryDestinationIdentity(r models.IndexedRecord) (string, error) {
 }
 
 func recoveryDestinationPayload(r models.IndexedRecord) (string, error) {
+	origin, err := recoveryDestinationOrigin(r.Origin)
+	if err != nil {
+		return "", err
+	}
+	r.Origin = origin
 	if r.UUID != nil && *r.UUID == "" {
 		r.UUID = nil
 	}
@@ -509,6 +566,16 @@ func recoveryDestinationPayload(r models.IndexedRecord) (string, error) {
 		return "", fmt.Errorf("encode recovery payload: %w", err)
 	}
 	return string(encoded), nil
+}
+
+func recoveryDestinationOrigin(origin models.MessageOrigin) (models.MessageOrigin, error) {
+	if origin == "" {
+		return models.OriginUnknown, nil
+	}
+	if !models.ValidMessageOrigin(origin) {
+		return "", fmt.Errorf("invalid recovery message origin %q", origin)
+	}
+	return origin, nil
 }
 
 func recoveryDestinationNullableString(value *string) any {

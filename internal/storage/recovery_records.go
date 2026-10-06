@@ -62,43 +62,111 @@ func readCanonicalSearchItems(ctx context.Context, q compat.Queryer) ([]models.I
 	if err != nil || diag != nil {
 		return nil, diag, err
 	}
-	// Pre-v15 inputs have no pairing evidence. Keep the canonical text reader
-	// compatible with every historical shape, then retain positive provenance.
+
+	// Historical inputs lack newer provenance columns. Read the common payload
+	// first, then enrich only from structured evidence present in that lineage.
+	type anchor struct {
+		source, path, role, text, project, uuid, timestamp, contentType string
+		ordinal                                                         int64
+		projectValid, uuidValid, timestampValid                         bool
+	}
+	anchorOf := func(r models.IndexedRecord) anchor {
+		return anchor{
+			source: r.Source, path: r.SourcePath, ordinal: r.Ordinal, role: r.Role,
+			text: r.Text, project: recoveryStringValue(r.Project), projectValid: r.Project != nil,
+			uuid: recoveryStringValue(r.UUID), uuidValid: r.UUID != nil,
+			timestamp: recoveryStringValue(r.Timestamp), timestampValid: r.Timestamp != nil,
+			contentType: r.ContentType,
+		}
+	}
+
 	var hasEcho int
 	if err := q.QueryRowContext(ctx, `SELECT COUNT(*) FROM pragma_table_info('search_items') WHERE name = 'search_echo'`).Scan(&hasEcho); err != nil {
 		return nil, nil, fmt.Errorf("inspect recovery echo provenance: %w", err)
 	}
-	if hasEcho == 0 {
+	if hasEcho != 0 {
+		marked, err := q.QueryContext(ctx, `
+			SELECT source, source_path, ordinal, role, text,
+			       COALESCE(project, ''), project IS NOT NULL,
+			       COALESCE(uuid, ''), uuid IS NOT NULL,
+			       COALESCE(timestamp, ''), timestamp IS NOT NULL, content_type
+			FROM search_items WHERE search_echo = 1
+		`)
+		if err != nil {
+			return nil, nil, fmt.Errorf("read recovery echo provenance: %w", err)
+		}
+		echoes := make(map[anchor]bool)
+		for marked.Next() {
+			var a anchor
+			if err := marked.Scan(&a.source, &a.path, &a.ordinal, &a.role, &a.text,
+				&a.project, &a.projectValid, &a.uuid, &a.uuidValid,
+				&a.timestamp, &a.timestampValid, &a.contentType); err != nil {
+				_ = marked.Close()
+				return nil, nil, fmt.Errorf("scan recovery echo provenance: %w", err)
+			}
+			echoes[a] = true
+		}
+		if err := marked.Err(); err != nil {
+			_ = marked.Close()
+			return nil, nil, fmt.Errorf("iterate recovery echo provenance: %w", err)
+		}
+		if err := marked.Close(); err != nil {
+			return nil, nil, fmt.Errorf("close recovery echo provenance: %w", err)
+		}
+		for i := range records {
+			records[i].SearchEcho = echoes[anchorOf(records[i])]
+		}
+	}
+
+	for i := range records {
+		records[i].Origin = models.OriginUnknown
+	}
+	var hasOrigin int
+	if err := q.QueryRowContext(ctx, `SELECT COUNT(*) FROM pragma_table_info('search_items') WHERE name = 'origin'`).Scan(&hasOrigin); err != nil {
+		return nil, nil, fmt.Errorf("inspect recovery message origin: %w", err)
+	}
+	if hasOrigin == 0 {
 		return records, nil, nil
 	}
-	marked, err := q.QueryContext(ctx, `SELECT source_path, ordinal, COALESCE(uuid, ''), text, role, content_type FROM search_items WHERE search_echo = 1`)
+	originRows, err := q.QueryContext(ctx, `
+		SELECT source, source_path, ordinal, role, text,
+		       COALESCE(project, ''), project IS NOT NULL,
+		       COALESCE(uuid, ''), uuid IS NOT NULL,
+		       COALESCE(timestamp, ''), timestamp IS NOT NULL, content_type, origin
+		FROM search_items
+	`)
 	if err != nil {
-		return nil, nil, fmt.Errorf("read recovery echo provenance: %w", err)
+		return nil, nil, fmt.Errorf("read recovery message origin: %w", err)
 	}
-	defer marked.Close()
-	type anchor struct {
-		path                          string
-		ordinal                       int64
-		uuid, text, role, contentType string
-	}
-	echoes := make(map[anchor]bool)
-	for marked.Next() {
+	origins := make(map[anchor]models.MessageOrigin)
+	for originRows.Next() {
 		var a anchor
-		if err := marked.Scan(&a.path, &a.ordinal, &a.uuid, &a.text, &a.role, &a.contentType); err != nil {
-			return nil, nil, fmt.Errorf("scan recovery echo provenance: %w", err)
+		var origin models.MessageOrigin
+		if err := originRows.Scan(&a.source, &a.path, &a.ordinal, &a.role, &a.text,
+			&a.project, &a.projectValid, &a.uuid, &a.uuidValid,
+			&a.timestamp, &a.timestampValid, &a.contentType, &origin); err != nil {
+			_ = originRows.Close()
+			return nil, nil, fmt.Errorf("scan recovery message origin: %w", err)
 		}
-		echoes[a] = true
+		if !models.ValidMessageOrigin(origin) {
+			_ = originRows.Close()
+			return nil, uninterpretableRecoveryRowDiagnostic(), nil
+		}
+		origins[a] = origin
 	}
-	if err := marked.Err(); err != nil {
-		return nil, nil, fmt.Errorf("iterate recovery echo provenance: %w", err)
+	if err := originRows.Err(); err != nil {
+		_ = originRows.Close()
+		return nil, nil, fmt.Errorf("iterate recovery message origin: %w", err)
+	}
+	if err := originRows.Close(); err != nil {
+		return nil, nil, fmt.Errorf("close recovery message origin: %w", err)
 	}
 	for i := range records {
-		r := &records[i]
-		uuid := ""
-		if r.UUID != nil {
-			uuid = *r.UUID
+		origin, ok := origins[anchorOf(records[i])]
+		if !ok {
+			return nil, uninterpretableRecoveryRowDiagnostic(), nil
 		}
-		r.SearchEcho = echoes[anchor{r.SourcePath, r.Ordinal, uuid, r.Text, r.Role, r.ContentType}]
+		records[i].Origin = origin
 	}
 	return records, nil, nil
 }
@@ -162,6 +230,13 @@ func recoveryStringPtr(value sql.NullString) *string {
 		return nil
 	}
 	return &value.String
+}
+
+func recoveryStringValue(value *string) string {
+	if value == nil {
+		return ""
+	}
+	return *value
 }
 
 func uninterpretableRecoveryRowDiagnostic() *compat.Diagnostic {
