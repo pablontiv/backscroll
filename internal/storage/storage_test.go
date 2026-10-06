@@ -4,9 +4,12 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"reflect"
+	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -60,6 +63,126 @@ func TestOpen(t *testing.T) {
 	if err != nil || count == 0 {
 		t.Fatalf("messages_fts FTS5 table not created")
 	}
+}
+
+func TestConcurrentOpenOfMissingDatabasePublishesOneCompleteDatabase(t *testing.T) {
+	for _, workers := range []int{2, 8} {
+		t.Run(fmt.Sprintf("workers_%d", workers), func(t *testing.T) {
+			directory := t.TempDir()
+			dbPath := filepath.Join(directory, "concurrent.db")
+			originalInitialize := initializeNewDatabaseSchema
+			var entered atomic.Int32
+			release := make(chan struct{})
+			initializeNewDatabaseSchema = func(db *Database) error {
+				if entered.Add(1) == int32(workers) {
+					close(release)
+				}
+				select {
+				case <-release:
+					return originalInitialize(db)
+				case <-time.After(5 * time.Second):
+					return errors.New("timed out waiting for concurrent creators")
+				}
+			}
+			defer func() { initializeNewDatabaseSchema = originalInitialize }()
+
+			type openResult struct {
+				db  *Database
+				err error
+			}
+			start := make(chan struct{})
+			results := make(chan openResult, workers)
+			var group sync.WaitGroup
+			for range workers {
+				group.Add(1)
+				go func() {
+					defer group.Done()
+					<-start
+					db, err := Open(dbPath)
+					results <- openResult{db: db, err: err}
+				}()
+			}
+			close(start)
+			group.Wait()
+			close(results)
+
+			var databases []*Database
+			for result := range results {
+				if result.err != nil {
+					t.Errorf("concurrent Open: %v", result.err)
+					continue
+				}
+				if result.db == nil {
+					t.Error("concurrent Open returned nil database")
+					continue
+				}
+				databases = append(databases, result.db)
+				assertCurrentShape(t, result.db.DB())
+			}
+			for _, db := range databases {
+				if err := db.Close(); err != nil {
+					t.Errorf("close concurrent database: %v", err)
+				}
+			}
+			if len(databases) != workers {
+				t.Fatalf("successful opens = %d, want %d", len(databases), workers)
+			}
+
+			entries, err := os.ReadDir(directory)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if len(entries) != 1 || entries[0].Name() != filepath.Base(dbPath) {
+				t.Fatalf("database directory entries = %v, want only %s", directoryEntryNames(entries), filepath.Base(dbPath))
+			}
+			if snapshots, err := filepath.Glob(dbPath + ".snapshot*"); err != nil || len(snapshots) != 0 {
+				t.Fatalf("new database snapshots = %v, err=%v; want none", snapshots, err)
+			}
+
+			readonly, err := OpenReadOnly(dbPath)
+			if err != nil {
+				t.Fatalf("open published database read-only: %v", err)
+			}
+			defer func() { _ = readonly.Close() }()
+			assertCurrentShape(t, readonly.DB())
+		})
+	}
+}
+
+func TestOpenInitializationFailureDoesNotPublishDatabase(t *testing.T) {
+	directory := t.TempDir()
+	dbPath := filepath.Join(directory, "failed.db")
+	initErr := errors.New("injected initialization failure")
+	originalInitialize := initializeNewDatabaseSchema
+	initializeNewDatabaseSchema = func(*Database) error { return initErr }
+	defer func() { initializeNewDatabaseSchema = originalInitialize }()
+
+	db, err := Open(dbPath)
+	if db != nil {
+		_ = db.Close()
+		t.Fatal("Open returned database after initialization failure")
+	}
+	if !errors.Is(err, initErr) {
+		t.Fatalf("Open error = %v, want %v", err, initErr)
+	}
+	if _, err := os.Lstat(dbPath); !errors.Is(err, fs.ErrNotExist) {
+		t.Fatalf("canonical database was published after initialization failure: %v", err)
+	}
+	entries, err := os.ReadDir(directory)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(entries) != 0 {
+		t.Fatalf("database directory entries after initialization failure = %v, want none", directoryEntryNames(entries))
+	}
+}
+
+func directoryEntryNames(entries []os.DirEntry) []string {
+	names := make([]string, len(entries))
+	for i, entry := range entries {
+		names[i] = entry.Name()
+	}
+	return names
 }
 
 // TestOpenDirectoryPath verifies Open fails cleanly when the path is a directory.

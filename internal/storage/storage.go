@@ -27,6 +27,7 @@ var (
 		return snapshotDatabase(ctx, path, plan)
 	}
 	openCompatibleApplyMigrationPlan = applyMigrationPlanLocked
+	initializeNewDatabaseSchema      = func(db *Database) error { return db.setupNewDatabaseSchema() }
 )
 
 var ErrImmutableReadOnlyWALUnsafe = errors.New("non-empty WAL makes immutable read-only content unsafe")
@@ -49,36 +50,119 @@ func Open(path string) (*Database, error) {
 	return db, openErr
 }
 
-func createDatabaseExclusively(path string) (*Database, bool, error) {
-	reserved, err := os.OpenFile(path, os.O_RDWR|os.O_CREATE|os.O_EXCL, 0o600)
-	if errors.Is(err, fs.ErrExist) {
-		return nil, false, nil
-	}
+func createDatabaseExclusively(path string) (db *Database, created bool, err error) {
+	canonicalPath, err := canonicalizeDBPath(path)
 	if err != nil {
-		return nil, false, fmt.Errorf("reserve database path %s: %w", path, err)
+		return nil, false, err
 	}
-	if err := reserved.Close(); err != nil {
-		_ = os.Remove(path)
-		return nil, false, fmt.Errorf("close newly reserved database path %s: %w", path, err)
+	if _, err := os.Stat(canonicalPath); err == nil {
+		return nil, false, nil
+	} else if !errors.Is(err, fs.ErrNotExist) {
+		return nil, false, fmt.Errorf("stat database path %s: %w", canonicalPath, err)
 	}
-	db, err := createDatabase(path)
+
+	directory := filepath.Dir(canonicalPath)
+	temp, err := os.CreateTemp(directory, "."+filepath.Base(canonicalPath)+".create-*")
+	if err != nil {
+		return nil, false, fmt.Errorf("create private database file for %s: %w", canonicalPath, err)
+	}
+	tempPath := temp.Name()
+	defer func() {
+		if tempPath == "" {
+			return
+		}
+		if cleanupErr := cleanupCreationFiles(tempPath); cleanupErr != nil {
+			err = errors.Join(err, cleanupErr)
+		}
+	}()
+	if err := temp.Close(); err != nil {
+		return nil, false, fmt.Errorf("close private database file %s: %w", tempPath, err)
+	}
+
+	candidate, err := createDatabaseWithOpen(tempPath, openPrivateCreationWithoutSetup)
+	if err != nil {
+		return nil, false, fmt.Errorf("initialize private database for %s: %w", canonicalPath, err)
+	}
+	if err := candidate.Close(); err != nil {
+		return nil, false, fmt.Errorf("close initialized private database %s: %w", tempPath, err)
+	}
+	if err := ensureCreationHasNoSidecars(tempPath); err != nil {
+		return nil, false, err
+	}
+	if err := fsyncPath(tempPath); err != nil {
+		return nil, false, err
+	}
+
+	if err := os.Link(tempPath, canonicalPath); err != nil {
+		if errors.Is(err, fs.ErrExist) {
+			if cleanupErr := cleanupCreationFiles(tempPath); cleanupErr != nil {
+				return nil, false, cleanupErr
+			}
+			tempPath = ""
+			return nil, false, nil
+		}
+		return nil, false, fmt.Errorf("publish database without clobbering %s: %w", canonicalPath, err)
+	}
+	if err := fsyncDirectory(directory); err != nil {
+		return nil, true, err
+	}
+	if err := cleanupCreationFiles(tempPath); err != nil {
+		return nil, true, err
+	}
+	tempPath = ""
+	if err := fsyncDirectory(directory); err != nil {
+		return nil, true, err
+	}
+
+	// Reopen through the canonical name so the returned connection never depends
+	// on the private construction link and uses the ordinary WAL configuration.
+	db, err = openWithoutSetup(canonicalPath)
 	return db, true, err
 }
 
 func createDatabase(path string) (*Database, error) {
-	d, err := openWithoutSetup(path)
+	return createDatabaseWithOpen(path, openWithoutSetup)
+}
+
+func createDatabaseWithOpen(path string, open func(string) (*Database, error)) (*Database, error) {
+	d, err := open(path)
 	if err != nil {
 		return nil, err
 	}
-	if err := d.setupNewDatabaseSchema(); err != nil {
+	if err := initializeNewDatabaseSchema(d); err != nil {
 		_ = d.Close()
 		return nil, err
 	}
 	return d, nil
 }
 
+func cleanupCreationFiles(path string) error {
+	var cleanupErr error
+	for _, suffix := range []string{"", "-journal", "-wal", "-shm"} {
+		if err := os.Remove(path + suffix); err != nil && !errors.Is(err, fs.ErrNotExist) {
+			cleanupErr = errors.Join(cleanupErr, fmt.Errorf("remove private database file %s: %w", path+suffix, err))
+		}
+	}
+	return cleanupErr
+}
+
+func ensureCreationHasNoSidecars(path string) error {
+	for _, suffix := range []string{"-journal", "-wal", "-shm"} {
+		if _, err := os.Lstat(path + suffix); err == nil {
+			return fmt.Errorf("private database construction left sidecar %s", path+suffix)
+		} else if !errors.Is(err, fs.ErrNotExist) {
+			return fmt.Errorf("inspect private database sidecar %s: %w", path+suffix, err)
+		}
+	}
+	return nil
+}
+
 func openWithoutSetup(path string) (*Database, error) {
 	return openWriteConnection(path, false)
+}
+
+func openPrivateCreationWithoutSetup(path string) (*Database, error) {
+	return openWriteConnectionWithPragmas(path, false, "DELETE", "FULL")
 }
 
 func openMigrationWithoutSetup(path string) (*Database, error) {
@@ -86,13 +170,17 @@ func openMigrationWithoutSetup(path string) (*Database, error) {
 }
 
 func openWriteConnection(path string, migrationImmediate bool) (*Database, error) {
+	return openWriteConnectionWithPragmas(path, migrationImmediate, "WAL", "NORMAL")
+}
+
+func openWriteConnectionWithPragmas(path string, migrationImmediate bool, journalMode, synchronous string) (*Database, error) {
 	canonicalPath, err := canonicalizeDBPath(path)
 	if err != nil {
 		return nil, err
 	}
 	// modernc.org/sqlite honors the `_pragma=name(value)` DSN syntax; the mattn-style
 	// `_name=value` form is silently ignored (leaving rollback journal mode + no busy timeout).
-	dsn := canonicalPath + "?_pragma=journal_mode(WAL)&_pragma=synchronous(NORMAL)&_pragma=busy_timeout(5000)"
+	dsn := fmt.Sprintf("%s?_pragma=journal_mode(%s)&_pragma=synchronous(%s)&_pragma=busy_timeout(5000)", canonicalPath, journalMode, synchronous)
 	if migrationImmediate {
 		dsn += "&_txlock=immediate"
 	}
