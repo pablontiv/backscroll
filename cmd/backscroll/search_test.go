@@ -164,23 +164,69 @@ func TestSearchTextLinesBudgetsWholeResults(t *testing.T) {
 	}
 
 	firstLines := resultsToLines(results[:1], picokitoutput.FormatText)
-	firstBudget := searchTextTestTokenCount(firstLines)
+	firstPayload := strings.Join(firstLines, "\n")
+	firstBudget := picokitoutput.TokenCount(firstPayload)
 	if got := searchTextLines(results, firstBudget-1); len(got) != 0 {
 		t.Fatalf("budget below first complete result emitted partial output: %q", strings.Join(got, "\n"))
 	}
 
-	firstPayload := strings.Join(firstLines, "\n")
 	if got := strings.Join(searchTextLines(results, firstBudget), "\n"); got != firstPayload {
 		t.Fatalf("exact first-result budget did not emit exactly one complete group\ngot:  %q\nwant: %q", got, firstPayload)
 	} else if !strings.Contains(got, "UUID: message-budget-1") || !strings.Contains(got, "Ordinal: 11") {
 		t.Fatalf("complete first result lacks identity: %q", got)
 	}
 
-	totalBudget := searchTextTestTokenCount(allLines)
+	totalBudget := picokitoutput.TokenCount(allPayload)
 	if got := strings.Join(searchTextLines(results, totalBudget), "\n"); got != allPayload {
 		t.Fatalf("total budget did not emit all complete groups\ngot:  %q\nwant: %q", got, allPayload)
 	} else if !strings.Contains(got, "UUID: null") || !strings.Contains(got, "Ordinal: 12") {
 		t.Fatalf("complete nullable-UUID result lacks fallback identity: %q", got)
+	}
+
+	for _, budget := range []int{firstBudget - 1, firstBudget, totalBudget - 1, totalBudget} {
+		payload := strings.Join(searchTextLines(results, budget), "\n")
+		if tokens := picokitoutput.TokenCount(payload); tokens > budget {
+			t.Fatalf("emitted payload uses %d tokens, budget is %d: %q", tokens, budget, payload)
+		}
+		if payload == "" {
+			continue
+		}
+		groups := strings.Count(payload, "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
+		if uuids := strings.Count(payload, "UUID: "); uuids != groups {
+			t.Fatalf("emitted %d complete groups but %d UUID fields: %q", groups, uuids, payload)
+		}
+		if ordinals := strings.Count(payload, "Ordinal: "); ordinals != groups {
+			t.Fatalf("emitted %d complete groups but %d ordinal fields: %q", groups, ordinals, payload)
+		}
+	}
+}
+
+func TestSearchTextLinesCountsCompletePayload(t *testing.T) {
+	uuid := "message-rounding"
+	results := []models.SearchResult{{
+		Source:   "session",
+		Role:     "assistant",
+		UUID:     &uuid,
+		Ordinal:  7,
+		Content:  "rounding regression payload",
+		FilePath: "/tmp/rounding.jsonl",
+		Rank:     1,
+		Score:    0.75,
+	}}
+	lines := resultsToLines(results, picokitoutput.FormatText)
+	payload := strings.Join(lines, "\n")
+
+	// This models the rejected implementation only to prove the fixture catches it.
+	separatelyRounded := 0
+	for _, line := range lines {
+		separatelyRounded += picokitoutput.TokenCount(line)
+	}
+	completeTokens := picokitoutput.TokenCount(payload)
+	if separatelyRounded >= completeTokens {
+		t.Fatalf("fixture does not expose per-line undercount: separate=%d complete=%d", separatelyRounded, completeTokens)
+	}
+	if got := searchTextLines(results, separatelyRounded); len(got) != 0 {
+		t.Fatalf("group whose complete payload exceeds budget was emitted: %q", strings.Join(got, "\n"))
 	}
 }
 
@@ -203,23 +249,17 @@ func TestRunSearchTextBudgetBoundary(t *testing.T) {
 	if unlimited == "" {
 		t.Fatal("unlimited runSearch returned no fixture result")
 	}
-	budget := searchTextTestTokenCount(strings.Split(unlimited, "\n"))
+	budget := picokitoutput.TokenCount(unlimited)
 	if got := run(budget - 1); got != "" {
 		t.Fatalf("runSearch emitted a partial first result below its boundary: %q", got)
 	}
 	if got := run(budget); got != unlimited {
 		t.Fatalf("runSearch exact boundary changed the complete result\ngot:  %q\nwant: %q", got, unlimited)
+	} else if picokitoutput.TokenCount(got) > budget {
+		t.Fatalf("runSearch emitted %d tokens with budget %d", picokitoutput.TokenCount(got), budget)
 	} else if !strings.Contains(got, "UUID: contract-uuid") || !strings.Contains(got, "Ordinal: 4") {
 		t.Fatalf("runSearch exact boundary omitted identity: %q", got)
 	}
-}
-
-func searchTextTestTokenCount(lines []string) int {
-	total := 0
-	for _, line := range lines {
-		total += picokitoutput.TokenCount(line)
-	}
-	return total
 }
 
 func TestSearchTextFormatStructure(t *testing.T) {

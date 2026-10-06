@@ -282,18 +282,15 @@ func searchTextLines(results []models.SearchResult, maxTokens int) []string {
 	}
 
 	var lines []string
-	tokens := 0
 	for _, result := range results {
 		group := resultsToLines([]models.SearchResult{result}, picokitoutput.FormatText)
-		groupTokens := 0
-		for _, line := range group {
-			groupTokens += picokitoutput.TokenCount(line)
-		}
-		if tokens+groupTokens > maxTokens {
+		candidateLines := make([]string, 0, len(lines)+len(group))
+		candidateLines = append(candidateLines, lines...)
+		candidateLines = append(candidateLines, group...)
+		if picokitoutput.TokenCount(strings.Join(candidateLines, "\n")) > maxTokens {
 			break
 		}
-		lines = append(lines, group...)
-		tokens += groupTokens
+		lines = candidateLines
 	}
 	return lines
 }
