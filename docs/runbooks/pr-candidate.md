@@ -26,7 +26,9 @@ cd backscroll-candidate
 ```
 
 Confirm that `candidate.json` names the intended PR and exact head SHA before
-running any binary:
+running any binary. Candidate versions have the SemVer-compatible form
+`<next-patch>-pr.<PR_NUMBER>.g<SHORT_SHA>`; the `g` keeps an all-numeric short
+SHA with a leading zero from becoming an invalid numeric prerelease identifier.
 
 ```sh
 jq . candidate.json
@@ -36,7 +38,7 @@ jq -e \
   '.pr == $pr and .sha == $sha and
    (.base_sha | length == 40) and
    (.base_version | length > 0) and
-   (.version | contains("-pr.")) and
+   (.version | test("^(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)-pr\\.[1-9][0-9]*\\.g[0-9a-f]{7}$")) and
    (.version | contains("dev") | not)' candidate.json
 ```
 
