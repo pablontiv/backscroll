@@ -9,8 +9,112 @@ import (
 	"time"
 
 	"github.com/pablontiv/backscroll/internal/config"
+	"github.com/pablontiv/backscroll/internal/input_config"
+	"github.com/pablontiv/backscroll/internal/models"
+	"github.com/pablontiv/backscroll/internal/readers"
 	"github.com/pablontiv/backscroll/internal/storage"
 )
+
+type sidecarBackedReader struct {
+	path       string
+	hash       string
+	content    string
+	hashCalls  int
+	parseCalls int
+}
+
+func (*sidecarBackedReader) Name() string { return "opencode" }
+
+func (r *sidecarBackedReader) Discover(input_config.InputDefinition) ([]string, error) {
+	return []string{r.path}, nil
+}
+
+func (r *sidecarBackedReader) Hash(string) (string, error) {
+	r.hashCalls++
+	return r.hash, nil
+}
+
+func (r *sidecarBackedReader) Parse(string, input_config.InputDefinition) (models.ParsedFile, error) {
+	r.parseCalls++
+	return models.ParsedFile{
+		Path: r.path,
+		Hash: r.hash,
+		Records: []models.Message{{
+			Role:        "assistant",
+			Content:     r.content,
+			ContentType: "text",
+		}},
+	}, nil
+}
+
+func TestMetadataPrefilterAlwaysHashesOpenCode(t *testing.T) {
+	tmpDir := t.TempDir()
+	sourcePath := filepath.Join(tmpDir, "opencode.db")
+	if err := os.WriteFile(sourcePath, []byte("unchanged main database"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	oldTime := time.Now().Add(-time.Hour)
+	if err := os.Chtimes(sourcePath, oldTime, oldTime); err != nil {
+		t.Fatal(err)
+	}
+
+	reader := &sidecarBackedReader{path: sourcePath, hash: "watermark-1", content: "first"}
+	oldActiveInputs, oldNewRegistry := maybeAutoSyncActiveInputs, maybeAutoSyncNewRegistry
+	t.Cleanup(func() {
+		maybeAutoSyncActiveInputs = oldActiveInputs
+		maybeAutoSyncNewRegistry = oldNewRegistry
+	})
+	maybeAutoSyncActiveInputs = func([]string) ([]input_config.InputDefinition, input_config.InputMode, error) {
+		return []input_config.InputDefinition{{
+			ID:     "opencode",
+			Source: "session",
+			Active: true,
+			Decode: input_config.DecodeConfig{Format: "opencode"},
+		}}, input_config.ModeDeclarative, nil
+	}
+	maybeAutoSyncNewRegistry = func() *readers.Registry {
+		registry := readers.NewRegistry()
+		registry.Register(reader)
+		return registry
+	}
+
+	cfg := config.Config{DatabasePath: filepath.Join(tmpDir, "index.db")}
+	if err := maybeAutoSync(&cfg, &bytes.Buffer{}); err != nil {
+		t.Fatalf("initial sync: %v", err)
+	}
+
+	// Simulate a WAL-only commit: the reader watermark changes while the main
+	// database file metadata remains identical.
+	reader.hash = "watermark-2"
+	reader.content = "second"
+	if err := maybeAutoSync(&cfg, &bytes.Buffer{}); err != nil {
+		t.Fatalf("sync after sidecar change: %v", err)
+	}
+	if reader.hashCalls != 2 || reader.parseCalls != 2 {
+		t.Fatalf("calls after changed watermark = hash %d, parse %d; want 2, 2", reader.hashCalls, reader.parseCalls)
+	}
+
+	// An unchanged watermark is still queried, but does not require a full parse.
+	if err := maybeAutoSync(&cfg, &bytes.Buffer{}); err != nil {
+		t.Fatalf("sync after unchanged watermark: %v", err)
+	}
+	if reader.hashCalls != 3 || reader.parseCalls != 2 {
+		t.Fatalf("calls after unchanged watermark = hash %d, parse %d; want 3, 2", reader.hashCalls, reader.parseCalls)
+	}
+
+	db, err := storage.Open(cfg.DatabasePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	hashes, err := db.GetFileHashes()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := hashes[sourcePath]; got != "watermark-2" {
+		t.Fatalf("indexed hash = %q, want watermark-2", got)
+	}
+}
 
 // TestMetadataPrefilterSkipsHashingOnUnchangedFiles validates that files
 // with matching size and mtime are not re-hashed during sync.

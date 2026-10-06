@@ -3,7 +3,7 @@ estado: Completed
 ---
 # Sync and Indexing
 
-Backscroll has no public `sync` command. Ingestion is integrated into ordinary operational startup: active global input manifests are validated, changed inputs are detected by SHA-256, and only new or changed content is indexed.
+Backscroll has no public `sync` command. Ingestion is integrated into ordinary operational startup: active global input manifests are validated, changed inputs are detected by content hash or reader watermark, and only new or changed content is indexed.
 
 Startup behavior is command-classed, not one-size-fits-all:
 
@@ -100,7 +100,7 @@ Plans and external Markdown documents are also declared as inputs. Use `decode.f
 
 ## Incremental and perennial behavior
 
-Backscroll stores a SHA-256 hash for each indexed input. Unchanged files are skipped on later startup syncs. Files with stable message UUIDs are updated append-only; legacy or UUID-less inputs retain wipe-and-reload behavior while the source exists.
+Backscroll stores a content hash or reader watermark for each indexed input. Unchanged files are skipped on later startup syncs. OpenCode is the exception to the file-metadata shortcut: its SQLite watermark is queried on every owner sync because WAL commits may not change `opencode.db` itself. Files with stable message UUIDs are updated append-only; legacy or UUID-less inputs retain wipe-and-reload behavior while the source exists.
 
 Startup coordination uses owner/follower branches: snapshot-read, metadata-read, and mutation owners acquire the canonical lock and perform prepare/migrate/sync before the handler runs; a remediation owner acquires and retains the same mutation-grade lock but bypasses ordinary compatible-open and pre-handler sync; a read-safe follower validates the existing database read-only and continues on a compatible snapshot; metadata-read followers avoid opening the database; mutation and remediation followers wait up to five seconds for ownership or fail retryably with `sync_in_progress`. WAL snapshot followers remain compatible only on the same local host.
 
