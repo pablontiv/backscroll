@@ -285,11 +285,11 @@ git config core.hooksPath .githooks
 
 Without this, git uses `.git/hooks/` (samples only) and **every push silently skips**:
 
-- the binary rebuild + install into `$HOME/.local/bin/backscroll` (so your installed CLI stays stale vs. the pushed code),
-- the `just ci` aggregate-coverage gate when Go files change, and
-- the AGENTS.md / docs-update validation.
+- the `just ci` aggregate-coverage gate when Go files change,
+- the AGENTS.md / docs-update validation, and
+- input preset synchronization.
 
-Once activated, `pre-push` runs those gates and reinstalls the binary and input presets on every push; `post-merge` reinstalls them after a `git pull`/merge. Neither hook replaces skill directories. Explicitly installed skill links follow the operator-selected stable clone; see [installation and restoration](docs/skill-installation.md). Verify a hook actually fired by running the command you changed from the PATH binary — `go build` reports `version dev` (the release version is injected by CI), so confirm by behavior, not the version string.
+Once activated, `pre-push` runs those gates and syncs input presets; `post-merge` syncs presets and documentation aggregates after a `git pull`/merge. Hooks never install the Backscroll executable or replace skill directories. Install a release with `install.sh`; released binaries then update themselves. Explicitly installed skill links follow the operator-selected stable clone; see [installation and restoration](docs/skill-installation.md).
 
 Commits follow [Conventional Commits](https://www.conventionalcommits.org/) (`type(scope): description`).
 
