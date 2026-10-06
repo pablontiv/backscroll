@@ -198,6 +198,21 @@ func (d *Database) SyncFiles(files []IndexedFile) error {
 			}
 		}
 
+		// A complete UUID-backed parse is also evidence that retained rows which
+		// were not emitted have no actor proof at this origin epoch. Close that
+		// backlog in the same per-file transaction without replacing perennial
+		// payload. Mixed UUID/uuid-less parses are excluded by the flap guard.
+		if perennial && allCurrentHaveUUIDs {
+			if _, err := tx.Exec(`
+				UPDATE search_items
+				SET origin = 'unknown', origin_version = ?
+				WHERE source_path = ?
+				  AND (origin_version IS NULL OR origin_version < ?)
+			`, CurrentOriginVersion, file.SourcePath, CurrentOriginVersion); err != nil {
+				return fmt.Errorf("close message origin backlog for %s: %w", file.SourcePath, err)
+			}
+		}
+
 		// If this is a session (source == "session"), upsert session_tags
 		if file.Source == "session" {
 			// Delete old tags for this source_path

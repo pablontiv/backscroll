@@ -129,14 +129,29 @@ func TestOriginParserSyncReplayIsBoundedAndConverges(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// More recent, expired sources sort ahead of every live source. They must
-	// remain unknown without preventing the live backlog from using the cap.
-	const expiredFiles = 201
-	expiredRoot := filepath.Join(tmp, "expired")
+	// The first 200 perennial paths also retain a historical UUID which the
+	// current parser no longer emits. They consume the first replay cap, then
+	// must leave the queue so the final live path can advance on the next run.
+	const retainedFiles = 200
 	tx, err := db.DB().Begin()
 	if err != nil {
 		t.Fatal(err)
 	}
+	for i := 0; i < retainedFiles; i++ {
+		path := filepath.Join(liveRoot, fmt.Sprintf("session-%03d.jsonl", i))
+		if _, err := tx.Exec(`
+			INSERT INTO search_items(source, source_path, ordinal, role, origin, text, uuid, content_type, extraction_version, search_echo, origin_version)
+			VALUES ('session', ?, 1, 'assistant', 'unknown', 'retained historical payload', ?, 'text', ?, 0, NULL)
+		`, path, fmt.Sprintf("origin-retained-%03d", i), storage.CurrentExtractionVersion); err != nil {
+			_ = tx.Rollback()
+			t.Fatal(err)
+		}
+	}
+
+	// More recent, expired sources sort ahead of every live source. They must
+	// remain unknown without preventing the live backlog from using the cap.
+	const expiredFiles = 201
+	expiredRoot := filepath.Join(tmp, "expired")
 	for i := 0; i < expiredFiles; i++ {
 		path := filepath.Join(expiredRoot, fmt.Sprintf("expired-%03d.jsonl", i))
 		if _, err := tx.Exec(`INSERT INTO indexed_files(path, hash, last_indexed) VALUES (?, ?, '2099-01-01T00:00:00Z')`, path, fmt.Sprintf("expired-hash-%03d", i)); err != nil {
@@ -181,6 +196,9 @@ func TestOriginParserSyncReplayIsBoundedAndConverges(t *testing.T) {
 	if got := count(`SELECT COUNT(*) FROM search_items WHERE source_path LIKE ? AND origin_version IS NULL`, liveRoot+"%"); got != 1 {
 		t.Fatalf("live origin backlog after first replay = %d, want 1", got)
 	}
+	if got := count(`SELECT COUNT(*) FROM search_items WHERE uuid LIKE 'origin-retained-%' AND (origin != 'unknown' OR origin_version != ?)`, storage.CurrentOriginVersion); got != 0 {
+		t.Fatalf("retained rows not closed as current unknown after first replay = %d", got)
+	}
 	if got := count(`SELECT COUNT(*) FROM search_items WHERE source_path LIKE ? AND search_echo IS NULL`, liveRoot+"%"); got != 0 {
 		t.Fatalf("overlapping search_echo backlog after first replay = %d, want 0", got)
 	}
@@ -203,8 +221,11 @@ func TestOriginParserSyncReplayIsBoundedAndConverges(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got := count(`SELECT COUNT(*) FROM search_items WHERE source_path LIKE ? AND (origin != 'human' OR origin_version != ?)`, liveRoot+"%", storage.CurrentOriginVersion); got != 0 {
-		t.Fatalf("live rows without persisted parser origin after convergence = %d", got)
+	if got := count(`SELECT COUNT(*) FROM search_items WHERE uuid LIKE 'origin-live-%' AND (origin != 'human' OR origin_version != ?)`, storage.CurrentOriginVersion); got != 0 {
+		t.Fatalf("live parser rows without persisted origin after convergence = %d", got)
+	}
+	if got := count(`SELECT COUNT(*) FROM search_items WHERE uuid LIKE 'origin-retained-%' AND (origin != 'unknown' OR origin_version != ?)`, storage.CurrentOriginVersion); got != 0 {
+		t.Fatalf("retained rows without closed unknown origin after convergence = %d", got)
 	}
 	for path, wantHash := range initialHashes {
 		var gotHash string

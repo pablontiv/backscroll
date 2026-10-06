@@ -85,6 +85,58 @@ func TestOriginPerennialEnrichmentPreservesPayloadAndDoesNotDegrade(t *testing.T
 	assertOriginRow(t, db, "stable-origin", originalID, models.OriginHuman, "original text", 1)
 }
 
+func TestOriginPerennialReplayClosesRetainedRowsWithoutEvidence(t *testing.T) {
+	db, err := Open(filepath.Join(t.TempDir(), "origin.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = db.Close() }()
+
+	const path = "/sessions/retained.jsonl"
+	file := IndexedFile{SourcePath: path, Source: "session", Hash: "h1", Messages: []IndexedMessage{
+		{Ordinal: 0, UUID: "historical-origin", Role: "user", Origin: models.OriginHuman, Text: "retained payload", ContentType: "text", ExtractionVersion: 1},
+		{Ordinal: 1, UUID: "current-origin", Role: "assistant", Origin: models.OriginAssistant, Text: "still emitted", ContentType: "text", ExtractionVersion: 1},
+	}}
+	if err := db.SyncFiles([]IndexedFile{file}); err != nil {
+		t.Fatal(err)
+	}
+
+	var retainedID int64
+	if err := db.db.QueryRow(`SELECT id FROM search_items WHERE uuid = 'historical-origin'`).Scan(&retainedID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.db.Exec(`UPDATE search_items SET origin = 'unknown', origin_version = NULL WHERE uuid = 'historical-origin'`); err != nil {
+		t.Fatal(err)
+	}
+
+	file.Hash = "h2"
+	file.Messages = file.Messages[1:]
+	if err := db.SyncFiles([]IndexedFile{file}); err != nil {
+		t.Fatalf("replay current parser output: %v", err)
+	}
+
+	var gotID int64
+	var gotUUID, gotText string
+	var gotOrigin models.MessageOrigin
+	var gotVersion int
+	if err := db.db.QueryRow(`
+		SELECT id, uuid, text, origin, origin_version
+		FROM search_items WHERE uuid = 'historical-origin'
+	`).Scan(&gotID, &gotUUID, &gotText, &gotOrigin, &gotVersion); err != nil {
+		t.Fatal(err)
+	}
+	if gotID != retainedID || gotUUID != "historical-origin" || gotText != "retained payload" {
+		t.Fatalf("retained payload changed: id=%d uuid=%q text=%q; want id=%d uuid=%q text=%q",
+			gotID, gotUUID, gotText, retainedID, "historical-origin", "retained payload")
+	}
+	if gotOrigin != models.OriginUnknown || gotVersion != CurrentOriginVersion {
+		t.Fatalf("retained provenance = (%q, %d), want (%q, %d)", gotOrigin, gotVersion, models.OriginUnknown, CurrentOriginVersion)
+	}
+	if pending, err := db.PendingOriginPaths(10); err != nil || len(pending) != 0 {
+		t.Fatalf("origin queue after successful replay = %v, err=%v", pending, err)
+	}
+}
+
 func TestOriginRejectsContradictoryProofForIdentity(t *testing.T) {
 	db, err := Open(filepath.Join(t.TempDir(), "origin.db"))
 	if err != nil {
