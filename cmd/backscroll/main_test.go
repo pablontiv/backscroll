@@ -110,7 +110,7 @@ func TestHelp(t *testing.T) {
 	commandsSection := parts[1]
 
 	// v2 approved root commands that SHOULD be present
-	approvedV2 := []string{"list", "search", "status", "validate", "rebuild", "purge", "config"}
+	approvedV2 := []string{"list", "search", "context", "status", "validate", "rebuild", "purge", "config"}
 	for _, cmd := range approvedV2 {
 		if !strings.Contains(commandsSection, "\n  "+cmd+" ") && !strings.Contains(commandsSection, "\n  "+cmd+"\n") {
 			t.Errorf("--help missing approved v2 command %q", cmd)

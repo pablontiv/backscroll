@@ -13,6 +13,7 @@ func TestEveryOperationalCommandHasApprovedStartupClass(t *testing.T) {
 	root := buildRootCmd(io.Discard, io.Discard)
 	want := map[string]startupCommandClass{
 		"search":   startupSnapshotRead,
+		"context":  startupSnapshotRead,
 		"list":     startupSnapshotRead,
 		"patterns": startupSnapshotRead,
 		"status":   startupSnapshotRead,

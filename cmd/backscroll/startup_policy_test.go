@@ -29,6 +29,12 @@ func TestInvalidOperationalCommandsSkipStartup(t *testing.T) {
 		{name: "search invalid content type", argv: []string{"search", "needle", "--content-type", "invalid"}},
 		{name: "search invalid after", argv: []string{"search", "needle", "--after", "not-a-date"}},
 		{name: "search invalid before", argv: []string{"search", "needle", "--before", "not-a-date"}},
+		{name: "context missing selector", argv: []string{"context"}},
+		{name: "context conflicting selectors", argv: []string{"context", "--uuid", "u", "--source-path", "/session", "--ordinal", "1"}},
+		{name: "context incomplete path selector", argv: []string{"context", "--source-path", "/session"}},
+		{name: "context conflicting formats", argv: []string{"context", "--uuid", "u", "--json", "--robot"}},
+		{name: "context invalid window", argv: []string{"context", "--uuid", "u", "--before", "-1"}},
+		{name: "context invalid budget", argv: []string{"context", "--uuid", "u", "--max-tokens", "63"}},
 		{name: "list positional argument", argv: []string{"list", "unexpected"}},
 		{name: "patterns positional argument", argv: []string{"patterns", "unexpected", "--kind", "commands"}},
 		{name: "patterns invalid kind", argv: []string{"patterns", "--kind", "invalid"}},
@@ -96,6 +102,7 @@ func TestEveryOperationalCommandRunsStartupBeforeHandler(t *testing.T) {
 		wantClass startupCommandClass
 	}{
 		{argv: []string{"search", "needle"}, wantClass: startupSnapshotRead},
+		{argv: []string{"context", "--uuid", "missing"}, wantClass: startupSnapshotRead},
 		{argv: []string{"list"}, wantClass: startupSnapshotRead},
 		{argv: []string{"patterns", "--kind", "commands"}, wantClass: startupSnapshotRead},
 		{argv: []string{"annotate", "--uuid", "u", "--kind", "correction", "--label", "x"}, wantClass: startupMutation},
