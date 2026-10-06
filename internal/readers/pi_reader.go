@@ -27,8 +27,8 @@ func (r *PiReader) Hash(path string) (string, error) {
 }
 
 type piRecord struct {
-	Type       *string         `json:"type"`
-	RecordType *string         `json:"recordType"`
+	Type       json.RawMessage `json:"type"`
+	RecordType json.RawMessage `json:"recordType"`
 	Timestamp  string          `json:"timestamp"`
 	CWD        string          `json:"cwd"`
 	CustomType string          `json:"customType"`
@@ -93,16 +93,36 @@ func (r *PiReader) Parse(path string, def input_config.InputDefinition) (models.
 // the established message/custom contract. A lone recordType field supports
 // only Pion messages. Dual fields must agree before the legacy contract applies.
 func piEnvelopeType(rec piRecord) (string, bool) {
-	if rec.Type != nil {
-		if rec.RecordType != nil && *rec.Type != *rec.RecordType {
+	typePresent := rec.Type != nil
+	recordTypePresent := rec.RecordType != nil
+
+	legacyType, typeIsString := piDiscriminator(rec.Type)
+	pionType, recordTypeIsString := piDiscriminator(rec.RecordType)
+	if typePresent && !typeIsString || recordTypePresent && !recordTypeIsString {
+		return "", false
+	}
+	if typePresent {
+		if recordTypePresent && legacyType != pionType {
 			return "", false
 		}
-		return *rec.Type, true
+		return legacyType, true
 	}
-	if rec.RecordType != nil && *rec.RecordType == "message" {
-		return *rec.RecordType, true
+	if recordTypePresent && pionType == "message" {
+		return pionType, true
 	}
 	return "", false
+}
+
+func piDiscriminator(raw json.RawMessage) (string, bool) {
+	if raw == nil {
+		return "", false
+	}
+	var value any
+	if err := json.Unmarshal(raw, &value); err != nil {
+		return "", false
+	}
+	discriminator, ok := value.(string)
+	return discriminator, ok
 }
 
 func piTimestamp(s string) time.Time {
