@@ -27,7 +27,7 @@ func TestPairedEchoRefillAfterFTSRebuild(t *testing.T) {
 	}
 	for i := 0; i < 2; i++ {
 		got, err := db.Search("orchard", models.SearchOptions{AllProjects: true, Limit: 300})
-		if err != nil || len(got) != 1 || got[0].UUID != "legitimate" {
+		if err != nil || len(got) != 1 || got[0].UUID == nil || *got[0].UUID != "legitimate" {
 			t.Fatalf("refill lost legitimate output: %v %v", got, err)
 		}
 	}

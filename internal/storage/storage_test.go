@@ -685,6 +685,48 @@ func TestSearch(t *testing.T) {
 	}
 }
 
+func TestSearchPreservesNullableUUID(t *testing.T) {
+	db, cleanup := newTestDB(t)
+	defer cleanup()
+
+	if err := db.SyncFiles([]IndexedFile{{
+		SourcePath: "/path/to/nullable-search.jsonl",
+		Source:     "session",
+		Hash:       "nullable-search",
+		Messages: []IndexedMessage{
+			{Ordinal: 0, Role: "user", Text: "nullable identity sentinel", UUID: "present-uuid", ContentType: "text"},
+			{Ordinal: 1, Role: "user", Text: "nullable identity sentinel", ContentType: "text"},
+			{Ordinal: 2, Role: "user", Text: "nullable identity sentinel", ContentType: "text"},
+		},
+	}}); err != nil {
+		t.Fatalf("sync nullable search fixtures: %v", err)
+	}
+	if _, err := db.db.Exec(`UPDATE search_items SET uuid = '' WHERE source_path = ? AND ordinal = 2`, "/path/to/nullable-search.jsonl"); err != nil {
+		t.Fatalf("store empty UUID fixture: %v", err)
+	}
+
+	results, err := db.Search("nullable identity sentinel", models.SearchOptions{ContentType: "text", Limit: 10})
+	if err != nil {
+		t.Fatalf("search nullable UUID fixtures: %v", err)
+	}
+	if len(results) != 3 {
+		t.Fatalf("got %d results, want 3: %+v", len(results), results)
+	}
+	byOrdinal := make(map[int]SearchResult, len(results))
+	for _, result := range results {
+		byOrdinal[result.Ordinal] = result
+	}
+	if got := byOrdinal[0].UUID; got == nil || *got != "present-uuid" {
+		t.Fatalf("present UUID = %v, want present-uuid", got)
+	}
+	if got := byOrdinal[1].UUID; got != nil {
+		t.Fatalf("SQL NULL UUID = %v, want nil", got)
+	}
+	if got := byOrdinal[2].UUID; got != nil {
+		t.Fatalf("empty UUID = %v, want nil", got)
+	}
+}
+
 // TestSearchWithFilters tests search with various filters.
 func TestSearchWithFilters(t *testing.T) {
 	db, cleanup := newTestDB(t)

@@ -23,7 +23,7 @@ type SearchResult struct {
 	Snippet      string
 	Score        float64
 	Timestamp    time.Time
-	UUID         string
+	UUID         *string
 	Project      string
 	ContentType  string
 	SearchEcho   bool `json:"-"` // persisted call/result provenance; not a public output field
@@ -238,8 +238,9 @@ func (d *Database) searchTableQuery(ftsTable, ftsQuery string, opts models.Searc
 			r.Timestamp = t
 		}
 
-		if uuid.Valid {
-			r.UUID = uuid.String
+		if uuid.Valid && uuid.String != "" {
+			uuidValue := uuid.String
+			r.UUID = &uuidValue
 		}
 
 		if project.Valid {

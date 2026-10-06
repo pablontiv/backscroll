@@ -1032,7 +1032,7 @@ func TestHybridSearch_WithMockProvider(t *testing.T) {
 		Hash:       "h3",
 		Project:    "proj",
 		Messages: []IndexedMessage{
-			{Ordinal: 0, Role: "user", Text: "mock provider hybrid search", ContentType: "text"},
+			{Ordinal: 7, Role: "user", Text: "mock provider hybrid search", UUID: "hybrid-uuid", ContentType: "text"},
 		},
 	}})
 
@@ -1048,7 +1048,10 @@ func TestHybridSearch_WithMockProvider(t *testing.T) {
 		t.Fatalf("HybridSearch with provider: %v", err)
 	}
 	if len(results) == 0 {
-		t.Error("expected hybrid results with mock provider")
+		t.Fatal("expected hybrid results with mock provider")
+	}
+	if results[0].UUID == nil || *results[0].UUID != "hybrid-uuid" || results[0].Ordinal != 7 {
+		t.Fatalf("hybrid copy lost identity: %+v", results[0])
 	}
 }
 

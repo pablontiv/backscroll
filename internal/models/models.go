@@ -9,6 +9,8 @@ import (
 type SearchResult struct {
 	Source       string // "session", "plan", "ke", "decision", etc.
 	Role         string // "user", "assistant"
+	UUID         *string
+	Ordinal      int
 	Content      string // text content (possibly snippet)
 	FilePath     string // path to original file
 	Timestamp    time.Time

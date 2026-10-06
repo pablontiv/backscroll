@@ -9,9 +9,12 @@ import (
 // TestSearchResultCreation tests SearchResult struct creation and field access.
 func TestSearchResultCreation(t *testing.T) {
 	timestamp := time.Date(2024, 5, 14, 10, 30, 0, 0, time.UTC)
+	uuid := "message-123"
 	sr := SearchResult{
 		Source:      "session",
 		Role:        "assistant",
+		UUID:        &uuid,
+		Ordinal:     7,
 		Content:     "test content",
 		FilePath:    "/path/to/file",
 		Timestamp:   timestamp,
@@ -28,6 +31,12 @@ func TestSearchResultCreation(t *testing.T) {
 	}
 	if sr.Role != "assistant" {
 		t.Errorf("expected Role 'assistant', got %q", sr.Role)
+	}
+	if sr.UUID == nil || *sr.UUID != uuid {
+		t.Errorf("expected UUID %q, got %v", uuid, sr.UUID)
+	}
+	if sr.Ordinal != 7 {
+		t.Errorf("expected Ordinal 7, got %d", sr.Ordinal)
 	}
 	if sr.Content != "test content" {
 		t.Errorf("expected Content 'test content', got %q", sr.Content)
@@ -111,6 +120,12 @@ func TestSearchResultZeroValues(t *testing.T) {
 	}
 	if sr.Role != "" {
 		t.Errorf("expected empty Role, got %q", sr.Role)
+	}
+	if sr.UUID != nil {
+		t.Errorf("expected nil UUID, got %v", sr.UUID)
+	}
+	if sr.Ordinal != 0 {
+		t.Errorf("expected zero Ordinal, got %d", sr.Ordinal)
 	}
 	if sr.Score != 0.0 {
 		t.Errorf("expected zero Score, got %f", sr.Score)
