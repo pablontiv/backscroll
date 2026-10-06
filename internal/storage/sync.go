@@ -62,13 +62,10 @@ func (d *Database) SyncFiles(files []IndexedFile) error {
 	defer func() { _ = tx.Rollback() }()
 
 	for _, file := range files {
-		// Perennial path: session files where every message carries a UUID
-		// sync append-only — IDs and content are retained; pairing provenance
-		// may be enriched below when the original source supplies evidence.
-		// Flap guard: if the file was previously perennial (DB has uuid-bearing rows),
-		// keep it perennial even if this sync has some uuid-less messages or no
-		// messages (prevents wiping rows during temporary parsing drift).
-		// Anything else keeps wipe-and-reload (correct for mutable sources).
+		// A non-empty session parse in which every message carries a UUID starts
+		// the perennial path. Once the database has stored identity for a path,
+		// that stored fact remains authoritative even when a later parse is empty
+		// or mixed; transient parser output must not wipe retained history.
 		isSession := file.Source == "session"
 		allCurrentHaveUUIDs := true
 		for _, m := range file.Messages {
@@ -77,18 +74,27 @@ func (d *Database) SyncFiles(files []IndexedFile) error {
 				break
 			}
 		}
-		perennial := isSession && len(file.Messages) > 0 && allCurrentHaveUUIDs
+		completeUUIDParse := len(file.Messages) > 0 && allCurrentHaveUUIDs
 
-		// Flap guard: a file that was perennial in an earlier sync (DB has
-		// uuid-bearing rows) stays perennial even if this parse has uuid-less
-		// messages — it must never be wiped.
-		if isSession && !perennial {
-			var uuidCount int
-			err := tx.QueryRow("SELECT COUNT(*) FROM search_items WHERE source_path = ? AND uuid IS NOT NULL", file.SourcePath).Scan(&uuidCount)
+		storedIdentity := storedPathIdentity{}
+		if isSession {
+			storedIdentity, err = inspectStoredPathIdentity(tx, file.SourcePath)
 			if err != nil {
 				return fmt.Errorf("check perennial status for %s: %w", file.SourcePath, err)
 			}
-			perennial = uuidCount > 0
+		}
+		perennial := isSession && (completeUUIDParse || storedIdentity.identified())
+
+		// UUID-less legacy history is deleted only for the one-way transition
+		// from a purely legacy path to a complete UUID parse whose replacements
+		// can actually be installed. Empty/mixed replays of an identified path
+		// retain every UUID-less search row and tool event.
+		legacyTransition := false
+		if perennial && storedIdentity.pureLegacy() && completeUUIDParse {
+			legacyTransition, err = uuidReplacementsAvailable(tx, file.SourcePath, file.Messages)
+			if err != nil {
+				return fmt.Errorf("check legacy replacements for %s: %w", file.SourcePath, err)
+			}
 		}
 
 		if !perennial {
@@ -101,11 +107,7 @@ func (d *Database) SyncFiles(files []IndexedFile) error {
 			if _, err := tx.Exec("DELETE FROM tool_events WHERE source_path = ?", file.SourcePath); err != nil {
 				return fmt.Errorf("delete old tool_events for %s: %w", file.SourcePath, err)
 			}
-		} else {
-			// Transition cleanup: rows indexed BEFORE v8 for this same file
-			// have uuid NULL; without this one-time delete the uuid-carrying
-			// re-parse would duplicate the whole file. Expired files never
-			// re-sync, so their legacy rows persist untouched (perennity).
+		} else if legacyTransition {
 			if _, err := tx.Exec("DELETE FROM search_items WHERE source_path = ? AND uuid IS NULL", file.SourcePath); err != nil {
 				return fmt.Errorf("delete legacy rows for %s: %w", file.SourcePath, err)
 			}
@@ -198,19 +200,12 @@ func (d *Database) SyncFiles(files []IndexedFile) error {
 			}
 		}
 
-		// A successful parse of a perennial path is also evidence that retained
-		// rows without current actor proof are unknown at this origin epoch. Close
-		// that backlog in the same per-file transaction without replacing payload.
-		// This includes empty and mixed parses: leaving them pending would replay
-		// the same successful source forever and starve later queue entries.
+		// Close omitted-row provenance in the same transaction as every other
+		// sync mutation. Closure advances epochs and resolves echo unknowns, but
+		// never rewrites actor proof, payload, identity, or positive echo evidence.
 		if perennial {
-			if _, err := tx.Exec(`
-				UPDATE search_items
-				SET origin = 'unknown', origin_version = ?
-				WHERE source_path = ?
-				  AND (origin_version IS NULL OR origin_version < ?)
-			`, CurrentOriginVersion, file.SourcePath, CurrentOriginVersion); err != nil {
-				return fmt.Errorf("close message origin backlog for %s: %w", file.SourcePath, err)
+			if err := closePerennialProvenance(tx, file.SourcePath, file.Messages); err != nil {
+				return fmt.Errorf("close provenance backlog for %s: %w", file.SourcePath, err)
 			}
 		}
 

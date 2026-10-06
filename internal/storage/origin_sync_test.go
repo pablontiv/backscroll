@@ -216,7 +216,7 @@ func TestOriginReplaySyncFailureDoesNotCloseOrDelete(t *testing.T) {
 	if err := db.SyncFiles([]IndexedFile{replay, conflict}); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := db.db.Exec(`UPDATE search_items SET origin = 'unknown', origin_version = NULL WHERE uuid = 'rollback-origin'`); err != nil {
+	if _, err := db.db.Exec(`UPDATE search_items SET origin = 'unknown', origin_version = NULL, search_echo = NULL WHERE uuid = 'rollback-origin'`); err != nil {
 		t.Fatal(err)
 	}
 
@@ -231,8 +231,9 @@ func TestOriginReplaySyncFailureDoesNotCloseOrDelete(t *testing.T) {
 	}
 
 	var version sql.NullInt64
+	var echo sql.NullBool
 	var itemCount, eventCount int
-	if err := db.db.QueryRow(`SELECT origin_version FROM search_items WHERE uuid = 'rollback-origin'`).Scan(&version); err != nil {
+	if err := db.db.QueryRow(`SELECT origin_version, search_echo FROM search_items WHERE uuid = 'rollback-origin'`).Scan(&version, &echo); err != nil {
 		t.Fatal(err)
 	}
 	if err := db.db.QueryRow(`SELECT COUNT(*) FROM search_items WHERE uuid = 'rollback-origin' AND text = 'must survive rollback'`).Scan(&itemCount); err != nil {
@@ -241,8 +242,8 @@ func TestOriginReplaySyncFailureDoesNotCloseOrDelete(t *testing.T) {
 	if err := db.db.QueryRow(`SELECT COUNT(*) FROM tool_events WHERE message_uuid = 'rollback-origin'`).Scan(&eventCount); err != nil {
 		t.Fatal(err)
 	}
-	if version.Valid || itemCount != 1 || eventCount != 1 {
-		t.Fatalf("failed sync mutated replay history: version=%+v items=%d events=%d", version, itemCount, eventCount)
+	if version.Valid || echo.Valid || itemCount != 1 || eventCount != 1 {
+		t.Fatalf("failed sync mutated replay history: version=%+v echo=%+v items=%d events=%d", version, echo, itemCount, eventCount)
 	}
 }
 
