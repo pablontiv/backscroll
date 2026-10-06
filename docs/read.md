@@ -37,7 +37,7 @@ A missing UUID is `null`; Backscroll does not invent one. If the UUID is not nul
 if [ "$UUID" != "null" ] && [ -n "$UUID" ]; then
   backscroll context --uuid "$UUID" --before 5 --after 5 --json
 else
-  backscroll context --source-path "$SOURCE_PATH" --ordinal $ORDINAL --before 5 --after 5 --json
+  backscroll context --source-path "$SOURCE_PATH" --ordinal "$ORDINAL" --before 5 --after 5 --json
 fi
 ```
 

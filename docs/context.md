@@ -8,7 +8,7 @@ Supply exactly one selector. When the search UUID is not null, use it as an opaq
 
 ```bash
 backscroll context --uuid "$UUID"
-backscroll context --source-path "$SOURCE_PATH" --ordinal $ORDINAL
+backscroll context --source-path "$SOURCE_PATH" --ordinal "$ORDINAL"
 ```
 
 The second form requires an exact value; it does not accept path fragments or globs. Backscroll does not manufacture a UUID for a row that lacks one. Selectors must resolve to exactly one indexed row: zero matches produce `context_not_found`, while duplicate rows at the same exact source-path-plus-ordinal coordinate produce `context_ambiguous`.
@@ -17,7 +17,7 @@ The default window is five records before and five after the anchor. Each side c
 
 ```bash
 backscroll context --uuid "$UUID" --before 2 --after 8
-backscroll context --source-path "$SOURCE_PATH" --ordinal $ORDINAL --before 0 --after 0 --json
+backscroll context --source-path "$SOURCE_PATH" --ordinal "$ORDINAL" --before 0 --after 0 --json
 ```
 
 Rows come from the anchor's stored source path and are ordered by ordinal, then database row ID. The anchor is always marked and retained. Every record text is capped at 4000 Unicode code points.
@@ -28,7 +28,7 @@ Text is the default. `--json` and `--robot` are mutually exclusive machine modes
 
 ```bash
 backscroll context --uuid "$UUID" --json --max-tokens 2000
-backscroll context --source-path "$SOURCE_PATH" --ordinal $ORDINAL --robot --max-tokens 2000
+backscroll context --source-path "$SOURCE_PATH" --ordinal "$ORDINAL" --robot --max-tokens 2000
 ```
 
 `--max-tokens` defaults to 2000 and accepts 64 through 16384. It applies to the complete escaped successful payload. If the full window does not fit, whole edge records are removed deterministically while preserving the anchor. `truncated` and `omitted` report that reduction. If the anchor and required metadata cannot fit, no partial success is emitted; the command produces `context_budget_too_small` instead. Structured diagnostics are intentionally exempt from this budget.
@@ -89,7 +89,7 @@ backscroll search --text "$QUERY" --all-projects --robot --fields minimal --max-
 if [ "$UUID" != "null" ] && [ -n "$UUID" ]; then
   backscroll context --uuid "$UUID" --before 5 --after 5 --robot --max-tokens 2000
 else
-  backscroll context --source-path "$SOURCE_PATH" --ordinal $ORDINAL --before 5 --after 5 --robot --max-tokens 2000
+  backscroll context --source-path "$SOURCE_PATH" --ordinal "$ORDINAL" --before 5 --after 5 --robot --max-tokens 2000
 fi
 ```
 

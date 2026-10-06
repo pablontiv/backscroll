@@ -113,7 +113,7 @@ backscroll search --text "$QUERY" --all-projects --json --fields minimal
 if [ "$UUID" != "null" ] && [ -n "$UUID" ]; then
   backscroll context --uuid "$UUID" --before 5 --after 5
 else
-  backscroll context --source-path "$SOURCE_PATH" --ordinal $ORDINAL --before 5 --after 5
+  backscroll context --source-path "$SOURCE_PATH" --ordinal "$ORDINAL" --before 5 --after 5
 fi
 
 # Which errors keep coming back?
@@ -165,7 +165,7 @@ backscroll search --text "$QUERY" --source-path "$SOURCE_PATH" --all-projects --
 if [ "$UUID" != "null" ] && [ -n "$UUID" ]; then
   backscroll context --uuid "$UUID" --before 5 --after 5 --json
 else
-  backscroll context --source-path "$SOURCE_PATH" --ordinal $ORDINAL --before 5 --after 5 --robot
+  backscroll context --source-path "$SOURCE_PATH" --ordinal "$ORDINAL" --before 5 --after 5 --robot
 fi
 ```
 
