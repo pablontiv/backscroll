@@ -22,6 +22,7 @@ var livingCLIContractDocs = []string{
 	"README.md",
 	"docs/audit-integration.md",
 	"docs/configuration.md",
+	"docs/context.md",
 	"docs/eval/README.md",
 	"docs/eval/corrections-calibration.md",
 	"docs/input-contract.md",
@@ -39,6 +40,8 @@ func TestBackscrollSkillContractAcceptsCurrentCLIForms(t *testing.T) {
 		"backscroll search --help",
 		"command -v backscroll >/dev/null",
 		"backscroll search \"needle\" --all-projects --source-path \"*uuid*\" --robot --fields full --max-tokens 4000",
+		"backscroll context --uuid opaque --before 5 --after 5 --json --max-tokens 2000",
+		"backscroll context --source-path /exact/session.jsonl --ordinal 42 --before 0 --after 50 --robot --max-tokens 16384",
 		"backscroll list --all-projects --limit 10 --json",
 		"backscroll patterns --kind corrections --pending --batch 50 --robot",
 		"backscroll annotate --uuid u --kind correction --label false-positive",
@@ -47,6 +50,20 @@ func TestBackscrollSkillContractAcceptsCurrentCLIForms(t *testing.T) {
 	violations := validateSkillMarkdown(root, "synthetic-valid.md", content)
 	if len(violations) > 0 {
 		t.Fatalf("expected current CLI forms to pass, got violations:\n%s", formatSkillContractViolations(violations))
+	}
+}
+
+func TestBackscrollSkillContractAcceptsContextForms(t *testing.T) {
+	root := buildRootCmd(io.Discard, io.Discard)
+	content := strings.Join([]string{
+		`backscroll context --uuid "$UUID" --before 5 --after 5 --json --max-tokens 2000`,
+		`backscroll context --source-path "$SOURCE_PATH" --ordinal "$ORDINAL" --before 0 --after 50 --robot --max-tokens 16384`,
+		`backscroll context --help`,
+	}, "\n")
+
+	violations := validateSkillMarkdown(root, "synthetic-context-valid.md", content)
+	if len(violations) > 0 {
+		t.Fatalf("expected current context forms to pass, got violations:\n%s", formatSkillContractViolations(violations))
 	}
 }
 

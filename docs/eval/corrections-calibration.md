@@ -27,8 +27,13 @@ Before running the F3b agent-classification loop, we must establish baseline pre
    **CRITICAL**: The worksheet contains private session text. Write it **OUTSIDE the repository** (e.g., `~/calibration/` or `/tmp/`), never inside `docs/eval/`.
 
 3. For each candidate in the CSV:
-   - Note `source_path`, `ordinal`, `detectors` (array), `max_confidence`.
-   - Read the labeling window (see Labeling Windows below for context definitions).
+   - Note `uuid`, `source_path`, `ordinal`, `detectors` (array), and `max_confidence`.
+   - Retrieve the exact labeling window with `context` (see Labeling Windows below). Use the opaque UUID when present; otherwise use the exact stored source path and ordinal.
+   ```bash
+   backscroll context --uuid "$UUID" --before 1 --after 1 --json --max-tokens 2000
+   backscroll context --source-path "$SOURCE_PATH" --ordinal "$ORDINAL" --before 1 --after 1 --json --max-tokens 2000
+   ```
+   Do not use ranked search or raw session files once exact identity exists.
 
 ### Labeling Windows (Detection Context)
 
@@ -41,13 +46,14 @@ Each correction candidate requires a labeling window to establish judgment conte
 | **Interrupt** | Preceding (assistant) + current (user) + following (user) | Last assistant message before interrupt; the resumed user message; user's next message (if exists) to see if correction follows |
 | **Denial** | Preceding (assistant/tool) + current (user) + following (user) | The permission denial or error message; the user's response; follow-up if present |
 
-**Window Retrieval**: The extraction tool (`scripts/calibration-extract/main.go`) populates `labeling_window_before` and `labeling_window_after` columns in the output CSV for interrupt/denial strata. For lexicon/rephrase, only the current message is required.
+**Window Retrieval**: `backscroll context` is the authoritative read surface. For lexicon/rephrase, request `--before 0 --after 0`. For interrupt/denial, request `--before 1 --after 1` and apply the detector-specific interpretation above. Context reads perennial SQLite rows, including compatible recovery rows, and never falls back to raw source files. The extraction tool's `labeling_window_before` and `labeling_window_after` columns are worksheet conveniences, not a separate retrieval contract.
 
 ### Phase 2: Hand Labeling (manual)
 
 4. Create a spreadsheet with columns:
    - **Candidate #** (1–50)
-   - **Source Path** (file)
+   - **UUID** (opaque, when present)
+   - **Source Path** (exact stored path)
    - **Ordinal** (message index)
    - **Detectors Fired** (comma-separated)
    - **Max Confidence** (v1 prior)

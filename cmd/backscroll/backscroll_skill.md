@@ -12,8 +12,8 @@ Backscroll is the primary local episodic index for coding-agent work and the sou
 
 Every operational command validates active manifests and attempts one incremental
 sync before executing. Session, plan, and Markdown files are ingestion inputs;
-SQLite is the perennial record used by search, list, patterns, status, and validate.
-Use `--source-path` on search as a filter, paired with query text, for database-backed retrieval scoped to a known input path.
+SQLite is the perennial record used by search, context, list, patterns, status, and validate.
+Use `search` for discovery. Once a result, correction candidate, or audit record supplies an exact UUID or exact stored source path plus ordinal, use `context` for the immediate neighborhood. Both surfaces are database-backed.
 
 ## 1) Preflight (required)
 
@@ -61,8 +61,9 @@ Use machine-readable, budgeted output:
 
 - Robot mode on search emits `result_N_field=value` lines; search string values escape backslash as `\\`, carriage return as `\r`, and newline as `\n`.
 - `--robot --fields minimal`: emits `result_N_filepath`, `result_N_content` (bounded snippet), `result_N_score`, `result_N_role`, and `result_N_timestamp`. JSON uses `source_path` and `snippet`; do not use those names as robot keys.
-- `--fields full`: use only for a selected source-path drill.
+- `--fields full`: use only while discovery still needs richer search results.
 - `--max-tokens <budget>`: declare and enforce the output budget.
+- Context JSON is one `anchor` / `records` / `truncated` / `omitted` envelope. Context robot output uses `anchor_*`, envelope, and zero-based `record_N_*` keys.
 
 `backscroll list` without an explicit scope uses the project inferred from the current working directory. For global recovery or inventory, repeat with `backscroll list --all-projects`. An empty list does not prove indexed history is absent or lost.
 
@@ -77,6 +78,10 @@ backscroll search "QUERY" --all-projects --robot --fields minimal --max-tokens 2
 
 # Execution-shaped queries: commands, flags, errors, paths.
 backscroll search "command or error" --all-projects --content-type tool --robot --fields minimal --max-tokens 1500
+
+# Exact neighborhood after discovery supplies identity.
+backscroll context --uuid "$UUID" --before 5 --after 5 --robot --max-tokens 2000
+backscroll context --source-path "$SOURCE_PATH" --ordinal "$ORDINAL" --before 5 --after 5 --robot --max-tokens 2000
 ```
 
 If an explicit project is needed, use a semantic project ID, not a filesystem path:
@@ -133,11 +138,11 @@ backscroll search "go test" --all-projects --content-type tool --robot --fields 
 
 ## Search discipline (hard rules)
 
-1. **Drill the top hit.** If a top-ranked result contains relevant decision keywords, inspect indexed rows from that returned path before dismissing it by age or hunting another session.
+1. **Drill the top hit.** If a top-ranked result contains relevant decision keywords, inspect its exact indexed neighborhood before dismissing it by age or hunting another session. Treat UUIDs as opaque. Prefer UUID; otherwise require the exact stored source path and ordinal.
 
 ```bash
-SOURCE_PATH="<decoded result_N_filepath value>"
-backscroll search --text "$QUERY" --all-projects --source-path "$SOURCE_PATH" --robot --fields full --max-tokens 4000
+backscroll context --uuid "$UUID" --before 5 --after 5 --robot --max-tokens 4000
+backscroll context --source-path "$SOURCE_PATH" --ordinal "$ORDINAL" --before 5 --after 5 --robot --max-tokens 4000
 ```
 
 1. **Use the artifact's vocabulary.** For transcripts, logs, reports, and pasted artifacts, query literal speaker names, boilerplate, IDs, exact errors, paths, and the artifact language. A translated or paraphrased query is secondary evidence only.
@@ -146,23 +151,25 @@ backscroll search --text "$QUERY" --all-projects --source-path "$SOURCE_PATH" --
 
 ```bash
 backscroll search --help
+backscroll context --help
 backscroll list --help
 ```
 
-1. **Two empty searches prove nothing.** Before concluding content is absent from the index: retry with artifact-literal terms; broaden to `--all-projects`; if a path or UUID is known, drill down with search `--source-path` plus query text; rely on mandatory startup sync to refresh active manifests; then collect diagnostics and report the gap.
+1. **Two empty searches prove nothing.** Before concluding content is absent from the index: retry with artifact-literal terms; broaden to `--all-projects`; if exact UUID or source-path-plus-ordinal identity is known, query it with `context`; rely on mandatory startup sync to refresh active manifests; then collect diagnostics and report the gap.
 
 ```bash
 backscroll search "literal speaker or error" --all-projects --robot --fields minimal --max-tokens 2000
 backscroll search --text "artifact literal" --all-projects --source-path "*SESSION-UUID*" --json --fields minimal --limit 1
 backscroll search "literal speaker or error" --all-projects --content-type tool --robot --fields minimal --max-tokens 2000
-backscroll search --text "$QUERY" --all-projects --source-path "*SESSION-UUID*" --json --fields full --max-tokens 4000
+backscroll context --uuid "$UUID" --before 5 --after 5 --json --max-tokens 4000
+backscroll context --source-path "$SOURCE_PATH" --ordinal "$ORDINAL" --before 5 --after 5 --json --max-tokens 4000
 backscroll status
 backscroll validate
 ```
 
 Report the source path or UUID, literal probes, scopes used, and full diagnostic output as an indexing gap when the probe remains absent.
 
-1. **Raw-file boundary.** `cat`, `jq`, Python, or filesystem session hunting is not a normal retrieval fallback. Do not use raw JSONL parsing, directory listings for session hunting, or direct file inspection unless the user explicitly authorizes indexing-bug diagnosis after you report the gap and the indexed commands attempted. Database-backed search with `--source-path` and query text is the supported drill-down path.
+1. **Raw-file boundary.** `cat`, `jq`, Python, or filesystem session hunting is not a normal retrieval fallback. Do not use raw JSONL parsing, directory listings for session hunting, or direct file inspection unless the user explicitly authorizes indexing-bug diagnosis after you report the gap and the indexed commands attempted. Database-backed `context` is the exact drill-down path; it reads perennial and recovered SQLite rows without raw fallback.
 
 ## 6) Degradation and troubleshooting
 
@@ -175,7 +182,7 @@ backscroll validate
 
 If a search warns about scope, content type, or compatibility, follow the hint and rerun a corrected current command once.
 
-**No results:** follow the hard rules: literal artifact vocabulary, all-projects scope, source-path/UUID probe through mandatory startup sync, then status and validate. Report uncertainty; do not convert empty rows into proof of absence.
+**No results:** follow the hard rules: literal artifact vocabulary, all-projects scope, then an exact context probe when UUID or source-path-plus-ordinal identity exists. `context_not_found` and `context_ambiguous` are diagnostics, not permission to inspect raw files. Run status and validate, report uncertainty, and do not convert empty rows into proof of absence.
 
 **Tool-query tokenizer limits:** the tool index uses a trigram tokenizer. Prefer exact flags, paths, command names, and error fragments of at least three characters, for example `"--content-type tool"`, `"go test"`, or `"BUSY"`.
 
@@ -211,7 +218,7 @@ backscroll search "query" --all-projects --robot --fields minimal --max-tokens 2
 
 ## References
 
-- CLI help: `backscroll search --help`, `backscroll list --help`, `backscroll patterns --help`, `backscroll annotate --help`.
+- CLI help: `backscroll search --help`, `backscroll context --help`, `backscroll list --help`, `backscroll patterns --help`, `backscroll annotate --help`.
 - Deployable version check: `backscroll --version`; `backscroll status` also shows deployed build and index state.
 - v1.4.0+ search behavior: split FTS indexes; `tool_fts` uses trigram tokenization for exact command/error matching, while `messages_fts` uses porter tokenization for prose. Select with `--content-type`.
 - Diagnostic skill: `backscroll-doctor` audits index bugs, gaps, and enhancement candidates.
@@ -254,8 +261,11 @@ retain their previous shape.
 
 ```bash
 backscroll patterns --kind corrections --origin human --pending --batch 50 --robot
+backscroll context --uuid <u> --before 1 --after 1 --robot --max-tokens 2000
 backscroll annotate --uuid <u> --kind correction --label "<free-form>"
 # Re-run fetch: labeled candidates vanish, so no loop state is needed.
 ```
 
-Full doc: `docs/patterns.md`. Calibration gate before trusting confidences: `docs/eval/corrections-calibration.md`.
+Use `context` whenever a candidate already has exact identity; do not approximate its labeling window with ranked search. Context defaults to 5/5 records (maximum 50 each), caps each text at 4000 Unicode code points, and defaults to `--max-tokens 2000` (valid range 64–16384). `context_not_found`, `context_ambiguous`, and `context_budget_too_small` are structured, budget-exempt diagnostics. Record origin is parser-backed and may remain `unknown`.
+
+Full docs: `docs/context.md` and `docs/patterns.md`. Calibration gate before trusting confidences: `docs/eval/corrections-calibration.md`.

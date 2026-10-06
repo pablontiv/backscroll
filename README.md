@@ -106,6 +106,9 @@ backscroll search --text "migration plan" --all-projects
 # What did that command actually return?
 backscroll search --text "go test ./..." --all-projects --content-type tool
 
+# Once a result supplies exact identity, recover its immediate neighborhood
+backscroll context --uuid "$UUID" --before 5 --after 5
+
 # Which errors keep coming back?
 backscroll patterns --kind templates --min-support 5 --all-projects
 ```
@@ -133,7 +136,7 @@ How a file is re-synced depends on whether its messages carry identity. Sessions
 
 **Conversation and tool activity are indexed separately, on purpose.** Prose goes to an FTS5 index with a Porter stemmer, so "migrating" finds "migration". Tool text — commands, paths, errors — goes to a trigram index, where an exact substring like `internal/storage/sync.go` matches. An unfiltered query merges both by rank position, which is why a search never has to pick one.
 
-**Retrieval and discovery are different questions.** `search` retrieves what you can name. `patterns` computes a census: it counts commands, failures, recurring error templates, correction candidates and repeated tool sequences across the whole corpus. No individual document contains a pattern, so ranking cannot surface one.
+**Exact context, discovery, and census are different questions.** `context` retrieves the immediate indexed neighborhood of one exact UUID or exact source-path-plus-ordinal anchor. `search` discovers ranked records from terms and filters. `patterns` computes a census: it counts commands, failures, recurring error templates, correction candidates and repeated tool sequences across the whole corpus. No individual document contains a pattern, so ranking cannot surface one.
 
 ---
 
@@ -143,16 +146,20 @@ How a file is re-synced depends on whether its messages carry identity. Sessions
 
 Every operational command validates active manifests and attempts one incremental
 sync before executing. Session, plan, and Markdown files are ingestion inputs;
-SQLite is the perennial record used by search, list, patterns, status, and validate.
-Use `--source-path` on search as a filter, paired with query text, for database-backed retrieval scoped to a known input path.
+SQLite is the perennial record used by search, context, list, patterns, status, and validate.
+Use `search` to discover relevant records. Once a result or downstream record supplies exact identity, use `context` for the anchor's immediate database-backed neighborhood.
 
 ```bash
 backscroll search --text "QUERY" --project <name>     # this project
 backscroll search --text "QUERY" --all-projects       # everywhere
 backscroll search --text "QUERY" --content-type tool  # commands, paths, errors
 backscroll list --order timestamp:desc --limit 10     # recent sessions
-backscroll search --text "artifact literal" --source-path "*SESSION-ID*" --all-projects --json  # filter one known input path
+backscroll search --text "artifact literal" --source-path "*SESSION-ID*" --all-projects --json  # discovery filter
+backscroll context --uuid "$UUID" --before 5 --after 5 --json
+backscroll context --source-path "$SOURCE_PATH" --ordinal "$ORDINAL" --robot
 ```
+
+A context UUID is opaque. The alternate selector requires the exact stored source path and ordinal. Defaults are five records on each side (maximum 50 each); record text is capped at 4000 Unicode code points. The complete successful payload defaults to a 2000-token budget (`--max-tokens`, 64–16384). See the [exact context contract](docs/context.md).
 
 Filters worth knowing: `--after` / `--before` for a date window, `--tag` for auto-detected session categories (debugging, refactoring, testing…), `--source-path` to pin one stored input path, `--source` to keep one source class, and `--role` to keep only what you said.
 
@@ -192,9 +199,9 @@ backscroll purge --before <DATE>   # the only deletion path
 
 Default output is human-readable text. Machine modes keep stdout parseable: human progress and warnings go to stderr, JSON/robot startup progress is discarded, and structured diagnostics remain parseable.
 
-`--json` is available on `search`, `list`, `patterns`, `status`, `validate`, and `config`. JSON mode on search emits a JSON array. `--robot` is available on `search`, `list`, and `patterns`; robot mode on search emits `result_N_field=value` lines, and search robot string values escape backslash as `\\`, carriage return as `\r`, and newline as `\n`. `rebuild`, `purge`, and `annotate` report in plain text only.
+`--json` is available on `search`, `context`, `list`, `patterns`, `status`, `validate`, and `config`. JSON mode on context emits one complete envelope with `anchor`, `records`, `truncated`, and `omitted`. `--robot` is available on `search`, `context`, `list`, and `patterns`; context robot mode emits line-oriented anchor, envelope, and record fields. `rebuild`, `purge`, and `annotate` report in plain text only.
 
-On `search`, `--fields minimal|full` controls density and `--max-tokens N` caps output for a context window.
+On `search`, `--fields minimal|full` controls density and `--max-tokens N` caps output. On `context`, `--max-tokens N` budgets the complete successful payload; diagnostics are exempt.
 
 ---
 
@@ -256,8 +263,9 @@ See [Configuration docs](docs/configuration.md) for the full resolution order an
 | ------- | ------------- |
 | [Sync & Indexing](docs/sync.md) | Incremental sync, noise filtering, project detection |
 | [Search Engine](docs/search.md) | BM25 ranking, output formats, token limiting |
+| [Exact Context](docs/context.md) | Exact anchors, neighboring rows, output and diagnostics |
 | [Pattern Discovery](docs/patterns.md) | The five censuses, the classification loop, calibration |
-| [Source Path Retrieval](docs/read.md) | DB-backed lookup using `search_items.source_path` |
+| [Retrieval Migration](docs/read.md) | Discovery-to-context flow over perennial SQLite |
 | [Configuration](docs/configuration.md) | Config resolution, TOML format, environment variables |
 | [Input Manifest Contract](docs/input-contract.md) | Supported fields and registered decoders for global `*.inputs.toml` files |
 | [Session Search Research](docs/research/backscroll-session-search-cli.md) | Feasibility study: axioms, evidence tables, capabilities matrix |

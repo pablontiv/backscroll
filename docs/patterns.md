@@ -107,22 +107,19 @@ The resumable funnel that turns correction candidates into labeled data:
 # 1. Agent fetches a batch of unlabeled candidates (uuid included in robot output)
 backscroll patterns --kind corrections --origin human --pending --batch 50 --robot
 
-# 2. Agent classifies each window and writes the label back
+# 2. Retrieve the exact labeling window, then write the label back
+backscroll context --uuid <u> --before 1 --after 1 --robot --max-tokens 2000
 backscroll annotate --uuid <u> --kind correction --label "scope-exceeded"
 
 # 3. Re-running step 1 automatically resumes: --pending is a LEFT JOIN
 #    against annotations — already-labeled candidates disappear.
 ```
 
-`annotate` resolves the uuid to canonical coordinates before writing and
-rejects conflicting `--path`/`--ordinal` inputs; re-annotating the same
-(message, kind) replaces the label. Labels are free-form until the
-post-calibration `label_enum` freeze. Crash-safety comes from the query,
-not from loop state: there is nothing to checkpoint.
+`context` is mandatory once the candidate UUID is known: ranked search is discovery, not an exact labeling window. If a legacy candidate has no UUID, use its exact stored source path and ordinal with `backscroll context --source-path "$SOURCE_PATH" --ordinal "$ORDINAL"`. `annotate` resolves the UUID to canonical coordinates before writing and rejects conflicting `--path`/`--ordinal` inputs; re-annotating the same (message, kind) replaces the label. Labels are free-form until the post-calibration `label_enum` freeze. Crash-safety comes from the query, not from loop state: there is nothing to checkpoint.
 
 ## Operating notes
 
-- Every operational command validates active manifests and attempts one incremental sync before executing. Session, plan, and Markdown files are ingestion inputs; SQLite is the perennial record used by search, list, patterns, status, and validate. Use `--source-path` on search as a filter, paired with query text, for database-backed retrieval scoped to a known input path.
+- Every operational command validates active manifests and attempts one incremental sync before executing. Session, plan, and Markdown files are ingestion inputs; SQLite is the perennial record used by search, context, list, patterns, status, and validate. Use search for discovery and context whenever exact UUID or source-path-plus-ordinal identity exists.
 - Zero-result guidance goes to stderr; stdout stays clean for `--json`.
 - Robot mode on search emits `result_N_field=value` lines and escapes search string values with backslash as `\\`, carriage return as `\r`, and newline as `\n`.
 - A malformed `categories.toml` fails the command (non-zero exit) rather

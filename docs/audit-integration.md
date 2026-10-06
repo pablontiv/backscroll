@@ -6,8 +6,8 @@ Backscroll owns the perennial corpus and supported CLI query surfaces. A downstr
 
 Every operational command validates active manifests and attempts one incremental
 sync before executing. Session, plan, and Markdown files are ingestion inputs;
-SQLite is the perennial record used by search, list, patterns, status, and validate.
-Use `--source-path` on search as a filter, paired with query text, for database-backed retrieval scoped to a known input path.
+SQLite is the perennial record used by search, context, list, patterns, status, and validate.
+Use `search` for ranked discovery. When an audit item already has a UUID or exact stored source path and ordinal, use `context` for its exact neighborhood.
 
 Use diagnostics at the start of an audit run:
 
@@ -22,7 +22,10 @@ Then query through the database-backed CLI surfaces:
 backscroll list --json --all-projects --order timestamp:asc --limit 100
 backscroll search --text "permission denied" --json --all-projects
 backscroll patterns --kind failures --json --all-projects
+backscroll context --uuid "$UUID" --before 5 --after 5 --json
 ```
+
+The first three commands discover or aggregate. The final command is required once exact record identity exists; if UUID is unavailable, use `backscroll context --source-path "$SOURCE_PATH" --ordinal "$ORDINAL" --json`. Do not approximate an exact audit window with another ranked search.
 
 Human startup progress and warnings use stderr. JSON/robot startup progress is discarded so stdout remains machine-readable, and structured diagnostics stay parseable in machine modes.
 
@@ -51,8 +54,10 @@ backscroll search --text "go test" --content-type tool --source-path "*/example/
 backscroll search --text "$QUERY" --source-path "*session-id*" --all-projects --json
 ```
 
-Search is an investigation surface, not an exhaustive corpus export: ranking, limits, and token budgets may omit rows. The current public CLI does not provide an empty-query stream of every stored message. Consumers requiring a complete message-level export must not infer one from `list` or `search`; they need a separately designed read-only API or an explicitly versioned database integration.
+Search is an investigation surface, not an exhaustive corpus export: ranking, limits, and token budgets may omit rows. `context` is exact but local: it resolves one opaque UUID or exact source-path-plus-ordinal selector and returns up to 50 neighboring records on either side (five by default). Its complete JSON envelope contains `anchor`, full-field `records`, `truncated`, and `omitted`; each text is capped at 4000 Unicode code points. Its successful-payload budget defaults to 2000 tokens and accepts 64–16384. Diagnostics `context_not_found`, `context_ambiguous`, and `context_budget_too_small` are exempt from that budget.
+
+The current public CLI does not provide an empty-query stream of every stored message. Consumers requiring a complete message-level export must not infer one from `list`, `search`, or `context`; they need a separately designed read-only API or an explicitly versioned database integration.
 
 ## Privacy and raw-content boundary
 
-Backscroll stores normalized message text and serialized tool content in SQLite. The public CLI does not make raw provider JSONL a downstream schema contract. Database-backed retrieval through search with the `--source-path` filter and query text is the supported drill-down path for a known input path. Raw provider files remain ingestion inputs, not the normal audit read boundary.
+Backscroll stores normalized message text and serialized tool content in SQLite. The public CLI does not make raw provider JSONL a downstream schema contract. `context` reads perennial `search_items` rows only, including compatible rows retained or installed by recovery; it never falls back to raw files. Record origin is parser-backed and may be `unknown` when native evidence is insufficient. Raw provider files remain ingestion inputs, not the normal audit read boundary.

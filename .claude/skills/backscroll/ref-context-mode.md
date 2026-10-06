@@ -2,7 +2,7 @@
 
 Use this only for `/skill:backscroll --context`. Produce a recovery brief with: Backscroll evidence, optional Rootline live state, and gaps.
 
-Backscroll retrieval uses active manifests, mandatory startup sync, perennial SQLite, and database-backed query. Raw `cat`, `jq`, Python, or filesystem session hunting is not a normal retrieval fallback; drill into known paths with search `--source-path` plus query text.
+Backscroll retrieval uses active manifests, mandatory startup sync, perennial SQLite, and database-backed query. Use `search` for discovery and `context` once exact UUID or source-path-plus-ordinal identity exists. Raw `cat`, `jq`, Python, or filesystem session hunting is not a fallback.
 
 ## Required Backscroll Retrieval
 
@@ -25,14 +25,16 @@ If this returns no useful results, run one broader session search:
 backscroll search "$PROJECT_SLUG" --source session --all-projects --max-tokens 4000
 ```
 
-If a result includes a useful `source_path`, drill into it before leaving the indexed boundary:
+If a result includes exact identity, retrieve its immediate indexed neighborhood. Treat the UUID as opaque; otherwise require the exact stored source path and ordinal:
 
 ```bash
-SOURCE_PATH="<result_N_source_path>"
-backscroll search --text "$QUERY" --source-path "$SOURCE_PATH" --all-projects --max-tokens 4000
+backscroll context --uuid "$UUID" --before 5 --after 5 --json --max-tokens 4000
+backscroll context --source-path "$SOURCE_PATH" --ordinal "$ORDINAL" --before 5 --after 5 --json --max-tokens 4000
 ```
 
-For empty results or suspected gaps, follow the main skill's search discipline rather than raw-file fallback.
+Context defaults to five records on each side, caps each record text at 4000 Unicode code points, and preserves the anchor while removing whole edge records to meet the successful-payload budget. `context_not_found`, `context_ambiguous`, and `context_budget_too_small` are structured diagnostics exempt from that budget. Origin is parser-backed and can remain `unknown`.
+
+For empty results or suspected gaps, follow the main skill's search discipline rather than raw-file fallback. Context reads only perennial or recovered SQLite rows; it never reads provider files.
 
 ## Optional Rootline State
 
