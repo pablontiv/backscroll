@@ -170,7 +170,7 @@ func maybeAutoSync(cfg *config.Config, progress io.Writer) (retErr error) {
 	// the query to the indexed-file cardinality is explicit and sufficient: the
 	// queue returns distinct paths joined to indexed_files. This prevents expired
 	// or inactive sources at the head of the queue from starving surviving ones.
-	originPaths, err := db.PendingOriginPaths(len(existingMetadata))
+	originPaths, err := db.PendingOriginPaths(storage.CurrentOriginVersion, len(existingMetadata))
 	if err != nil {
 		return fmt.Errorf("discover pending message origins: %w", err)
 	}

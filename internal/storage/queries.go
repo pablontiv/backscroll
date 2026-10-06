@@ -1025,9 +1025,9 @@ func (d *Database) EmptyIndexedPaths() ([]string, error) {
 }
 
 // PendingOriginPaths returns a bounded queue of source-backed paths whose
-// historical rows have not been re-read by an origin-aware parser. It never
-// derives origin from stored role or text.
-func (d *Database) PendingOriginPaths(limit int) ([]string, error) {
+// historical rows have not been read at currentVersion by an origin-aware
+// parser. It never derives origin from stored role or text.
+func (d *Database) PendingOriginPaths(currentVersion, limit int) ([]string, error) {
 	if limit <= 0 {
 		return nil, nil
 	}
@@ -1037,9 +1037,10 @@ func (d *Database) PendingOriginPaths(limit int) ([]string, error) {
 		FROM search_items
 		JOIN indexed_files ON search_items.source_path = indexed_files.path
 		WHERE search_items.origin_version IS NULL
+		   OR search_items.origin_version < ?
 		ORDER BY indexed_files.last_indexed DESC, search_items.source_path ASC
 		LIMIT ?
-	`, limit)
+	`, currentVersion, limit)
 	if err != nil {
 		return nil, fmt.Errorf("query pending origin paths: %w", err)
 	}

@@ -51,7 +51,7 @@ func TestPendingOriginPathsIsDeterministicAndBounded(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	got, err := db.PendingOriginPaths(2)
+	got, err := db.PendingOriginPaths(CurrentOriginVersion, 2)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -59,12 +59,44 @@ func TestPendingOriginPathsIsDeterministicAndBounded(t *testing.T) {
 		t.Fatalf("pending origin paths = %v, want %v", got, want)
 	}
 
-	again, err := db.PendingOriginPaths(2)
+	again, err := db.PendingOriginPaths(CurrentOriginVersion, 2)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if !reflect.DeepEqual(again, got) {
 		t.Fatalf("pending queue changed without writes: first=%v second=%v", got, again)
+	}
+}
+
+func TestPendingOriginPathsRequeuesOlderNonNullVersionUntilUpdated(t *testing.T) {
+	db, cleanup := newTestDB(t)
+	defer cleanup()
+
+	const path = "/p/older-origin.jsonl"
+	if _, err := db.db.Exec(`
+		INSERT INTO indexed_files (path, hash, last_indexed)
+		VALUES (?, 'hash', '2026-01-01T00:00:00Z')
+	`, path); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.db.Exec(`
+		INSERT INTO search_items
+			(source, source_path, ordinal, role, text, content_type, origin, origin_version)
+		VALUES ('session', ?, 0, 'user', 'older origin epoch', 'text', 'human', ?)
+	`, path, CurrentOriginVersion); err != nil {
+		t.Fatal(err)
+	}
+
+	nextVersion := CurrentOriginVersion + 1
+	if got, err := db.PendingOriginPaths(nextVersion, 1); err != nil || !reflect.DeepEqual(got, []string{path}) {
+		t.Fatalf("queue at origin version %d = %v, err=%v; want [%s]", nextVersion, got, err, path)
+	}
+
+	if _, err := db.db.Exec(`UPDATE search_items SET origin_version = ? WHERE source_path = ?`, nextVersion, path); err != nil {
+		t.Fatal(err)
+	}
+	if got, err := db.PendingOriginPaths(nextVersion, 1); err != nil || len(got) != 0 {
+		t.Fatalf("queue after updating to origin version %d = %v, err=%v; want empty", nextVersion, got, err)
 	}
 }
 
@@ -87,7 +119,7 @@ func TestPendingOriginPathsPreservesHistoricalEvidenceAndConverges(t *testing.T)
 		t.Fatal(err)
 	}
 
-	if got, err := db.PendingOriginPaths(1); err != nil || !reflect.DeepEqual(got, []string{path}) {
+	if got, err := db.PendingOriginPaths(CurrentOriginVersion, 1); err != nil || !reflect.DeepEqual(got, []string{path}) {
 		t.Fatalf("initial pending queue = %v, err=%v", got, err)
 	}
 	var origin string
@@ -106,13 +138,13 @@ func TestPendingOriginPathsPreservesHistoricalEvidenceAndConverges(t *testing.T)
 	`, path); err != nil {
 		t.Fatal(err)
 	}
-	if got, err := db.PendingOriginPaths(1); err != nil || len(got) != 0 {
+	if got, err := db.PendingOriginPaths(CurrentOriginVersion, 1); err != nil || len(got) != 0 {
 		t.Fatalf("processed path remained pending: %v, err=%v", got, err)
 	}
 
 	for _, limit := range []int{0, -1} {
-		if got, err := db.PendingOriginPaths(limit); err != nil || got != nil {
-			t.Fatalf("PendingOriginPaths(%d) = %v, err=%v; want nil, nil", limit, got, err)
+		if got, err := db.PendingOriginPaths(CurrentOriginVersion, limit); err != nil || got != nil {
+			t.Fatalf("PendingOriginPaths(%d, %d) = %v, err=%v; want nil, nil", CurrentOriginVersion, limit, got, err)
 		}
 	}
 }

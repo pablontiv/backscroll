@@ -3,6 +3,7 @@ package storage
 import (
 	"database/sql"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 
@@ -132,8 +133,47 @@ func TestOriginPerennialReplayClosesRetainedRowsWithoutEvidence(t *testing.T) {
 	if gotOrigin != models.OriginUnknown || gotVersion != CurrentOriginVersion {
 		t.Fatalf("retained provenance = (%q, %d), want (%q, %d)", gotOrigin, gotVersion, models.OriginUnknown, CurrentOriginVersion)
 	}
-	if pending, err := db.PendingOriginPaths(10); err != nil || len(pending) != 0 {
+	if pending, err := db.PendingOriginPaths(CurrentOriginVersion, 10); err != nil || len(pending) != 0 {
 		t.Fatalf("origin queue after successful replay = %v, err=%v", pending, err)
+	}
+}
+
+func TestOriginPerennialReplayWithUUIDLessSessionDoesNotCloseRetainedRows(t *testing.T) {
+	db, err := Open(filepath.Join(t.TempDir(), "origin.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = db.Close() }()
+
+	const path = "/sessions/uuid-less.jsonl"
+	file := IndexedFile{SourcePath: path, Source: "session", Hash: "h1", Messages: []IndexedMessage{
+		{Ordinal: 0, UUID: "retained-origin", Role: "user", Origin: models.OriginHuman, Text: "retained", ContentType: "text"},
+	}}
+	if err := db.SyncFiles([]IndexedFile{file}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.db.Exec(`UPDATE search_items SET origin = 'unknown', origin_version = NULL WHERE uuid = 'retained-origin'`); err != nil {
+		t.Fatal(err)
+	}
+
+	file.Hash = "h2"
+	file.Messages = []IndexedMessage{
+		{Ordinal: 0, Role: "user", Origin: models.OriginHuman, Text: "parser omitted identity", ContentType: "text"},
+	}
+	if err := db.SyncFiles([]IndexedFile{file}); err != nil {
+		t.Fatalf("replay UUID-less session: %v", err)
+	}
+
+	var origin models.MessageOrigin
+	var version sql.NullInt64
+	if err := db.db.QueryRow(`SELECT origin, origin_version FROM search_items WHERE uuid = 'retained-origin'`).Scan(&origin, &version); err != nil {
+		t.Fatal(err)
+	}
+	if origin != models.OriginUnknown || version.Valid {
+		t.Fatalf("UUID-less replay closed retained provenance: origin=%q version=%+v", origin, version)
+	}
+	if pending, err := db.PendingOriginPaths(CurrentOriginVersion, 10); err != nil || !reflect.DeepEqual(pending, []string{path}) {
+		t.Fatalf("origin queue after UUID-less replay = %v, err=%v; want [%s]", pending, err, path)
 	}
 }
 
