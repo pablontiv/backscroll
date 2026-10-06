@@ -24,6 +24,13 @@ fail() {
     echo "  FAIL: $1 — $2"
 }
 
+core_presets_match() {
+    local destination="$1" preset
+    for preset in claude pi codex; do
+        cmp -s "$INPUTS_DIR/$preset.inputs.toml" "$destination/$preset.inputs.toml" || return 1
+    done
+}
+
 # Create a testable version: strip set -e and the main call
 make_testable() {
     local tmp
@@ -276,101 +283,95 @@ else
     fail "empty version" "expected failure, got exit 0"
 fi
 
-# Test 10: BACKSCROLL_CONFIG_DIR controls input destination
+# Test 10: BACKSCROLL_CONFIG_DIR controls input destination and wins over defaults
 echo "[input preset install with config override]"
 testable=$(make_testable)
-INSTALL_DIR=$(mktemp -d)
 CONFIG_DIR=$(mktemp -d)
-output=$(run_main_linux "$testable" "$INSTALL_DIR" "$CONFIG_DIR") && rc=$? || rc=$?
+HOME_DIR=$(mktemp -d)
+XDG_DIR=$(mktemp -d)
+output=$(BACKSCROLL_CONFIG_DIR="$CONFIG_DIR" BACKSCROLL_INPUTS_SOURCE_DIR="$INPUTS_DIR" \
+    HOME="$HOME_DIR" XDG_CONFIG_HOME="$XDG_DIR" bash -c "
+    unset BACKSCROLL_FORCE_INPUTS
+    source '$testable'
+    install_input_presets 'v0.2.3' 2>&1
+") && rc=$? || rc=$?
 rm -f "$testable"
 
-if [ -f "$CONFIG_DIR/backscroll/inputs/claude.inputs.toml" ] &&
-    cmp -s "$INPUTS_DIR/pi.inputs.toml" "$CONFIG_DIR/backscroll/inputs/pi.inputs.toml" &&
-    cmp -s "$INPUTS_DIR/codex.inputs.toml" "$CONFIG_DIR/backscroll/inputs/codex.inputs.toml"; then
-    pass "installs input presets under BACKSCROLL_CONFIG_DIR/backscroll/inputs"
+if core_presets_match "$CONFIG_DIR/backscroll/inputs" &&
+    [ ! -e "$HOME_DIR/.config/backscroll" ] &&
+    [ ! -e "$XDG_DIR/backscroll" ]; then
+    pass "BACKSCROLL_CONFIG_DIR installs Pi, Claude, and Codex only under its destination"
 else
-    fail "input preset install" "preset not found in $CONFIG_DIR/backscroll/inputs; output: $output"
+    fail "config override destination" "unexpected preset destination; output: $output"
 fi
-rm -rf "$INSTALL_DIR" "$CONFIG_DIR"
+rm -rf "$CONFIG_DIR" "$HOME_DIR" "$XDG_DIR"
 
-# Test 11: Existing input presets are not overwritten by default
+# Test 11: Without an override, Unix installs under HOME/.config and ignores XDG_CONFIG_HOME
+echo "[Unix default config destination]"
+testable=$(make_testable)
+HOME_DIR=$(mktemp -d)
+XDG_DIR=$(mktemp -d)
+output=$(HOME="$HOME_DIR" XDG_CONFIG_HOME="$XDG_DIR" BACKSCROLL_INPUTS_SOURCE_DIR="$INPUTS_DIR" bash -c "
+    unset BACKSCROLL_CONFIG_DIR BACKSCROLL_FORCE_INPUTS
+    source '$testable'
+    install_input_presets 'v0.2.3' 2>&1
+") && rc=$? || rc=$?
+rm -f "$testable"
+
+if core_presets_match "$HOME_DIR/.config/backscroll/inputs" &&
+    [ ! -e "$XDG_DIR/backscroll" ]; then
+    pass "default installs Pi, Claude, and Codex under HOME/.config despite XDG_CONFIG_HOME"
+else
+    fail "Unix default config destination" "expected presets only under $HOME_DIR/.config; output: $output"
+fi
+rm -rf "$HOME_DIR" "$XDG_DIR"
+
+# Test 12: Existing core presets are not overwritten by default
 echo "[input preset skip existing]"
 testable=$(make_testable)
 CONFIG_DIR=$(mktemp -d)
 mkdir -p "$CONFIG_DIR/backscroll/inputs"
-echo "user edit" >"$CONFIG_DIR/backscroll/inputs/claude.inputs.toml"
-echo "pi user edit" >"$CONFIG_DIR/backscroll/inputs/pi.inputs.toml"
-echo "codex user edit" >"$CONFIG_DIR/backscroll/inputs/codex.inputs.toml"
+printf '%s\n' "claude user edit" >"$CONFIG_DIR/backscroll/inputs/claude.inputs.toml"
+printf '%s\n' "pi user edit" >"$CONFIG_DIR/backscroll/inputs/pi.inputs.toml"
+printf '%s\n' "codex user edit" >"$CONFIG_DIR/backscroll/inputs/codex.inputs.toml"
 output=$(BACKSCROLL_CONFIG_DIR="$CONFIG_DIR" BACKSCROLL_INPUTS_SOURCE_DIR="$INPUTS_DIR" bash -c "
+    unset BACKSCROLL_FORCE_INPUTS
     source '$testable'
     install_input_presets 'v0.2.3' 2>&1
 ") && rc=$? || rc=$?
 rm -f "$testable"
 
-if grep -q "user edit" "$CONFIG_DIR/backscroll/inputs/claude.inputs.toml" &&
-    grep -q "pi user edit" "$CONFIG_DIR/backscroll/inputs/pi.inputs.toml" &&
-    grep -q "codex user edit" "$CONFIG_DIR/backscroll/inputs/codex.inputs.toml" &&
-    echo "$output" | grep -q "exists, skipping"; then
-    pass "existing input preset is skipped by default"
+if grep -qxF "claude user edit" "$CONFIG_DIR/backscroll/inputs/claude.inputs.toml" &&
+    grep -qxF "pi user edit" "$CONFIG_DIR/backscroll/inputs/pi.inputs.toml" &&
+    grep -qxF "codex user edit" "$CONFIG_DIR/backscroll/inputs/codex.inputs.toml" &&
+    [ "$(printf '%s\n' "$output" | grep -c 'exists, skipping')" -eq 3 ]; then
+    pass "existing Pi, Claude, and Codex presets are preserved by default"
 else
-    fail "input preset skip" "file or output did not show skip; output: $output"
+    fail "input preset preservation" "a core preset changed or was not skipped; output: $output"
 fi
 rm -rf "$CONFIG_DIR"
 
-# Test 12: BACKSCROLL_FORCE_INPUTS=1 overwrites existing input presets
+# Test 13: BACKSCROLL_FORCE_INPUTS=1 overwrites existing core presets
 echo "[input preset force overwrite]"
 testable=$(make_testable)
 CONFIG_DIR=$(mktemp -d)
 mkdir -p "$CONFIG_DIR/backscroll/inputs"
-echo "user edit" >"$CONFIG_DIR/backscroll/inputs/claude.inputs.toml"
-output=$(BACKSCROLL_CONFIG_DIR="$CONFIG_DIR" BACKSCROLL_INPUTS_SOURCE_DIR="$INPUTS_DIR" BACKSCROLL_FORCE_INPUTS=1 bash -c "
+printf '%s\n' "claude user edit" >"$CONFIG_DIR/backscroll/inputs/claude.inputs.toml"
+printf '%s\n' "pi user edit" >"$CONFIG_DIR/backscroll/inputs/pi.inputs.toml"
+printf '%s\n' "codex user edit" >"$CONFIG_DIR/backscroll/inputs/codex.inputs.toml"
+output=$(BACKSCROLL_CONFIG_DIR="$CONFIG_DIR" BACKSCROLL_INPUTS_SOURCE_DIR="$INPUTS_DIR" \
+    BACKSCROLL_FORCE_INPUTS=1 bash -c "
     source '$testable'
     install_input_presets 'v0.2.3' 2>&1
 ") && rc=$? || rc=$?
 rm -f "$testable"
 
-if grep -q "id = \"claude\"" "$CONFIG_DIR/backscroll/inputs/claude.inputs.toml"; then
-    pass "BACKSCROLL_FORCE_INPUTS=1 overwrites existing preset"
+if core_presets_match "$CONFIG_DIR/backscroll/inputs"; then
+    pass "BACKSCROLL_FORCE_INPUTS=1 overwrites Pi, Claude, and Codex presets"
 else
-    fail "input preset force" "preset was not overwritten; output: $output"
+    fail "input preset force" "a core preset was not overwritten; output: $output"
 fi
 rm -rf "$CONFIG_DIR"
-
-# Test 13: Linux default config dir honors XDG_CONFIG_HOME
-echo "[Linux config dir resolution]"
-testable=$(make_testable)
-XDG_DIR=$(mktemp -d)
-output=$(XDG_CONFIG_HOME="$XDG_DIR" HOME="$(mktemp -d)" bash -c "
-    source '$testable'
-    uname() { echo 'Linux'; }
-    get_config_dir
-") && rc=$? || rc=$?
-rm -f "$testable"
-
-if [ "$output" = "$XDG_DIR" ]; then
-    pass "Linux config dir uses XDG_CONFIG_HOME"
-else
-    fail "Linux config dir" "expected $XDG_DIR, got $output"
-fi
-rm -rf "$XDG_DIR"
-
-# Test 14: macOS installer default matches the runtime ~/.config location
-echo "[macOS config dir resolution]"
-testable=$(make_testable)
-HOME_DIR=$(mktemp -d)
-output=$(HOME="$HOME_DIR" bash -c "
-    source '$testable'
-    uname() { echo 'Darwin'; }
-    get_config_dir
-") && rc=$? || rc=$?
-rm -f "$testable"
-
-if [ "$output" = "$HOME_DIR/.config" ]; then
-    pass "macOS config dir uses ~/.config"
-else
-    fail "macOS config dir" "expected $HOME_DIR/.config, got $output"
-fi
-rm -rf "$HOME_DIR"
 
 # --- Summary ---
 echo ""
