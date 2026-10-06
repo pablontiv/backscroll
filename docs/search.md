@@ -24,7 +24,7 @@ backscroll search "artifact literal" --source-path "*/session.jsonl" --robot
 | `--json` | Output as a JSON array |
 | `--robot` | Output compact `result_N_field=value` lines |
 | `--fields minimal\|full` | Field set to include (default: `minimal`) |
-| `--max-tokens <N>` | Approximate token limit for total output |
+| `--max-tokens <N>` | Approximate token budget for text and robot output; JSON is not contractually truncated |
 | `--source-path <PATH_OR_PATTERN>` | Filter a normal text query by indexed `source_path`; exact paths or `*`/SQL `LIKE` patterns |
 | `--relax` | Opt in to bounded lexical term dropping after zero rows; all scope filters stay fixed |
 
@@ -121,22 +121,28 @@ Across text, JSON, and robot output, UUID and ordinal expose exact selectors for
 
 ## Token Limiting
 
-For robot output, `--max-tokens` applies Picokit's approximate token estimator
-(word count multiplied by 1.3) to the complete escaped payload. Once the next
-complete result group would exceed the limit, search stops and emits a parseable
-omission record when that record fits the remaining budget. This document does
-not define a `--max-tokens` truncation contract for JSON output.
+The `--max-tokens` flag applies Picokit's approximate token estimator (word count
+multiplied by 1.3) to text and robot output. This document does not define a
+`--max-tokens` truncation contract for JSON output. `--max-tokens 0` keeps output
+unlimited.
+
+Text output includes only complete results in rank order and stops before the
+next result would exceed the budget. If the first result does not fit, stdout is
+empty. Text output does not emit omission or truncation metadata.
+
+For robot output, once the next complete result group would exceed the limit,
+search stops and emits a parseable omission record when that record fits the
+remaining budget:
 
 ```
 result_3_truncated=true
 result_3_omitted=7
 ```
 
-For robot output, the estimator is applied once to the complete escaped payload,
-including all fields and the omission record; estimates rounded independently per
-line or per result are not added together. Whole trailing results may be removed
-to make room for the omission record. If even that record cannot fit, stdout is
-empty. `--max-tokens 0` keeps output unlimited.
+The robot estimator is applied once to the complete escaped payload, including
+all fields and the omission record; estimates rounded independently per line or
+per result are not added together. Whole trailing results may be removed to make
+room for the omission record. If even that record cannot fit, stdout is empty.
 
 This is useful when feeding results into context-limited tools.
 
@@ -145,7 +151,9 @@ backscroll search "decisions" --robot --max-tokens 4000
 backscroll search --text "$QUERY" --source-path "$SOURCE_PATH" --robot --fields full --max-tokens 4000
 ```
 
-The robot limit is approximate — it will not truncate a result mid-output, but will stop before starting a result that would exceed the budget.
+The limit is approximate in both budgeted formats: a result is never truncated
+mid-output, and search stops before starting a result that would exceed the
+budget.
 
 ## Query-Echo Handling
 
