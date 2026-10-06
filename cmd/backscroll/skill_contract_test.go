@@ -451,6 +451,32 @@ func TestSearchToContextGuidanceUsesPublishedIdentity(t *testing.T) {
 	}
 }
 
+func TestPatternsClassificationGuidanceHandlesEmptyLegacyUUID(t *testing.T) {
+	artifacts := map[string]string{
+		"cmd/backscroll/backscroll_skill.md": embeddedBackscrollSkill,
+	}
+	path, content := readTrackedSkillMarkdown(t, "docs/patterns.md")
+	artifacts[path] = content
+
+	for artifact, content := range artifacts {
+		t.Run(artifact, func(t *testing.T) {
+			for _, anchor := range []string{
+				"A usable UUID is non-null and non-empty",
+				`"UUID":""`,
+				"result_N_uuid=",
+				`if [ -n "${UUID:-}" ] && [ "$UUID" != "null" ]; then`,
+				`backscroll context --uuid "$UUID"`,
+				`backscroll context --source-path "$SOURCE_PATH" --ordinal "$ORDINAL"`,
+				"exact published `source_path` plus `ordinal` from that same candidate",
+			} {
+				if !strings.Contains(content, anchor) {
+					t.Errorf("patterns fallback guidance missing %q", anchor)
+				}
+			}
+		})
+	}
+}
+
 func TestBackscrollSkillPreservesCorrectionsAuditAndUnixConfigGuidance(t *testing.T) {
 	for _, anchor := range []string{
 		`config_dir="${BACKSCROLL_CONFIG_DIR:-${XDG_CONFIG_HOME:-$HOME/.config}}"`,

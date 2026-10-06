@@ -107,19 +107,20 @@ The resumable funnel that turns correction candidates into labeled data:
 # 1. Agent fetches a batch of unlabeled candidates.
 backscroll patterns --kind corrections --origin human --pending --batch 50 --robot
 
-# 2a. Preferred when the selected candidate publishes a non-null UUID.
-backscroll context --uuid "$UUID" --before 1 --after 1 --robot --max-tokens 2000
-backscroll annotate --uuid "$UUID" --kind correction --label "$LABEL"
-
-# 2b. Fallback only when UUID is null; use the exact published coordinates.
-backscroll context --source-path "$SOURCE_PATH" --ordinal "$ORDINAL" --before 1 --after 1 --robot --max-tokens 2000
-backscroll annotate --path "$SOURCE_PATH" --ordinal "$ORDINAL" --kind correction --label "$LABEL"
+# 2. Inspect and label using a UUID only when its value is not empty or null.
+if [ -n "${UUID:-}" ] && [ "$UUID" != "null" ]; then
+  backscroll context --uuid "$UUID" --before 1 --after 1 --robot --max-tokens 2000
+  backscroll annotate --uuid "$UUID" --kind correction --label "$LABEL"
+else
+  backscroll context --source-path "$SOURCE_PATH" --ordinal "$ORDINAL" --before 1 --after 1 --robot --max-tokens 2000
+  backscroll annotate --path "$SOURCE_PATH" --ordinal "$ORDINAL" --kind correction --label "$LABEL"
+fi
 
 # 3. Re-running step 1 automatically resumes: --pending is a LEFT JOIN
 #    against annotations — already-labeled candidates disappear.
 ```
 
-Before step 2, assign `UUID`, or `SOURCE_PATH` and `ORDINAL`, from one selected machine-readable candidate and assign the intended free-form label to `LABEL`. `context` is mandatory once candidate identity is known: ranked search is discovery, not an exact labeling window. It returns positional DB neighbors by stored ordinal, not a role-selected window and not raw provider records. If `context_ambiguous` is returned, do not label a guessed row; keep the diagnostic and disambiguate with a non-null UUID when available. `annotate` resolves the UUID to canonical coordinates before writing and rejects conflicting `--path`/`--ordinal` inputs; re-annotating the same (message, kind) replaces the label. Labels are free-form until the post-calibration `label_enum` freeze. Crash-safety comes from the query, not from loop state: there is nothing to checkpoint.
+Before step 2, assign `UUID`, `SOURCE_PATH`, and `ORDINAL` from one selected machine-readable candidate and assign the intended free-form label to `LABEL`. A usable UUID is non-null and non-empty. The historical patterns contract can expose a legacy row as `"UUID":""` in JSON or `result_N_uuid=` in robot output; treat either form like null and use the exact published `source_path` plus `ordinal` from that same candidate. `context` is mandatory once candidate identity is known: ranked search is discovery, not an exact labeling window. It returns positional DB neighbors by stored ordinal, not a role-selected window and not raw provider records. If `context_ambiguous` is returned, do not label a guessed row; keep the diagnostic and disambiguate with a usable UUID when available. `annotate` resolves the UUID to canonical coordinates before writing and rejects conflicting `--path`/`--ordinal` inputs; re-annotating the same (message, kind) replaces the label. Labels are free-form until the post-calibration `label_enum` freeze. Crash-safety comes from the query, not from loop state: there is nothing to checkpoint.
 
 ## Operating notes
 

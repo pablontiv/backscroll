@@ -272,16 +272,17 @@ retain their previous shape.
 ```bash
 backscroll patterns --kind corrections --origin human --pending --batch 50 --robot
 
-# Preferred when the selected candidate's UUID is non-null.
-backscroll context --uuid "$UUID" --before 1 --after 1 --robot --max-tokens 2000
-backscroll annotate --uuid "$UUID" --kind correction --label "$LABEL"
-
-# Fallback only when UUID is null.
-backscroll context --source-path "$SOURCE_PATH" --ordinal "$ORDINAL" --before 1 --after 1 --robot --max-tokens 2000
-backscroll annotate --path "$SOURCE_PATH" --ordinal "$ORDINAL" --kind correction --label "$LABEL"
+# Use the UUID only when its value is not empty or null.
+if [ -n "${UUID:-}" ] && [ "$UUID" != "null" ]; then
+  backscroll context --uuid "$UUID" --before 1 --after 1 --robot --max-tokens 2000
+  backscroll annotate --uuid "$UUID" --kind correction --label "$LABEL"
+else
+  backscroll context --source-path "$SOURCE_PATH" --ordinal "$ORDINAL" --before 1 --after 1 --robot --max-tokens 2000
+  backscroll annotate --path "$SOURCE_PATH" --ordinal "$ORDINAL" --kind correction --label "$LABEL"
+fi
 # Re-run fetch: labeled candidates vanish, so no loop state is needed.
 ```
 
-Assign the variables from one selected candidate and set `LABEL` to the intended free-form label. Use `context` whenever a candidate already has exact identity; do not approximate its labeling window with ranked search. Context defaults to 5/5 positional DB records (maximum 50 each), does not filter neighbors by role, never reads raw provider files, caps each text at 4000 Unicode code points, and defaults to `--max-tokens 2000` (valid range 64–16384). `context_not_found`, `context_ambiguous`, and `context_budget_too_small` are structured, budget-exempt diagnostics. Record origin is parser-backed and may remain `unknown`.
+Assign `UUID`, `SOURCE_PATH`, and `ORDINAL` from one selected candidate and set `LABEL` to the intended free-form label. A usable UUID is non-null and non-empty. The historical patterns contract can expose a legacy row as `"UUID":""` in JSON or `result_N_uuid=` in robot output; treat either form like null and use the exact published `source_path` plus `ordinal` from that same candidate. Use `context` whenever a candidate already has exact identity; do not approximate its labeling window with ranked search. Context defaults to 5/5 positional DB records (maximum 50 each), does not filter neighbors by role, never reads raw provider files, caps each text at 4000 Unicode code points, and defaults to `--max-tokens 2000` (valid range 64–16384). `context_not_found`, `context_ambiguous`, and `context_budget_too_small` are structured, budget-exempt diagnostics. Record origin is parser-backed and may remain `unknown`.
 
 Full docs: `docs/context.md` and `docs/patterns.md`. Calibration gate before trusting confidences: `docs/eval/corrections-calibration.md`.
