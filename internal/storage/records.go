@@ -128,7 +128,7 @@ func (d *Database) QueryContextRecords(ctx context.Context, q ContextRecordQuery
 		); err != nil {
 			return nil, fmt.Errorf("scan context record: %w", err)
 		}
-		if uuid.Valid {
+		if uuid.Valid && uuid.String != "" {
 			record.UUID = &uuid.String
 		}
 		if timestamp.Valid {

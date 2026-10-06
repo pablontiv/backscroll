@@ -416,6 +416,72 @@ func TestContextCommandUsesIndexedAPIAndEmitsDiagnostics(t *testing.T) {
 	})
 }
 
+func TestContextEmptyUUIDFallbackFormats(t *testing.T) {
+	cfg := newContextTestIndex(t)
+
+	tests := []struct {
+		name  string
+		json  bool
+		robot bool
+		check func(*testing.T, string)
+	}{
+		{
+			name: "json",
+			json: true,
+			check: func(t *testing.T, output string) {
+				t.Helper()
+				var envelope contextEnvelope
+				if err := json.Unmarshal([]byte(output), &envelope); err != nil {
+					t.Fatalf("decode JSON: %v; output=%q", err, output)
+				}
+				if envelope.Anchor.UUID != nil || len(envelope.Records) != 1 || envelope.Records[0].UUID != nil {
+					t.Fatalf("empty UUID JSON context = %+v", envelope)
+				}
+				if !strings.Contains(output, `"uuid":null`) {
+					t.Fatalf("JSON did not publish null UUID: %q", output)
+				}
+			},
+		},
+		{
+			name:  "robot",
+			robot: true,
+			check: func(t *testing.T, output string) {
+				t.Helper()
+				for _, want := range []string{"anchor_uuid=null\n", "record_0_uuid=null\n", "record_0_is_anchor=true\n"} {
+					if !strings.Contains(output, want) {
+						t.Fatalf("robot output missing %q: %q", want, output)
+					}
+				}
+			},
+		},
+		{
+			name: "text",
+			check: func(t *testing.T, output string) {
+				t.Helper()
+				for _, want := range []string{"Context anchor: uuid=null", "  uuid: null\n", "  is_anchor: true\n"} {
+					if !strings.Contains(output, want) {
+						t.Fatalf("text output missing %q: %q", want, output)
+					}
+				}
+			},
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			var stdout, stderr bytes.Buffer
+			err := runContext(context.Background(), &stdout, &stderr, cfg, contextCommandOptions{
+				sourcePath: "/empty-uuid", sourcePathSet: true,
+				ordinal: 11, ordinalSet: true, before: 0, after: 0,
+				maxTokens: contextMaxMaxTokens, jsonFormat: tc.json, robotFormat: tc.robot,
+			})
+			if err != nil || stderr.Len() != 0 {
+				t.Fatalf("context empty UUID fallback: err=%v stderr=%q", err, stderr.String())
+			}
+			tc.check(t, stdout.String())
+		})
+	}
+}
+
 func TestContextDiagnosticsAreIntentionallyExemptFromSuccessfulPayloadBudget(t *testing.T) {
 	cfg := newContextTestIndex(t)
 	missing := strings.Repeat("missing diagnostic detail ", 100)
@@ -498,6 +564,7 @@ func newContextTestIndex(t *testing.T) *config.Config {
 	insert(3, 3, "/session", "user", "human", "after", nil)
 	insert(4, 9, "/duplicate", "user", "human", "duplicate one", nil)
 	insert(5, 9, "/duplicate", "assistant", "assistant", "duplicate two", nil)
+	insert(6, 11, "/empty-uuid", "assistant", "assistant", "historical empty UUID", "")
 	if _, err := db.DB().Exec(`PRAGMA wal_checkpoint(TRUNCATE)`); err != nil {
 		_ = db.Close()
 		t.Fatalf("checkpoint context fixture: %v", err)

@@ -60,6 +60,32 @@ func TestQueryContextRecordsSelectorsWindowAndIsolation(t *testing.T) {
 	}
 }
 
+func TestQueryContextRecordsNormalizesEmptyUUIDAsAbsent(t *testing.T) {
+	db, cleanup := newTestDB(t)
+	defer cleanup()
+
+	const sourcePath = "/sessions/context-empty-uuid.jsonl"
+	insertContextRecord(t, db, 151, "session", sourcePath, 1, "user", models.OriginHuman, "null uuid", nil, nil, "text")
+	insertContextRecord(t, db, 152, "session", sourcePath, 2, "assistant", models.OriginAssistant, "empty uuid", contextString(""), nil, "text")
+	insertContextRecord(t, db, 153, "session", sourcePath, 3, "assistant", models.OriginAssistant, "opaque uuid", contextString("opaque:not-a-uuid"), nil, "text")
+
+	ordinal := int64(2)
+	records, err := db.QueryContextRecords(context.Background(), ContextRecordQuery{
+		SourcePath: contextString(sourcePath), Ordinal: &ordinal, Before: 1, After: 1,
+	})
+	if err != nil {
+		t.Fatalf("QueryContextRecords by path/ordinal: %v", err)
+	}
+	assertContextRecordOrder(t, records, []string{"null uuid", "empty uuid", "opaque uuid"})
+	assertSingleContextAnchor(t, records, "empty uuid")
+	if records[0].UUID != nil || records[1].UUID != nil {
+		t.Fatalf("absent UUIDs = %v/%v, want nil/nil", records[0].UUID, records[1].UUID)
+	}
+	if records[2].UUID == nil || *records[2].UUID != "opaque:not-a-uuid" {
+		t.Fatalf("non-empty opaque UUID = %v", records[2].UUID)
+	}
+}
+
 func TestQueryContextRecordsEdgesAndGapsUsePosition(t *testing.T) {
 	db, cleanup := newTestDB(t)
 	defer cleanup()
