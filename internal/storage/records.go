@@ -23,7 +23,7 @@ type IndexedRecordQuery struct {
 // ordered by source_path and ordinal.
 func (d *Database) QueryIndexedRecords(q IndexedRecordQuery) ([]models.IndexedRecord, error) {
 	baseQuery := `
-		SELECT source, source_path, ordinal, role, text, project, uuid, timestamp, content_type
+		SELECT source, source_path, ordinal, role, origin, text, project, uuid, timestamp, content_type
 		FROM search_items`
 
 	var whereClauses []string
@@ -74,7 +74,7 @@ func (d *Database) QueryIndexedRecords(q IndexedRecordQuery) ([]models.IndexedRe
 		var r models.IndexedRecord
 		var project, uuid, timestamp sql.NullString
 		if err := rows.Scan(
-			&r.Source, &r.SourcePath, &r.Ordinal, &r.Role, &r.Text,
+			&r.Source, &r.SourcePath, &r.Ordinal, &r.Role, &r.Origin, &r.Text,
 			&project, &uuid, &timestamp, &r.ContentType,
 		); err != nil {
 			return nil, fmt.Errorf("scan record: %w", err)

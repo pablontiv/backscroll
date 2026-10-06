@@ -18,6 +18,7 @@ type SearchResult struct {
 	SourcePath   string
 	Ordinal      int
 	Role         string
+	Origin       models.MessageOrigin `json:"-"`
 	Text         string
 	Snippet      string
 	Score        float64
@@ -168,6 +169,7 @@ func (d *Database) searchTableQuery(ftsTable, ftsQuery string, opts models.Searc
 			si.source_path,
 			si.ordinal,
 			si.role,
+			si.origin,
 			si.text,
 			snippet(%[1]s, 0, '<b>', '</b>', '...', 32) as snippet,
 			bm25(%[1]s) as score,
@@ -216,6 +218,7 @@ func (d *Database) searchTableQuery(ftsTable, ftsQuery string, opts models.Searc
 			&r.SourcePath,
 			&r.Ordinal,
 			&r.Role,
+			&r.Origin,
 			&r.Text,
 			&r.Snippet,
 			&r.Score,
