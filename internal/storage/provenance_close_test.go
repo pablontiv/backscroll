@@ -4,6 +4,7 @@ import (
 	"database/sql"
 	"path/filepath"
 	"reflect"
+	"strings"
 	"testing"
 
 	"github.com/pablontiv/backscroll/internal/models"
@@ -198,6 +199,152 @@ func TestIdentifiedEmptyAndMixedReplaysPreserveUUIDNullHistory(t *testing.T) {
 	}
 	if gotItems, gotEvents := readHistory(); !reflect.DeepEqual(gotItems, wantItems) || !reflect.DeepEqual(gotEvents, wantEvents) {
 		t.Fatalf("mixed replay changed history:\nitems got=%+v want=%+v\nevents got=%+v want=%+v", gotItems, wantItems, gotEvents, wantEvents)
+	}
+}
+
+func TestPureLegacyTransitionRejectsDuplicateUUIDsWithoutChanges(t *testing.T) {
+	db, err := Open(filepath.Join(t.TempDir(), "duplicate-transition.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = db.Close() }()
+
+	const path = "/sessions/duplicate-transition.jsonl"
+	legacy := IndexedFile{SourcePath: path, Source: "session", Hash: "legacy-hash", Messages: []IndexedMessage{
+		{
+			Ordinal: 0, Role: "assistant", Origin: models.OriginAutomation, Text: "legacy first",
+			ContentType: "tool", ToolName: "LegacyRead", CommandHead: "old-read", ExtractionVersion: 0,
+		},
+		{
+			Ordinal: 1, Role: "assistant", Origin: models.OriginAssistant, Text: "legacy second",
+			ContentType: "tool", ToolName: "LegacyBash", CommandHead: "old-bash", ExtractionVersion: 1,
+		},
+	}}
+	if err := db.SyncFiles([]IndexedFile{legacy}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.db.Exec(`
+		UPDATE search_items
+		SET origin_version = CASE ordinal WHEN 0 THEN NULL ELSE 1 END,
+		    search_echo = CASE ordinal WHEN 0 THEN NULL ELSE 1 END
+		WHERE source_path = ?
+	`, path); err != nil {
+		t.Fatal(err)
+	}
+
+	type itemSnapshot struct {
+		id                int64
+		ordinal           int
+		role              string
+		origin            models.MessageOrigin
+		text              string
+		uuid              sql.NullString
+		contentType       string
+		extractionVersion sql.NullInt64
+		searchEcho        sql.NullBool
+		originVersion     sql.NullInt64
+	}
+	type eventSnapshot struct {
+		id                int64
+		messageUUID       sql.NullString
+		ordinal           int
+		toolName          string
+		commandHead       string
+		isError           sql.NullBool
+		exitCode          sql.NullInt64
+		extractionVersion sql.NullInt64
+	}
+	readState := func() ([]itemSnapshot, []eventSnapshot, string) {
+		t.Helper()
+		itemRows, err := db.db.Query(`
+			SELECT id, ordinal, role, origin, text, uuid, content_type,
+			       extraction_version, search_echo, origin_version
+			FROM search_items WHERE source_path = ? ORDER BY id
+		`, path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var items []itemSnapshot
+		for itemRows.Next() {
+			var item itemSnapshot
+			if err := itemRows.Scan(
+				&item.id, &item.ordinal, &item.role, &item.origin, &item.text,
+				&item.uuid, &item.contentType, &item.extractionVersion,
+				&item.searchEcho, &item.originVersion,
+			); err != nil {
+				_ = itemRows.Close()
+				t.Fatal(err)
+			}
+			items = append(items, item)
+		}
+		if err := itemRows.Err(); err != nil {
+			_ = itemRows.Close()
+			t.Fatal(err)
+		}
+		if err := itemRows.Close(); err != nil {
+			t.Fatal(err)
+		}
+
+		eventRows, err := db.db.Query(`
+			SELECT id, message_uuid, ordinal, tool_name, command_head,
+			       is_error, exit_code, extraction_version
+			FROM tool_events WHERE source_path = ? ORDER BY id
+		`, path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var events []eventSnapshot
+		for eventRows.Next() {
+			var event eventSnapshot
+			if err := eventRows.Scan(
+				&event.id, &event.messageUUID, &event.ordinal, &event.toolName,
+				&event.commandHead, &event.isError, &event.exitCode, &event.extractionVersion,
+			); err != nil {
+				_ = eventRows.Close()
+				t.Fatal(err)
+			}
+			events = append(events, event)
+		}
+		if err := eventRows.Err(); err != nil {
+			_ = eventRows.Close()
+			t.Fatal(err)
+		}
+		if err := eventRows.Close(); err != nil {
+			t.Fatal(err)
+		}
+
+		var hash string
+		if err := db.db.QueryRow(`SELECT hash FROM indexed_files WHERE path = ?`, path).Scan(&hash); err != nil {
+			t.Fatal(err)
+		}
+		return items, events, hash
+	}
+
+	wantItems, wantEvents, wantHash := readState()
+	duplicate := IndexedFile{SourcePath: path, Source: "session", Hash: "replacement-hash", Messages: []IndexedMessage{
+		{
+			Ordinal: 0, UUID: "duplicate-transition-uuid", Role: "assistant", Origin: models.OriginAssistant,
+			Text: "replacement first", ContentType: "tool", ToolName: "Read", CommandHead: "new-read", ExtractionVersion: CurrentExtractionVersion,
+		},
+		{
+			Ordinal: 1, UUID: "duplicate-transition-uuid", Role: "assistant", Origin: models.OriginAssistant,
+			Text: "replacement second", ContentType: "tool", ToolName: "Bash", CommandHead: "new-bash", ExtractionVersion: CurrentExtractionVersion,
+		},
+	}}
+	err = db.SyncFiles([]IndexedFile{duplicate})
+	if err == nil || !strings.Contains(err.Error(), `duplicate UUID "duplicate-transition-uuid"`) {
+		t.Fatalf("duplicate transition error = %v, want duplicate UUID error", err)
+	}
+
+	gotItems, gotEvents, gotHash := readState()
+	if !reflect.DeepEqual(gotItems, wantItems) {
+		t.Fatalf("duplicate transition changed search history:\ngot=%+v\nwant=%+v", gotItems, wantItems)
+	}
+	if !reflect.DeepEqual(gotEvents, wantEvents) {
+		t.Fatalf("duplicate transition changed tool history:\ngot=%+v\nwant=%+v", gotEvents, wantEvents)
+	}
+	if gotHash != wantHash || gotHash != "legacy-hash" {
+		t.Fatalf("duplicate transition changed hash: got %q, want %q", gotHash, wantHash)
 	}
 }
 

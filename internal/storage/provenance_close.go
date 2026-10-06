@@ -33,16 +33,28 @@ func (s storedPathIdentity) pureLegacy() bool {
 }
 
 // uuidReplacementsAvailable reports whether a complete UUID parse can be
-// installed for sourcePath. A UUID already owned by another path would be
-// ignored by the perennial INSERT, so it cannot justify deleting legacy rows.
+// installed for sourcePath. Every emitted identity is preflighted before legacy
+// history is removed: duplicate UUIDs in the parse are invalid, and a UUID
+// already owned by another path would be ignored by the perennial INSERT.
 func uuidReplacementsAvailable(tx *sql.Tx, sourcePath string, messages []IndexedMessage) (bool, error) {
+	seen := make(map[string]struct{}, len(messages))
 	for _, message := range messages {
+		if message.UUID == "" {
+			continue
+		}
+		if _, duplicate := seen[message.UUID]; duplicate {
+			return false, fmt.Errorf("duplicate UUID %q in complete parse", message.UUID)
+		}
+		seen[message.UUID] = struct{}{}
+	}
+
+	for uuid := range seen {
 		var conflicting int
 		if err := tx.QueryRow(`
 			SELECT COUNT(*)
 			FROM search_items
 			WHERE uuid = ? AND source_path <> ?
-		`, message.UUID, sourcePath).Scan(&conflicting); err != nil {
+		`, uuid, sourcePath).Scan(&conflicting); err != nil {
 			return false, err
 		}
 		if conflicting != 0 {
