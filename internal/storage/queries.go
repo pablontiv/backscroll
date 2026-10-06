@@ -179,13 +179,13 @@ type ListOptions struct {
 	Before      *time.Time
 }
 
-// ListItemsV2 lists indexed search items using v2 filter grammar.
+// ListItemsV2 lists indexed sessions using v2 filter grammar.
 // Supports --input (maps to source), --order (timestamp:asc|desc), --limit, --offset, --after, --before.
 func (d *Database) ListItemsV2(opts ListOptions) ([]SessionEntry, error) {
 	query := `
 		SELECT si.source_path, si.project, MAX(si.timestamp) as ts
 		FROM search_items si
-		WHERE 1=1
+		WHERE si.source = 'session'
 	`
 
 	var args []interface{}

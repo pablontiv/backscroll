@@ -3529,14 +3529,28 @@ func TestListItemsV2WithInputFilter(t *testing.T) {
 		t.Fatalf("SyncFiles error: %v", err)
 	}
 
-	// Test input filter
-	opts := ListOptions{Input: "session", Limit: 10}
-	entries, err := db.ListItemsV2(opts)
+	// Both the legacy and V2 list paths are session-only by default.
+	legacy, err := db.ListSessions("", 0)
 	if err != nil {
-		t.Fatalf("ListItemsV2 input filter error: %v", err)
+		t.Fatalf("ListSessions error: %v", err)
+	}
+	entries, err := db.ListItemsV2(ListOptions{Limit: 10})
+	if err != nil {
+		t.Fatalf("ListItemsV2 error: %v", err)
+	}
+	if len(legacy) != 1 || legacy[0].Path != "session.jsonl" {
+		t.Errorf("legacy list population = %v, want only session.jsonl", legacy)
 	}
 	if len(entries) != 1 || entries[0].Path != "session.jsonl" {
-		t.Errorf("expected only session.jsonl with input filter, got %v", entries)
+		t.Errorf("V2 list population = %v, want only session.jsonl", entries)
+	}
+
+	entries, err = db.ListItemsV2(ListOptions{Input: "plan", Limit: 10})
+	if err != nil {
+		t.Fatalf("ListItemsV2 plan input error: %v", err)
+	}
+	if len(entries) != 0 {
+		t.Errorf("V2 list accepted non-session input: %v", entries)
 	}
 }
 

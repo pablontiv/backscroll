@@ -65,7 +65,14 @@ Use --json, --robot for output formats.`,
 				if err := validatePatternsRequest(kind, project, allProjects, limit, offset, trend); err != nil {
 					return err
 				}
-				return validatePatternsOrigin(kind, origin)
+				if err := validatePatternsOrigin(kind, origin); err != nil {
+					return err
+				}
+				resolved, err := effectiveProject(project, allProjects)
+				if err == nil {
+					project = resolved
+				}
+				return err
 			})
 		},
 		RunE: func(cmd *cobra.Command, args []string) error {
@@ -151,6 +158,11 @@ func runPatterns(ctx context.Context, stdout, stderr io.Writer, cfg *config.Conf
 		return err
 	}
 
+	project, err := effectiveProject(project, allProjects)
+	if err != nil {
+		return err
+	}
+
 	db, diag, err := prepareIndex(ctx, cfg, indexDataRead)
 	if diag != nil {
 		return refuseIndex(stdout, stderr, *diag, jsonFormat, robotFormat)
@@ -159,11 +171,6 @@ func runPatterns(ctx context.Context, stdout, stderr io.Writer, cfg *config.Conf
 		return fmt.Errorf("prepare index: %w", err)
 	}
 	defer func() { retErr = closeIndexDB(db, retErr) }()
-
-	// Derive effective project
-	if project == "" && !allProjects {
-		project = effectiveProject(project, allProjects)
-	}
 
 	opts := storage.AggregateOptions{
 		Project:     project,

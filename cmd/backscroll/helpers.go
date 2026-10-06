@@ -1,32 +1,31 @@
 package main
 
 import (
+	"fmt"
 	"os"
 
 	"github.com/pablontiv/backscroll/internal/projects"
 )
 
+var currentWorkingDirectory = os.Getwd
+
 // effectiveProject returns the canonical project ID for filtering purposes.
-// It implements the following logic:
-// - If allProjects is true, returns "" (no filter)
-// - If project is explicitly set, returns that value
-// - Otherwise derives project from current working directory via projects.Identify()
-// - If derivation fails or project is unknown, returns ""
-func effectiveProject(project string, allProjects bool) string {
+// Only an explicit all-projects scope may return an empty project filter.
+func effectiveProject(project string, allProjects bool) (string, error) {
 	if allProjects {
-		return ""
+		return "", nil
 	}
 	if project != "" {
-		return project
+		return project, nil
 	}
-	cwd, err := os.Getwd()
+	cwd, err := currentWorkingDirectory()
 	if err != nil {
-		return ""
+		return "", fmt.Errorf("resolve project from current working directory: %w; use --project NAME or --all-projects", err)
 	}
 	registry := projects.LoadGlobalRegistry()
 	result := projects.Identify(cwd, registry)
 	if result.ProjectID == "unknown" {
-		return ""
+		return "", fmt.Errorf("resolve project from current working directory %q: project is unknown; use --project NAME or --all-projects", cwd)
 	}
-	return result.ProjectID
+	return result.ProjectID, nil
 }

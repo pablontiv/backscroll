@@ -1,28 +1,32 @@
 package main
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
-// TestEffectiveProjectAllProjects tests that --all-projects returns empty string
+// TestEffectiveProjectAllProjects tests that --all-projects returns empty string.
 func TestEffectiveProjectAllProjects(t *testing.T) {
-	// When allProjects=true, result should be empty regardless of project or cwd
-	result := effectiveProject("anyproject", true)
-	if result != "" {
-		t.Errorf("effectiveProject with allProjects=true should return empty string, got %q", result)
-	}
-
-	result = effectiveProject("", true)
-	if result != "" {
-		t.Errorf("effectiveProject with allProjects=true should return empty string, got %q", result)
+	for _, project := range []string{"anyproject", ""} {
+		result, err := effectiveProject(project, true)
+		if err != nil {
+			t.Fatalf("effectiveProject(%q, true): %v", project, err)
+		}
+		if result != "" {
+			t.Errorf("effectiveProject(%q, true) = %q, want empty", project, result)
+		}
 	}
 }
 
-// TestEffectiveProjectExplicitProject tests that explicit --project flag takes precedence
+// TestEffectiveProjectExplicitProject tests that explicit --project is retained.
 func TestEffectiveProjectExplicitProject(t *testing.T) {
-	result := effectiveProject("myproject", false)
+	result, err := effectiveProject("myproject", false)
+	if err != nil {
+		t.Fatalf("effectiveProject: %v", err)
+	}
 	if result != "myproject" {
 		t.Errorf("effectiveProject with explicit project should return that project, got %q", result)
 	}
@@ -65,7 +69,10 @@ roots = ["/tmp/other"]
 	t.Chdir(projDir)
 
 	// Test that derivation returns the correct project ID
-	result := effectiveProject("", false)
+	result, err := effectiveProject("", false)
+	if err != nil {
+		t.Fatalf("effectiveProject: %v", err)
+	}
 	if result != "testproj" {
 		t.Errorf("effectiveProject from cwd should return testproj, got %q", result)
 	}
@@ -84,12 +91,45 @@ func TestEffectiveProjectUnknownCwd(t *testing.T) {
 
 	// When cwd is not in the registry, Identify() now returns a fallback ID from the basename
 	// So effectiveProject will return that fallback ID instead of empty string
-	result := effectiveProject("", false)
+	result, err := effectiveProject("", false)
+	if err != nil {
+		t.Fatalf("effectiveProject: %v", err)
+	}
 	if result == "" {
 		t.Error("effectiveProject should return fallback ID from cwd basename, got empty string")
 	}
 	// The result should be derived from the temp directory basename (which is not "unknown")
 	if result == "unknown" {
 		t.Errorf("effectiveProject should return fallback ID, not 'unknown', got %q", result)
+	}
+}
+
+func TestEffectiveProjectDeletedCwdFailsClosed(t *testing.T) {
+	originalGetwd := currentWorkingDirectory
+	currentWorkingDirectory = func() (string, error) { return "", errors.New("current directory was removed") }
+	t.Cleanup(func() { currentWorkingDirectory = originalGetwd })
+
+	assertProjectResolutionError(t)
+}
+
+func TestEffectiveProjectUnknownIdentityFailsClosed(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	originalGetwd := currentWorkingDirectory
+	currentWorkingDirectory = func() (string, error) { return filepath.Join(string(filepath.Separator), "💥"), nil }
+	t.Cleanup(func() { currentWorkingDirectory = originalGetwd })
+
+	assertProjectResolutionError(t)
+}
+
+func assertProjectResolutionError(t *testing.T) {
+	t.Helper()
+	project, err := effectiveProject("", false)
+	if err == nil {
+		t.Fatalf("effectiveProject = %q, nil; want resolution error", project)
+	}
+	for _, want := range []string{"--project NAME", "--all-projects"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("error %q missing guidance %q", err, want)
+		}
 	}
 }
