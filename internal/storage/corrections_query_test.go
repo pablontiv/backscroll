@@ -99,10 +99,10 @@ func TestAggregateCorrectionNullUUID(t *testing.T) {
 		t.Fatalf("insert search_items row: %v", err)
 	}
 
-	// Insert a correction_signals row for that message
+	// Insert a UUID-less correction_signals row for that legacy message.
 	_, err = db.db.Exec(`
-		INSERT INTO correction_signals (source_path, ordinal, detector, confidence, extraction_version)
-		VALUES ('/p/legacy.jsonl', 0, 'lexicon', 0.8, 1)
+		INSERT INTO correction_signals (item_uuid, source_path, ordinal, detector, confidence, extraction_version)
+		VALUES ('', '/p/legacy.jsonl', 0, 'lexicon', 0.8, 1)
 	`)
 	if err != nil {
 		t.Fatalf("insert correction_signals row: %v", err)
@@ -135,5 +135,16 @@ func TestAggregateCorrectionNullUUID(t *testing.T) {
 	}
 	if c.MaxConfidence != 0.8 {
 		t.Errorf("expected confidence 0.8, got %v", c.MaxConfidence)
+	}
+
+	if err := db.UpsertAnnotation("", "/p/legacy.jsonl", 0, "correction", "reviewed"); err != nil {
+		t.Fatalf("annotate legacy correction: %v", err)
+	}
+	pending, err := db.AggregateCorrections(CorrectionAggOpts{PendingOnly: true})
+	if err != nil {
+		t.Fatalf("aggregate pending legacy corrections: %v", err)
+	}
+	if len(pending) != 0 {
+		t.Fatalf("pending legacy corrections = %+v, want none", pending)
 	}
 }

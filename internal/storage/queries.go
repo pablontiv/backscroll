@@ -779,22 +779,46 @@ func (d *Database) AggregateCorrections(opts CorrectionAggOpts) ([]CorrectionCan
 
 	query := `
 		SELECT
-			cs.source_path,
-			cs.ordinal,
+			si.source_path,
+			si.ordinal,
 			si.text,
 			MAX(cs.confidence) as max_confidence,
 			GROUP_CONCAT(DISTINCT cs.detector ORDER BY cs.detector) as detectors,
 			COALESCE(si.uuid, ''),
 			si.origin
 		FROM correction_signals cs
-		JOIN search_items si ON (cs.source_path = si.source_path AND cs.ordinal = si.ordinal)
+		JOIN search_items si ON (
+			(NULLIF(cs.item_uuid, '') IS NOT NULL AND si.uuid = cs.item_uuid)
+			OR (
+				NULLIF(cs.item_uuid, '') IS NULL
+				AND cs.source_path = si.source_path
+				AND cs.ordinal = si.ordinal
+				AND (
+					NULLIF(si.uuid, '') IS NULL
+					OR NOT EXISTS (
+						SELECT 1
+						FROM search_items peer
+						WHERE peer.source_path = si.source_path
+							AND peer.ordinal = si.ordinal
+							AND peer.id <> si.id
+					)
+				)
+			)
+		)
 	`
 	if opts.PendingOnly {
 		query += `
 		LEFT JOIN annotations a ON (
-			si.source_path = a.source_path
-			AND si.ordinal = a.ordinal
-			AND a.kind = 'correction'
+			a.kind = 'correction'
+			AND (
+				(NULLIF(si.uuid, '') IS NOT NULL AND a.item_uuid = si.uuid)
+				OR (
+					NULLIF(si.uuid, '') IS NULL
+					AND NULLIF(a.item_uuid, '') IS NULL
+					AND si.source_path = a.source_path
+					AND si.ordinal = a.ordinal
+				)
+			)
 		)
 		`
 	}
@@ -815,7 +839,7 @@ func (d *Database) AggregateCorrections(opts CorrectionAggOpts) ([]CorrectionCan
 		args = append(args, opts.Origin)
 	}
 
-	query += ` GROUP BY cs.source_path, cs.ordinal, si.uuid, si.origin
+	query += ` GROUP BY si.source_path, si.ordinal, si.uuid, si.origin
 		HAVING MAX(cs.confidence) >= ?
 		ORDER BY max_confidence DESC
 	`

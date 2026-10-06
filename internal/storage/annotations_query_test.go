@@ -140,6 +140,60 @@ func TestAggregateCorrectionsWithPendingFilter(t *testing.T) {
 	}
 }
 
+func TestPendingCorrectionsMatchesAnnotationIdentity(t *testing.T) {
+	db, err := Open(filepath.Join(t.TempDir(), "test.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = db.Close() }()
+
+	const sourcePath = "/p/perennial.jsonl"
+	for _, row := range []struct {
+		uuid string
+		text string
+	}{
+		{uuid: "old-automation", text: "old correction"},
+		{uuid: "new-human", text: "new message"},
+	} {
+		if _, err := db.db.Exec(`
+			INSERT INTO search_items
+				(source, source_path, ordinal, role, text, uuid, project, content_type)
+			VALUES ('session', ?, 0, 'user', ?, ?, 'proj', 'text')
+		`, sourcePath, row.text, row.uuid); err != nil {
+			t.Fatalf("insert search item %q: %v", row.uuid, err)
+		}
+	}
+	if _, err := db.db.Exec(`
+		INSERT INTO correction_signals
+			(item_uuid, source_path, ordinal, detector, confidence, extraction_version)
+		VALUES ('old-automation', ?, 0, 'test', 0.9, 1)
+	`, sourcePath); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := db.UpsertAnnotation("new-human", sourcePath, 0, "correction", "reviewed"); err != nil {
+		t.Fatal(err)
+	}
+	pending, err := db.AggregateCorrections(CorrectionAggOpts{PendingOnly: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(pending) != 1 || pending[0].UUID != "old-automation" {
+		t.Fatalf("pending after wrong-identity annotation = %+v, want old-automation", pending)
+	}
+
+	if err := db.UpsertAnnotation("old-automation", sourcePath, 0, "correction", "reviewed"); err != nil {
+		t.Fatal(err)
+	}
+	pending, err = db.AggregateCorrections(CorrectionAggOpts{PendingOnly: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(pending) != 0 {
+		t.Fatalf("pending after matching annotation = %+v, want none", pending)
+	}
+}
+
 func TestUpsertAnnotationResolvesByUUID(t *testing.T) {
 	db, err := Open(filepath.Join(t.TempDir(), "test.db"))
 	if err != nil {

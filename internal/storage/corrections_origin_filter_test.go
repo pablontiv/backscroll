@@ -90,6 +90,55 @@ func TestAggregateCorrectionsWithoutOriginPreservesPopulationAndShape(t *testing
 	}
 }
 
+func TestAggregateCorrectionsUsesSignalIdentityAcrossRetainedOrdinals(t *testing.T) {
+	db, cleanup := newTestDB(t)
+	defer cleanup()
+
+	const sourcePath = "/p/perennial.jsonl"
+	for _, row := range []struct {
+		uuid   string
+		text   string
+		origin models.MessageOrigin
+	}{
+		{uuid: "old-automation", text: "old automation correction", origin: models.OriginAutomation},
+		{uuid: "new-human", text: "new human message", origin: models.OriginHuman},
+	} {
+		if _, err := db.db.Exec(`
+			INSERT INTO search_items
+				(source, source_path, ordinal, role, text, uuid, project, content_type, origin, origin_version)
+			VALUES ('session', ?, 0, 'user', ?, ?, 'project', 'text', ?, 1)
+		`, sourcePath, row.text, row.uuid, row.origin); err != nil {
+			t.Fatalf("insert search item %q: %v", row.uuid, err)
+		}
+	}
+	if _, err := db.db.Exec(`
+		INSERT INTO correction_signals
+			(item_uuid, source_path, ordinal, detector, confidence, extraction_version)
+		VALUES ('old-automation', ?, 0, 'test', 0.9, 1)
+	`, sourcePath); err != nil {
+		t.Fatal(err)
+	}
+
+	human, err := db.AggregateCorrections(CorrectionAggOpts{Origin: models.OriginHuman})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(human) != 0 {
+		t.Fatalf("human-filtered corrections = %+v, want none", human)
+	}
+
+	all, err := db.AggregateCorrections(CorrectionAggOpts{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(all) != 1 {
+		t.Fatalf("corrections = %+v, want exactly one", all)
+	}
+	if all[0].UUID != "old-automation" || all[0].TextSnippet != "old automation correction" {
+		t.Fatalf("correction identity/text = (%q, %q), want old automation row", all[0].UUID, all[0].TextSnippet)
+	}
+}
+
 func TestAggregateCorrectionsRejectsInvalidOrigin(t *testing.T) {
 	db, cleanup := newTestDB(t)
 	defer cleanup()
