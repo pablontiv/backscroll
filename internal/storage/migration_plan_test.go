@@ -280,7 +280,7 @@ func TestOpenCompatibleReturnsOrdinaryHandleAfterMigration(t *testing.T) {
 	assertDatabaseBeginLeavesWriteReservationAvailable(t, dbPath, db.DB())
 }
 
-func TestOpenCompatibleMigrationTransactionReservesWriteLock(t *testing.T) {
+func TestOpenCompatibleMigrationTransactionReservesWriteLockBeforeTempCleanup(t *testing.T) {
 	dbPath := createFixtureDatabase(t, "v7.sql")
 	originalBegin := beginMigrationTx
 	var checked bool
@@ -289,8 +289,16 @@ func TestOpenCompatibleMigrationTransactionReservesWriteLock(t *testing.T) {
 		if err != nil {
 			return nil, err
 		}
+		activeTemp, err := createSnapshotTempDirectory(filepath.Dir(dbPath), filepath.Base(dbPath))
+		if err != nil {
+			_ = tx.Rollback()
+			return nil, err
+		}
 		checked = true
 		assertCompetingBeginImmediateBlocked(t, dbPath)
+		if _, err := os.Lstat(activeTemp); err != nil {
+			t.Fatalf("competing migration path changed active snapshot temp: %v", err)
+		}
 		return tx, nil
 	}
 	t.Cleanup(func() { beginMigrationTx = originalBegin })
@@ -322,11 +330,11 @@ func TestSnapshotDatabaseUsesIncrementalRecoverableNames(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	first, err := SnapshotDatabase(ctx, dbPath, plan)
+	first, err := snapshotDatabase(ctx, dbPath, plan)
 	if err != nil {
 		t.Fatalf("first snapshot: %v", err)
 	}
-	second, err := SnapshotDatabase(ctx, dbPath, plan)
+	second, err := snapshotDatabase(ctx, dbPath, plan)
 	if err != nil {
 		t.Fatalf("second snapshot: %v", err)
 	}
@@ -356,15 +364,15 @@ func TestSnapshotDatabaseRetainsAtMostTwoValidatedBackups(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	first, err := SnapshotDatabase(ctx, dbPath, plan)
+	first, err := snapshotDatabase(ctx, dbPath, plan)
 	if err != nil {
 		t.Fatal(err)
 	}
-	second, err := SnapshotDatabase(ctx, dbPath, plan)
+	second, err := snapshotDatabase(ctx, dbPath, plan)
 	if err != nil {
 		t.Fatal(err)
 	}
-	third, err := SnapshotDatabase(ctx, dbPath, plan)
+	third, err := snapshotDatabase(ctx, dbPath, plan)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -389,11 +397,11 @@ func TestSnapshotDatabaseRetentionSpansSuccessivePlanStems(t *testing.T) {
 	secondPlan.Steps = append([]compat.MigrationStep(nil), firstPlan.Steps...)
 	secondPlan.Steps[len(secondPlan.Steps)-1].Version++
 
-	first, err := SnapshotDatabase(ctx, dbPath, firstPlan)
+	first, err := snapshotDatabase(ctx, dbPath, firstPlan)
 	if err != nil {
 		t.Fatal(err)
 	}
-	second, err := SnapshotDatabase(ctx, dbPath, firstPlan)
+	second, err := snapshotDatabase(ctx, dbPath, firstPlan)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -401,7 +409,7 @@ func TestSnapshotDatabaseRetentionSpansSuccessivePlanStems(t *testing.T) {
 	if err := os.WriteFile(foreign, []byte("foreign"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	third, err := SnapshotDatabase(ctx, dbPath, secondPlan)
+	third, err := snapshotDatabase(ctx, dbPath, secondPlan)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -425,11 +433,11 @@ func TestSnapshotDatabasePublicationFailurePreservesPreviousSnapshots(t *testing
 	ctx := context.Background()
 	dbPath := createFixtureDatabase(t, "v15.sql")
 	plan := inspectPlanForTest(t, ctx, dbPath)
-	first, err := SnapshotDatabase(ctx, dbPath, plan)
+	first, err := snapshotDatabase(ctx, dbPath, plan)
 	if err != nil {
 		t.Fatal(err)
 	}
-	second, err := SnapshotDatabase(ctx, dbPath, plan)
+	second, err := snapshotDatabase(ctx, dbPath, plan)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -446,7 +454,7 @@ func TestSnapshotDatabasePublicationFailurePreservesPreviousSnapshots(t *testing
 		t.Fatal(err)
 	}
 
-	if _, err := SnapshotDatabase(ctx, dbPath, plan); err == nil {
+	if _, err := snapshotDatabase(ctx, dbPath, plan); err == nil {
 		t.Fatal("expected snapshot publication failure")
 	}
 	for path, before := range map[string]os.FileInfo{first: firstInfo, second: secondInfo} {
@@ -517,7 +525,24 @@ func TestSnapshotDatabaseCleansOnlyOwnedCrashDirectories(t *testing.T) {
 	if err := os.Mkdir(stale, 0o700); err != nil {
 		t.Fatal(err)
 	}
+	if err := os.WriteFile(filepath.Join(stale, snapshotTempMarkerName), snapshotTempMarker(base), 0o600); err != nil {
+		t.Fatal(err)
+	}
 	if err := os.WriteFile(filepath.Join(stale, "snapshot.db"), []byte("crash leftover"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	unmarked := filepath.Join(directory, "."+base+".snapshot-tmp-222222222")
+	if err := os.Mkdir(unmarked, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(unmarked, "keep"), []byte("not owned"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	wrongOwner := filepath.Join(directory, "."+base+".snapshot-tmp-333333333")
+	if err := os.Mkdir(wrongOwner, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(wrongOwner, snapshotTempMarkerName), snapshotTempMarker("other.db"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	foreign := filepath.Join(directory, "."+base+".snapshot-tmp-foreign")
@@ -536,15 +561,15 @@ func TestSnapshotDatabaseCleansOnlyOwnedCrashDirectories(t *testing.T) {
 		t.Skipf("symlinks unavailable: %v", err)
 	}
 
-	if _, err := SnapshotDatabase(ctx, dbPath, plan); err != nil {
+	if _, err := snapshotDatabase(ctx, dbPath, plan); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := os.Lstat(stale); !os.IsNotExist(err) {
 		t.Fatalf("owned stale temporary directory remains: %v", err)
 	}
-	for _, path := range []string{foreign, symlink} {
+	for _, path := range []string{unmarked, wrongOwner, foreign, symlink} {
 		if _, err := os.Lstat(path); err != nil {
-			t.Fatalf("foreign temporary-looking path %s changed: %v", path, err)
+			t.Fatalf("unowned temporary-looking path %s changed: %v", path, err)
 		}
 	}
 	contents, err := os.ReadFile(filepath.Join(target, "keep"))
@@ -558,7 +583,7 @@ func TestSnapshotRetentionIncludesHistoricalNamesWithoutTouchingForeignPaths(t *
 	dbPath := createFixtureDatabase(t, "v15.sql")
 	plan := inspectPlanForTest(t, ctx, dbPath)
 
-	first, err := SnapshotDatabase(ctx, dbPath, plan)
+	first, err := snapshotDatabase(ctx, dbPath, plan)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -570,25 +595,28 @@ func TestSnapshotRetentionIncludesHistoricalNamesWithoutTouchingForeignPaths(t *
 	if err := os.Chtimes(historical, old, old); err != nil {
 		t.Fatal(err)
 	}
-	second, err := SnapshotDatabase(ctx, dbPath, plan)
+	if err := os.Chmod(historical, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	second, err := snapshotDatabase(ctx, dbPath, plan)
 	if err != nil {
 		t.Fatal(err)
 	}
-
-	foreignTarget := filepath.Join(t.TempDir(), "foreign")
-	if err := os.WriteFile(foreignTarget, []byte("untouched"), 0o600); err != nil {
+	if info, err := os.Lstat(historical); err != nil {
 		t.Fatal(err)
+	} else if supportsPOSIXModes() && info.Mode().Perm() != 0o600 {
+		t.Fatalf("historical snapshot mode = %o, want 0600", info.Mode().Perm())
 	}
-	historicalSymlink := dbPath + ".snapshot.9"
-	if err := os.Symlink(foreignTarget, historicalSymlink); err != nil {
-		t.Skipf("symlinks unavailable: %v", err)
+	if err := validateSnapshot(ctx, historical, plan.From); err != nil {
+		t.Fatalf("hardened historical snapshot invalid: %v", err)
 	}
+
 	foreignName := dbPath + ".snapshot.notes"
 	if err := os.WriteFile(foreignName, []byte("foreign"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 
-	third, err := SnapshotDatabase(ctx, dbPath, plan)
+	third, err := snapshotDatabase(ctx, dbPath, plan)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -600,14 +628,55 @@ func TestSnapshotRetentionIncludesHistoricalNamesWithoutTouchingForeignPaths(t *
 			t.Fatalf("retained backup %s invalid: %v", path, err)
 		}
 	}
-	if info, err := os.Lstat(historicalSymlink); err != nil || info.Mode()&os.ModeSymlink == 0 {
-		t.Fatalf("historical-looking symlink changed: info=%v err=%v", info, err)
-	}
-	if contents, err := os.ReadFile(foreignTarget); err != nil || string(contents) != "untouched" {
-		t.Fatalf("historical symlink target changed: contents=%q err=%v", contents, err)
-	}
 	if contents, err := os.ReadFile(foreignName); err != nil || string(contents) != "foreign" {
 		t.Fatalf("foreign similarly named file changed: contents=%q err=%v", contents, err)
+	}
+}
+
+func TestHistoricalSnapshotValidationFailureBlocksWithoutDeletion(t *testing.T) {
+	ctx := context.Background()
+	dbPath := createFixtureDatabase(t, "v15.sql")
+	plan := inspectPlanForTest(t, ctx, dbPath)
+	historical := dbPath + ".snapshot"
+	if err := os.WriteFile(historical, []byte("not a database"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := snapshotDatabase(ctx, dbPath, plan); err == nil || !strings.Contains(err.Error(), "validate historical snapshot") {
+		t.Fatalf("snapshot error = %v, want historical validation failure", err)
+	}
+	contents, err := os.ReadFile(historical)
+	if err != nil || string(contents) != "not a database" {
+		t.Fatalf("invalid historical snapshot changed: contents=%q err=%v", contents, err)
+	}
+	if info, err := os.Lstat(historical); err != nil {
+		t.Fatal(err)
+	} else if supportsPOSIXModes() && info.Mode().Perm() != 0o600 {
+		t.Fatalf("invalid historical snapshot mode = %o, want hardened 0600", info.Mode().Perm())
+	}
+}
+
+func TestHistoricalSnapshotSymlinkBlocksWithoutFollowing(t *testing.T) {
+	ctx := context.Background()
+	dbPath := createFixtureDatabase(t, "v15.sql")
+	plan := inspectPlanForTest(t, ctx, dbPath)
+	foreign := filepath.Join(t.TempDir(), "foreign")
+	if err := os.WriteFile(foreign, []byte("untouched"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	historical := dbPath + ".snapshot.9"
+	if err := os.Symlink(foreign, historical); err != nil {
+		t.Skipf("symlinks unavailable: %v", err)
+	}
+
+	if _, err := snapshotDatabase(ctx, dbPath, plan); err == nil || !strings.Contains(err.Error(), "historical snapshot is not a regular file") {
+		t.Fatalf("snapshot error = %v, want historical symlink rejection", err)
+	}
+	if info, err := os.Lstat(historical); err != nil || info.Mode()&os.ModeSymlink == 0 {
+		t.Fatalf("historical symlink changed: info=%v err=%v", info, err)
+	}
+	if contents, err := os.ReadFile(foreign); err != nil || string(contents) != "untouched" {
+		t.Fatalf("historical symlink target changed: contents=%q err=%v", contents, err)
 	}
 }
 
@@ -634,7 +703,7 @@ func TestSnapshotDatabaseIncludesCommittedWALFrames(t *testing.T) {
 		t.Fatalf("expected non-empty WAL before snapshot: info=%v err=%v", walInfo, err)
 	}
 
-	snapshotPath, err := SnapshotDatabase(ctx, dbPath, plan)
+	snapshotPath, err := snapshotDatabase(ctx, dbPath, plan)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -879,7 +948,7 @@ func TestV9HistoricalMigrationDefinitionIsImmutable(t *testing.T) {
 	}
 }
 
-func TestSetupSchemaMigrationLedgerMatchesAuthoritativeDefinitions(t *testing.T) {
+func TestFreshSchemaMigrationLedgerMatchesAuthoritativeDefinitions(t *testing.T) {
 	dbPath := filepath.Join(t.TempDir(), "backscroll.db")
 	db, err := Open(dbPath)
 	if err != nil {

@@ -22,7 +22,10 @@ var beginMigrationTx = func(ctx context.Context, db *sql.DB) (*sql.Tx, error) {
 	return db.BeginTx(ctx, nil)
 }
 
-const snapshotRetention = 2
+const (
+	snapshotRetention      = 2
+	snapshotTempMarkerName = ".backscroll-snapshot-owner"
+)
 
 type retainedSnapshot struct {
 	path string
@@ -35,9 +38,10 @@ type parsedSnapshotName struct {
 	historical      bool
 }
 
-// SnapshotDatabase creates and validates a durable sibling backup of srcPath.
-// The backup is published atomically without replacing an existing path.
-func SnapshotDatabase(ctx context.Context, srcPath string, plan compat.MigrationPlan) (snapshotPath string, err error) {
+// snapshotDatabase creates and validates a durable sibling backup of srcPath.
+// The backup is published atomically without replacing an existing path. Its
+// caller must already hold the migration write reservation for srcPath.
+func snapshotDatabase(ctx context.Context, srcPath string, plan compat.MigrationPlan) (snapshotPath string, err error) {
 	if len(plan.Steps) == 0 {
 		return "", fmt.Errorf("snapshot requires a non-empty migration plan")
 	}
@@ -59,16 +63,9 @@ func SnapshotDatabase(ctx context.Context, srcPath string, plan compat.Migration
 		targetPath = fmt.Sprintf("%s.%d", stem, nextSuffix)
 	}
 
-	tempDirectory, err := os.MkdirTemp(directory, "."+filepath.Base(srcPath)+".snapshot-tmp-")
+	tempDirectory, err := createSnapshotTempDirectory(directory, filepath.Base(srcPath))
 	if err != nil {
-		return "", fmt.Errorf("create private snapshot temporary directory: %w", err)
-	}
-	if err := securePathMode(tempDirectory, 0o700, true); err != nil {
-		secureErr := fmt.Errorf("secure snapshot temporary directory: %w", err)
-		if removeErr := os.RemoveAll(tempDirectory); removeErr != nil && !os.IsNotExist(removeErr) {
-			secureErr = errors.Join(secureErr, fmt.Errorf("remove insecure snapshot temporary directory: %w", removeErr))
-		}
-		return "", secureErr
+		return "", err
 	}
 	tempPath := filepath.Join(tempDirectory, "snapshot.db")
 	published := false
@@ -161,11 +158,32 @@ func inspectRetainedSnapshots(ctx context.Context, srcPath, currentStem string) 
 		if err != nil {
 			return nil, 0, fmt.Errorf("inspect retained snapshot %s: %w", path, err)
 		}
-		if info.Mode()&os.ModeSymlink != 0 || !info.Mode().IsRegular() {
+		if parsed.historical {
+			if info.Mode()&os.ModeSymlink != 0 || !info.Mode().IsRegular() {
+				return nil, 0, fmt.Errorf("historical snapshot is not a regular file: %s", path)
+			}
+			if err := securePathMode(path, 0o600, false); err != nil {
+				return nil, 0, fmt.Errorf("secure historical snapshot %s: %w", path, err)
+			}
+			hardened, err := os.Lstat(path)
+			if err != nil {
+				return nil, 0, fmt.Errorf("recheck hardened historical snapshot %s: %w", path, err)
+			}
+			if hardened.Mode()&os.ModeSymlink != 0 || !hardened.Mode().IsRegular() || !os.SameFile(info, hardened) {
+				return nil, 0, fmt.Errorf("historical snapshot changed while securing: %s", path)
+			}
+			if err := fsyncPath(path); err != nil {
+				return nil, 0, fmt.Errorf("persist hardened historical snapshot %s: %w", path, err)
+			}
+			info = hardened
+		} else if info.Mode()&os.ModeSymlink != 0 || !info.Mode().IsRegular() {
 			continue
 		}
 		shape, err := inspectSnapshot(ctx, path)
 		if err != nil {
+			if parsed.historical {
+				return nil, 0, fmt.Errorf("validate historical snapshot %s: %w", path, err)
+			}
 			continue
 		}
 		if !parsed.historical && (shape.AppliedVersion != parsed.fromVersion || !strings.HasPrefix(strings.TrimPrefix(shape.Signature, "sha256:"), parsed.signaturePrefix)) {
@@ -218,12 +236,48 @@ func parseSnapshotName(databaseBase, name string) (parsedSnapshotName, bool) {
 	return parsedSnapshotName{historical: true}, true
 }
 
+func createSnapshotTempDirectory(directory, databaseBase string) (path string, err error) {
+	path, err = os.MkdirTemp(directory, "."+databaseBase+".snapshot-tmp-")
+	if err != nil {
+		return "", fmt.Errorf("create private snapshot temporary directory: %w", err)
+	}
+	defer func() {
+		if err != nil {
+			if removeErr := os.RemoveAll(path); removeErr != nil && !os.IsNotExist(removeErr) {
+				err = errors.Join(err, fmt.Errorf("remove unusable snapshot temporary directory: %w", removeErr))
+			}
+		}
+	}()
+	if err := securePathMode(path, 0o700, true); err != nil {
+		return "", fmt.Errorf("secure snapshot temporary directory: %w", err)
+	}
+	markerPath := filepath.Join(path, snapshotTempMarkerName)
+	if err := os.WriteFile(markerPath, snapshotTempMarker(databaseBase), 0o600); err != nil {
+		return "", fmt.Errorf("create snapshot temporary directory marker: %w", err)
+	}
+	if err := securePathMode(markerPath, 0o600, false); err != nil {
+		return "", fmt.Errorf("secure snapshot temporary directory marker: %w", err)
+	}
+	if err := fsyncPath(markerPath); err != nil {
+		return "", err
+	}
+	if err := fsyncDirectory(path); err != nil {
+		return "", err
+	}
+	return path, nil
+}
+
+func snapshotTempMarker(databaseBase string) []byte {
+	return []byte("backscroll-snapshot-temp-v1\n" + databaseBase + "\n")
+}
+
 func cleanupSnapshotTempDirectories(directory, databaseBase string) error {
 	entries, err := os.ReadDir(directory)
 	if err != nil {
 		return fmt.Errorf("list snapshot temporary directories: %w", err)
 	}
 	pattern := regexp.MustCompile(`^\.` + regexp.QuoteMeta(databaseBase) + `\.snapshot-tmp-[0-9]+$`)
+	expectedMarker := snapshotTempMarker(databaseBase)
 	removed := false
 	for _, entry := range entries {
 		if !pattern.MatchString(entry.Name()) {
@@ -235,6 +289,31 @@ func cleanupSnapshotTempDirectories(directory, databaseBase string) error {
 			return fmt.Errorf("inspect snapshot temporary directory %s: %w", path, err)
 		}
 		if info.Mode()&os.ModeSymlink != 0 || !info.IsDir() || (supportsPOSIXModes() && info.Mode().Perm() != 0o700) {
+			continue
+		}
+		markerPath := filepath.Join(path, snapshotTempMarkerName)
+		markerInfo, err := os.Lstat(markerPath)
+		if err != nil {
+			if os.IsNotExist(err) {
+				continue
+			}
+			return fmt.Errorf("inspect snapshot temporary directory marker %s: %w", markerPath, err)
+		}
+		if markerInfo.Mode()&os.ModeSymlink != 0 || !markerInfo.Mode().IsRegular() || markerInfo.Size() != int64(len(expectedMarker)) || (supportsPOSIXModes() && markerInfo.Mode().Perm() != 0o600) {
+			continue
+		}
+		marker, err := os.ReadFile(markerPath)
+		if err != nil {
+			return fmt.Errorf("read snapshot temporary directory marker %s: %w", markerPath, err)
+		}
+		if string(marker) != string(expectedMarker) {
+			continue
+		}
+		after, err := os.Lstat(path)
+		if err != nil {
+			return fmt.Errorf("recheck snapshot temporary directory %s: %w", path, err)
+		}
+		if after.Mode()&os.ModeSymlink != 0 || !after.IsDir() || !os.SameFile(info, after) {
 			continue
 		}
 		if err := os.RemoveAll(path); err != nil {

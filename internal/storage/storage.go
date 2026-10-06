@@ -24,7 +24,7 @@ type Database struct {
 
 var (
 	openCompatibleSnapshotDatabase = func(ctx context.Context, path string, plan compat.MigrationPlan) (string, error) {
-		return SnapshotDatabase(ctx, path, plan)
+		return snapshotDatabase(ctx, path, plan)
 	}
 	openCompatibleApplyMigrationPlan = applyMigrationPlanLocked
 )
@@ -70,7 +70,7 @@ func createDatabase(path string) (*Database, error) {
 	if err != nil {
 		return nil, err
 	}
-	if err := d.SetupSchema(); err != nil {
+	if err := d.setupNewDatabaseSchema(); err != nil {
 		_ = d.Close()
 		return nil, err
 	}

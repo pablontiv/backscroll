@@ -142,12 +142,16 @@ func TestLoadStopwords(t *testing.T) {
 	}
 }
 
-func TestSetupSchemaIdempotent(t *testing.T) {
+func TestOpenInitializesSchema(t *testing.T) {
 	db, cleanup := newTestDB(t)
 	defer cleanup()
-	// Should not fail when called again on an already-initialized DB
-	if err := db.SetupSchema(); err != nil {
-		t.Fatalf("SetupSchema twice: %v", err)
+
+	var count int
+	if err := db.DB().QueryRow("SELECT COUNT(*) FROM schema_migrations").Scan(&count); err != nil {
+		t.Fatalf("query initialized schema: %v", err)
+	}
+	if count == 0 {
+		t.Fatal("fresh database has no migration records")
 	}
 }
 
@@ -1282,16 +1286,9 @@ func TestRefreshStopwordsEmptyVocab(t *testing.T) {
 	}
 }
 
-// TestSetupSchemaCheckMigrationError covers migration check errors
-func TestSetupSchemaCheckMigrationError(t *testing.T) {
+func TestOpenRecordsInitialMigrations(t *testing.T) {
 	db, cleanup := newTestDB(t)
 	defer cleanup()
-
-	// SetupSchema should have been called in Open, so calling again should be idempotent
-	err := db.SetupSchema()
-	if err != nil {
-		t.Fatalf("SetupSchema idempotent call: %v", err)
-	}
 
 	// Verify all migrations were applied
 	var v1, v2, v3 int
@@ -3548,10 +3545,6 @@ func TestV4MigrationRoutesToolRowsToToolFTS(t *testing.T) {
 	}
 	defer func() { _ = db.Close() }()
 
-	if err := db.SetupSchema(); err != nil {
-		t.Fatalf("setup schema: %v", err)
-	}
-
 	// Insert one prose row and one tool row directly.
 	_, err = db.db.Exec(`INSERT INTO indexed_files(path, hash) VALUES ('p1','h1')`)
 	if err != nil {
@@ -3609,10 +3602,6 @@ func TestToolSearchRanksExactPathFirst(t *testing.T) {
 		t.Fatalf("open: %v", err)
 	}
 	defer func() { _ = db.Close() }()
-	if err := db.SetupSchema(); err != nil {
-		t.Fatalf("setup: %v", err)
-	}
-
 	_, _ = db.db.Exec(`INSERT INTO indexed_files(path, hash) VALUES ('p1','h1')`)
 	_, err = db.db.Exec(`
 		INSERT INTO search_items (source, source_path, ordinal, role, text, content_type)
@@ -3642,9 +3631,6 @@ func TestSearchEverythingReturnsBothProseAndTool(t *testing.T) {
 		t.Fatalf("open: %v", err)
 	}
 	defer func() { _ = db.Close() }()
-	if err := db.SetupSchema(); err != nil {
-		t.Fatalf("setup: %v", err)
-	}
 	_, _ = db.db.Exec(`INSERT INTO indexed_files(path, hash) VALUES ('p1','h1')`)
 	_, err = db.db.Exec(`
 		INSERT INTO search_items (source, source_path, ordinal, role, text, content_type)
@@ -3680,9 +3666,6 @@ func TestOptimizeFTSCoversToolIndex(t *testing.T) {
 		t.Fatalf("open: %v", err)
 	}
 	defer func() { _ = db.Close() }()
-	if err := db.SetupSchema(); err != nil {
-		t.Fatalf("setup: %v", err)
-	}
 	// Must not error now that two FTS tables exist.
 	if err := db.OptimizeFTS(); err != nil {
 		t.Fatalf("optimize: %v", err)
@@ -3918,7 +3901,7 @@ func TestMigrationV7ErrorRollback(t *testing.T) {
 	db, cleanup := newTestDB(t)
 	defer cleanup()
 
-	// Remove v7 from schema_migrations if it exists (fresh DB has it from SetupSchema)
+	// Remove v7 from schema_migrations if it exists (fresh DB has it from initialization)
 	if _, err := db.DB().Exec("DELETE FROM schema_migrations WHERE version = 7"); err != nil {
 		t.Fatalf("delete v7: %v", err)
 	}
@@ -3949,13 +3932,10 @@ func TestMigrationV7ErrorRollback(t *testing.T) {
 	}
 }
 
-func TestMigrationV7Idempotent(t *testing.T) {
-	// Test that SetupSchema correctly skips v7 migration when already applied.
-	// This exercises the version-check path in SetupSchema that determines whether to apply.
+func TestMigrationV7InitializedOnce(t *testing.T) {
 	db, cleanup := newTestDB(t)
 	defer cleanup()
 
-	// Verify v7 is applied from fresh DB
 	var count int
 	if err := db.DB().QueryRow("SELECT COUNT(*) FROM schema_migrations WHERE version = 7").Scan(&count); err != nil {
 		t.Fatalf("query v7: %v", err)
@@ -3964,20 +3944,7 @@ func TestMigrationV7Idempotent(t *testing.T) {
 		t.Errorf("v7 should be applied once on fresh DB; count=%d", count)
 	}
 
-	// Call SetupSchema again — should skip v7 (idempotent)
-	if err := db.SetupSchema(); err != nil {
-		t.Fatalf("SetupSchema second call: %v", err)
-	}
-
-	// Verify v7 is still applied exactly once
-	if err := db.DB().QueryRow("SELECT COUNT(*) FROM schema_migrations WHERE version = 7").Scan(&count); err != nil {
-		t.Fatalf("query v7 after second SetupSchema: %v", err)
-	}
-	if count != 1 {
-		t.Errorf("v7 should be applied exactly once after idempotent SetupSchema; count=%d", count)
-	}
-
-	// Verify triggers still work by inserting reasoning content
+	// Verify triggers work after fresh initialization.
 	if _, err := db.DB().Exec(`
 		INSERT INTO search_items (source_path, ordinal, role, text, content_type)
 		VALUES (?, ?, ?, ?, ?)
@@ -3990,7 +3957,7 @@ func TestMigrationV7Idempotent(t *testing.T) {
 		t.Fatalf("query messages_fts: %v", err)
 	}
 	if reasoningFound == 0 {
-		t.Error("reasoning content not indexed in messages_fts after idempotent SetupSchema")
+		t.Error("reasoning content not indexed in messages_fts after initialization")
 	}
 }
 

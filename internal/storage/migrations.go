@@ -2,9 +2,9 @@ package storage
 
 import "fmt"
 
-// SetupSchema creates the database schema if it doesn't already exist.
-// It idempotently applies all migrations using the schema_migrations table.
-func (d *Database) SetupSchema() error {
+// setupNewDatabaseSchema initializes a newly and exclusively created database.
+// Existing databases must migrate through OpenCompatible so a backup is created.
+func (d *Database) setupNewDatabaseSchema() error {
 	// Create the schema_migrations table if it doesn't exist
 	if _, err := d.db.Exec(`
 		CREATE TABLE IF NOT EXISTS schema_migrations (

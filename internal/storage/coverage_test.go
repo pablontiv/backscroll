@@ -178,23 +178,13 @@ func TestOptimizeFTSError(t *testing.T) {
 	}
 }
 
-// TestSetupSchemaV3MigrationError covers the error return path in applyV3Migration
-// and the propagation in SetupSchema. By deleting the V3 migration record from a
-// fully-migrated DB and calling SetupSchema again, the ALTER TABLE (which the column
-// already has) fails — covering both the migration error return and SetupSchema's
-// "return err" after applyV3Migration.
-func TestSetupSchemaV3MigrationError(t *testing.T) {
+// TestApplyV3MigrationError covers the error return path when the column
+// already exists in a fully initialized database.
+func TestApplyV3MigrationError(t *testing.T) {
 	db, cleanup := newTestDB(t)
 	defer cleanup()
 
-	// Delete V3 migration record; SetupSchema will try to re-apply V3
-	if _, err := db.DB().Exec("DELETE FROM schema_migrations WHERE version = 3"); err != nil {
-		t.Fatalf("delete v3 migration: %v", err)
-	}
-
-	// ApplyV3 tries ALTER TABLE ADD COLUMN on a column that already exists → fails
-	err := db.SetupSchema()
-	if err == nil {
+	if err := db.applyV3Migration(); err == nil {
 		t.Fatal("expected error re-running V3 migration on already-migrated DB")
 	}
 }
