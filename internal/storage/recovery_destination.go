@@ -12,7 +12,6 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/google/uuid"
 	"github.com/pablontiv/backscroll/internal/compat"
 	"github.com/pablontiv/backscroll/internal/models"
 )
@@ -541,7 +540,7 @@ func recoveryDestinationTokenedCount(plan compat.RecoveryPlan, table string) int
 
 func recoveryDestinationIdentity(r models.IndexedRecord) (string, error) {
 	if r.UUID != nil && *r.UUID != "" {
-		if _, err := uuid.Parse(*r.UUID); err != nil {
+		if err := compat.ValidateRecoveryUUID(*r.UUID); err != nil {
 			return "", err
 		}
 		return "uuid\x00" + *r.UUID, nil

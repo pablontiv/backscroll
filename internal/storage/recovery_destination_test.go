@@ -281,6 +281,51 @@ func TestRecoverUnionPreservesActiveAndStrandedRecords(t *testing.T) {
 	assertRecoveryDBSnapshot(t, strandedPath, strandedSnapshot)
 }
 
+func TestRecoveryDestinationInstallsV16ClaudeDerivedUUIDs(t *testing.T) {
+	ctx := context.Background()
+	baseUUID := "11111111-1111-4111-8111-111111111111"
+	records := []models.IndexedRecord{
+		{
+			Source: "claude", SourcePath: "/claude/derived.jsonl", Ordinal: 0,
+			Role: "user", Origin: models.OriginHuman, Text: "derived text sentinelalpha",
+			UUID: stringPtr(baseUUID), ContentType: "text",
+		},
+		{
+			Source: "claude", SourcePath: "/claude/derived.jsonl", Ordinal: 1,
+			Role: "assistant", Origin: models.OriginAssistant, Text: "derived tool sentinelbeta",
+			UUID: stringPtr(baseUUID + "#t0"), ContentType: "tool",
+		},
+		{
+			Source: "claude", SourcePath: "/claude/derived.jsonl", Ordinal: 2,
+			Role: "user", Origin: models.OriginAutomation, Text: "derived result sentinelgamma",
+			UUID: stringPtr(baseUUID + "#r0"), ContentType: "tool",
+		},
+	}
+	input := compat.RecoveryInput{
+		Shape:    compat.SchemaShape{AppliedVersion: 16, Signature: "sha256:v16-derived"},
+		Records:  records,
+		RowCount: len(records),
+	}
+	plan, diagnostics, err := compat.PlanRecovery([]compat.RecoveryInput{input})
+	if err != nil || len(diagnostics) != 0 {
+		t.Fatalf("PlanRecovery V16 derived records error=%v diagnostics=%+v", err, diagnostics)
+	}
+	if len(plan.Records) != len(records) {
+		t.Fatalf("planned records = %d, want %d", len(plan.Records), len(records))
+	}
+
+	destPath, err := CreateRecoveryDestination(ctx, t.TempDir(), plan)
+	if err != nil {
+		t.Fatalf("CreateRecoveryDestination V16 derived records: %v", err)
+	}
+	defer func() { _ = removeRecoveryDestinationTestFiles(destPath) }()
+	if err := VerifyRecoveryDestination(ctx, destPath, plan); err != nil {
+		t.Fatalf("VerifyRecoveryDestination V16 derived records: %v", err)
+	}
+	assertRecoveryDestinationRecords(t, destPath, plan)
+	assertRecoveryDestinationFTS(t, destPath, "sentinelalpha", 1, "sentinelbeta", 1)
+}
+
 func TestRecoveryDestinationPreservesOriginVersionAndSearchEchoIndependently(t *testing.T) {
 	ctx := context.Background()
 	records := []models.IndexedRecord{
@@ -632,6 +677,22 @@ func TestRecoveryDestinationRejectsUnsafePlanIdentitiesAndCleansUp(t *testing.T)
 		{
 			name:   "invalid_uuid",
 			record: models.IndexedRecord{Source: "session", SourcePath: "/sessions/invalid-uuid.jsonl", Ordinal: 0, Role: "user", Text: "invalid uuid record", UUID: stringPtr("not-a-uuid"), ContentType: "text"},
+		},
+		{
+			name:   "invalid_derived_base",
+			record: models.IndexedRecord{Source: "session", SourcePath: "/sessions/invalid-derived-base.jsonl", Ordinal: 0, Role: "user", Text: "invalid derived base", UUID: stringPtr("not-a-uuid#t0"), ContentType: "text"},
+		},
+		{
+			name:   "unknown_derived_suffix",
+			record: models.IndexedRecord{Source: "session", SourcePath: "/sessions/unknown-derived-suffix.jsonl", Ordinal: 0, Role: "user", Text: "unknown derived suffix", UUID: stringPtr("11111111-1111-4111-8111-111111111111#x0"), ContentType: "text"},
+		},
+		{
+			name:   "empty_derived_index",
+			record: models.IndexedRecord{Source: "session", SourcePath: "/sessions/empty-derived-index.jsonl", Ordinal: 0, Role: "user", Text: "empty derived index", UUID: stringPtr("11111111-1111-4111-8111-111111111111#r"), ContentType: "text"},
+		},
+		{
+			name:   "garbage_derived_index",
+			record: models.IndexedRecord{Source: "session", SourcePath: "/sessions/garbage-derived-index.jsonl", Ordinal: 0, Role: "user", Text: "garbage derived index", UUID: stringPtr("11111111-1111-4111-8111-111111111111#t0garbage"), ContentType: "text"},
 		},
 		{
 			name:   "missing_fallback_identity",

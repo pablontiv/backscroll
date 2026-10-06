@@ -142,6 +142,89 @@ func TestRecoverIdentityAndConflictMatrixAcrossInputs(t *testing.T) {
 	}
 }
 
+func TestValidateRecoveryUUID(t *testing.T) {
+	valid := []string{
+		uuidA,
+		uuidA + "#t0",
+		uuidA + "#t007",
+		uuidA + "#r12",
+	}
+	for _, value := range valid {
+		if err := ValidateRecoveryUUID(value); err != nil {
+			t.Errorf("ValidateRecoveryUUID(%q) error = %v", value, err)
+		}
+	}
+
+	invalid := []string{
+		"",
+		"not-a-uuid",
+		"not-a-uuid#t0",
+		uuidA + "#",
+		uuidA + "#t",
+		uuidA + "#r",
+		uuidA + "#x0",
+		uuidA + "#t-1",
+		uuidA + "#r1garbage",
+		uuidA + "#t1#r0",
+		"11111111111141118111111111111111#t0",
+	}
+	for _, value := range invalid {
+		if err := ValidateRecoveryUUID(value); err == nil {
+			t.Errorf("ValidateRecoveryUUID(%q) accepted malformed value", value)
+		}
+	}
+}
+
+func TestPlanRecoveryTreatsClaudeDerivedUUIDsAsOpaqueIdentities(t *testing.T) {
+	ids := []string{uuidA, uuidA + "#t0", uuidA + "#r0"}
+	records := make([]models.IndexedRecord, 0, len(ids))
+	for _, id := range ids {
+		record := recordWithUUID(id, "/claude/session.jsonl", 7)
+		record.Origin = models.OriginAssistant
+		records = append(records, record)
+	}
+
+	plan, diagnostics, err := PlanRecovery([]RecoveryInput{recoveryInput("v16", 16, records...)})
+	if err != nil || len(diagnostics) != 0 {
+		t.Fatalf("PlanRecovery error=%v diagnostics=%+v", err, diagnostics)
+	}
+	if len(plan.Records) != len(ids) || plan.ExactDuplicates != 0 {
+		t.Fatalf("plan records=%d duplicates=%d, want %d and 0", len(plan.Records), plan.ExactDuplicates, len(ids))
+	}
+	got := make(map[string]bool, len(plan.Records))
+	for _, planned := range plan.Records {
+		got[*planned.Record.UUID] = true
+	}
+	for _, id := range ids {
+		if !got[id] {
+			t.Errorf("opaque identity %q missing from plan", id)
+		}
+	}
+}
+
+func TestPlanRecoveryRejectsMalformedClaudeDerivedUUIDs(t *testing.T) {
+	malformed := []string{
+		"not-a-uuid#t0",
+		uuidA + "#x0",
+		uuidA + "#t",
+		uuidA + "#r-1",
+		uuidA + "#t0garbage",
+	}
+	for _, value := range malformed {
+		t.Run(value, func(t *testing.T) {
+			plan, diagnostics, err := PlanRecovery([]RecoveryInput{
+				recoveryInput("v16", 16, recordWithUUID(value, "/claude/malformed.jsonl", 0)),
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if plan.Records != nil || len(diagnostics) != 1 || diagnostics[0].Code != CodeUninterpretableRow {
+				t.Fatalf("plan=%+v diagnostics=%+v, want one uninterpretable-row diagnostic", plan, diagnostics)
+			}
+		})
+	}
+}
+
 func TestPlanRecoveryAccountsForEveryInputRow(t *testing.T) {
 	active := recoveryInput("active", 13,
 		recordWithUUID(uuidA, "/active/a", 1),

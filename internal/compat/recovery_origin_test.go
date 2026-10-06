@@ -64,7 +64,7 @@ func TestPlanRecoveryAcceptsMatchingProvenOrigins(t *testing.T) {
 }
 
 func TestPlanRecoveryRejectsContradictoryProvenOrigins(t *testing.T) {
-	human := recordWithUUID(uuidC, "/origin/conflict.jsonl", 3)
+	human := recordWithUUID(uuidC+"#r0", "/origin/conflict.jsonl", 3)
 	human.Origin = models.OriginHuman
 	assistant := human
 	assistant.Origin = models.OriginAssistant

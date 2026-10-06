@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"sort"
+	"strings"
 
 	"github.com/google/uuid"
 	"github.com/pablontiv/backscroll/internal/models"
@@ -133,7 +134,7 @@ func PlanRecovery(inputs []RecoveryInput) (RecoveryPlan, []Diagnostic, error) {
 
 func identityOf(r models.IndexedRecord) (recordIdentity, error) {
 	if r.UUID != nil && *r.UUID != "" {
-		if _, err := uuid.Parse(*r.UUID); err != nil {
+		if err := ValidateRecoveryUUID(*r.UUID); err != nil {
 			return recordIdentity{}, err
 		}
 		return recordIdentity{Kind: "uuid", UUID: *r.UUID}, nil
@@ -142,6 +143,34 @@ func identityOf(r models.IndexedRecord) (recordIdentity, error) {
 		return recordIdentity{}, errUnsafeIdentity
 	}
 	return recordIdentity{Kind: "path_ordinal", SourcePath: r.SourcePath, Ordinal: r.Ordinal}, nil
+}
+
+// ValidateRecoveryUUID accepts a canonical RFC UUID or the exact Claude
+// derived forms <uuid>#tN and <uuid>#rN. The complete accepted value remains
+// the recovery identity; this function only validates its syntax.
+func ValidateRecoveryUUID(value string) error {
+	base := value
+	if separator := strings.IndexByte(value, '#'); separator >= 0 {
+		base = value[:separator]
+		suffix := value[separator+1:]
+		if len(suffix) < 2 || (suffix[0] != 't' && suffix[0] != 'r') {
+			return fmt.Errorf("invalid Claude recovery UUID suffix in %q", value)
+		}
+		for _, digit := range suffix[1:] {
+			if digit < '0' || digit > '9' {
+				return fmt.Errorf("invalid Claude recovery UUID suffix in %q", value)
+			}
+		}
+	}
+
+	parsed, err := uuid.Parse(base)
+	if err != nil {
+		return fmt.Errorf("invalid recovery UUID %q: %w", value, err)
+	}
+	if parsed.String() != base {
+		return fmt.Errorf("recovery UUID base %q is not canonical", base)
+	}
+	return nil
 }
 
 type recordOccurrence struct {
