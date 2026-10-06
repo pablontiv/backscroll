@@ -10,6 +10,7 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/pablontiv/backscroll/internal/config"
+	"github.com/pablontiv/backscroll/internal/models"
 	"github.com/pablontiv/backscroll/internal/sequences"
 	"github.com/pablontiv/backscroll/internal/storage"
 )
@@ -33,6 +34,7 @@ func newPatternsCmd(stdout, stderr io.Writer) *cobra.Command {
 		after         string
 		before        string
 		trend         bool
+		origin        string
 	)
 
 	cmd := &cobra.Command{
@@ -50,6 +52,7 @@ Use --tag to filter by session tags (e.g., debugging, testing).
 Use --min-support for template/sequence filtering (default 3; minimum occurrences).
 Use --min-length, --max-length for sequence pattern length bounds (default 2, 6).
 Use --min-confidence for correction filtering (default 0.6; detector confidence threshold).
+Use --origin for parser-backed correction origin filtering.
 Use --limit, --offset for pagination.
 Use --json, --robot for output formats.`,
 		Args: func(cmd *cobra.Command, args []string) error {
@@ -59,7 +62,10 @@ Use --json, --robot for output formats.`,
 				}
 				return nil
 			}, func() error {
-				return validatePatternsRequest(kind, project, allProjects, limit, offset, trend)
+				if err := validatePatternsRequest(kind, project, allProjects, limit, offset, trend); err != nil {
+					return err
+				}
+				return validatePatternsOrigin(kind, origin)
 			})
 		},
 		RunE: func(cmd *cobra.Command, args []string) error {
@@ -69,7 +75,7 @@ Use --json, --robot for output formats.`,
 			}
 			return runPatterns(cmd.Context(), stdout, stderr, startup.Config, kind, project, allProjects, tag, limit, offset,
 				jsonFormat, robotFormat, minSupport, minConfidence, pending, batch,
-				minLength, maxLength, after, before, trend)
+				minLength, maxLength, after, before, trend, origin)
 		},
 	}
 
@@ -90,6 +96,7 @@ Use --json, --robot for output formats.`,
 	cmd.Flags().BoolVar(&pending, "pending", false, "Only corrections without a 'correction' annotation (checkpoint resume)")
 	cmd.Flags().IntVar(&batch, "batch", 0, "Alias for --limit (batch size for loop)")
 	cmd.Flags().BoolVar(&trend, "trend", false, "Week-over-week bucketing (--kind commands|failures only)")
+	cmd.Flags().StringVar(&origin, "origin", "", "Filter parser-backed origin (--kind corrections only: human|assistant|system|automation|unknown)")
 
 	cmd.MarkFlagRequired("kind")
 
@@ -119,12 +126,28 @@ func validatePatternsRequest(kind, project string, allProjects bool, limit, offs
 	return nil
 }
 
+func validatePatternsOrigin(kind, origin string) error {
+	if origin == "" {
+		return nil
+	}
+	if !models.ValidMessageOrigin(models.MessageOrigin(origin)) {
+		return fmt.Errorf("unsupported --origin %q (supported: human, assistant, system, automation, unknown)", origin)
+	}
+	if kind != "corrections" {
+		return fmt.Errorf("--origin only supported for --kind corrections, got %q", kind)
+	}
+	return nil
+}
+
 func runPatterns(ctx context.Context, stdout, stderr io.Writer, cfg *config.Config,
 	kind string, project string, allProjects bool, tag string,
 	limit, offset int, jsonFormat, robotFormat bool, minSupport int, minConfidence float64, pending bool, batch int,
-	minLength, maxLength int, after, before string, trend bool) (retErr error) {
+	minLength, maxLength int, after, before string, trend bool, origin string) (retErr error) {
 
 	if err := validatePatternsRequest(kind, project, allProjects, limit, offset, trend); err != nil {
+		return err
+	}
+	if err := validatePatternsOrigin(kind, origin); err != nil {
 		return err
 	}
 
@@ -474,6 +497,7 @@ func runPatterns(ctx context.Context, stdout, stderr io.Writer, cfg *config.Conf
 
 		correctionOpts := storage.CorrectionAggOpts{
 			Project:       project,
+			Origin:        models.MessageOrigin(origin),
 			MinConfidence: minConfidence,
 			Limit:         limit,
 			Offset:        offset,
@@ -516,6 +540,9 @@ func runPatterns(ctx context.Context, stdout, stderr io.Writer, cfg *config.Conf
 				_, _ = fmt.Fprintf(stdout, "result_%d_detectors=%s\n", i, strings.Join(c.Detectors, ","))
 				_, _ = fmt.Fprintf(stdout, "result_%d_max_confidence=%.2f\n", i, c.MaxConfidence)
 				_, _ = fmt.Fprintf(stdout, "result_%d_text_snippet=%q\n", i, c.TextSnippet)
+				if origin != "" {
+					_, _ = fmt.Fprintf(stdout, "result_%d_origin=%s\n", i, c.Origin)
+				}
 			}
 			_, _ = fmt.Fprintf(stdout, "*** Total: %d patterns ***\n", len(results))
 		} else {
@@ -525,7 +552,11 @@ func runPatterns(ctx context.Context, stdout, stderr io.Writer, cfg *config.Conf
 				_, _ = fmt.Fprintf(stdout, "%d. UUID: %s\n", i+1, c.UUID)
 				_, _ = fmt.Fprintf(stdout, "   Source: %s (ordinal %d)\n", c.SourcePath, c.Ordinal)
 				_, _ = fmt.Fprintf(stdout, "   Detectors: %s (max confidence: %.2f)\n", strings.Join(c.Detectors, ", "), c.MaxConfidence)
-				_, _ = fmt.Fprintf(stdout, "   Text: %s\n\n", c.TextSnippet)
+				_, _ = fmt.Fprintf(stdout, "   Text: %s\n", c.TextSnippet)
+				if origin != "" {
+					_, _ = fmt.Fprintf(stdout, "   Origin: %s\n", c.Origin)
+				}
+				_, _ = fmt.Fprintln(stdout)
 			}
 		}
 
