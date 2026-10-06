@@ -83,6 +83,105 @@ func TestPerennialProvenanceClosureIsMonotonicAndDrainsEchoQueue(t *testing.T) {
 	}
 }
 
+func TestPerennialProvenanceClosureClassifiesRetainedPayloadAfterEchoDrift(t *testing.T) {
+	db, err := Open(filepath.Join(t.TempDir(), "echo-drift.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = db.Close() }()
+
+	const path = "/sessions/echo-drift.jsonl"
+	file := IndexedFile{SourcePath: path, Source: "session", Hash: "h1", Messages: []IndexedMessage{
+		{Ordinal: 0, UUID: "drift-direct-zero", Role: "assistant", Text: "Bash command=backscroll search --text retained-zero", ContentType: "tool", ExtractionVersion: 1},
+		{Ordinal: 1, UUID: "drift-direct-null", Role: "assistant", Text: `shell command=["/bin/bash","-lc","backscroll search --text retained-null"]`, ContentType: "tool", ExtractionVersion: 1},
+		{Ordinal: 2, UUID: "drift-nondirect", Role: "assistant", Text: "Bash command=echo backscroll search", ContentType: "tool", ExtractionVersion: 1},
+		{Ordinal: 3, UUID: "drift-positive", Role: "assistant", Text: "retained paired result", ContentType: "tool", ExtractionVersion: 1, SearchEcho: true},
+	}}
+	if err := db.SyncFiles([]IndexedFile{file}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.db.Exec(`UPDATE search_items SET search_echo = NULL WHERE uuid IN ('drift-direct-null', 'drift-nondirect')`); err != nil {
+		t.Fatal(err)
+	}
+
+	type retainedRow struct {
+		id                int64
+		text              string
+		contentType       string
+		extractionVersion int
+		searchEcho        int
+		origin            models.MessageOrigin
+		originVersion     int
+	}
+	readRow := func(uuid string) retainedRow {
+		t.Helper()
+		var row retainedRow
+		if err := db.db.QueryRow(`
+			SELECT id, text, content_type, extraction_version,
+			       COALESCE(search_echo, -1), origin, origin_version
+			FROM search_items WHERE uuid = ?
+		`, uuid).Scan(
+			&row.id, &row.text, &row.contentType, &row.extractionVersion,
+			&row.searchEcho, &row.origin, &row.originVersion,
+		); err != nil {
+			t.Fatal(err)
+		}
+		return row
+	}
+
+	before := make(map[string]retainedRow, len(file.Messages))
+	for _, message := range file.Messages {
+		before[message.UUID] = readRow(message.UUID)
+	}
+	if pending, err := db.PendingSearchEchoPaths(); err != nil || !reflect.DeepEqual(pending, []string{path}) {
+		t.Fatalf("echo queue before drift replay = %v, err=%v; want [%s]", pending, err, path)
+	}
+
+	file.Hash = "h2"
+	file.Messages = []IndexedMessage{
+		{Ordinal: 0, UUID: "drift-direct-zero", Role: "assistant", Origin: models.OriginAssistant, Text: "rewritten parser payload zero", ContentType: "tool", ExtractionVersion: CurrentExtractionVersion, SearchEcho: true},
+		{Ordinal: 1, UUID: "drift-direct-null", Role: "assistant", Origin: models.OriginAssistant, Text: "rewritten parser payload null", ContentType: "tool", ExtractionVersion: CurrentExtractionVersion, SearchEcho: true},
+		{Ordinal: 2, UUID: "drift-nondirect", Role: "assistant", Origin: models.OriginAssistant, Text: "rewritten parser payload non-direct", ContentType: "tool", ExtractionVersion: CurrentExtractionVersion, SearchEcho: true},
+		{Ordinal: 3, UUID: "drift-positive", Role: "assistant", Origin: models.OriginAssistant, Text: "rewritten parser payload positive", ContentType: "tool", ExtractionVersion: CurrentExtractionVersion},
+	}
+	if err := db.SyncFiles([]IndexedFile{file}); err != nil {
+		t.Fatalf("first drift replay: %v", err)
+	}
+
+	wantEcho := map[string]int{
+		"drift-direct-zero": 1,
+		"drift-direct-null": 1,
+		"drift-nondirect":   0,
+		"drift-positive":    1,
+	}
+	assertConverged := func(stage string) {
+		t.Helper()
+		for uuid, want := range wantEcho {
+			got := readRow(uuid)
+			original := before[uuid]
+			if got.id != original.id || got.text != original.text || got.contentType != original.contentType || got.extractionVersion != original.extractionVersion {
+				t.Errorf("%s changed retained payload for %s: got=%+v before=%+v", stage, uuid, got, original)
+			}
+			if got.searchEcho != want {
+				t.Errorf("%s search_echo for %s = %d, want %d", stage, uuid, got.searchEcho, want)
+			}
+			if got.origin != models.OriginAssistant || got.originVersion != CurrentOriginVersion {
+				t.Errorf("%s origin for %s = (%q,%d), want (%q,%d)", stage, uuid, got.origin, got.originVersion, models.OriginAssistant, CurrentOriginVersion)
+			}
+		}
+		if pending, err := db.PendingSearchEchoPaths(); err != nil || len(pending) != 0 {
+			t.Errorf("%s echo queue = %v, err=%v; want empty", stage, pending, err)
+		}
+	}
+	assertConverged("first replay")
+
+	file.Hash = "h3"
+	if err := db.SyncFiles([]IndexedFile{file}); err != nil {
+		t.Fatalf("second drift replay: %v", err)
+	}
+	assertConverged("second replay")
+}
+
 func TestIdentifiedEmptyAndMixedReplaysPreserveUUIDNullHistory(t *testing.T) {
 	db, err := Open(filepath.Join(t.TempDir(), "history.db"))
 	if err != nil {

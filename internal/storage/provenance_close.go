@@ -54,19 +54,30 @@ func closePerennialProvenance(tx *sql.Tx, sourcePath string, messages []IndexedM
 }
 
 func closeSearchEchoProvenance(tx *sql.Tx, sourcePath string, messages []IndexedMessage) error {
-	emittedUUIDs := make(map[string]struct{}, len(messages))
+	type appliedEvidence struct {
+		uuid        string
+		text        string
+		contentType string
+	}
+	emittedEvidence := make(map[appliedEvidence]struct{}, len(messages))
 	for _, message := range messages {
 		if message.UUID != "" {
-			emittedUUIDs[message.UUID] = struct{}{}
+			emittedEvidence[appliedEvidence{
+				uuid:        message.UUID,
+				text:        message.Text,
+				contentType: message.ContentType,
+			}] = struct{}{}
 		}
 	}
 
 	// SQL intentionally supplies only the established broad superset. The one
 	// serialized-call recognizer remains the final boundary for every omitted
-	// shape. Emitted identities retain the parser's current evidence and can
-	// remain queued when that evidence is still zero.
+	// shape. Exclude an emitted identity only when its payload and content type
+	// match the retained row, which is the same boundary used by SyncFiles when
+	// applying parser evidence. A UUID replay whose payload drifted did not
+	// classify the retained payload, so closure must classify that stored text.
 	rows, err := tx.Query(`
-		SELECT id, uuid, text
+		SELECT id, uuid, text, content_type
 		FROM search_items
 		WHERE source_path = ?
 		  AND `+searchEchoZeroPrefilterSQL("search_items"), sourcePath)
@@ -78,13 +89,17 @@ func closeSearchEchoProvenance(tx *sql.Tx, sourcePath string, messages []Indexed
 	for rows.Next() {
 		var id int64
 		var uuid sql.NullString
-		var text string
-		if err := rows.Scan(&id, &uuid, &text); err != nil {
+		var text, contentType string
+		if err := rows.Scan(&id, &uuid, &text, &contentType); err != nil {
 			_ = rows.Close()
 			return fmt.Errorf("scan search echo candidate: %w", err)
 		}
 		if uuid.Valid {
-			if _, emitted := emittedUUIDs[uuid.String]; emitted {
+			if _, applied := emittedEvidence[appliedEvidence{
+				uuid:        uuid.String,
+				text:        text,
+				contentType: contentType,
+			}]; applied {
 				continue
 			}
 		}
