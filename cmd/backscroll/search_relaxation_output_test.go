@@ -23,8 +23,9 @@ func TestSearchRelaxationBudgetKeepsProvenanceWithEachResult(t *testing.T) {
 				t.Fatalf("payload exceeds %d tokens: %s", budget, payload)
 			}
 			count := strings.Count(payload, "_filepath=")
-			if count != strings.Count(payload, "_match_stage=drop-terms") || count != strings.Count(payload, "_dropped_terms=") {
-				t.Fatalf("partial result/provenance at budget %d: %s", budget, payload)
+			if count != strings.Count(payload, "_uuid=") || count != strings.Count(payload, "_ordinal=") ||
+				count != strings.Count(payload, "_match_stage=drop-terms") || count != strings.Count(payload, "_dropped_terms=") {
+				t.Fatalf("partial result/identity/provenance at budget %d: %s", budget, payload)
 			}
 			if strings.Contains(payload, "line\nwith") {
 				t.Fatalf("unescaped provenance split a robot line: %s", payload)

@@ -218,23 +218,8 @@ func runSearch(ctx context.Context, stdout, stderr io.Writer, cfg *config.Config
 		}
 	}
 
-	// Convert storage.SearchResult to models.SearchResult
-	var modelResults []models.SearchResult
-	for i, r := range results {
-		modelResults = append(modelResults, models.SearchResult{
-			Source:       r.Source,
-			Role:         r.Role,
-			Content:      r.Text,
-			FilePath:     r.SourcePath,
-			Timestamp:    r.Timestamp,
-			ProjectPath:  r.Project,
-			Score:        r.Score,
-			ContentType:  r.ContentType,
-			Rank:         i + 1,
-			MatchStage:   r.MatchStage,
-			DroppedTerms: r.DroppedTerms,
-		})
-	}
+	// Convert storage.SearchResult to models.SearchResult.
+	modelResults := searchModelResults(results)
 
 	// Determine output format
 	format := picokitoutput.FormatText
@@ -253,6 +238,8 @@ func runSearch(ctx context.Context, stdout, stderr io.Writer, cfg *config.Config
 			for i, r := range results {
 				minimal[i] = minimalSearchResult{
 					SourcePath:   r.SourcePath,
+					UUID:         normalizedSearchUUID(r.UUID),
+					Ordinal:      r.Ordinal,
 					Snippet:      r.Snippet,
 					Score:        r.Score,
 					Role:         r.Role,
@@ -331,6 +318,8 @@ func searchRobotResultLines(result storage.SearchResult, index int, fields strin
 	if fields == "minimal" {
 		return searchRobotProvenance([]string{
 			fmt.Sprintf("result_%d_filepath=%s", index, escapeRobotValue(result.SourcePath)),
+			fmt.Sprintf("result_%d_uuid=%s", index, searchNullableRobot(result.UUID)),
+			fmt.Sprintf("result_%d_ordinal=%d", index, result.Ordinal),
 			fmt.Sprintf("result_%d_content=%s", index, escapeRobotValue(result.Snippet)),
 			fmt.Sprintf("result_%d_score=%.2f", index, result.Score),
 			fmt.Sprintf("result_%d_role=%s", index, escapeRobotValue(result.Role)),
@@ -342,6 +331,8 @@ func searchRobotResultLines(result storage.SearchResult, index int, fields strin
 		fmt.Sprintf("result_%d_source=%s", index, escapeRobotValue(result.Source)),
 		fmt.Sprintf("result_%d_role=%s", index, escapeRobotValue(result.Role)),
 		fmt.Sprintf("result_%d_filepath=%s", index, escapeRobotValue(result.SourcePath)),
+		fmt.Sprintf("result_%d_uuid=%s", index, searchNullableRobot(result.UUID)),
+		fmt.Sprintf("result_%d_ordinal=%d", index, result.Ordinal),
 		fmt.Sprintf("result_%d_content=%s", index, escapeRobotValue(result.Text)),
 	}
 	if result.Project != "" {
@@ -391,15 +382,62 @@ func flattenRobotGroups(groups [][]string) []string {
 }
 
 // minimalSearchResult is the reduced JSON payload emitted by --fields=minimal,
-// matching the v0 minimal field set.
+// preserving the v0 fields and adding exact context selectors.
 type minimalSearchResult struct {
 	SourcePath   string    `json:"source_path"`
+	UUID         *string   `json:"uuid"`
+	Ordinal      int       `json:"ordinal"`
 	Snippet      string    `json:"snippet"`
 	Score        float64   `json:"score"`
 	Role         string    `json:"role"`
 	Timestamp    time.Time `json:"timestamp"`
 	MatchStage   string    `json:"match_stage,omitempty"`
 	DroppedTerms []string  `json:"dropped_terms,omitempty"`
+}
+
+func searchModelResults(results []storage.SearchResult) []models.SearchResult {
+	modelResults := make([]models.SearchResult, 0, len(results))
+	for i, result := range results {
+		modelResults = append(modelResults, models.SearchResult{
+			Source:       result.Source,
+			Role:         result.Role,
+			UUID:         normalizedSearchUUID(result.UUID),
+			Ordinal:      result.Ordinal,
+			Content:      result.Text,
+			FilePath:     result.SourcePath,
+			Timestamp:    result.Timestamp,
+			ProjectPath:  result.Project,
+			Score:        result.Score,
+			ContentType:  result.ContentType,
+			Rank:         i + 1,
+			MatchStage:   result.MatchStage,
+			DroppedTerms: result.DroppedTerms,
+		})
+	}
+	return modelResults
+}
+
+func normalizedSearchUUID(uuid *string) *string {
+	if uuid == nil || *uuid == "" {
+		return nil
+	}
+	return uuid
+}
+
+func searchNullableRobot(uuid *string) string {
+	uuid = normalizedSearchUUID(uuid)
+	if uuid == nil {
+		return "null"
+	}
+	return escapeRobotValue(*uuid)
+}
+
+func searchNullableText(uuid *string) string {
+	uuid = normalizedSearchUUID(uuid)
+	if uuid == nil {
+		return "null"
+	}
+	return *uuid
 }
 
 // resultsToLines converts SearchResults to string lines for the specified format.
@@ -416,6 +454,8 @@ func resultsToLines(results []models.SearchResult, format picokitoutput.Format) 
 				fmt.Sprintf("result_%d_source=%s", i, escapeRobotValue(result.Source)),
 				fmt.Sprintf("result_%d_role=%s", i, escapeRobotValue(result.Role)),
 				fmt.Sprintf("result_%d_filepath=%s", i, escapeRobotValue(result.FilePath)),
+				fmt.Sprintf("result_%d_uuid=%s", i, searchNullableRobot(result.UUID)),
+				fmt.Sprintf("result_%d_ordinal=%d", i, result.Ordinal),
 				fmt.Sprintf("result_%d_content=%s", i, escapeRobotValue(result.Content)),
 			)
 			if result.SessionID != "" {
@@ -450,7 +490,11 @@ func resultsToLines(results []models.SearchResult, format picokitoutput.Format) 
 			if len(result.Tags) > 0 {
 				lines = append(lines, fmt.Sprintf("Tags: %s", strings.Join(result.Tags, ", ")))
 			}
-			lines = append(lines, result.Content)
+			lines = append(lines,
+				fmt.Sprintf("UUID: %s", searchNullableText(result.UUID)),
+				fmt.Sprintf("Ordinal: %d", result.Ordinal),
+				result.Content,
+			)
 		}
 	}
 

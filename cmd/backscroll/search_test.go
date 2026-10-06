@@ -130,10 +130,13 @@ func TestSearchOutputRespectsTokenLimit(t *testing.T) {
 
 func TestSearchTextFormatStructure(t *testing.T) {
 	// Test the resultsToLines adapter function directly
+	uuid := "message-123"
 	results := []models.SearchResult{
 		{
 			Source:      "session",
 			Role:        "user",
+			UUID:        &uuid,
+			Ordinal:     17,
 			Content:     "test content",
 			FilePath:    "/path/to/file.jsonl",
 			Rank:        1,
@@ -159,6 +162,8 @@ func TestSearchTextFormatStructure(t *testing.T) {
 		"Session: session-123",
 		"Project: /home/project",
 		"Tags: debugging",
+		"UUID: message-123",
+		"Ordinal: 17",
 		"test content",
 	}
 
@@ -171,10 +176,13 @@ func TestSearchTextFormatStructure(t *testing.T) {
 
 func TestSearchRobotFormatStructure(t *testing.T) {
 	// Test the resultsToLines adapter function directly for robot format
+	uuid := "message-456"
 	results := []models.SearchResult{
 		{
 			Source:      "session",
 			Role:        "assistant",
+			UUID:        &uuid,
+			Ordinal:     23,
 			Content:     "test content",
 			FilePath:    "/path/to/file.jsonl",
 			Rank:        1,
@@ -194,6 +202,8 @@ func TestSearchRobotFormatStructure(t *testing.T) {
 		"result_0_source=session",
 		"result_0_role=assistant",
 		"result_0_filepath=/path/to/file.jsonl",
+		"result_0_uuid=message-456",
+		"result_0_ordinal=23",
 		"result_0_content=test content",
 		"result_0_session_id=session-456",
 		"result_0_project=/home/project2",
@@ -210,10 +220,13 @@ func TestSearchRobotFormatStructure(t *testing.T) {
 }
 
 func TestSearchRobotFormatEscapesStringValuesToSingleLine(t *testing.T) {
+	uuid := "uuid\\part\nnext"
 	results := []models.SearchResult{
 		{
 			Source:      "sess\\ion",
 			Role:        "assist\rant",
+			UUID:        &uuid,
+			Ordinal:     31,
 			Content:     "line 1\nline 2\r\npath\\tail",
 			FilePath:    "/tmp/file\nname.md",
 			Rank:        2,
@@ -237,6 +250,8 @@ func TestSearchRobotFormatEscapesStringValuesToSingleLine(t *testing.T) {
 		`result_0_source=sess\\ion`,
 		`result_0_role=assist\rant`,
 		`result_0_filepath=/tmp/file\nname.md`,
+		`result_0_uuid=uuid\\part\nnext`,
+		`result_0_ordinal=31`,
 		`result_0_content=line 1\nline 2\r\npath\\tail`,
 		`result_0_session_id=session\n789`,
 		`result_0_project=project\\root`,

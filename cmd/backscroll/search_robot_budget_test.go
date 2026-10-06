@@ -15,9 +15,12 @@ import (
 )
 
 func TestSearchRobotLinesMinimalUsesBoundedSnippet(t *testing.T) {
+	uuid := "robot-minimal"
 	results := []storage.SearchResult{{
 		Source:     "session",
 		SourcePath: "/tmp/session.jsonl",
+		UUID:       &uuid,
+		Ordinal:    12,
 		Role:       "assistant",
 		Text:       "full private content that must not appear",
 		Snippet:    "bounded snippet",
@@ -29,6 +32,8 @@ func TestSearchRobotLinesMinimalUsesBoundedSnippet(t *testing.T) {
 	got := searchRobotLines(results, "minimal", 0)
 	want := []string{
 		"result_0_filepath=/tmp/session.jsonl",
+		"result_0_uuid=robot-minimal",
+		"result_0_ordinal=12",
 		"result_0_content=bounded snippet",
 		"result_0_score=1.25",
 		"result_0_role=assistant",
@@ -43,9 +48,12 @@ func TestSearchRobotLinesMinimalUsesBoundedSnippet(t *testing.T) {
 }
 
 func TestSearchRobotLinesFullUsesCompleteContent(t *testing.T) {
+	emptyUUID := ""
 	results := []storage.SearchResult{{
 		Source:      "session",
 		SourcePath:  "/tmp/session.jsonl",
+		UUID:        &emptyUUID,
+		Ordinal:     19,
 		Role:        "assistant",
 		Text:        "full content",
 		Snippet:     "short snippet",
@@ -60,6 +68,8 @@ func TestSearchRobotLinesFullUsesCompleteContent(t *testing.T) {
 		"result_0_source=session",
 		"result_0_role=assistant",
 		"result_0_filepath=/tmp/session.jsonl",
+		"result_0_uuid=null",
+		"result_0_ordinal=19",
 		"result_0_content=full content",
 		"result_0_project=backscroll",
 		"result_0_content_type=text",
@@ -79,9 +89,11 @@ func TestSearchRobotLinesBudgetsWholeResultsAndReportsOmission(t *testing.T) {
 		{SourcePath: "/c", Role: "assistant", Snippet: "gamma", Score: 3},
 	}
 
-	got := searchRobotLines(results, "minimal", 9)
+	got := searchRobotLines(results, "minimal", 11)
 	want := []string{
 		"result_0_filepath=/a",
+		"result_0_uuid=null",
+		"result_0_ordinal=0",
 		"result_0_content=alpha",
 		"result_0_score=1.00",
 		"result_0_role=assistant",
@@ -92,8 +104,8 @@ func TestSearchRobotLinesBudgetsWholeResultsAndReportsOmission(t *testing.T) {
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("budgeted robot output mismatch\ngot:  %#v\nwant: %#v", got, want)
 	}
-	if tokens := picokitoutput.TokenCount(strings.Join(got, "\n")); tokens > 9 {
-		t.Fatalf("complete payload uses %d tokens, budget is 9", tokens)
+	if tokens := picokitoutput.TokenCount(strings.Join(got, "\n")); tokens > 11 {
+		t.Fatalf("complete payload uses %d tokens, budget is 11", tokens)
 	}
 }
 
@@ -112,18 +124,19 @@ func TestSearchRobotLinesRoundsOnlyTheCompletePayload(t *testing.T) {
 		{"minimal", 0, 3, 0},
 		{"minimal", 1, 0, 0},
 		{"minimal", 2, 0, 3},
-		{"minimal", 7, 0, 3},
-		{"minimal", 8, 0, 3},
-		{"minimal", 9, 1, 2},
-		{"minimal", 13, 1, 2},
-		{"minimal", 15, 2, 1},
-		{"minimal", 18, 2, 1},
-		{"minimal", 19, 3, 0},
-		{"full", 10, 0, 3},
-		{"full", 11, 1, 2},
-		{"full", 18, 1, 2},
-		{"full", 20, 2, 1},
-		{"full", 27, 3, 0},
+		{"minimal", 10, 0, 3},
+		{"minimal", 11, 1, 2},
+		{"minimal", 19, 1, 2},
+		{"minimal", 20, 2, 1},
+		{"minimal", 26, 2, 1},
+		{"minimal", 27, 3, 0},
+		{"full", 2, 0, 3},
+		{"full", 13, 0, 3},
+		{"full", 14, 1, 2},
+		{"full", 25, 1, 2},
+		{"full", 26, 2, 1},
+		{"full", 34, 2, 1},
+		{"full", 35, 3, 0},
 	} {
 		t.Run(fmt.Sprintf("%s/%d", tt.fields, tt.budget), func(t *testing.T) {
 			lines := searchRobotLines(results, tt.fields, tt.budget)
@@ -134,9 +147,9 @@ func TestSearchRobotLinesRoundsOnlyTheCompletePayload(t *testing.T) {
 			if got := strings.Count(payload, "_content="); got != tt.results {
 				t.Fatalf("got %d complete results, want %d:\n%s", got, tt.results, payload)
 			}
-			fieldsPerResult := 5
+			fieldsPerResult := 7
 			if tt.fields == "full" {
-				fieldsPerResult = 7
+				fieldsPerResult = 9
 			}
 			wantLines := tt.results * fieldsPerResult
 			if tt.omitted > 0 {
