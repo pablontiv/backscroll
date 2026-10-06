@@ -1,15 +1,14 @@
 # Pull request candidate artifacts
 
-Pull request candidates are opt-in CI snapshots for review. They are not GitHub
-Releases, do not create tags, and expire after seven days.
+Pull request candidates are automatic CI snapshots and required review gates.
+They are not GitHub Releases, do not create tags, and expire after seven days.
 
-## Trigger a candidate build
+## Automatic candidate gate
 
-Add the `build-candidate` label to an open pull request. CI first runs the normal
-`ci`, `gitleaks`, and `skill-install` gates, then builds the exact pull request
-head SHA. A later push to the pull request reruns the candidate job while the
-label remains present. Remove the label when candidate builds are no longer
-needed.
+Every pull request runs the normal `ci`, `gitleaks`, and `skill-install` gates,
+then builds the exact pull request head SHA. A later push emits a `synchronize`
+event and automatically rebuilds the candidate for the new head SHA. The latest
+candidate job must pass before the pull request is closed.
 
 The workflow also runs for fork pull requests with read-only repository access.
 It does not use repository secrets, OIDC, or publishing credentials.
