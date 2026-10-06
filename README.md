@@ -38,7 +38,7 @@ Backscroll ships as a **single self-contained binary**: pure Go, built with CGO 
 curl -fsSL https://raw.githubusercontent.com/pablontiv/backscroll/master/install.sh | bash
 ```
 
-Detects your platform (Linux x86_64 / macOS aarch64), installs the binary to `~/.local/bin/`, and installs the shipped Claude, Pi, OpenCode, and Codex input presets into the user input config directory without overwriting existing manifests.
+Detects your platform (Linux x86_64 / macOS aarch64), installs the binary to `~/.local/bin/`, and installs the shipped Claude, Pi, OpenCode, and Codex input presets without overwriting existing manifests. The Unix installer uses `BACKSCROLL_CONFIG_DIR` as the config base when set and `$HOME/.config` otherwise, placing presets under `backscroll/inputs/`.
 
 **Windows (PowerShell):**
 
@@ -46,7 +46,7 @@ Detects your platform (Linux x86_64 / macOS aarch64), installs the binary to `~/
 irm https://raw.githubusercontent.com/pablontiv/backscroll/master/install.ps1 | iex
 ```
 
-Installs the binary to `%LOCALAPPDATA%\backscroll\bin\`, adds it to your PATH, and installs the shipped Claude, Pi, and Codex input presets into `<user-home>\.config\backscroll\inputs\` without overwriting existing manifests. `BACKSCROLL_CONFIG_DIR` overrides the config base when set. Compatible with Windows PowerShell 5.1+.
+Installs the binary to `%LOCALAPPDATA%\backscroll\bin\`, adds it to your PATH, and installs the shipped Claude, Pi, and Codex input presets without overwriting existing manifests. The Windows installer uses `BACKSCROLL_CONFIG_DIR` as the config base when set and `<user-home>\.config` otherwise, placing presets under `<config-base>\backscroll\inputs\`. Compatible with Windows PowerShell 5.1+.
 
 ### Install input presets
 
@@ -58,7 +58,7 @@ Runtime input config directories:
 | Linux / macOS | `$HOME/.config/backscroll/inputs/` |
 | Windows | `<user-home>\.config\backscroll\inputs\` |
 
-Set `BACKSCROLL_CONFIG_DIR` to override the `<config_dir>` base; manifests are then read from `$BACKSCROLL_CONFIG_DIR/backscroll/inputs/`. Both install scripts follow this same runtime convention.
+Set `BACKSCROLL_CONFIG_DIR` to override the `<config_dir>` base. Both install scripts follow this runtime convention and otherwise use the platform defaults shown above.
 
 If you install from a source checkout, copy presets without clobbering existing files:
 
