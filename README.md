@@ -217,7 +217,7 @@ Default output is human-readable text. Machine modes keep stdout parseable: huma
 
 Search identity is present in every density and output mode. Text uses `Path`, `UUID`, and `Ordinal`; minimal JSON uses `source_path`, `uuid`, and `ordinal`; full JSON keeps the model casing `FilePath`, `UUID`, and `Ordinal`; robot output uses `result_N_filepath`, `result_N_uuid`, and `result_N_ordinal` for both `--fields minimal` and `--fields full`. A missing UUID is `null`, not a generated value.
 
-On `search`, `--fields minimal|full` controls machine-output density and `--max-tokens N` caps output. On `context`, `--max-tokens N` budgets the complete successful payload; diagnostics are exempt.
+On `search`, `--fields minimal|full` controls machine-output density, while `--max-tokens N` applies the truncation budget to text and robot output; JSON has no documented truncation contract. On `context`, `--max-tokens N` budgets the complete successful payload; diagnostics are exempt.
 
 ---
 
