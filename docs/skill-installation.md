@@ -27,9 +27,10 @@ copies are outside this installer's ownership; inventory and retire them through
 their own owners, with separate approval. This installer is not for Windows.
 
 Neither `install.sh`/`install.ps1` nor `pre-push`/`post-merge` replaces skill
-folders. Downloading a binary does not establish a stable skill source. Git hooks
-still handle their existing binary/input work, but skill replacement is never a
-side effect of a push or merge.
+folders. Downloading a binary does not install a discovery shim, and installing
+the shim does not replace input preset synchronization. Git hooks still handle
+inputs but never install the binary, and skill replacement is never a side effect
+of a push or merge.
 
 ## Inspect, approve, install
 

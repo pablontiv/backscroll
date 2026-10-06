@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Post-merge: rebuild backscroll, install inputs, propagate doc aggregates
+# Post-merge: install inputs, propagate doc aggregates
 
 [ -z "$HOME" ] && HOME=$(eval echo ~)
 
@@ -33,39 +33,5 @@ install_input_presets() {
 echo "backscroll: skills unchanged; explicit installation: docs/skill-installation.md"
 install_input_presets
 
-BACKSCROLL_BIN="${BACKSCROLL_BIN:-$HOME/.local/bin/backscroll}"
-
-install_backscroll_binary() {
-  local tmp
-  tmp="$(mktemp)"
-
-  if ! go build -o "$tmp" ./cmd/backscroll 2>&1; then
-    rm -f "$tmp"
-    return 1
-  fi
-
-  if [ -w "$BACKSCROLL_BIN" ] || { [ ! -e "$BACKSCROLL_BIN" ] && [ -w "$(dirname "$BACKSCROLL_BIN")" ]; }; then
-    install -m 0755 "$tmp" "$BACKSCROLL_BIN"
-  elif command -v sudo >/dev/null 2>&1 && sudo -n true 2>/dev/null; then
-    sudo install -m 0755 "$tmp" "$BACKSCROLL_BIN"
-  else
-    echo "Warning: $BACKSCROLL_BIN is not writable and passwordless sudo is unavailable"
-    rm -f "$tmp"
-    return 1
-  fi
-
-  rm -f "$tmp"
-}
-
-echo "Rebuilding backscroll..."
-if install_backscroll_binary; then
-  echo "backscroll rebuilt: $("$BACKSCROLL_BIN" --version 2>/dev/null || echo "unknown")"
-  if command -v backscroll >/dev/null 2>&1 && [ "$(command -v backscroll)" != "$BACKSCROLL_BIN" ]; then
-    echo "Warning: $(command -v backscroll) shadows $BACKSCROLL_BIN in PATH"
-  fi
-
-  # Propagate aggregate values after merge (fix stale parent READMEs)
-  rootline fix --all "$REPO_ROOT/docs/roadmap/" 2>/dev/null || true
-else
-  echo "Warning: backscroll rebuild failed"
-fi
+# Propagate aggregate values after merge (fix stale parent READMEs).
+rootline fix --all "$REPO_ROOT/docs/roadmap/" 2>/dev/null || true

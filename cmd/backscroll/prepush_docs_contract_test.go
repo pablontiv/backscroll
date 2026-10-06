@@ -85,6 +85,21 @@ func TestPrePushDocumentationGateUsesSubstantiveAGENTS(t *testing.T) {
 	}
 }
 
+func TestGitHooksDoNotInstallBinary(t *testing.T) {
+	repoRoot := prePushRepositoryRoot(t)
+	for _, name := range []string{"pre-push", "post-merge"} {
+		hook, err := os.ReadFile(filepath.Join(repoRoot, ".githooks", name))
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, forbidden := range []string{"BACKSCROLL_BIN", "install_backscroll_binary", "go build"} {
+			if strings.Contains(string(hook), forbidden) {
+				t.Errorf("%s installs a source-built binary via %q", name, forbidden)
+			}
+		}
+	}
+}
+
 func prePushDocumentationGateOnly(t *testing.T, hook string) string {
 	t.Helper()
 	const boundary = "  # CI parity gate: run full CI if Go files changed"

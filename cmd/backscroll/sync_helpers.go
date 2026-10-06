@@ -51,6 +51,11 @@ func newDefaultAutoSyncRegistry() *readers.Registry {
 	return reg
 }
 
+func usesFileMetadataPrefilter(reader readers.SessionReader) bool {
+	// SQLite WAL commits may not change OpenCode's main database file.
+	return reader.Name() != "opencode"
+}
+
 // getFileMetadata returns the size and mtime of a file in RFC3339 format.
 // Returns (size, mtime, error). On error, all values are nil/empty.
 // This is used by the v14 metadata prefilter to skip hashing unchanged files.
@@ -210,7 +215,7 @@ func maybeAutoSync(cfg *config.Config, progress io.Writer) (retErr error) {
 			var shouldParse bool
 
 			existingMeta, exists := existingMetadata[ref]
-			if exists && existingMeta.Size != nil && existingMeta.Mtime != nil &&
+			if usesFileMetadataPrefilter(reader) && exists && existingMeta.Size != nil && existingMeta.Mtime != nil &&
 				existingMeta.LastIndexed != nil {
 				// All metadata fields must be non-NULL to use the prefilter
 				// Check if current file matches recorded metadata
@@ -249,6 +254,9 @@ func maybeAutoSync(cfg *config.Config, progress io.Writer) (retErr error) {
 					return fmt.Errorf("hash %s: %w", ref, err)
 				}
 				shouldParse = true
+				if !usesFileMetadataPrefilter(reader) && exists && existingMeta.Hash == hash {
+					shouldParse = staleSet[ref] && staleParsesDone < staleParsesCap
+				}
 				if diag {
 					filesHashed++
 					// Get file size for bytes hashed metric

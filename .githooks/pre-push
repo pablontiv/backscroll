@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Pre-push: validate docs, check drift, rebuild binary
+# Pre-push: validate docs, check drift, install input presets
 
 remote="$1"
 REPO_ROOT="$(git rev-parse --show-toplevel)"
@@ -95,41 +95,3 @@ install_input_presets() {
 # See docs/skill-installation.md and scripts/install-skills.py.
 echo "backscroll: skills unchanged; explicit installation: docs/skill-installation.md"
 install_input_presets
-
-# Rebuild backscroll binary so the installed version matches the pushed code.
-BACKSCROLL_BIN="${BACKSCROLL_BIN:-$HOME/.local/bin/backscroll}"
-
-install_backscroll_binary() {
-  local tmp
-  tmp="$(mktemp)"
-
-  local ver
-  ver="$(git describe --tags --abbrev=0 2>/dev/null | sed 's/^v//')"
-  ver="${ver:-dev}"
-  if ! go build -ldflags "-X main.version=${ver}" -o "$tmp" ./cmd/backscroll 2>&1; then
-    rm -f "$tmp"
-    return 1
-  fi
-
-  if [ -w "$BACKSCROLL_BIN" ] || { [ ! -e "$BACKSCROLL_BIN" ] && [ -w "$(dirname "$BACKSCROLL_BIN")" ]; }; then
-    install -m 0755 "$tmp" "$BACKSCROLL_BIN"
-  elif command -v sudo >/dev/null 2>&1 && sudo -n true 2>/dev/null; then
-    sudo install -m 0755 "$tmp" "$BACKSCROLL_BIN"
-  else
-    echo "Warning: $BACKSCROLL_BIN is not writable and passwordless sudo is unavailable"
-    rm -f "$tmp"
-    return 1
-  fi
-
-  rm -f "$tmp"
-}
-
-echo "Rebuilding backscroll..."
-if install_backscroll_binary; then
-  echo "backscroll rebuilt: $("$BACKSCROLL_BIN" --version 2>/dev/null || echo "unknown")"
-  if command -v backscroll >/dev/null 2>&1 && [ "$(command -v backscroll)" != "$BACKSCROLL_BIN" ]; then
-    echo "Warning: $(command -v backscroll) shadows $BACKSCROLL_BIN in PATH"
-  fi
-else
-  echo "Warning: backscroll rebuild failed (push continues)"
-fi
