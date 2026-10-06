@@ -83,9 +83,8 @@ get_config_dir() {
 		return
 	fi
 
-	# Match the binary: config/projects/inputs all live under ~/.config/backscroll
-	# on every OS (the binary hardcodes ~/.config; macOS Application Support would split it).
-	echo "${XDG_CONFIG_HOME:-${HOME}/.config}"
+	# Match the runtime, which always uses ~/.config unless explicitly overridden.
+	echo "${HOME}/.config"
 }
 
 get_local_inputs_dir() {
