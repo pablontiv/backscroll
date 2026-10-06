@@ -100,6 +100,7 @@ func (r *OpenCodeReader) Parse(dbPath string, _ input_config.InputDefinition) (m
 		if len(textParts) > 0 {
 			msgs = append(msgs, models.Message{
 				Role:        normalizeOpenCodeRole(currentRole),
+				Origin:      openCodeOriginForRole(currentRole),
 				Content:     strings.Join(textParts, "\n"),
 				ContentType: "text",
 				Timestamp:   time.UnixMilli(currentTime),
@@ -152,15 +153,16 @@ func (r *OpenCodeReader) Parse(dbPath string, _ input_config.InputDefinition) (m
 				continue
 			}
 			role := normalizeOpenCodeRole(currentRole)
+			origin := openCodeOriginForRole(currentRole)
 			ts := time.UnixMilli(currentTime)
 			// One part carries both the call and its output, so a direct
 			// Backscroll search marks both rows by identity; no adjacency guess.
 			echo := isDirectSearchInput(pd.Tool, pd.State.Input)
 			if in := SerializeToolInput(pd.Tool, pd.State.Input); strings.TrimSpace(in) != "" {
-				toolMsgs = append(toolMsgs, models.Message{Role: role, Content: in, ContentType: "tool", Timestamp: ts, SearchEcho: echo})
+				toolMsgs = append(toolMsgs, models.Message{Role: role, Origin: origin, Content: in, ContentType: "tool", Timestamp: ts, SearchEcho: echo})
 			}
 			if out := SerializeToolOutput(pd.State.Output); strings.TrimSpace(out) != "" {
-				toolMsgs = append(toolMsgs, models.Message{Role: role, Content: out, ContentType: "tool", Timestamp: ts, SearchEcho: echo})
+				toolMsgs = append(toolMsgs, models.Message{Role: role, Origin: models.OriginAutomation, Content: out, ContentType: "tool", Timestamp: ts, SearchEcho: echo})
 			}
 		}
 	}
@@ -180,6 +182,19 @@ func (r *OpenCodeReader) Parse(dbPath string, _ input_config.InputDefinition) (m
 // openReadOnly opens a SQLite database in read-only mode.
 func openReadOnly(path string) (*sql.DB, error) {
 	return sql.Open("sqlite", "file:"+path+"?mode=ro")
+}
+
+// openCodeOriginForRole maps only OpenCode's validated actor roles. Tool
+// outputs are assigned automation at the structured part boundary instead.
+func openCodeOriginForRole(role string) models.MessageOrigin {
+	switch role {
+	case "user":
+		return models.OriginHuman
+	case "assistant":
+		return models.OriginAssistant
+	default:
+		return models.OriginUnknown
+	}
 }
 
 // normalizeOpenCodeRole maps OpenCode roles to canonical backscroll roles.
