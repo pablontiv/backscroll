@@ -4,45 +4,305 @@ import (
 	"context"
 	"crypto/sha256"
 	"database/sql"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
+	"strconv"
 	"strings"
 
 	"github.com/pablontiv/backscroll/internal/compat"
 )
 
-var (
-	snapshotDatabase = SnapshotDatabase
-	beginMigrationTx = func(ctx context.Context, db *sql.DB) (*sql.Tx, error) {
-		return db.BeginTx(ctx, nil)
-	}
-)
+var beginMigrationTx = func(ctx context.Context, db *sql.DB) (*sql.Tx, error) {
+	return db.BeginTx(ctx, nil)
+}
 
-// SnapshotDatabase creates a read-only reopenable sibling snapshot of srcPath.
-func SnapshotDatabase(ctx context.Context, srcPath string) (string, error) {
-	targetPath, err := nextSnapshotPath(srcPath)
+const snapshotRetention = 2
+
+type retainedSnapshot struct {
+	path   string
+	suffix int
+	info   os.FileInfo
+}
+
+// SnapshotDatabase creates and validates a durable sibling backup of srcPath.
+// The backup is published atomically without replacing an existing path.
+func SnapshotDatabase(ctx context.Context, srcPath string, plans ...compat.MigrationPlan) (snapshotPath string, err error) {
+	plan, err := snapshotPlan(ctx, srcPath, plans)
 	if err != nil {
 		return "", err
 	}
-
-	db, err := sql.Open("sqlite", "file:"+srcPath+"?mode=ro&_pragma=busy_timeout(5000)")
+	stem, err := snapshotStem(srcPath, plan)
 	if err != nil {
-		return "", fmt.Errorf("open snapshot source: %w", err)
-	}
-	defer db.Close()
-
-	if _, err := db.ExecContext(ctx, "VACUUM INTO "+quoteSQLString(targetPath)); err != nil {
-		_ = os.Remove(targetPath)
-		return "", fmt.Errorf("create database snapshot: %w", err)
-	}
-	if err := fsyncPath(targetPath); err != nil {
 		return "", err
 	}
-	if err := fsyncPath(filepath.Dir(targetPath)); err != nil {
+	directory := filepath.Dir(srcPath)
+
+	existing, nextSuffix, err := inspectRetainedSnapshots(ctx, stem, plan.From)
+	if err != nil {
+		return "", err
+	}
+	targetPath := stem
+	if nextSuffix > 0 {
+		targetPath = fmt.Sprintf("%s.%d", stem, nextSuffix)
+	}
+
+	tempFile, err := os.CreateTemp(directory, "."+filepath.Base(stem)+".tmp-")
+	if err != nil {
+		return "", fmt.Errorf("create snapshot temporary name: %w", err)
+	}
+	tempPath := tempFile.Name()
+	if closeErr := tempFile.Close(); closeErr != nil {
+		_ = os.Remove(tempPath)
+		return "", fmt.Errorf("close snapshot temporary file: %w", closeErr)
+	}
+	if removeErr := os.Remove(tempPath); removeErr != nil {
+		return "", fmt.Errorf("prepare snapshot temporary path: %w", removeErr)
+	}
+
+	published := false
+	defer func() {
+		if tempPath != "" {
+			if removeErr := os.Remove(tempPath); removeErr != nil && !os.IsNotExist(removeErr) {
+				err = errors.Join(err, fmt.Errorf("remove snapshot temporary file: %w", removeErr))
+			}
+		}
+		if err != nil && published {
+			if removeErr := os.Remove(targetPath); removeErr != nil && !os.IsNotExist(removeErr) {
+				err = errors.Join(err, fmt.Errorf("remove failed snapshot publication: %w", removeErr))
+			}
+			if syncErr := fsyncPath(directory); syncErr != nil {
+				err = errors.Join(err, syncErr)
+			}
+		}
+	}()
+
+	if err := vacuumSnapshot(ctx, srcPath, tempPath); err != nil {
+		return "", err
+	}
+	if err := os.Chmod(tempPath, 0o600); err != nil {
+		return "", fmt.Errorf("set snapshot permissions: %w", err)
+	}
+	if err := validateSnapshot(ctx, tempPath, plan.From); err != nil {
+		return "", fmt.Errorf("validate new snapshot: %w", err)
+	}
+	if err := fsyncPath(tempPath); err != nil {
+		return "", err
+	}
+
+	if err := pruneSnapshots(existing, snapshotRetention-1); err != nil {
+		return "", err
+	}
+	if len(existing) > snapshotRetention-1 {
+		if err := fsyncPath(directory); err != nil {
+			return "", err
+		}
+	}
+
+	if err := os.Link(tempPath, targetPath); err != nil {
+		return "", fmt.Errorf("publish snapshot without clobbering %s: %w", targetPath, err)
+	}
+	published = true
+	if err := os.Remove(tempPath); err != nil {
+		return "", fmt.Errorf("remove published snapshot temporary link: %w", err)
+	}
+	tempPath = ""
+	if err := fsyncPath(directory); err != nil {
 		return "", err
 	}
 	return targetPath, nil
+}
+
+func snapshotPlan(ctx context.Context, srcPath string, plans []compat.MigrationPlan) (compat.MigrationPlan, error) {
+	if len(plans) > 1 {
+		return compat.MigrationPlan{}, fmt.Errorf("snapshot accepts at most one migration plan")
+	}
+	if len(plans) == 1 {
+		if len(plans[0].Steps) == 0 {
+			return compat.MigrationPlan{}, fmt.Errorf("snapshot requires a non-empty migration plan")
+		}
+		return plans[0], nil
+	}
+
+	db, err := OpenReadOnly(srcPath)
+	if err != nil {
+		return compat.MigrationPlan{}, fmt.Errorf("inspect snapshot source: %w", err)
+	}
+	plan, diag, inspectErr := compat.InspectIndex(ctx, db.DB())
+	closeErr := db.Close()
+	if inspectErr != nil {
+		return compat.MigrationPlan{}, fmt.Errorf("inspect snapshot source: %w", inspectErr)
+	}
+	if diag != nil {
+		return compat.MigrationPlan{}, fmt.Errorf("inspect snapshot source: %s: %s", diag.Code, diag.Summary)
+	}
+	if closeErr != nil {
+		return compat.MigrationPlan{}, fmt.Errorf("close snapshot source inspection: %w", closeErr)
+	}
+	if len(plan.Steps) == 0 {
+		plan.Steps = []compat.MigrationStep{{Version: plan.From.AppliedVersion, Name: "current schema backup"}}
+	}
+	return plan, nil
+}
+
+func snapshotStem(srcPath string, plan compat.MigrationPlan) (string, error) {
+	signature := strings.TrimPrefix(plan.From.Signature, "sha256:")
+	if len(signature) < 12 {
+		return "", fmt.Errorf("invalid source schema signature %q", plan.From.Signature)
+	}
+	for _, char := range signature[:12] {
+		if !strings.ContainsRune("0123456789abcdef", char) {
+			return "", fmt.Errorf("invalid source schema signature %q", plan.From.Signature)
+		}
+	}
+	toVersion := plan.Steps[len(plan.Steps)-1].Version
+	if toVersion <= 0 {
+		return "", fmt.Errorf("invalid migration target version %d", toVersion)
+	}
+	return fmt.Sprintf("%s.snapshot-v%d-%s-to-v%d", srcPath, plan.From.AppliedVersion, signature[:12], toVersion), nil
+}
+
+func inspectRetainedSnapshots(ctx context.Context, stem string, expected compat.SchemaShape) ([]retainedSnapshot, int, error) {
+	entries, err := os.ReadDir(filepath.Dir(stem))
+	if err != nil {
+		return nil, 0, fmt.Errorf("list retained snapshots: %w", err)
+	}
+	base := filepath.Base(stem)
+	var snapshots []retainedSnapshot
+	maxSuffix := -1
+	for _, entry := range entries {
+		suffix, ok := snapshotSuffix(base, entry.Name())
+		if !ok {
+			continue
+		}
+		path := filepath.Join(filepath.Dir(stem), entry.Name())
+		info, err := os.Lstat(path)
+		if err != nil {
+			return nil, 0, fmt.Errorf("inspect retained snapshot %s: %w", path, err)
+		}
+		if info.Mode()&os.ModeSymlink != 0 || !info.Mode().IsRegular() {
+			return nil, 0, fmt.Errorf("refuse unsafe retained snapshot %s", path)
+		}
+		if err := validateSnapshot(ctx, path, expected); err != nil {
+			return nil, 0, fmt.Errorf("refuse unvalidated retained snapshot %s: %w", path, err)
+		}
+		snapshots = append(snapshots, retainedSnapshot{path: path, suffix: suffix, info: info})
+		if suffix > maxSuffix {
+			maxSuffix = suffix
+		}
+	}
+	sort.Slice(snapshots, func(i, j int) bool { return snapshots[i].suffix < snapshots[j].suffix })
+	return snapshots, maxSuffix + 1, nil
+}
+
+func snapshotSuffix(base, name string) (int, bool) {
+	if name == base {
+		return 0, true
+	}
+	prefix := base + "."
+	if !strings.HasPrefix(name, prefix) {
+		return 0, false
+	}
+	raw := strings.TrimPrefix(name, prefix)
+	if raw == "" || (len(raw) > 1 && raw[0] == '0') {
+		return 0, false
+	}
+	suffix, err := strconv.Atoi(raw)
+	if err != nil || suffix <= 0 {
+		return 0, false
+	}
+	return suffix, true
+}
+
+func vacuumSnapshot(ctx context.Context, srcPath, targetPath string) error {
+	db, err := sql.Open("sqlite", "file:"+srcPath+"?mode=ro&_pragma=busy_timeout(5000)")
+	if err != nil {
+		return fmt.Errorf("open snapshot source: %w", err)
+	}
+	db.SetMaxOpenConns(1)
+	if _, err := db.ExecContext(ctx, "VACUUM INTO "+quoteSQLString(targetPath)); err != nil {
+		_ = db.Close()
+		return fmt.Errorf("create database snapshot: %w", err)
+	}
+	if err := db.Close(); err != nil {
+		return fmt.Errorf("close snapshot source: %w", err)
+	}
+	return nil
+}
+
+func validateSnapshot(ctx context.Context, path string, expected compat.SchemaShape) (err error) {
+	info, err := os.Lstat(path)
+	if err != nil {
+		return fmt.Errorf("stat snapshot: %w", err)
+	}
+	if !info.Mode().IsRegular() || info.Mode().Perm() != 0o600 {
+		return fmt.Errorf("snapshot mode is %s, want regular 0600", info.Mode())
+	}
+
+	db, err := sql.Open("sqlite", "file:"+path+"?mode=ro&immutable=1&_pragma=busy_timeout(5000)")
+	if err != nil {
+		return fmt.Errorf("open snapshot for validation: %w", err)
+	}
+	defer func() {
+		if closeErr := db.Close(); closeErr != nil {
+			err = errors.Join(err, fmt.Errorf("close snapshot validation connection: %w", closeErr))
+		}
+	}()
+
+	rows, err := db.QueryContext(ctx, "PRAGMA integrity_check")
+	if err != nil {
+		return fmt.Errorf("run snapshot integrity_check: %w", err)
+	}
+	var results []string
+	for rows.Next() {
+		var result string
+		if err := rows.Scan(&result); err != nil {
+			_ = rows.Close()
+			return fmt.Errorf("read snapshot integrity_check: %w", err)
+		}
+		results = append(results, result)
+	}
+	if err := rows.Err(); err != nil {
+		_ = rows.Close()
+		return fmt.Errorf("read snapshot integrity_check: %w", err)
+	}
+	if err := rows.Close(); err != nil {
+		return fmt.Errorf("close snapshot integrity_check: %w", err)
+	}
+	if len(results) != 1 || results[0] != "ok" {
+		return fmt.Errorf("snapshot integrity_check failed: %s", strings.Join(results, "; "))
+	}
+
+	plan, diag, err := compat.InspectIndex(ctx, db)
+	if err != nil {
+		return fmt.Errorf("inspect snapshot shape: %w", err)
+	}
+	if diag != nil {
+		return fmt.Errorf("inspect snapshot shape: %s: %s", diag.Code, diag.Summary)
+	}
+	if plan.From != expected {
+		return fmt.Errorf("snapshot schema shape changed: got %+v want %+v", plan.From, expected)
+	}
+	return nil
+}
+
+func pruneSnapshots(snapshots []retainedSnapshot, keep int) error {
+	removeCount := len(snapshots) - keep
+	for i := 0; i < removeCount; i++ {
+		current, err := os.Lstat(snapshots[i].path)
+		if err != nil {
+			return fmt.Errorf("recheck retained snapshot %s: %w", snapshots[i].path, err)
+		}
+		if current.Mode()&os.ModeSymlink != 0 || !current.Mode().IsRegular() || !os.SameFile(current, snapshots[i].info) {
+			return fmt.Errorf("retained snapshot changed before removal: %s", snapshots[i].path)
+		}
+		if err := os.Remove(snapshots[i].path); err != nil {
+			return fmt.Errorf("remove retained snapshot %s: %w", snapshots[i].path, err)
+		}
+	}
+	return nil
 }
 
 // ApplyMigrationPlan applies a checked compatibility migration plan atomically.
@@ -56,12 +316,6 @@ func (d *Database) ApplyMigrationPlan(ctx context.Context, plan compat.Migration
 
 	if planIncludesVersion(plan, 9) {
 		if err := prepareV9ToolEventDuplicates(ctx, d.db); err != nil {
-			return err
-		}
-	}
-
-	if planHasDestructiveMigration(plan) {
-		if _, err := snapshotDatabase(ctx, d.path); err != nil {
 			return err
 		}
 	}
@@ -160,19 +414,6 @@ var migrationPlanDispatch = map[compat.MigrationStep]migrationApplier{
 	{Version: 16, Name: "V16 parser-backed message origin"}:                              applyV16,
 }
 
-func isDestructiveMigration(step compat.MigrationStep) bool {
-	return step.Version == 5 || step.Version == 6 || step.Version == 8 || step.Version == 9
-}
-
-func planHasDestructiveMigration(plan compat.MigrationPlan) bool {
-	for _, step := range plan.Steps {
-		if isDestructiveMigration(step) {
-			return true
-		}
-	}
-	return false
-}
-
 func planStartsFromEmptySchema(plan compat.MigrationPlan) bool {
 	return plan.From.AppliedVersion == 0 && len(plan.Steps) > 0 && plan.Steps[0].Version == 1
 }
@@ -184,22 +425,6 @@ func planIncludesVersion(plan compat.MigrationPlan, version int) bool {
 		}
 	}
 	return false
-}
-
-func nextSnapshotPath(srcPath string) (string, error) {
-	for i := 0; ; i++ {
-		candidate := srcPath + ".snapshot"
-		if i > 0 {
-			candidate = fmt.Sprintf("%s.snapshot.%d", srcPath, i)
-		}
-		_, err := os.Stat(candidate)
-		if os.IsNotExist(err) {
-			return candidate, nil
-		}
-		if err != nil {
-			return "", fmt.Errorf("stat snapshot target: %w", err)
-		}
-	}
 }
 
 func quoteSQLString(value string) string {

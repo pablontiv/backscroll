@@ -22,9 +22,14 @@ type Database struct {
 	embeddingProvider embedding.EmbeddingProvider
 }
 
-var openCompatibleApplyMigrationPlan = func(db *Database, ctx context.Context, plan compat.MigrationPlan) error {
-	return db.ApplyMigrationPlan(ctx, plan)
-}
+var (
+	openCompatibleSnapshotDatabase = func(ctx context.Context, path string, plan compat.MigrationPlan) (string, error) {
+		return SnapshotDatabase(ctx, path, plan)
+	}
+	openCompatibleApplyMigrationPlan = func(db *Database, ctx context.Context, plan compat.MigrationPlan) error {
+		return db.ApplyMigrationPlan(ctx, plan)
+	}
+)
 
 var ErrImmutableReadOnlyWALUnsafe = errors.New("non-empty WAL makes immutable read-only content unsafe")
 
@@ -101,6 +106,10 @@ func OpenCompatible(ctx context.Context, path string) (*Database, *compat.Diagno
 	if len(plan.Steps) == 0 {
 		db, openErr := openWithoutSetup(canonicalPath)
 		return db, nil, openErr
+	}
+
+	if _, err := openCompatibleSnapshotDatabase(ctx, canonicalPath, plan); err != nil {
+		return nil, nil, fmt.Errorf("snapshot database before migration: %w", err)
 	}
 
 	migrationDB, err := openMigrationWithoutSetup(canonicalPath)

@@ -40,7 +40,7 @@ func TestEveryCatalogFixtureReachesCurrentSemanticHead(t *testing.T) {
 		}{
 			name:              release.Fixture,
 			appliedVersion:    release.AppliedVersion,
-			expectSnapshot:    fixtureNeedsDestructiveSnapshot(release.AppliedVersion, release.HasSourceMetadata),
+			expectSnapshot:    release.AppliedVersion < catalog.CurrentShape().AppliedVersion,
 			hasSourceMetadata: release.HasSourceMetadata,
 		})
 	}
@@ -57,7 +57,7 @@ func TestEveryCatalogFixtureReachesCurrentSemanticHead(t *testing.T) {
 		}{
 			name:              fixture.Fixture,
 			appliedVersion:    fixture.AppliedVersion,
-			expectSnapshot:    fixtureNeedsDestructiveSnapshot(fixture.AppliedVersion, fixture.HasSourceMetadata),
+			expectSnapshot:    fixture.AppliedVersion < catalog.CurrentShape().AppliedVersion,
 			hasSourceMetadata: fixture.HasSourceMetadata,
 		})
 	}
@@ -116,7 +116,7 @@ func TestEveryCatalogFixtureReachesCurrentSemanticHead(t *testing.T) {
 
 			snapshotPath := maybeOnlySnapshot(t, dbPath)
 			if fixture.expectSnapshot && snapshotPath == "" {
-				t.Fatalf("expected snapshot for fixture %s with destructive migration steps", fixture.name)
+				t.Fatalf("expected snapshot for fixture %s with pending migration steps", fixture.name)
 			}
 			if !fixture.expectSnapshot && snapshotPath != "" {
 				t.Fatalf("unexpected snapshot for fixture %s: %s", fixture.name, snapshotPath)
@@ -155,7 +155,7 @@ func TestHistoricalLineageWithoutSourceMetadataUpgradesLosslessly(t *testing.T) 
 	assertCurrentShape(t, db.DB())
 }
 
-func TestMigrationSnapshotAndRollbackOnDestructiveFailure(t *testing.T) {
+func TestApplyMigrationPlanRollbackDoesNotCreateBackup(t *testing.T) {
 	ctx := context.Background()
 	dbPath := createFixtureDatabase(t, "v3-no-source-metadata.sql")
 	wantRows := seedMigrationSentinels(t, dbPath)
@@ -189,14 +189,9 @@ func TestMigrationSnapshotAndRollbackOnDestructiveFailure(t *testing.T) {
 	assertTableExists(t, db.DB(), "tool_fts", false)
 	assertMigrationVersionCount(t, db.DB(), 4, 0)
 
-	snapshotPath := onlySnapshot(t, dbPath)
-	snapshot, err := OpenReadOnly(snapshotPath)
-	if err != nil {
-		t.Fatalf("open snapshot read-only: %v", err)
+	if snapshotPath := maybeOnlySnapshot(t, dbPath); snapshotPath != "" {
+		t.Fatalf("ApplyMigrationPlan created backup outside OpenCompatible: %s", snapshotPath)
 	}
-	defer func() { _ = snapshot.Close() }()
-	assertSearchItems(t, snapshot.DB(), wantRows)
-	assertTableExists(t, snapshot.DB(), "session_events", true)
 }
 
 func TestOpenCompatibleClosesAndClearsDatabaseOnMigrationError(t *testing.T) {
@@ -292,24 +287,218 @@ func TestOpenCompatibleMigrationTransactionReservesWriteLock(t *testing.T) {
 	}
 }
 
-func TestSnapshotDatabaseUsesAvailableSiblingName(t *testing.T) {
-	dbPath := createFixtureDatabase(t, "v16.sql")
-	if err := os.WriteFile(dbPath+".snapshot", []byte("occupied"), 0o644); err != nil {
+func TestSnapshotDatabaseUsesIncrementalRecoverableNames(t *testing.T) {
+	ctx := context.Background()
+	dbPath := createFixtureDatabase(t, "v15.sql")
+	inspect, err := OpenReadOnly(dbPath)
+	if err != nil {
 		t.Fatal(err)
 	}
-	snapshotPath, err := SnapshotDatabase(context.Background(), dbPath)
-	if err != nil {
-		t.Fatalf("snapshot database: %v", err)
+	plan, diag, err := compat.InspectIndex(ctx, inspect.DB())
+	_ = inspect.Close()
+	if err != nil || diag != nil {
+		t.Fatalf("inspect error=%v diagnostic=%+v", err, diag)
 	}
-	if snapshotPath != dbPath+".snapshot.1" {
-		t.Fatalf("snapshot path = %q, want numbered sibling", snapshotPath)
+	stem, err := snapshotStem(dbPath, plan)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	first, err := SnapshotDatabase(ctx, dbPath, plan)
+	if err != nil {
+		t.Fatalf("first snapshot: %v", err)
+	}
+	second, err := SnapshotDatabase(ctx, dbPath, plan)
+	if err != nil {
+		t.Fatalf("second snapshot: %v", err)
+	}
+	if first != stem || second != stem+".1" {
+		t.Fatalf("snapshot paths = %q, %q; want %q, %q", first, second, stem, stem+".1")
+	}
+	for _, path := range []string{first, second} {
+		info, err := os.Lstat(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if info.Mode().Perm() != 0o600 {
+			t.Fatalf("snapshot %s mode = %o, want 0600", path, info.Mode().Perm())
+		}
+		if err := validateSnapshot(ctx, path, plan.From); err != nil {
+			t.Fatalf("validate snapshot %s: %v", path, err)
+		}
+	}
+}
+
+func TestSnapshotDatabaseRetainsAtMostTwoValidatedBackups(t *testing.T) {
+	ctx := context.Background()
+	dbPath := createFixtureDatabase(t, "v15.sql")
+	plan := inspectPlanForTest(t, ctx, dbPath)
+	stem, err := snapshotStem(dbPath, plan)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	first, err := SnapshotDatabase(ctx, dbPath, plan)
+	if err != nil {
+		t.Fatal(err)
+	}
+	second, err := SnapshotDatabase(ctx, dbPath, plan)
+	if err != nil {
+		t.Fatal(err)
+	}
+	third, err := SnapshotDatabase(ctx, dbPath, plan)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if first != stem || second != stem+".1" || third != stem+".2" {
+		t.Fatalf("incremental names = %q, %q, %q", first, second, third)
+	}
+	if _, err := os.Lstat(first); !os.IsNotExist(err) {
+		t.Fatalf("oldest snapshot was not pruned: %v", err)
+	}
+	for _, path := range []string{second, third} {
+		if err := validateSnapshot(ctx, path, plan.From); err != nil {
+			t.Fatalf("retained snapshot %s invalid: %v", path, err)
+		}
+	}
+}
+
+func TestSnapshotDatabaseRefusesSymlinkWithoutFollowingOrDeletingIt(t *testing.T) {
+	ctx := context.Background()
+	dbPath := createFixtureDatabase(t, "v15.sql")
+	plan := inspectPlanForTest(t, ctx, dbPath)
+	stem, err := snapshotStem(dbPath, plan)
+	if err != nil {
+		t.Fatal(err)
+	}
+	foreign := filepath.Join(t.TempDir(), "foreign")
+	if err := os.WriteFile(foreign, []byte("do not touch"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(foreign, stem); err != nil {
+		t.Fatal(err)
+	}
+
+	db, diag, err := OpenCompatible(ctx, dbPath)
+	if err == nil {
+		if db != nil {
+			_ = db.Close()
+		}
+		t.Fatal("expected matching symlink to block snapshot retention")
+	}
+	if db != nil || diag != nil {
+		t.Fatalf("retention failure result db=%v diagnostic=%+v", db, diag)
+	}
+	if after := inspectPlanForTest(t, ctx, dbPath).From; after != plan.From {
+		t.Fatalf("retention failure changed database shape: got %+v want %+v", after, plan.From)
+	}
+	info, err := os.Lstat(stem)
+	if err != nil || info.Mode()&os.ModeSymlink == 0 {
+		t.Fatalf("snapshot symlink was changed: info=%v err=%v", info, err)
+	}
+	contents, err := os.ReadFile(foreign)
+	if err != nil || string(contents) != "do not touch" {
+		t.Fatalf("foreign target changed: contents=%q err=%v", contents, err)
+	}
+}
+
+func TestSnapshotDatabaseIncludesCommittedWALFrames(t *testing.T) {
+	ctx := context.Background()
+	dbPath := createFixtureDatabase(t, "v15.sql")
+	plan := inspectPlanForTest(t, ctx, dbPath)
+	writer, err := openWithoutSetup(dbPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = writer.Close() }()
+	if _, err := writer.DB().Exec(`PRAGMA wal_autocheckpoint = 0`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := writer.DB().Exec(`
+		INSERT INTO search_items (source_path, ordinal, role, text, uuid)
+		VALUES ('/wal.jsonl', 991, 'assistant', 'committed-wal-sentinel', 'wal-snapshot-uuid')
+	`); err != nil {
+		t.Fatal(err)
+	}
+	walInfo, err := os.Stat(dbPath + "-wal")
+	if err != nil || walInfo.Size() == 0 {
+		t.Fatalf("expected non-empty WAL before snapshot: info=%v err=%v", walInfo, err)
+	}
+
+	snapshotPath, err := SnapshotDatabase(ctx, dbPath, plan)
+	if err != nil {
+		t.Fatal(err)
 	}
 	snapshot, err := OpenReadOnly(snapshotPath)
 	if err != nil {
-		t.Fatalf("open snapshot read-only: %v", err)
+		t.Fatal(err)
 	}
 	defer func() { _ = snapshot.Close() }()
-	assertCurrentShape(t, snapshot.DB())
+	var count int
+	if err := snapshot.DB().QueryRow(`SELECT COUNT(*) FROM search_items WHERE uuid = 'wal-snapshot-uuid' AND text = 'committed-wal-sentinel'`).Scan(&count); err != nil {
+		t.Fatal(err)
+	}
+	if count != 1 {
+		t.Fatalf("snapshot contains %d committed WAL rows, want 1", count)
+	}
+}
+
+func TestOpenCompatibleSnapshotFailureBlocksMigrationAndPreservesDatabase(t *testing.T) {
+	ctx := context.Background()
+	dbPath := createFixtureDatabase(t, "v15.sql")
+	before := inspectPlanForTest(t, ctx, dbPath).From
+	originalSnapshot := openCompatibleSnapshotDatabase
+	originalApply := openCompatibleApplyMigrationPlan
+	applyCalled := false
+	openCompatibleSnapshotDatabase = func(context.Context, string, compat.MigrationPlan) (string, error) {
+		return "", fmt.Errorf("injected durable snapshot failure")
+	}
+	openCompatibleApplyMigrationPlan = func(*Database, context.Context, compat.MigrationPlan) error {
+		applyCalled = true
+		return nil
+	}
+	t.Cleanup(func() {
+		openCompatibleSnapshotDatabase = originalSnapshot
+		openCompatibleApplyMigrationPlan = originalApply
+	})
+
+	db, diag, err := OpenCompatible(ctx, dbPath)
+	if err == nil || !strings.Contains(err.Error(), "injected durable snapshot failure") {
+		t.Fatalf("OpenCompatible error = %v, want snapshot failure", err)
+	}
+	if db != nil || diag != nil || applyCalled {
+		t.Fatalf("snapshot failure result db=%v diag=%v applyCalled=%v", db, diag, applyCalled)
+	}
+	after := inspectPlanForTest(t, ctx, dbPath).From
+	if after != before {
+		t.Fatalf("database shape changed after snapshot failure: got %+v want %+v", after, before)
+	}
+}
+
+func TestOpenCompatibleSecondStartupDoesNotDuplicateBackup(t *testing.T) {
+	ctx := context.Background()
+	dbPath := createFixtureDatabase(t, "v15.sql")
+	first, diag, err := OpenCompatible(ctx, dbPath)
+	if err != nil || diag != nil {
+		t.Fatalf("first startup error=%v diagnostic=%+v", err, diag)
+	}
+	if err := first.Close(); err != nil {
+		t.Fatal(err)
+	}
+	matches, err := filepath.Glob(dbPath + ".snapshot*")
+	if err != nil || len(matches) != 1 {
+		t.Fatalf("first startup snapshots=%v err=%v", matches, err)
+	}
+
+	second, diag, err := OpenCompatible(ctx, dbPath)
+	if err != nil || diag != nil {
+		t.Fatalf("second startup error=%v diagnostic=%+v", err, diag)
+	}
+	defer func() { _ = second.Close() }()
+	after, err := filepath.Glob(dbPath + ".snapshot*")
+	if err != nil || !reflect.DeepEqual(after, matches) {
+		t.Fatalf("second startup snapshots=%v, want unchanged %v (err=%v)", after, matches, err)
+	}
 }
 
 func TestApplyMigrationPlanRejectsUnknownStep(t *testing.T) {
@@ -468,44 +657,33 @@ func TestDestructiveV8AndV9EntryPointsCreateSnapshot(t *testing.T) {
 	}
 }
 
-func TestApplyMigrationPlanSnapshotsBeforeBeginningTransaction(t *testing.T) {
+func TestOpenCompatibleSnapshotsBeforeOpeningMigrationTransaction(t *testing.T) {
 	ctx := context.Background()
 	dbPath := createFixtureDatabase(t, "v7.sql")
-	inspect, err := OpenReadOnly(dbPath)
-	if err != nil {
-		t.Fatal(err)
-	}
-	plan, diag, err := compat.InspectIndex(ctx, inspect.DB())
-	_ = inspect.Close()
-	if err != nil || diag != nil {
-		t.Fatalf("inspect error=%v diagnostic=%+v", err, diag)
-	}
-
-	db, err := openWithoutSetup(dbPath)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer func() { _ = db.Close() }()
-
-	originalSnapshot := snapshotDatabase
+	originalSnapshot := openCompatibleSnapshotDatabase
 	originalBegin := beginMigrationTx
 	var order []string
-	snapshotDatabase = func(context.Context, string) (string, error) {
-		order = append(order, "snapshot")
-		return dbPath + ".snapshot", nil
+	openCompatibleSnapshotDatabase = func(ctx context.Context, path string, plan compat.MigrationPlan) (string, error) {
+		snapshotPath, err := originalSnapshot(ctx, path, plan)
+		if err == nil {
+			order = append(order, "snapshot")
+		}
+		return snapshotPath, err
 	}
 	beginMigrationTx = func(ctx context.Context, raw *sql.DB) (*sql.Tx, error) {
 		order = append(order, "begin")
 		return raw.BeginTx(ctx, nil)
 	}
 	t.Cleanup(func() {
-		snapshotDatabase = originalSnapshot
+		openCompatibleSnapshotDatabase = originalSnapshot
 		beginMigrationTx = originalBegin
 	})
 
-	if err := db.ApplyMigrationPlan(ctx, plan); err != nil {
-		t.Fatalf("apply migration plan: %v", err)
+	db, diag, err := OpenCompatible(ctx, dbPath)
+	if err != nil || diag != nil {
+		t.Fatalf("open compatible error=%v diagnostic=%+v", err, diag)
 	}
+	defer func() { _ = db.Close() }()
 	if !reflect.DeepEqual(order[:2], []string{"snapshot", "begin"}) {
 		t.Fatalf("snapshot/transaction order = %+v, want snapshot before begin", order)
 	}
@@ -532,21 +710,13 @@ func TestV9DuplicateToolEventsConflictAbortsBeforeMutation(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer func() { _ = db.Close() }()
-	var snapshotCalled, beginCalled bool
-	originalSnapshot := snapshotDatabase
+	var beginCalled bool
 	originalBegin := beginMigrationTx
-	snapshotDatabase = func(ctx context.Context, path string) (string, error) {
-		snapshotCalled = true
-		return originalSnapshot(ctx, path)
-	}
 	beginMigrationTx = func(ctx context.Context, raw *sql.DB) (*sql.Tx, error) {
 		beginCalled = true
 		return raw.BeginTx(ctx, nil)
 	}
-	t.Cleanup(func() {
-		snapshotDatabase = originalSnapshot
-		beginMigrationTx = originalBegin
-	})
+	t.Cleanup(func() { beginMigrationTx = originalBegin })
 
 	err = db.ApplyMigrationPlan(ctx, plan)
 	if err == nil {
@@ -555,8 +725,8 @@ func TestV9DuplicateToolEventsConflictAbortsBeforeMutation(t *testing.T) {
 	if !strings.Contains(err.Error(), "conflicting tool_events") {
 		t.Fatalf("error = %v, want conflicting tool_events", err)
 	}
-	if snapshotCalled || beginCalled {
-		t.Fatalf("V9 duplicate conflict reached snapshot=%v begin=%v; want preflight abort before both", snapshotCalled, beginCalled)
+	if beginCalled {
+		t.Fatal("V9 duplicate conflict reached transaction; want preflight abort")
 	}
 	assertToolEventUUIDCount(t, db.DB(), "dup-tool-uuid", 2)
 	assertMigrationVersionCount(t, db.DB(), 9, 0)
@@ -586,21 +756,13 @@ func TestV9DuplicateToolEventsDifferingOnlyProvenanceAbortBeforeSnapshotOrTransa
 		t.Fatal(err)
 	}
 	defer func() { _ = db.Close() }()
-	var snapshotCalled, beginCalled bool
-	originalSnapshot := snapshotDatabase
+	var beginCalled bool
 	originalBegin := beginMigrationTx
-	snapshotDatabase = func(ctx context.Context, path string) (string, error) {
-		snapshotCalled = true
-		return originalSnapshot(ctx, path)
-	}
 	beginMigrationTx = func(ctx context.Context, raw *sql.DB) (*sql.Tx, error) {
 		beginCalled = true
 		return raw.BeginTx(ctx, nil)
 	}
-	t.Cleanup(func() {
-		snapshotDatabase = originalSnapshot
-		beginMigrationTx = originalBegin
-	})
+	t.Cleanup(func() { beginMigrationTx = originalBegin })
 
 	err = db.ApplyMigrationPlan(ctx, plan)
 	if err == nil {
@@ -609,8 +771,8 @@ func TestV9DuplicateToolEventsDifferingOnlyProvenanceAbortBeforeSnapshotOrTransa
 	if !strings.Contains(err.Error(), "conflicting tool_events") {
 		t.Fatalf("error = %v, want conflicting tool_events", err)
 	}
-	if snapshotCalled || beginCalled {
-		t.Fatalf("V9 provenance conflict reached snapshot=%v begin=%v; want preflight abort before both", snapshotCalled, beginCalled)
+	if beginCalled {
+		t.Fatal("V9 provenance conflict reached transaction; want preflight abort")
 	}
 	assertToolEventUUIDCount(t, db.DB(), "provenance-tool-uuid", 2)
 	assertMigrationVersionCount(t, db.DB(), 9, 0)
@@ -790,14 +952,14 @@ func TestV9TransactionalRecheckCatchesDuplicateInsertedAfterPreflight(t *testing
 		t.Fatal(err)
 	}
 	defer func() { _ = db.Close() }()
-	originalSnapshot := snapshotDatabase
+	originalBegin := beginMigrationTx
 	var injected bool
-	snapshotDatabase = func(ctx context.Context, path string) (string, error) {
-		seedToolEvent(t, path, "late-duplicate-tool-uuid", "/late-b.jsonl", 2, "Bash", "echo two", 0, 0, 8)
+	beginMigrationTx = func(ctx context.Context, raw *sql.DB) (*sql.Tx, error) {
+		seedToolEvent(t, dbPath, "late-duplicate-tool-uuid", "/late-b.jsonl", 2, "Bash", "echo two", 0, 0, 8)
 		injected = true
-		return originalSnapshot(ctx, path)
+		return originalBegin(ctx, raw)
 	}
-	t.Cleanup(func() { snapshotDatabase = originalSnapshot })
+	t.Cleanup(func() { beginMigrationTx = originalBegin })
 
 	err = db.ApplyMigrationPlan(ctx, plan)
 	if err == nil {
@@ -844,12 +1006,12 @@ func TestV9SamePayloadDifferentSourceIsNotAnExactDuplicate(t *testing.T) {
 	}
 	defer func() { _ = raw.Close() }()
 	assertToolEventUUIDCount(t, raw.DB(), "same-payload-tool-uuid", 2)
-	if snapshotPath := maybeOnlySnapshot(t, dbPath); snapshotPath != "" {
-		t.Fatalf("unexpected snapshot for V9 preflight failure: %s", snapshotPath)
+	if snapshotPath := maybeOnlySnapshot(t, dbPath); snapshotPath == "" {
+		t.Fatal("OpenCompatible did not create backup before V9 preflight failure")
 	}
 }
 
-func TestApplyMigrationPlanUsesReceiverPathForSnapshotAndVerification(t *testing.T) {
+func TestApplyMigrationPlanUsesReceiverPathForVerificationOnly(t *testing.T) {
 	ctx := context.Background()
 	receiverPath := createFixtureDatabase(t, "v3.sql")
 	unrelatedPath := createFixtureDatabase(t, "v13.sql")
@@ -872,11 +1034,11 @@ func TestApplyMigrationPlanUsesReceiverPathForSnapshotAndVerification(t *testing
 	if err := db.ApplyMigrationPlan(ctx, plan); err != nil {
 		t.Fatalf("apply migration plan: %v", err)
 	}
-	if snapshotPath := maybeOnlySnapshot(t, receiverPath); snapshotPath == "" {
-		t.Fatal("receiver database was not snapshotted")
+	if snapshotPath := maybeOnlySnapshot(t, receiverPath); snapshotPath != "" {
+		t.Fatalf("ApplyMigrationPlan unexpectedly snapshotted receiver: %s", snapshotPath)
 	}
 	if snapshotPath := maybeOnlySnapshot(t, unrelatedPath); snapshotPath != "" {
-		t.Fatalf("unrelated path was snapshotted: %s", snapshotPath)
+		t.Fatalf("ApplyMigrationPlan unexpectedly snapshotted unrelated path: %s", snapshotPath)
 	}
 	assertCurrentShape(t, db.DB())
 }
@@ -1347,13 +1509,6 @@ func querySentinelTableRows(t *testing.T, db *sql.DB, table string) [][]string {
 	return result
 }
 
-func fixtureNeedsDestructiveSnapshot(appliedVersion int, hasSourceMetadata bool) bool {
-	if appliedVersion < 5 || (appliedVersion < 6 && hasSourceMetadata) {
-		return true
-	}
-	return appliedVersion < 9
-}
-
 func tableExists(t *testing.T, db *sql.DB, table string) bool {
 	t.Helper()
 	var count int
@@ -1405,6 +1560,20 @@ func columnExists(t *testing.T, db *sql.DB, table, column string) bool {
 		t.Fatal(err)
 	}
 	return false
+}
+
+func inspectPlanForTest(t *testing.T, ctx context.Context, dbPath string) compat.MigrationPlan {
+	t.Helper()
+	inspect, err := OpenReadOnly(dbPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	plan, diag, err := compat.InspectIndex(ctx, inspect.DB())
+	closeErr := inspect.Close()
+	if err != nil || diag != nil || closeErr != nil {
+		t.Fatalf("inspect plan error=%v diagnostic=%+v close=%v", err, diag, closeErr)
+	}
+	return plan
 }
 
 func maybeOnlySnapshot(t *testing.T, dbPath string) string {
