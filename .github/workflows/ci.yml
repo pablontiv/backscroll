@@ -55,159 +55,264 @@ jobs:
               -u BACKSCROLL_INPUTS_SOURCE_DIR \
               bash tests/test-install-isolation.sh
 
-  candidate:
+  candidate-build:
     needs: [ci, gitleaks, skill-install]
     if: github.event_name == 'pull_request'
+    uses: >-
+      pablontiv/crossbeam/.github/workflows/go-candidate.yml@d8c1cd73ac11e43c2079147f61a86f0e5ceaed65
+    permissions:
+      pull-requests: read
+    with:
+      source-repository: ${{ github.event.pull_request.head.repo.full_name }}
+      source-sha: ${{ github.event.pull_request.head.sha }}
+      base-sha: ${{ github.event.pull_request.base.sha }}
+      pr-number: ${{ github.event.number }}
+      binary-name: backscroll
+      go-version: '1.26.2'
+
+  candidate:
+    needs: [ci, gitleaks, skill-install, candidate-build]
+    if: always() && github.event_name == 'pull_request'
     runs-on: ubuntu-24.04
     permissions:
-      contents: read
+      actions: read
     steps:
-      - name: Check out the exact PR revision
-        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
-        with:
-          repository: ${{ github.event.pull_request.head.repo.full_name }}
-          ref: ${{ github.event.pull_request.head.sha }}
-          fetch-depth: 0
-          persist-credentials: false
-      - name: Load trusted base repository tags
-        run: |
-          while IFS= read -r tag; do
-            git tag --delete -- "$tag"
-          done < <(git tag --list)
-          git fetch --force --no-recurse-submodules \
-            'https://github.com/${{ github.repository }}.git' \
-            '+refs/tags/*:refs/tags/*'
-      - name: Set up Go
-        uses: actions/setup-go@d35c59abb061a4a6fb18e82ac0862c26744d6ab5 # v5.5.0
-        with:
-          go-version-file: go.mod
-      - name: Build snapshot archives
-        uses: goreleaser/goreleaser-action@e435ccd777264be153ace6237001ef4d979d3a7a # v6.4.0
-        with:
-          distribution: goreleaser
-          version: v2.18.2 # Renew only after matching local snapshot validation.
-          args: release --snapshot --clean
+      - name: Require every candidate gate to succeed
         env:
-          PR_NUMBER: ${{ github.event.number }}
-      - name: Verify candidate and smoke Linux amd64
-        env:
-          PR_NUMBER: ${{ github.event.number }}
-          PR_SHA: ${{ github.event.pull_request.head.sha }}
-          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          CI_RESULT: ${{ needs.ci.result }}
+          GITLEAKS_RESULT: ${{ needs.gitleaks.result }}
+          SKILL_INSTALL_RESULT: ${{ needs.skill-install.result }}
+          CANDIDATE_BUILD_RESULT: ${{ needs.candidate-build.result }}
         run: |
           set -euo pipefail
-
-          test "$(git rev-parse HEAD)" = "$PR_SHA"
-          base_tag="$(git describe --tags --abbrev=0)"
-          base_version="${base_tag#v}"
-          if [[ ! "$base_version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
-            echo "invalid base version: $base_version" >&2
-            exit 1
-          fi
-          IFS=. read -r major minor patch <<EOF
-          $base_version
-          EOF
-          next_version="$major.$minor.$((patch + 1))"
-          short_sha="$(git rev-parse --short=7 HEAD)"
-          candidate_version="$next_version-pr.$PR_NUMBER.g$short_sha"
-          case "$candidate_version" in
-            *dev*) echo "candidate version contains dev: $candidate_version" >&2; exit 1 ;;
-          esac
-
-          numeric_short_sha=0123456
-          numeric_candidate_version="$next_version-pr.$PR_NUMBER.g$numeric_short_sha"
-          candidate_semver_re='^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)-pr\.[1-9][0-9]*\.g[0-9a-f]{7}$'
-          for version in "$candidate_version" "$numeric_candidate_version"; do
-            if [[ ! "$version" =~ $candidate_semver_re ]]; then
-              echo "invalid candidate version: $version" >&2
+          for result in \
+            "$CI_RESULT" \
+            "$GITLEAKS_RESULT" \
+            "$SKILL_INSTALL_RESULT" \
+            "$CANDIDATE_BUILD_RESULT"; do
+            if [[ "$result" != success ]]; then
+              echo "::error::required candidate dependency was $result"
               exit 1
             fi
           done
 
-          expected_archives=(
-            "backscroll_${candidate_version}_linux_amd64.tar.gz"
-            "backscroll_${candidate_version}_linux_arm64.tar.gz"
-            "backscroll_${candidate_version}_darwin_amd64.tar.gz"
-            "backscroll_${candidate_version}_darwin_arm64.tar.gz"
-            "backscroll_${candidate_version}_windows_amd64.zip"
-            "backscroll_${candidate_version}_windows_arm64.zip"
+      - name: Verify candidate artifact identity through REST
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GITHUB_API_URL: ${{ github.api_url }}
+          REPOSITORY: ${{ github.repository }}
+          PR_NUMBER: ${{ github.event.number }}
+          PR_SHA: ${{ github.event.pull_request.head.sha }}
+          ARTIFACT_ID: ${{ needs.candidate-build.outputs.artifact-id }}
+          ARTIFACT_DIGEST: ${{ needs.candidate-build.outputs.artifact-digest }}
+          ARTIFACT_NAME: ${{ needs.candidate-build.outputs.artifact-name }}
+          SOURCE_SHA: ${{ needs.candidate-build.outputs.source-sha }}
+        run: |
+          set -euo pipefail
+          response=$(curl --fail-with-body --silent --show-error \
+            --header "Authorization: Bearer $GH_TOKEN" \
+            --header "Accept: application/vnd.github+json" \
+            --header "X-GitHub-Api-Version: 2022-11-28" \
+            "${GITHUB_API_URL%/}/repos/$REPOSITORY/actions/artifacts/$ARTIFACT_ID")
+          ARTIFACT_RESPONSE="$response" python3 - <<'PY'
+          import json
+          import os
+          import re
+
+          artifact_id = os.environ["ARTIFACT_ID"]
+          digest = os.environ["ARTIFACT_DIGEST"]
+          name = os.environ["ARTIFACT_NAME"]
+          source_sha = os.environ["SOURCE_SHA"].lower()
+          pr_sha = os.environ["PR_SHA"].lower()
+          pr_number = os.environ["PR_NUMBER"]
+          expected_name = f"go-candidate-pr-{pr_number}-{pr_sha}"
+          if not re.fullmatch(r"[1-9][0-9]*", artifact_id):
+              raise SystemExit("::error::candidate artifact ID is invalid")
+          if not re.fullmatch(r"[0-9a-f]{64}", digest):
+              raise SystemExit("::error::candidate artifact digest is invalid")
+          if not re.fullmatch(r"[0-9a-f]{40}", source_sha):
+              raise SystemExit("::error::candidate source SHA is invalid")
+          if source_sha != pr_sha or name != expected_name:
+              raise SystemExit("::error::candidate outputs do not match the PR")
+          try:
+              payload = json.loads(os.environ["ARTIFACT_RESPONSE"])
+              rest_id = str(payload["id"])
+              rest_name = payload["name"]
+              rest_digest = payload["digest"]
+              rest_sha = payload["workflow_run"]["head_sha"].lower()
+              expired = payload["expired"]
+          except (AttributeError, KeyError, TypeError,
+                  json.JSONDecodeError) as error:
+              message = f"::error::invalid artifact REST payload: {error}"
+              raise SystemExit(message)
+          rest_identity = (
+              rest_id, rest_name, rest_digest, rest_sha, expired,
           )
-          shopt -s nullglob
-          archives=(dist/backscroll_*.tar.gz dist/backscroll_*.zip)
-          test "${#archives[@]}" -eq 6
-          for archive in "${expected_archives[@]}"; do
-            test -f "dist/$archive"
-            grep -Fq "  $archive" dist/checksums.txt
-          done
-          test "$(wc -l < dist/checksums.txt)" -eq 6
-          (cd dist && sha256sum --check checksums.txt)
+          output_identity = (
+              artifact_id, name, f"sha256:{digest}", source_sha, False,
+          )
+          if rest_identity != output_identity:
+              message = "candidate outputs differ from artifact REST metadata"
+              raise SystemExit(f"::error::{message}")
+          PY
 
-          smoke_root="$(mktemp -d)"
-          trap 'rm -rf "$smoke_root"' EXIT
-          tar -xzf "dist/backscroll_${candidate_version}_linux_amd64.tar.gz" \
-            -C "$smoke_root"
-          binary="$smoke_root/backscroll"
-          test -x "$binary"
-
-          revision="$(go version -m "$binary" | sed -n \
-            's/^[[:space:]]*build[[:space:]]*vcs.revision=//p')"
-          test "$revision" = "$PR_SHA"
-
-          version_home="$smoke_root/version-home"
-          mkdir -p "$version_home/config" "$version_home/cache"
-          version_output="$(HOME="$version_home" \
-            XDG_CONFIG_HOME="$version_home/config" \
-            XDG_CACHE_HOME="$version_home/cache" \
-            "$binary" --version)"
-          case "$version_output" in
-            *"$candidate_version"*) ;;
-            *) echo "unexpected runtime version: $version_output" >&2; exit 1 ;;
-          esac
-          case "$version_output" in
-            *dev*) echo "runtime version contains dev: $version_output" >&2; exit 1 ;;
-          esac
-
-          smoke_home="$smoke_root/smoke-home"
-          smoke_config="$smoke_root/smoke-config"
-          smoke_db="$smoke_root/smoke.db"
-          mkdir -p "$smoke_home" "$smoke_config"
-          HOME="$smoke_home" \
-            XDG_CONFIG_HOME="$smoke_config" \
-            XDG_CACHE_HOME="$smoke_root/smoke-cache" \
-            BACKSCROLL_CONFIG_DIR="$smoke_config" \
-            BACKSCROLL_DATABASE_PATH="$smoke_db" \
-            "$binary" validate --json | grep -Fq '"valid":true'
-          test -s "$smoke_db"
-
-          jq -n \
-            --argjson pr "$PR_NUMBER" \
-            --arg sha "$PR_SHA" \
-            --arg base_sha "$BASE_SHA" \
-            --arg base_version "$base_version" \
-            --arg version "$candidate_version" \
-            '{schema_version: 1, pr: $pr, sha: $sha, base_sha: $base_sha,
-              base_version: $base_version, version: $version}' \
-            > dist/candidate.json
-          jq -e \
-            --argjson pr "$PR_NUMBER" \
-            --arg sha "$PR_SHA" \
-            --arg base_sha "$BASE_SHA" \
-            --arg base_version "$base_version" \
-            --arg version "$candidate_version" \
-            '.pr == $pr and .sha == $sha and .base_sha == $base_sha and
-             .base_version == $base_version and .version == $version' \
-            dist/candidate.json >/dev/null
-      - name: Upload PR candidate artifact
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+      - name: Download exact candidate artifact
+        # v4.3.0
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
         with:
-          name: backscroll-pr-${{ github.event.number }}-${{ github.event.pull_request.head.sha }}
-          path: |
-            dist/backscroll_*.tar.gz
-            dist/backscroll_*.zip
-            dist/checksums.txt
-            dist/candidate.json
-          if-no-files-found: error
-          retention-days: 7
+          artifact-ids: ${{ needs.candidate-build.outputs.artifact-id }}
+          path: candidate
+          merge-multiple: true
+
+      - name: Verify candidate inventory and hashes
+        id: inventory
+        env:
+          PR_NUMBER: ${{ github.event.number }}
+          PR_SHA: ${{ github.event.pull_request.head.sha }}
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          CANDIDATE_VERSION: >-
+            ${{ needs.candidate-build.outputs.candidate-version }}
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import hashlib
+          import json
+          import os
+          from pathlib import Path
+          import re
+          import stat
+
+          root = Path("candidate").resolve()
+          entries = list(root.iterdir())
+          if (len(entries) != 8
+                  or any(path.is_symlink() or not path.is_file()
+                         or not stat.S_ISREG(
+                             path.stat(follow_symlinks=False).st_mode)
+                         for path in entries)):
+              raise SystemExit("::error::candidate must contain eight files")
+          manifest_path = root / "candidate.json"
+          checksum_path = root / "checksums.txt"
+          if manifest_path not in entries or checksum_path not in entries:
+              raise SystemExit("::error::candidate controls are missing")
+          manifest = json.loads(manifest_path.read_text())
+          expected_keys = {
+              "archives", "base", "base_version", "candidate_version",
+              "pr", "schema", "sha",
+          }
+          if not isinstance(manifest, dict) or set(manifest) != expected_keys:
+              raise SystemExit("::error::candidate manifest shape is invalid")
+          version = os.environ["CANDIDATE_VERSION"]
+          source_sha = os.environ["PR_SHA"].lower()
+          base_sha = os.environ["BASE_SHA"].lower()
+          if not re.fullmatch(
+                  r"(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\."
+                  r"(0|[1-9][0-9]*)-pr\.[1-9][0-9]*\.g[0-9a-f]{7}",
+                  version):
+              raise SystemExit("::error::candidate version is invalid")
+          if (manifest["schema"], manifest["pr"], manifest["sha"],
+                  manifest["base"], manifest["candidate_version"]) != (
+                  1, int(os.environ["PR_NUMBER"]), source_sha, base_sha,
+                  version):
+              raise SystemExit("::error::candidate manifest identity mismatch")
+          if not re.fullmatch(
+                  r"v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\."
+                  r"(0|[1-9][0-9]*)", manifest["base_version"]):
+              raise SystemExit("::error::candidate base version is invalid")
+
+          matrix = {
+              ("linux", "amd64"), ("linux", "arm64"),
+              ("darwin", "amd64"), ("darwin", "arm64"),
+              ("windows", "amd64"), ("windows", "arm64"),
+          }
+          archives = manifest["archives"]
+          if not isinstance(archives, list) or len(archives) != 6:
+              raise SystemExit("::error::candidate archive count is invalid")
+          declared = {}
+          platforms = set()
+          for archive in archives:
+              archive_keys = {
+                  "file", "goarch", "goos", "name", "sha256",
+              }
+              if not isinstance(archive, dict) or set(archive) != archive_keys:
+                  raise SystemExit("::error::candidate archive shape invalid")
+              platform = (archive["goos"], archive["goarch"])
+              suffix = ".zip" if archive["goos"] == "windows" else ".tar.gz"
+              expected = (
+                  f"backscroll_{version}_{archive['goos']}_"
+                  f"{archive['goarch']}{suffix}"
+              )
+              digest = archive["sha256"]
+              declaration_invalid = (
+                  platform not in matrix
+                  or platform in platforms
+                  or archive["name"] != "backscroll"
+                  or archive["file"] != expected
+                  or not re.fullmatch(r"[0-9a-f]{64}", digest)
+              )
+              if declaration_invalid:
+                  raise SystemExit("::error::archive declaration invalid")
+              platforms.add(platform)
+              declared[expected] = digest
+          if platforms != matrix:
+              raise SystemExit("::error::candidate target matrix is incomplete")
+          expected_files = {"candidate.json", "checksums.txt", *declared}
+          if {path.name for path in entries} != expected_files:
+              raise SystemExit("::error::candidate file names are not exact")
+
+          checksums = {}
+          for line in checksum_path.read_text().splitlines():
+              match = re.fullmatch(
+                  r"([0-9a-f]{64})  ([A-Za-z0-9][A-Za-z0-9._-]*)", line
+              )
+              if not match or match.group(2) in checksums:
+                  raise SystemExit("::error::checksum line is invalid")
+              checksums[match.group(2)] = match.group(1)
+          if checksums != declared:
+              raise SystemExit("::error::checksums differ from manifest")
+          for filename, expected_digest in declared.items():
+              payload = (root / filename).read_bytes()
+              digest = hashlib.sha256(payload).hexdigest()
+              if digest != expected_digest:
+                  raise SystemExit("::error::candidate archive hash mismatch")
+          linux_archive = f"backscroll_{version}_linux_amd64.tar.gz"
+          with Path(os.environ["GITHUB_OUTPUT"]).open("a") as output:
+              print(f"linux_archive={linux_archive}", file=output)
+          PY
+          (cd candidate && sha256sum --check --strict checksums.txt)
+
+      - name: Smoke Linux amd64 with isolated SQLite state
+        env:
+          LINUX_ARCHIVE: ${{ steps.inventory.outputs.linux_archive }}
+        run: |
+          set -euo pipefail
+          smoke_root=$(mktemp -d)
+          trap 'rm -rf "$smoke_root"' EXIT
+          mkdir -p \
+            "$smoke_root/extract" \
+            "$smoke_root/home" \
+            "$smoke_root/config" \
+            "$smoke_root/cache" \
+            "$smoke_root/data" \
+            "$smoke_root/state" \
+            "$smoke_root/db" \
+            "$smoke_root/tmp" \
+            "$smoke_root/work"
+          tar -xzf "candidate/$LINUX_ARCHIVE" -C "$smoke_root/extract"
+          binary="$smoke_root/extract/backscroll"
+          test -x "$binary"
+          output=$(cd "$smoke_root/work" && env -i \
+            PATH=/usr/bin:/bin \
+            HOME="$smoke_root/home" \
+            TMPDIR="$smoke_root/tmp" \
+            XDG_CONFIG_HOME="$smoke_root/config" \
+            XDG_CACHE_HOME="$smoke_root/cache" \
+            XDG_DATA_HOME="$smoke_root/data" \
+            XDG_STATE_HOME="$smoke_root/state" \
+            BACKSCROLL_CONFIG_DIR="$smoke_root/config" \
+            BACKSCROLL_DATABASE_PATH="$smoke_root/db/backscroll.db" \
+            "$binary" validate --json)
+          jq -e '.valid == true' <<<"$output" >/dev/null
+          test -s "$smoke_root/db/backscroll.db"
 
   release:
     uses: pablontiv/crossbeam/.github/workflows/go-release.yml@v2
