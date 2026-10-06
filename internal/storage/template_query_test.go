@@ -83,7 +83,9 @@ func TestAggregateTemplatesProjectFilter(t *testing.T) {
 	}
 	files := []IndexedFile{
 		{SourcePath: "/p/s1.jsonl", Source: "session", Hash: "h1", Project: "proj_a", Messages: msgs},
-		{SourcePath: "/q/s2.jsonl", Source: "session", Hash: "h2", Project: "proj_b", Messages: msgs},
+		{SourcePath: "/q/s2.jsonl", Source: "session", Hash: "h2", Project: "proj_b", Messages: []IndexedMessage{
+			{Ordinal: 0, UUID: "u2", ContentType: "tool", ToolName: "Bash", IsError: boolPtr(true), Text: "error: thing failed", ExtractionVersion: 1},
+		}},
 	}
 	if err := db.SyncFiles(files); err != nil {
 		t.Fatal(err)
@@ -206,7 +208,9 @@ func TestAggregateTemplatesTagFilter(t *testing.T) {
 	}
 	files := []IndexedFile{
 		{SourcePath: "/p/s1.jsonl", Source: "session", Hash: "h1", Project: "proj", Messages: msgs, Tags: []string{"debugging"}},
-		{SourcePath: "/q/s2.jsonl", Source: "session", Hash: "h2", Project: "proj", Messages: msgs},
+		{SourcePath: "/q/s2.jsonl", Source: "session", Hash: "h2", Project: "proj", Messages: []IndexedMessage{
+			{Ordinal: 0, UUID: "u2", ContentType: "tool", ToolName: "Bash", IsError: boolPtr(true), Text: "error: connection failed", ExtractionVersion: 1},
+		}},
 	}
 	if err := db.SyncFiles(files); err != nil {
 		t.Fatal(err)

@@ -202,6 +202,209 @@ func TestIdentifiedEmptyAndMixedReplaysPreserveUUIDNullHistory(t *testing.T) {
 	}
 }
 
+func TestPureLegacyTransitionCrossPathUUIDRollsBackWholeBatch(t *testing.T) {
+	db, err := Open(filepath.Join(t.TempDir(), "legacy-cross-path.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = db.Close() }()
+
+	const (
+		legacyPath   = "/sessions/legacy-cross-path.jsonl"
+		externalPath = "/sessions/external-owner.jsonl"
+		conflictUUID = "legacy-external-conflict"
+		freeUUID     = "legacy-free-replacement"
+	)
+	if err := db.SyncFiles([]IndexedFile{{
+		SourcePath: externalPath, Source: "session", Hash: "external-hash", Messages: []IndexedMessage{{
+			Ordinal: 0, UUID: conflictUUID, Role: "assistant", Origin: models.OriginUnknown,
+			Text: "foreign payload", ContentType: "tool", ExtractionVersion: 1,
+		}},
+	}}); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.SyncFiles([]IndexedFile{{
+		SourcePath: legacyPath, Source: "session", Hash: "legacy-hash", Tags: []string{"old-tag"}, Messages: []IndexedMessage{{
+			Ordinal: 0, Role: "assistant", Origin: models.OriginUnknown, Text: "legacy payload",
+			ContentType: "tool", ToolName: "LegacyTool", CommandHead: "old", ExtractionVersion: 0,
+		}},
+	}}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.db.Exec(`UPDATE search_items SET origin_version = NULL, search_echo = NULL WHERE source_path = ?`, legacyPath); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.db.Exec(`UPDATE search_items SET origin_version = 0 WHERE uuid = ?`, conflictUUID); err != nil {
+		t.Fatal(err)
+	}
+
+	err = db.SyncFiles([]IndexedFile{{
+		SourcePath: legacyPath, Source: "session", Hash: "replacement-hash", Tags: []string{"new-tag"}, Messages: []IndexedMessage{
+			{
+				Ordinal: 0, UUID: conflictUUID, Role: "assistant", Origin: models.OriginAssistant,
+				Text: "conflicting replacement", ContentType: "tool", ToolName: "Bash", CommandHead: "crossed", SearchEcho: true,
+			},
+			{
+				Ordinal: 1, UUID: freeUUID, Role: "assistant", Origin: models.OriginAssistant,
+				Text: "free replacement", ContentType: "tool", ToolName: "Read", CommandHead: "free",
+			},
+		},
+	}})
+	if err == nil || !strings.Contains(err.Error(), conflictUUID) || !strings.Contains(err.Error(), externalPath) {
+		t.Fatalf("cross-path transition error = %v, want UUID ownership error", err)
+	}
+
+	var legacyRows, freeRows, crossedEvents int
+	if err := db.db.QueryRow(`SELECT COUNT(*) FROM search_items WHERE source_path = ? AND uuid IS NULL AND text = 'legacy payload'`, legacyPath).Scan(&legacyRows); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.db.QueryRow(`SELECT COUNT(*) FROM search_items WHERE uuid = ?`, freeUUID).Scan(&freeRows); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.db.QueryRow(`SELECT COUNT(*) FROM tool_events WHERE source_path = ? AND message_uuid IN (?, ?)`, legacyPath, conflictUUID, freeUUID).Scan(&crossedEvents); err != nil {
+		t.Fatal(err)
+	}
+	var legacyOriginVersion sql.NullInt64
+	var legacyEcho sql.NullBool
+	if err := db.db.QueryRow(`SELECT origin_version, search_echo FROM search_items WHERE source_path = ? AND uuid IS NULL`, legacyPath).Scan(&legacyOriginVersion, &legacyEcho); err != nil {
+		t.Fatal(err)
+	}
+	var foreignOrigin models.MessageOrigin
+	var foreignOriginVersion int
+	if err := db.db.QueryRow(`SELECT origin, origin_version FROM search_items WHERE uuid = ?`, conflictUUID).Scan(&foreignOrigin, &foreignOriginVersion); err != nil {
+		t.Fatal(err)
+	}
+	var hash string
+	if err := db.db.QueryRow(`SELECT hash FROM indexed_files WHERE path = ?`, legacyPath).Scan(&hash); err != nil {
+		t.Fatal(err)
+	}
+	var oldTags, newTags int
+	if err := db.db.QueryRow(`SELECT COUNT(*) FROM session_tags WHERE source_path = ? AND tag = 'old-tag'`, legacyPath).Scan(&oldTags); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.db.QueryRow(`SELECT COUNT(*) FROM session_tags WHERE source_path = ? AND tag = 'new-tag'`, legacyPath).Scan(&newTags); err != nil {
+		t.Fatal(err)
+	}
+	if legacyRows != 1 || freeRows != 0 || crossedEvents != 0 || legacyOriginVersion.Valid || legacyEcho.Valid ||
+		foreignOrigin != models.OriginUnknown || foreignOriginVersion != 0 || hash != "legacy-hash" || oldTags != 1 || newTags != 0 {
+		t.Fatalf("failed transition mutated state: legacy=%d free=%d events=%d legacyVersion=%+v legacyEcho=%+v foreign=(%q,%d) hash=%q tags=(%d,%d)",
+			legacyRows, freeRows, crossedEvents, legacyOriginVersion, legacyEcho, foreignOrigin, foreignOriginVersion, hash, oldTags, newTags)
+	}
+}
+
+func TestIdentifiedPathCrossPathUUIDDoesNotEnrichOrCrossToolEvent(t *testing.T) {
+	db, err := Open(filepath.Join(t.TempDir(), "identified-cross-path.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = db.Close() }()
+
+	const (
+		identifiedPath = "/sessions/identified-owner.jsonl"
+		externalPath   = "/sessions/identified-external.jsonl"
+		anchorUUID     = "identified-anchor"
+		conflictUUID   = "identified-external-conflict"
+	)
+	if err := db.SyncFiles([]IndexedFile{
+		{
+			SourcePath: identifiedPath, Source: "session", Hash: "identified-hash", Tags: []string{"old-tag"}, Messages: []IndexedMessage{{
+				Ordinal: 0, UUID: anchorUUID, Role: "user", Origin: models.OriginHuman,
+				Text: "anchor payload", ContentType: "text", ExtractionVersion: 1,
+			}},
+		},
+		{
+			SourcePath: externalPath, Source: "session", Hash: "external-hash", Messages: []IndexedMessage{{
+				Ordinal: 0, UUID: conflictUUID, Role: "assistant", Origin: models.OriginUnknown,
+				Text: "foreign payload", ContentType: "tool", ExtractionVersion: 1,
+			}},
+		},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.db.Exec(`UPDATE search_items SET origin_version = 0, search_echo = NULL WHERE uuid = ?`, anchorUUID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.db.Exec(`UPDATE search_items SET origin_version = 0 WHERE uuid = ?`, conflictUUID); err != nil {
+		t.Fatal(err)
+	}
+
+	err = db.SyncFiles([]IndexedFile{{
+		SourcePath: identifiedPath, Source: "session", Hash: "changed-hash", Tags: []string{"new-tag"}, Messages: []IndexedMessage{
+			{Ordinal: 0, UUID: anchorUUID, Role: "user", Origin: models.OriginHuman, Text: "anchor payload", ContentType: "text"},
+			{
+				Ordinal: 1, UUID: conflictUUID, Role: "assistant", Origin: models.OriginAssistant,
+				Text: "foreign replay", ContentType: "tool", ToolName: "Bash", CommandHead: "crossed", SearchEcho: true,
+			},
+		},
+	}})
+	if err == nil || !strings.Contains(err.Error(), conflictUUID) || !strings.Contains(err.Error(), externalPath) {
+		t.Fatalf("identified cross-path error = %v, want UUID ownership error", err)
+	}
+
+	var anchorVersion int
+	var anchorEcho sql.NullBool
+	if err := db.db.QueryRow(`SELECT origin_version, search_echo FROM search_items WHERE uuid = ?`, anchorUUID).Scan(&anchorVersion, &anchorEcho); err != nil {
+		t.Fatal(err)
+	}
+	var foreignOrigin models.MessageOrigin
+	var foreignVersion, crossedEvents int
+	if err := db.db.QueryRow(`SELECT origin, origin_version FROM search_items WHERE uuid = ?`, conflictUUID).Scan(&foreignOrigin, &foreignVersion); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.db.QueryRow(`SELECT COUNT(*) FROM tool_events WHERE source_path = ? AND message_uuid = ?`, identifiedPath, conflictUUID).Scan(&crossedEvents); err != nil {
+		t.Fatal(err)
+	}
+	var hash string
+	if err := db.db.QueryRow(`SELECT hash FROM indexed_files WHERE path = ?`, identifiedPath).Scan(&hash); err != nil {
+		t.Fatal(err)
+	}
+	var oldTags, newTags int
+	if err := db.db.QueryRow(`SELECT COUNT(*) FROM session_tags WHERE source_path = ? AND tag = 'old-tag'`, identifiedPath).Scan(&oldTags); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.db.QueryRow(`SELECT COUNT(*) FROM session_tags WHERE source_path = ? AND tag = 'new-tag'`, identifiedPath).Scan(&newTags); err != nil {
+		t.Fatal(err)
+	}
+	if anchorVersion != 0 || anchorEcho.Valid || foreignOrigin != models.OriginUnknown || foreignVersion != 0 ||
+		crossedEvents != 0 || hash != "identified-hash" || oldTags != 1 || newTags != 0 {
+		t.Fatalf("failed identified replay mutated state: anchor=(%d,%+v) foreign=(%q,%d) events=%d hash=%q tags=(%d,%d)",
+			anchorVersion, anchorEcho, foreignOrigin, foreignVersion, crossedEvents, hash, oldTags, newTags)
+	}
+}
+
+func TestNonTransitionSyncRejectsDuplicateUUIDs(t *testing.T) {
+	db, err := Open(filepath.Join(t.TempDir(), "non-transition-duplicate.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = db.Close() }()
+
+	const duplicateUUID = "plan-duplicate"
+	err = db.SyncFiles([]IndexedFile{{
+		SourcePath: "/plans/duplicate.md", Source: "plan", Hash: "plan-hash", Messages: []IndexedMessage{
+			{Ordinal: 0, UUID: duplicateUUID, Role: "user", Text: "first", ContentType: "text"},
+			{Ordinal: 1, UUID: duplicateUUID, Role: "assistant", Text: "second", ContentType: "text", ToolName: "Read"},
+		},
+	}})
+	if err == nil || !strings.Contains(err.Error(), `duplicate UUID "plan-duplicate"`) {
+		t.Fatalf("non-transition duplicate error = %v, want duplicate UUID error", err)
+	}
+
+	var items, events, indexed int
+	if err := db.db.QueryRow(`SELECT COUNT(*) FROM search_items WHERE uuid = ?`, duplicateUUID).Scan(&items); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.db.QueryRow(`SELECT COUNT(*) FROM tool_events WHERE message_uuid = ?`, duplicateUUID).Scan(&events); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.db.QueryRow(`SELECT COUNT(*) FROM indexed_files WHERE path = '/plans/duplicate.md'`).Scan(&indexed); err != nil {
+		t.Fatal(err)
+	}
+	if items != 0 || events != 0 || indexed != 0 {
+		t.Fatalf("duplicate non-transition sync mutated state: items=%d events=%d indexed=%d", items, events, indexed)
+	}
+}
+
 func TestPureLegacyTransitionRejectsDuplicateUUIDsWithoutChanges(t *testing.T) {
 	db, err := Open(filepath.Join(t.TempDir(), "duplicate-transition.db"))
 	if err != nil {

@@ -1,6 +1,7 @@
 package storage
 
 import (
+	"database/sql"
 	"fmt"
 	"time"
 
@@ -47,6 +48,51 @@ type IndexedFile struct {
 	FileMtime *string // populated by sync_helpers.go if available; RFC3339 format
 }
 
+// validateSyncUUIDs checks every non-empty UUID in the full synchronization
+// batch before any file is mutated. It returns the identities already retained
+// by their incoming source path so perennial replays can preserve those rows
+// without relying on INSERT conflict handling.
+func validateSyncUUIDs(tx *sql.Tx, files []IndexedFile) (map[string]bool, error) {
+	seen := make(map[string]string)
+	for _, file := range files {
+		for _, message := range file.Messages {
+			if message.UUID == "" {
+				continue
+			}
+			if firstPath, duplicate := seen[message.UUID]; duplicate {
+				return nil, fmt.Errorf("duplicate UUID %q in sync batch (source paths %q and %q)", message.UUID, firstPath, file.SourcePath)
+			}
+			seen[message.UUID] = file.SourcePath
+		}
+	}
+
+	existing := make(map[string]bool, len(seen))
+	for uuid, sourcePath := range seen {
+		var owner string
+		err := tx.QueryRow(`SELECT source_path FROM search_items WHERE uuid = ?`, uuid).Scan(&owner)
+		switch {
+		case err == sql.ErrNoRows:
+		case err != nil:
+			return nil, fmt.Errorf("inspect UUID %q: %w", uuid, err)
+		case owner != sourcePath:
+			return nil, fmt.Errorf("UUID %q belongs to source_path %q, not %q", uuid, owner, sourcePath)
+		default:
+			existing[uuid] = true
+		}
+
+		var eventOwner string
+		err = tx.QueryRow(`SELECT source_path FROM tool_events WHERE message_uuid = ? LIMIT 1`, uuid).Scan(&eventOwner)
+		switch {
+		case err == sql.ErrNoRows:
+		case err != nil:
+			return nil, fmt.Errorf("inspect tool event UUID %q: %w", uuid, err)
+		case eventOwner != sourcePath:
+			return nil, fmt.Errorf("UUID %q belongs to tool_event source_path %q, not %q", uuid, eventOwner, sourcePath)
+		}
+	}
+	return existing, nil
+}
+
 // SyncFiles syncs a batch of files into the database.
 // It uses a transaction to atomically insert all records.
 // For each file, it deletes old records and inserts new ones.
@@ -60,6 +106,11 @@ func (d *Database) SyncFiles(files []IndexedFile) error {
 		return fmt.Errorf("begin transaction: %w", err)
 	}
 	defer func() { _ = tx.Rollback() }()
+
+	existingUUIDs, err := validateSyncUUIDs(tx, files)
+	if err != nil {
+		return fmt.Errorf("validate sync UUIDs: %w", err)
+	}
 
 	for _, file := range files {
 		// A non-empty session parse in which every message carries a UUID starts
@@ -86,16 +137,11 @@ func (d *Database) SyncFiles(files []IndexedFile) error {
 		perennial := isSession && (completeUUIDParse || storedIdentity.identified())
 
 		// UUID-less legacy history is deleted only for the one-way transition
-		// from a purely legacy path to a complete UUID parse whose replacements
-		// can actually be installed. Empty/mixed replays of an identified path
-		// retain every UUID-less search row and tool event.
-		legacyTransition := false
-		if perennial && storedIdentity.pureLegacy() && completeUUIDParse {
-			legacyTransition, err = uuidReplacementsAvailable(tx, file.SourcePath, file.Messages)
-			if err != nil {
-				return fmt.Errorf("check legacy replacements for %s: %w", file.SourcePath, err)
-			}
-		}
+		// from a purely legacy path to a complete UUID parse. The batch-wide
+		// preflight above guarantees that every replacement can be installed.
+		// Empty/mixed replays of an identified path retain every UUID-less search
+		// row and tool event.
+		legacyTransition := perennial && storedIdentity.pureLegacy() && completeUUIDParse
 
 		if !perennial {
 			if _, err := tx.Exec("DELETE FROM template_matches WHERE source_path = ?", file.SourcePath); err != nil {
@@ -116,10 +162,11 @@ func (d *Database) SyncFiles(files []IndexedFile) error {
 			}
 		}
 
-		// Insert new search_items. Use OR IGNORE so that cross-file UUID
-		// collisions (rare) are silently skipped rather than aborting the
-		// transaction. Use nil (SQL NULL) when uuid is absent — SQLite's
-		// UNIQUE constraint allows multiple NULLs but not multiple "".
+		// Insert new search_items. UUID ownership and batch uniqueness were
+		// validated before any mutation. Existing UUID rows owned by this path
+		// are retained explicitly; INSERT conflict handling is not used to
+		// condense invalid input. Use nil (SQL NULL) when uuid is absent —
+		// SQLite's UNIQUE constraint allows multiple NULLs but not multiple "".
 		// For perennial files, skip messages without UUIDs (flap guard: don't
 		// introduce uuid-less rows into a perennial file).
 		for _, msg := range file.Messages {
@@ -141,28 +188,30 @@ func (d *Database) SyncFiles(files []IndexedFile) error {
 			if msg.IsError != nil {
 				isErrVal = *msg.IsError
 			}
-			_, err := tx.Exec(`
-				INSERT OR IGNORE INTO search_items
-				(source, source_path, ordinal, role, origin, text, timestamp, uuid, project, content_type, extraction_version, was_interrupted, search_echo, origin_version)
-				VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-			`,
-				file.Source,
-				file.SourcePath,
-				msg.Ordinal,
-				msg.Role,
-				origin,
-				msg.Text,
-				msg.Timestamp,
-				uuidVal,
-				file.Project,
-				msg.ContentType,
-				msg.ExtractionVersion,
-				msg.WasInterrupted,
-				msg.SearchEcho,
-				CurrentOriginVersion,
-			)
-			if err != nil {
-				return fmt.Errorf("insert search_item for %s: %w", file.SourcePath, err)
+			if !perennial || msg.UUID == "" || !existingUUIDs[msg.UUID] {
+				_, err := tx.Exec(`
+					INSERT INTO search_items
+					(source, source_path, ordinal, role, origin, text, timestamp, uuid, project, content_type, extraction_version, was_interrupted, search_echo, origin_version)
+					VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+				`,
+					file.Source,
+					file.SourcePath,
+					msg.Ordinal,
+					msg.Role,
+					origin,
+					msg.Text,
+					msg.Timestamp,
+					uuidVal,
+					file.Project,
+					msg.ContentType,
+					msg.ExtractionVersion,
+					msg.WasInterrupted,
+					msg.SearchEcho,
+					CurrentOriginVersion,
+				)
+				if err != nil {
+					return fmt.Errorf("insert search_item for %s: %w", file.SourcePath, err)
+				}
 			}
 
 			// Re-parsing a perennial row must enrich provenance without replacing

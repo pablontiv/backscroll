@@ -226,8 +226,8 @@ func TestOriginReplaySyncFailureDoesNotCloseOrDelete(t *testing.T) {
 	conflict.Hash = "c2"
 	conflict.Messages[0].Origin = models.OriginAssistant
 	err = db.SyncFiles([]IndexedFile{replay, conflict})
-	if err == nil || !strings.Contains(err.Error(), "conflicting proven origins") {
-		t.Fatalf("replay sync error = %v, want conflicting origin", err)
+	if err == nil || !strings.Contains(err.Error(), `UUID "conflicting-origin" belongs to source_path`) {
+		t.Fatalf("replay sync error = %v, want cross-path UUID ownership error", err)
 	}
 
 	var version sql.NullInt64
@@ -354,8 +354,8 @@ func TestOriginRejectsContradictoryProofForIdentity(t *testing.T) {
 		Ordinal: 0, UUID: "shared-origin", Role: "assistant", Origin: models.OriginAssistant, Text: "collision", ContentType: "text",
 	}}}
 	err = db.SyncFiles([]IndexedFile{contradiction})
-	if err == nil || !strings.Contains(err.Error(), "conflicting proven origins") {
-		t.Fatalf("contradictory proof error = %v", err)
+	if err == nil || !strings.Contains(err.Error(), `UUID "shared-origin" belongs to source_path`) {
+		t.Fatalf("contradictory proof error = %v, want cross-path UUID ownership error", err)
 	}
 
 	var origin models.MessageOrigin
