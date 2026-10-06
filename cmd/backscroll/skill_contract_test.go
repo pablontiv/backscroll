@@ -39,12 +39,13 @@ func TestBackscrollSkillContractAcceptsCurrentCLIForms(t *testing.T) {
 		"backscroll --help",
 		"backscroll search --help",
 		"command -v backscroll >/dev/null",
-		"backscroll search \"needle\" --all-projects --source-path \"*uuid*\" --robot --fields full --max-tokens 4000",
-		"backscroll context --uuid opaque --before 5 --after 5 --json --max-tokens 2000",
-		"backscroll context --source-path /exact/session.jsonl --ordinal 42 --before 0 --after 50 --robot --max-tokens 16384",
+		`backscroll search --text "$QUERY" --all-projects --source-path "$SOURCE_PATH" --robot --fields minimal --max-tokens 4000`,
+		`backscroll context --uuid "$UUID" --before 5 --after 5 --json --max-tokens 2000`,
+		`backscroll context --source-path "$SOURCE_PATH" --ordinal "$ORDINAL" --before 0 --after 50 --robot --max-tokens 16384`,
 		"backscroll list --all-projects --limit 10 --json",
-		"backscroll patterns --kind corrections --pending --batch 50 --robot",
-		"backscroll annotate --uuid u --kind correction --label false-positive",
+		"backscroll patterns --kind corrections --origin human --pending --batch 50 --robot",
+		`backscroll annotate --uuid "$UUID" --kind correction --label "$LABEL"`,
+		`backscroll annotate --path "$SOURCE_PATH" --ordinal "$ORDINAL" --kind correction --label "$LABEL"`,
 	}, "\n")
 
 	violations := validateSkillMarkdown(root, "synthetic-valid.md", content)
@@ -413,6 +414,78 @@ func TestBackscrollContextModeCommandsMatchCLI(t *testing.T) {
 	assertExactContextOutputSections(t, content)
 	if !strings.Contains(content, "main skill's search discipline") && !strings.Contains(content, "indexed boundary") {
 		t.Error("context mode must point to the main search discipline or preserve the indexed boundary")
+	}
+}
+
+func TestSearchToContextGuidanceUsesPublishedIdentity(t *testing.T) {
+	artifacts := map[string]string{
+		"cmd/backscroll/backscroll_skill.md": embeddedBackscrollSkill,
+	}
+	for _, relativePath := range []string{
+		".claude/skills/backscroll/ref-context-mode.md",
+		"docs/audit-integration.md",
+		"docs/patterns.md",
+	} {
+		path, content := readTrackedSkillMarkdown(t, relativePath)
+		artifacts[path] = content
+	}
+
+	for path, content := range artifacts {
+		t.Run(path, func(t *testing.T) {
+			for _, anchor := range []string{
+				`backscroll context --uuid "$UUID"`,
+				`backscroll context --source-path "$SOURCE_PATH" --ordinal "$ORDINAL"`,
+				"UUID",
+				"null",
+				"context_ambiguous",
+			} {
+				if !strings.Contains(content, anchor) {
+					t.Errorf("search-to-context guidance missing %q", anchor)
+				}
+			}
+			if strings.Contains(content, "<u>") {
+				t.Error("guidance must use quoted shell variables instead of the unsafe <u> placeholder")
+			}
+			assertContextCommandsHaveNoRoleFilter(t, content)
+		})
+	}
+}
+
+func TestBackscrollSkillPreservesCorrectionsAuditAndUnixConfigGuidance(t *testing.T) {
+	for _, anchor := range []string{
+		`config_dir="${BACKSCROLL_CONFIG_DIR:-${XDG_CONFIG_HOME:-$HOME/.config}}"`,
+		"backscroll patterns --kind corrections --origin human",
+		"parser-backed",
+		"contradictory proven origins",
+		"Raw-file boundary",
+	} {
+		if !strings.Contains(embeddedBackscrollSkill, anchor) {
+			t.Errorf("skill payload lost existing guidance %q", anchor)
+		}
+	}
+
+	_, patterns := readTrackedSkillMarkdown(t, "docs/patterns.md")
+	for _, anchor := range []string{"corrections — process-error candidates", "--origin human", "contradictory proven origins"} {
+		if !strings.Contains(patterns, anchor) {
+			t.Errorf("patterns documentation lost existing guidance %q", anchor)
+		}
+	}
+
+	_, audit := readTrackedSkillMarkdown(t, "docs/audit-integration.md")
+	for _, anchor := range []string{"complete message-level export", "Privacy and raw-content boundary"} {
+		if !strings.Contains(audit, anchor) {
+			t.Errorf("audit documentation lost existing boundary %q", anchor)
+		}
+	}
+}
+
+func assertContextCommandsHaveNoRoleFilter(t *testing.T, content string) {
+	t.Helper()
+	for _, line := range strings.Split(strings.ReplaceAll(content, "\r\n", "\n"), "\n") {
+		trimmed := strings.TrimSpace(line)
+		if strings.HasPrefix(trimmed, "backscroll context ") && strings.Contains(trimmed, "--role") {
+			t.Errorf("context is positional and must not use a role filter: %q", trimmed)
+		}
 	}
 }
 

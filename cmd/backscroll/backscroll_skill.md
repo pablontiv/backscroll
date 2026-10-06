@@ -13,7 +13,7 @@ Backscroll is the primary local episodic index for coding-agent work and the sou
 Every operational command validates active manifests and attempts one incremental
 sync before executing. Session, plan, and Markdown files are ingestion inputs;
 SQLite is the perennial record used by search, context, list, patterns, status, and validate.
-Use `search` for discovery. Once a result, correction candidate, or audit record supplies an exact UUID or exact stored source path plus ordinal, use `context` for the immediate neighborhood. Both surfaces are database-backed.
+Use `search` for discovery. Search publishes exact context identity with every result. For one selected result, use its opaque UUID when non-null; only when UUID is null, use its exact stored source path plus ordinal. Then use `context` for the immediate positional neighborhood. Both surfaces are database-backed.
 
 ## 1) Preflight (required)
 
@@ -60,8 +60,9 @@ where `<config_dir>` is the OS config directory, or `BACKSCROLL_CONFIG_DIR`. The
 Use machine-readable, budgeted output:
 
 - Robot mode on search emits `result_N_field=value` lines; search string values escape backslash as `\\`, carriage return as `\r`, and newline as `\n`.
-- `--robot --fields minimal`: emits `result_N_filepath`, `result_N_content` (bounded snippet), `result_N_score`, `result_N_role`, and `result_N_timestamp`. JSON uses `source_path` and `snippet`; do not use those names as robot keys.
-- `--fields full`: use only while discovery still needs richer search results.
+- `--robot --fields minimal`: emits `result_N_filepath`, nullable `result_N_uuid`, `result_N_ordinal`, `result_N_content` (bounded snippet), `result_N_score`, `result_N_role`, and `result_N_timestamp`.
+- Minimal JSON publishes `source_path`, nullable `uuid`, `ordinal`, and `snippet`. Full JSON uses `FilePath`, nullable `UUID`, and `Ordinal`. Keep each selected result's identity fields together.
+- `--fields full`: use only while discovery still needs richer search results; minimal mode already contains both context selector forms.
 - `--max-tokens <budget>`: declare and enforce the output budget.
 - Context JSON is one `anchor` / `records` / `truncated` / `omitted` envelope. Context robot output uses `anchor_*`, envelope, and zero-based `record_N_*` keys.
 
@@ -79,10 +80,14 @@ backscroll search "QUERY" --all-projects --robot --fields minimal --max-tokens 2
 # Execution-shaped queries: commands, flags, errors, paths.
 backscroll search "command or error" --all-projects --content-type tool --robot --fields minimal --max-tokens 1500
 
-# Exact neighborhood after discovery supplies identity.
+# Preferred when the selected result's UUID is non-null.
 backscroll context --uuid "$UUID" --before 5 --after 5 --robot --max-tokens 2000
+
+# Fallback only when that result's UUID is null.
 backscroll context --source-path "$SOURCE_PATH" --ordinal "$ORDINAL" --before 5 --after 5 --robot --max-tokens 2000
 ```
+
+Assign `UUID`, or `SOURCE_PATH` and `ORDINAL`, from one selected search result. Never combine identity fields from different results or derive an ordinal from display order.
 
 If an explicit project is needed, use a semantic project ID, not a filesystem path:
 
@@ -138,12 +143,17 @@ backscroll search "go test" --all-projects --content-type tool --robot --fields 
 
 ## Search discipline (hard rules)
 
-1. **Drill the top hit.** If a top-ranked result contains relevant decision keywords, inspect its exact indexed neighborhood before dismissing it by age or hunting another session. Treat UUIDs as opaque. Prefer UUID; otherwise require the exact stored source path and ordinal.
+1. **Drill the top hit.** If a top-ranked result contains relevant decision keywords, inspect its exact indexed neighborhood before dismissing it by age or hunting another session. Select one result explicitly and keep its published identity together. Treat UUIDs as opaque: if `uuid` is non-null, use it; only if it is null, use that result's exact `source_path` plus `ordinal`.
 
 ```bash
+# UUID is non-null in the selected result.
 backscroll context --uuid "$UUID" --before 5 --after 5 --robot --max-tokens 4000
+
+# UUID is null in the selected result.
 backscroll context --source-path "$SOURCE_PATH" --ordinal "$ORDINAL" --before 5 --after 5 --robot --max-tokens 4000
 ```
+
+If either selector returns `context_ambiguous`, do not guess or choose by role. Preserve the diagnostic, refine discovery, and prefer a non-null UUID from the intended search result when available. Context returns positional DB neighbors from the same stored source path, ordered by ordinal and then row ID; it does not select a conversational pair by user/assistant roles.
 
 1. **Use the artifact's vocabulary.** For transcripts, logs, reports, and pasted artifacts, query literal speaker names, boilerplate, IDs, exact errors, paths, and the artifact language. A translated or paraphrased query is secondary evidence only.
 
@@ -182,7 +192,7 @@ backscroll validate
 
 If a search warns about scope, content type, or compatibility, follow the hint and rerun a corrected current command once.
 
-**No results:** follow the hard rules: literal artifact vocabulary, all-projects scope, then an exact context probe when UUID or source-path-plus-ordinal identity exists. `context_not_found` and `context_ambiguous` are diagnostics, not permission to inspect raw files. Run status and validate, report uncertainty, and do not convert empty rows into proof of absence.
+**No results:** follow the hard rules: literal artifact vocabulary, all-projects scope, then an exact context probe when published UUID or source-path-plus-ordinal identity exists. `context_not_found` and `context_ambiguous` are diagnostics, not permission to inspect raw files or select by role. Run status and validate, report uncertainty, and do not convert empty rows into proof of absence.
 
 **Tool-query tokenizer limits:** the tool index uses a trigram tokenizer. Prefer exact flags, paths, command names, and error fragments of at least three characters, for example `"--content-type tool"`, `"go test"`, or `"BUSY"`.
 
@@ -261,11 +271,17 @@ retain their previous shape.
 
 ```bash
 backscroll patterns --kind corrections --origin human --pending --batch 50 --robot
-backscroll context --uuid <u> --before 1 --after 1 --robot --max-tokens 2000
-backscroll annotate --uuid <u> --kind correction --label "<free-form>"
+
+# Preferred when the selected candidate's UUID is non-null.
+backscroll context --uuid "$UUID" --before 1 --after 1 --robot --max-tokens 2000
+backscroll annotate --uuid "$UUID" --kind correction --label "$LABEL"
+
+# Fallback only when UUID is null.
+backscroll context --source-path "$SOURCE_PATH" --ordinal "$ORDINAL" --before 1 --after 1 --robot --max-tokens 2000
+backscroll annotate --path "$SOURCE_PATH" --ordinal "$ORDINAL" --kind correction --label "$LABEL"
 # Re-run fetch: labeled candidates vanish, so no loop state is needed.
 ```
 
-Use `context` whenever a candidate already has exact identity; do not approximate its labeling window with ranked search. Context defaults to 5/5 records (maximum 50 each), caps each text at 4000 Unicode code points, and defaults to `--max-tokens 2000` (valid range 64–16384). `context_not_found`, `context_ambiguous`, and `context_budget_too_small` are structured, budget-exempt diagnostics. Record origin is parser-backed and may remain `unknown`.
+Assign the variables from one selected candidate and set `LABEL` to the intended free-form label. Use `context` whenever a candidate already has exact identity; do not approximate its labeling window with ranked search. Context defaults to 5/5 positional DB records (maximum 50 each), does not filter neighbors by role, never reads raw provider files, caps each text at 4000 Unicode code points, and defaults to `--max-tokens 2000` (valid range 64–16384). `context_not_found`, `context_ambiguous`, and `context_budget_too_small` are structured, budget-exempt diagnostics. Record origin is parser-backed and may remain `unknown`.
 
 Full docs: `docs/context.md` and `docs/patterns.md`. Calibration gate before trusting confidences: `docs/eval/corrections-calibration.md`.
