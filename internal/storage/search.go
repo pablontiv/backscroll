@@ -1,6 +1,7 @@
 package storage
 
 import (
+	"context"
 	"database/sql"
 	"fmt"
 	"strings"
@@ -35,14 +36,26 @@ type SearchResult struct {
 // It applies all filters and returns results ranked by BM25 score.
 // When ContentType is empty, it queries both FTS tables and merges via RRF.
 func (d *Database) Search(query string, opts models.SearchOptions) ([]SearchResult, error) {
-	return searchTables(opts, func(table string, page models.SearchOptions) ([]SearchResult, error) {
-		return d.searchTable(table, query, page)
+	return d.SearchContext(context.Background(), query, opts)
+}
+
+// SearchContext is Search with cancellation propagated to every database query.
+func (d *Database) SearchContext(ctx context.Context, query string, opts models.SearchOptions) ([]SearchResult, error) {
+	results, err := searchTables(ctx, opts, func(table string, page models.SearchOptions) ([]SearchResult, error) {
+		return d.searchTableContext(ctx, table, query, page)
 	})
+	if err != nil {
+		return nil, err
+	}
+	return results, nil
 }
 
 // searchTables shares filtering, echo exclusion, RRF and pagination between
 // ordinary lexical queries and opt-in relaxation. Query syntax stays private.
-func searchTables(opts models.SearchOptions, search func(string, models.SearchOptions) ([]SearchResult, error)) ([]SearchResult, error) {
+func searchTables(ctx context.Context, opts models.SearchOptions, search func(string, models.SearchOptions) ([]SearchResult, error)) ([]SearchResult, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 	if opts.ContentType == "tool" {
 		return search("tool_fts", opts)
 	}
@@ -50,7 +63,7 @@ func searchTables(opts models.SearchOptions, search func(string, models.SearchOp
 		return search("messages_fts", opts)
 	}
 	candidates := func(table string) ([]SearchResult, error) {
-		return refillCandidatesWithoutDirectEchoes(withoutPaging(opts), func(page models.SearchOptions) ([]SearchResult, error) {
+		return refillCandidatesWithoutDirectEchoesContext(ctx, withoutPaging(opts), func(page models.SearchOptions) ([]SearchResult, error) {
 			return search(table, page)
 		})
 	}
@@ -62,13 +75,16 @@ func searchTables(opts models.SearchOptions, search func(string, models.SearchOp
 	if err != nil {
 		return nil, err
 	}
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 	return paginate(mergeRRF(prose, tool), opts.Limit, opts.Offset), nil
 }
 
-// searchTable queries a single FTS table with all filters applied.
-func (d *Database) searchTable(ftsTable, query string, opts models.SearchOptions) ([]SearchResult, error) {
+// searchTableContext queries a single FTS table with all filters applied.
+func (d *Database) searchTableContext(ctx context.Context, ftsTable, query string, opts models.SearchOptions) ([]SearchResult, error) {
 	// Load dynamic stopwords
-	stopwords, err := d.loadStopwords()
+	stopwords, err := d.loadStopwordsContext(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("load stopwords: %w", err)
 	}
@@ -81,11 +97,11 @@ func (d *Database) searchTable(ftsTable, query string, opts models.SearchOptions
 		ftsQuery = sanitizeFTS5Query(query, stopwords)
 	}
 
-	return d.searchTableQuery(ftsTable, ftsQuery, opts)
+	return d.searchTableQueryContext(ctx, ftsTable, ftsQuery, opts)
 }
 
-// searchTableQuery accepts only internally compiled MATCH expressions.
-func (d *Database) searchTableQuery(ftsTable, ftsQuery string, opts models.SearchOptions) ([]SearchResult, error) {
+// searchTableQueryContext accepts only internally compiled MATCH expressions.
+func (d *Database) searchTableQueryContext(ctx context.Context, ftsTable, ftsQuery string, opts models.SearchOptions) ([]SearchResult, error) {
 	// Build WHERE clause for filters
 	var whereClauses []string
 	var args []interface{}
@@ -199,7 +215,7 @@ func (d *Database) searchTableQuery(ftsTable, ftsQuery string, opts models.Searc
 	args = append(args, limit, offset)
 
 	// Execute query
-	rows, err := d.db.Query(sqlQuery, args...)
+	rows, err := d.db.QueryContext(ctx, sqlQuery, args...)
 	if err != nil {
 		return nil, fmt.Errorf("execute search query: %w", err)
 	}
@@ -253,13 +269,20 @@ func (d *Database) searchTableQuery(ftsTable, ftsQuery string, opts models.Searc
 	if err := rows.Err(); err != nil {
 		return nil, fmt.Errorf("iterate search results: %w", err)
 	}
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 
 	return results, nil
 }
 
-// loadStopwords loads the dynamic stopwords from the database.
+// loadStopwords loads dynamic stopwords without cancellation for compatibility.
 func (d *Database) loadStopwords() (map[string]struct{}, error) {
-	rows, err := d.db.Query("SELECT term FROM dynamic_stopwords")
+	return d.loadStopwordsContext(context.Background())
+}
+
+func (d *Database) loadStopwordsContext(ctx context.Context) (map[string]struct{}, error) {
+	rows, err := d.db.QueryContext(ctx, "SELECT term FROM dynamic_stopwords")
 	if err != nil {
 		// If table doesn't exist, return empty map
 		if strings.Contains(err.Error(), "no such table") {
@@ -276,6 +299,12 @@ func (d *Database) loadStopwords() (map[string]struct{}, error) {
 			continue
 		}
 		stopwords[strings.ToLower(term)] = struct{}{}
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate stopwords: %w", err)
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, err
 	}
 
 	return stopwords, nil
@@ -349,6 +378,10 @@ func withoutPaging(o models.SearchOptions) models.SearchOptions {
 }
 
 func refillCandidatesWithoutDirectEchoes(opts models.SearchOptions, loadPage func(models.SearchOptions) ([]SearchResult, error)) ([]SearchResult, error) {
+	return refillCandidatesWithoutDirectEchoesContext(context.Background(), opts, loadPage)
+}
+
+func refillCandidatesWithoutDirectEchoesContext(ctx context.Context, opts models.SearchOptions, loadPage func(models.SearchOptions) ([]SearchResult, error)) ([]SearchResult, error) {
 	target := opts.Limit
 	if target <= 0 {
 		target = unfilteredSearchCandidateLimit
@@ -359,6 +392,9 @@ func refillCandidatesWithoutDirectEchoes(opts models.SearchOptions, loadPage fun
 	filtered := make([]SearchResult, 0, target)
 	seen := make(map[int]struct{})
 	for len(filtered) < target {
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
 		page, err := loadPage(pageOpts)
 		if err != nil {
 			return nil, err
@@ -382,6 +418,9 @@ func refillCandidatesWithoutDirectEchoes(opts models.SearchOptions, loadPage fun
 			break
 		}
 		pageOpts.Offset += len(page)
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, err
 	}
 	return filtered, nil
 }

@@ -1,6 +1,7 @@
 package storage
 
 import (
+	"context"
 	"encoding/binary"
 	"fmt"
 	"math"
@@ -121,8 +122,12 @@ func (d *Database) GetEmbeddingCount() (int, error) {
 
 // GetVectorCount returns the number of chunks that have an embedding vector stored.
 func (d *Database) GetVectorCount() (int, error) {
+	return d.getVectorCountContext(context.Background())
+}
+
+func (d *Database) getVectorCountContext(ctx context.Context) (int, error) {
 	var n int
-	err := d.db.QueryRow("SELECT COUNT(*) FROM chunks WHERE embedding IS NOT NULL").Scan(&n)
+	err := d.db.QueryRowContext(ctx, "SELECT COUNT(*) FROM chunks WHERE embedding IS NOT NULL").Scan(&n)
 	return n, err
 }
 
@@ -138,7 +143,11 @@ func (d *Database) InsertChunkEmbedding(chunkID int64, embedding []float32) erro
 // LoadChunkEmbeddings returns all chunks that have an embedding, joined to their
 // search_items row via source_id = source_path. Used for linear-scan vector search.
 func (d *Database) LoadChunkEmbeddings() ([]ChunkEmbedding, error) {
-	rows, err := d.db.Query(`
+	return d.loadChunkEmbeddingsContext(context.Background())
+}
+
+func (d *Database) loadChunkEmbeddingsContext(ctx context.Context) ([]ChunkEmbedding, error) {
+	rows, err := d.db.QueryContext(ctx, `
 		SELECT c.id, si.id, c.embedding
 		FROM chunks c
 		JOIN search_items si ON si.source_path = c.source_id
@@ -159,13 +168,23 @@ func (d *Database) LoadChunkEmbeddings() ([]ChunkEmbedding, error) {
 		ce.Embedding = decodeEmbedding(blob)
 		results = append(results, ce)
 	}
-	return results, rows.Err()
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	return results, nil
 }
 
 // VectorSearch performs a linear-scan cosine similarity search over all stored embeddings.
 // Returns up to topK results sorted by descending similarity.
 func (d *Database) VectorSearch(queryVec []float32, topK int) ([]VectorResult, error) {
-	chunks, err := d.LoadChunkEmbeddings()
+	return d.vectorSearchContext(context.Background(), queryVec, topK)
+}
+
+func (d *Database) vectorSearchContext(ctx context.Context, queryVec []float32, topK int) ([]VectorResult, error) {
+	chunks, err := d.loadChunkEmbeddingsContext(ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -173,6 +192,9 @@ func (d *Database) VectorSearch(queryVec []float32, topK int) ([]VectorResult, e
 	// Deduplicate by ItemID, keep max similarity per item
 	best := make(map[int64]float64, len(chunks))
 	for _, c := range chunks {
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
 		if len(c.Embedding) != len(queryVec) {
 			continue
 		}
@@ -184,11 +206,17 @@ func (d *Database) VectorSearch(queryVec []float32, topK int) ([]VectorResult, e
 
 	results := make([]VectorResult, 0, len(best))
 	for itemID, sim := range best {
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
 		results = append(results, VectorResult{ItemID: itemID, Similarity: sim})
 	}
 
 	// Sort descending by similarity
 	for i := 1; i < len(results); i++ {
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
 		for j := i; j > 0 && results[j].Similarity > results[j-1].Similarity; j-- {
 			results[j], results[j-1] = results[j-1], results[j]
 		}
@@ -196,6 +224,9 @@ func (d *Database) VectorSearch(queryVec []float32, topK int) ([]VectorResult, e
 
 	if topK > 0 && len(results) > topK {
 		results = results[:topK]
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, err
 	}
 	return results, nil
 }
