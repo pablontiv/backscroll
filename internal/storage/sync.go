@@ -537,7 +537,16 @@ type FileMetadata struct {
 // GetFileMetadata returns all indexed file metadata (path, hash, size, mtime, last_indexed).
 // Pre-v14 rows have NULL size and mtime. LastIndexed is populated from indexed_files.last_indexed.
 func (d *Database) GetFileMetadata() (map[string]FileMetadata, error) {
-	rows, err := d.db.Query(`
+	return d.GetFileMetadataContext(context.Background())
+}
+
+// GetFileMetadataContext is GetFileMetadata with cancellation propagated through
+// the query and row iteration.
+func (d *Database) GetFileMetadataContext(ctx context.Context) (map[string]FileMetadata, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	rows, err := d.db.QueryContext(ctx, `
 		SELECT path, hash, file_size, file_mtime, last_indexed
 		FROM indexed_files
 		WHERE hash <> ?
@@ -549,6 +558,9 @@ func (d *Database) GetFileMetadata() (map[string]FileMetadata, error) {
 
 	metadata := make(map[string]FileMetadata)
 	for rows.Next() {
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
 		var path, hash string
 		var size *int64
 		var mtime *string
@@ -565,6 +577,9 @@ func (d *Database) GetFileMetadata() (map[string]FileMetadata, error) {
 		}
 	}
 
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 	if err := rows.Err(); err != nil {
 		return nil, fmt.Errorf("iterate file metadata: %w", err)
 	}
