@@ -1,6 +1,7 @@
 package storage
 
 import (
+	"context"
 	"database/sql"
 	"fmt"
 
@@ -17,13 +18,16 @@ func normalizedOrigin(origin models.MessageOrigin) models.MessageOrigin {
 
 // rejectConflictingOrigin protects a perennial identity from receiving two
 // contradictory proven actors. Unknown is deliberately not treated as proof.
-func rejectConflictingOrigin(tx *sql.Tx, uuid string, incoming models.MessageOrigin) error {
+func rejectConflictingOrigin(ctx context.Context, tx *sql.Tx, uuid string, incoming models.MessageOrigin) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	if uuid == "" || incoming == models.OriginUnknown {
 		return nil
 	}
 
 	var stored models.MessageOrigin
-	err := tx.QueryRow(`SELECT origin FROM search_items WHERE uuid = ?`, uuid).Scan(&stored)
+	err := tx.QueryRowContext(ctx, `SELECT origin FROM search_items WHERE uuid = ?`, uuid).Scan(&stored)
 	if err == sql.ErrNoRows {
 		return nil
 	}
@@ -39,11 +43,14 @@ func rejectConflictingOrigin(tx *sql.Tx, uuid string, incoming models.MessageOri
 // enrichOrigin advances unknown provenance when a parser later proves an
 // actor. A partial parse may report unknown, but it can never erase proof that
 // was already retained for the identity. No payload columns are modified.
-func enrichOrigin(tx *sql.Tx, uuid string, incoming models.MessageOrigin) error {
+func enrichOrigin(ctx context.Context, tx *sql.Tx, uuid string, incoming models.MessageOrigin) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	if uuid == "" {
 		return nil
 	}
-	_, err := tx.Exec(`
+	_, err := tx.ExecContext(ctx, `
 		UPDATE search_items
 		SET origin = CASE WHEN origin = 'unknown' THEN ? ELSE origin END,
 		    origin_version = ?
