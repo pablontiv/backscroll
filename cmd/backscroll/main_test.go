@@ -1371,89 +1371,176 @@ func TestSearchFindsPionRecordTypeAfterEmptyIndex(t *testing.T) {
 	}
 }
 
-func TestShippedPiPresetSubagentsRequireOptIn(t *testing.T) {
-	dbPath, cleanup := testEnv(t)
-	defer cleanup()
-
-	home := os.Getenv("HOME")
-	sessionsRoot := filepath.Join(home, ".pi", "agent", "sessions")
-	ordinaryPath := filepath.Join(sessionsRoot, "project", "ordinary.jsonl")
-	childPath := filepath.Join(sessionsRoot, "project", "parent", "child", "run-3", "session.jsonl")
-	for _, path := range []string{ordinaryPath, childPath} {
-		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
-			t.Fatalf("mkdir Pi fixture path: %v", err)
-		}
-	}
-	ordinary := `{"recordType":"message","timestamp":"2026-01-02T03:04:05Z","cwd":"/tmp/pi-main","message":{"role":"user","content":"ordinarycobalt shipped preset token"}}` + "\n"
-	child := `{"recordType":"tool_start","data":{"secret":"unsupportedneighbor"}}` + "\n" +
-		`{"recordType":"message","timestamp":"2026-01-02T03:04:06Z","cwd":"/tmp/pi-child","message":{"role":"assistant","content":[{"type":"thinking","text":"reasoningviolet must stay private"},{"type":"text","text":"childsaffron shipped preset token"}]}}` + "\n"
-	if err := os.WriteFile(ordinaryPath, []byte(ordinary), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(childPath, []byte(child), 0o644); err != nil {
-		t.Fatal(err)
-	}
-
+func TestPiPionIngestionRegressionMatrixE2E(t *testing.T) {
 	preset, err := os.ReadFile(filepath.Join("..", "..", "inputs", "pi.inputs.toml"))
 	if err != nil {
 		t.Fatalf("read shipped Pi preset: %v", err)
 	}
-	manifestPath := filepath.Join(os.Getenv("BACKSCROLL_CONFIG_DIR"), "backscroll", "inputs", "pi.inputs.toml")
-	if err := os.MkdirAll(filepath.Dir(manifestPath), 0o755); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(manifestPath, preset, 0o644); err != nil {
-		t.Fatal(err)
+
+	tests := []struct {
+		name             string
+		subagentsEnabled bool
+		wantChild        int
+	}{
+		{name: "default_off", wantChild: 0},
+		{name: "subagents_opt_in", subagentsEnabled: true, wantChild: 1},
 	}
 
-	searchCount := func(query string) int {
-		t.Helper()
-		out, stderr, err := runCmd("search", "--text", query, "--all-projects", "--lexical-only", "--json")
-		if err != nil {
-			t.Fatalf("search %q: %v\nstdout=%s\nstderr=%s", query, err, out, stderr)
-		}
-		var results []map[string]interface{}
-		if err := json.Unmarshal([]byte(out), &results); err != nil {
-			t.Fatalf("decode search %q: %v; output=%s", query, err, out)
-		}
-		return len(results)
-	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			dbPath, cleanup := testEnv(t)
+			defer cleanup()
 
-	if got := searchCount("ordinarycobalt"); got != 1 {
-		t.Fatalf("ordinary Pi results before opt-in = %d, want 1", got)
-	}
-	if got := searchCount("childsaffron"); got != 0 {
-		t.Fatalf("Pi subagent results before opt-in = %d, want 0", got)
-	}
+			sessionsRoot := filepath.Join(os.Getenv("HOME"), ".pi", "agent", "sessions")
+			legacyPath := filepath.Join(sessionsRoot, "project", "pi-legacy.jsonl")
+			pionPath := filepath.Join(sessionsRoot, "project", "pion-main.jsonl")
+			metadataPath := filepath.Join(sessionsRoot, "project", "pion-metadata.jsonl")
+			childPath := filepath.Join(sessionsRoot, "project", "parent", "child", "run-17", "session.jsonl")
+			fixtures := map[string]string{
+				legacyPath:   `{"type":"message","timestamp":"2026-01-02T03:04:05Z","cwd":"/synthetic/pi-legacy","message":{"role":"user","content":"legacymarigold ingestion matrix"}}` + "\n",
+				pionPath:     `{"recordType":"message","timestamp":"2026-01-02T03:04:06Z","cwd":"/synthetic/pion-main","message":{"role":"assistant","content":"pioncerulean ingestion matrix"}}` + "\n",
+				metadataPath: `{"recordType":"session_metadata","timestamp":"2026-01-02T03:04:07Z","cwd":"/synthetic/pion-metadata","data":{"private":"metadatacrimson must not be indexed"}}` + "\n",
+				childPath:    `{"recordType":"message","timestamp":"2026-01-02T03:04:08Z","cwd":"/synthetic/pion-child","message":{"role":"assistant","content":[{"type":"thinking","text":"reasoningviolet must stay private"},{"type":"text","text":"childsaffron ingestion matrix"}]}}` + "\n",
+			}
+			for path, content := range fixtures {
+				if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+					t.Fatalf("mkdir synthetic Pi fixture path: %v", err)
+				}
+				if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+					t.Fatalf("write synthetic Pi fixture %s: %v", path, err)
+				}
+			}
 
-	activated := strings.Replace(string(preset), "id = \"pi-subagents\"\nsource = \"session\"\nactive = false", "id = \"pi-subagents\"\nsource = \"session\"\nactive = true", 1)
-	if activated == string(preset) {
-		t.Fatal("could not activate pi-subagents in shipped preset")
-	}
-	if err := os.WriteFile(manifestPath, []byte(activated), 0o644); err != nil {
-		t.Fatal(err)
-	}
+			manifest := string(preset)
+			if tt.subagentsEnabled {
+				const disabled = "id = \"pi-subagents\"\nsource = \"session\"\nactive = false"
+				const enabled = "id = \"pi-subagents\"\nsource = \"session\"\nactive = true"
+				manifest = strings.Replace(manifest, disabled, enabled, 1)
+				if manifest == string(preset) {
+					t.Fatal("could not activate pi-subagents in shipped preset")
+				}
+			}
+			manifestPath := filepath.Join(os.Getenv("BACKSCROLL_CONFIG_DIR"), "backscroll", "inputs", "pi.inputs.toml")
+			if err := os.MkdirAll(filepath.Dir(manifestPath), 0o755); err != nil {
+				t.Fatalf("mkdir isolated input manifest dir: %v", err)
+			}
+			if err := os.WriteFile(manifestPath, []byte(manifest), 0o644); err != nil {
+				t.Fatalf("write shipped Pi preset: %v", err)
+			}
 
-	if got := searchCount("childsaffron"); got != 1 {
-		t.Fatalf("Pion recordType subagent results after opt-in = %d, want 1", got)
-	}
-	if got := searchCount("reasoningviolet"); got != 0 {
-		t.Fatalf("Pi subagent reasoning results with index_reasoning=false = %d, want 0", got)
-	}
+			searchCount := func(query string) int {
+				t.Helper()
+				out, stderr, err := runCmd("search", "--text", query, "--all-projects", "--lexical-only", "--json")
+				if err != nil {
+					t.Fatalf("search %q: %v\nstdout=%s\nstderr=%s", query, err, out, stderr)
+				}
+				var results []map[string]interface{}
+				if err := json.Unmarshal([]byte(out), &results); err != nil {
+					t.Fatalf("decode search %q: %v; output=%s", query, err, out)
+				}
+				return len(results)
+			}
 
-	db, err := storage.Open(dbPath)
-	if err != nil {
-		t.Fatalf("open index: %v", err)
-	}
-	defer db.Close()
-	for _, path := range []string{ordinaryPath, childPath} {
-		var count int
-		if err := db.DB().QueryRow(`SELECT COUNT(*) FROM search_items WHERE source_path = ?`, path).Scan(&count); err != nil {
-			t.Fatalf("count rows for %s: %v", path, err)
-		}
-		if count != 1 {
-			t.Fatalf("rows for %s = %d, want exactly 1", path, count)
-		}
+			type counts struct {
+				indexedFiles int
+				searchItems  int
+			}
+			wantCounts := map[string]counts{
+				legacyPath:   {indexedFiles: 1, searchItems: 1},
+				pionPath:     {indexedFiles: 1, searchItems: 1},
+				metadataPath: {indexedFiles: 1, searchItems: 0},
+				childPath:    {indexedFiles: tt.wantChild, searchItems: tt.wantChild},
+			}
+			assertStoreCounts := func(stage string) {
+				t.Helper()
+				db, err := storage.Open(dbPath)
+				if err != nil {
+					t.Fatalf("%s: open isolated index: %v", stage, err)
+				}
+				for path, want := range wantCounts {
+					var got counts
+					if err := db.DB().QueryRow(`SELECT COUNT(*) FROM indexed_files WHERE path = ?`, path).Scan(&got.indexedFiles); err != nil {
+						_ = db.Close()
+						t.Fatalf("%s: count indexed_files for %s: %v", stage, path, err)
+					}
+					if err := db.DB().QueryRow(`SELECT COUNT(*) FROM search_items WHERE source_path = ?`, path).Scan(&got.searchItems); err != nil {
+						_ = db.Close()
+						t.Fatalf("%s: count search_items for %s: %v", stage, path, err)
+					}
+					if got != want {
+						_ = db.Close()
+						t.Fatalf("%s: counts for %s = %+v, want %+v", stage, path, got, want)
+					}
+				}
+				var indexedTotal, itemsTotal, privateRows int
+				if err := db.DB().QueryRow(`SELECT COUNT(*) FROM indexed_files`).Scan(&indexedTotal); err != nil {
+					_ = db.Close()
+					t.Fatalf("%s: count indexed_files total: %v", stage, err)
+				}
+				if err := db.DB().QueryRow(`SELECT COUNT(*) FROM search_items`).Scan(&itemsTotal); err != nil {
+					_ = db.Close()
+					t.Fatalf("%s: count search_items total: %v", stage, err)
+				}
+				if err := db.DB().QueryRow(`SELECT COUNT(*) FROM search_items WHERE text LIKE '%metadatacrimson%' OR text LIKE '%reasoningviolet%'`).Scan(&privateRows); err != nil {
+					_ = db.Close()
+					t.Fatalf("%s: count unsupported or reasoning rows: %v", stage, err)
+				}
+				if err := db.Close(); err != nil {
+					t.Fatalf("%s: close isolated index: %v", stage, err)
+				}
+				if indexedTotal != 3+tt.wantChild || itemsTotal != 2+tt.wantChild || privateRows != 0 {
+					t.Fatalf("%s: totals indexed_files=%d search_items=%d private_rows=%d; want %d, %d, 0", stage, indexedTotal, itemsTotal, privateRows, 3+tt.wantChild, 2+tt.wantChild)
+				}
+			}
+
+			// The first real CLI read performs startup sync through the shipped preset.
+			if got := searchCount("legacymarigold"); got != 1 {
+				t.Fatalf("legacy Pi search results = %d, want 1", got)
+			}
+			assertStoreCounts("first sync")
+
+			// list performs a second startup sync; exact table counts must remain stable.
+			out, stderr, err := runCmd("list", "--all-projects", "--recent", "0", "--json")
+			if err != nil {
+				t.Fatalf("list --all-projects: %v\nstdout=%s\nstderr=%s", err, out, stderr)
+			}
+			var listed struct {
+				Count    int                    `json:"count"`
+				Sessions []storage.SessionEntry `json:"sessions"`
+			}
+			if err := json.Unmarshal([]byte(out), &listed); err != nil {
+				t.Fatalf("decode list --all-projects: %v; output=%s", err, out)
+			}
+			wantListed := map[string]int{legacyPath: 1, pionPath: 1}
+			if tt.wantChild == 1 {
+				wantListed[childPath] = 1
+			}
+			gotListed := make(map[string]int)
+			for _, session := range listed.Sessions {
+				gotListed[session.Path]++
+			}
+			if listed.Count != len(wantListed) || len(gotListed) != len(wantListed) {
+				t.Fatalf("listed sessions = count %d paths %v, want %v", listed.Count, gotListed, wantListed)
+			}
+			for path, want := range wantListed {
+				if gotListed[path] != want {
+					t.Fatalf("list occurrences for %s = %d, want %d; all paths=%v", path, gotListed[path], want, gotListed)
+				}
+			}
+			assertStoreCounts("second sync")
+
+			for query, want := range map[string]int{
+				"pioncerulean":    1,
+				"childsaffron":    tt.wantChild,
+				"metadatacrimson": 0,
+				"reasoningviolet": 0,
+			} {
+				if got := searchCount(query); got != want {
+					t.Fatalf("search %q results = %d, want %d", query, got, want)
+				}
+			}
+			assertStoreCounts("subsequent syncs")
+		})
 	}
 }
 
