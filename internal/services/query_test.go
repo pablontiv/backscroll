@@ -150,11 +150,28 @@ func TestValidateSearchRequestExactErrorsAndOrder(t *testing.T) {
 			request: SearchRequest{Query: `"unclosed`, Options: models.SearchOptions{Limit: 20}, Relax: true},
 			want:    "invalid --relax query: quoted phrases must be closed and whitespace-delimited",
 		},
+		{
+			name:    "relaxation syntax stays opt-in",
+			request: SearchRequest{Query: `"unclosed`, Options: models.SearchOptions{Limit: 20}},
+		},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
 			assertExactValidationError(t, ValidateSearchRequest(test.request), test.want)
 		})
+	}
+}
+
+func TestQueryServiceRejectsInvalidRelaxationBeforeDatabaseAccess(t *testing.T) {
+	service := QueryService{}
+	response, err := service.Search(context.Background(), SearchRequest{
+		Query:   `"unclosed`,
+		Options: models.SearchOptions{Limit: 20},
+		Relax:   true,
+	})
+	assertExactValidationError(t, err, "invalid --relax query: quoted phrases must be closed and whitespace-delimited")
+	if len(response.Results) != 0 || response.Provenance.RelaxationStages != nil {
+		t.Fatalf("response = %+v, want empty response", response)
 	}
 }
 
