@@ -3,6 +3,7 @@ package storage
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
 	"sort"
 	"strings"
@@ -78,21 +79,37 @@ func (d *Database) GetStatsContext(ctx context.Context) (Stats, error) {
 	// Get chunk and embedding counts (V2 tables — present after migration).
 	// Preserve compatibility by ignoring ordinary errors from these optional counts,
 	// but never suppress cancellation.
-	if err := d.db.QueryRowContext(ctx, "SELECT COUNT(*) FROM chunks").Scan(&stats.TotalChunks); err != nil && ctx.Err() != nil {
-		return Stats{}, ctx.Err()
+	if err := d.db.QueryRowContext(ctx, "SELECT COUNT(*) FROM chunks").Scan(&stats.TotalChunks); err != nil {
+		if cancellation := optionalStatsQueryCancellation(ctx, err); cancellation != nil {
+			return Stats{}, cancellation
+		}
 	}
-	if err := d.db.QueryRowContext(ctx, "SELECT COUNT(*) FROM embedding_metadata").Scan(&stats.TotalEmbeddings); err != nil && ctx.Err() != nil {
-		return Stats{}, ctx.Err()
+	if err := d.db.QueryRowContext(ctx, "SELECT COUNT(*) FROM embedding_metadata").Scan(&stats.TotalEmbeddings); err != nil {
+		if cancellation := optionalStatsQueryCancellation(ctx, err); cancellation != nil {
+			return Stats{}, cancellation
+		}
 	}
 	// V3: chunks with embedding vector blob
-	if err := d.db.QueryRowContext(ctx, "SELECT COUNT(*) FROM chunks WHERE embedding IS NOT NULL").Scan(&stats.TotalVectors); err != nil && ctx.Err() != nil {
-		return Stats{}, ctx.Err()
+	if err := d.db.QueryRowContext(ctx, "SELECT COUNT(*) FROM chunks WHERE embedding IS NOT NULL").Scan(&stats.TotalVectors); err != nil {
+		if cancellation := optionalStatsQueryCancellation(ctx, err); cancellation != nil {
+			return Stats{}, cancellation
+		}
 	}
 	if err := ctx.Err(); err != nil {
 		return Stats{}, err
 	}
 
 	return stats, nil
+}
+
+func optionalStatsQueryCancellation(ctx context.Context, err error) error {
+	if ctxErr := ctx.Err(); ctxErr != nil {
+		return ctxErr
+	}
+	if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+		return err
+	}
+	return nil
 }
 
 // TopicEntry represents a single topic with its document frequency.

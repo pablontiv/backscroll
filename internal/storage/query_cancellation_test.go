@@ -3,6 +3,7 @@ package storage
 import (
 	"context"
 	"errors"
+	"fmt"
 	"testing"
 	"time"
 
@@ -139,6 +140,59 @@ func TestHybridSearchContextProviderDeadlineDoesNotFallBack(t *testing.T) {
 	}
 	if results != nil {
 		t.Fatalf("HybridSearchContext fell back to partial lexical results: %+v", results)
+	}
+}
+
+type cancellationAfterChecksContext struct {
+	context.Context
+	cancelAt int
+	checks   int
+	err      error
+}
+
+func (c *cancellationAfterChecksContext) Err() error {
+	c.checks++
+	if c.checks >= c.cancelAt {
+		return c.err
+	}
+	return nil
+}
+
+func TestFilterVectorResultsContextCancellationReturnsNoPartialResults(t *testing.T) {
+	for _, cancellation := range []error{context.Canceled, context.DeadlineExceeded} {
+		t.Run(cancellation.Error(), func(t *testing.T) {
+			ctx := &cancellationAfterChecksContext{
+				Context:  context.Background(),
+				cancelAt: 3,
+				err:      cancellation,
+			}
+			results, err := filterVectorResultsContext(ctx, []VectorResult{
+				{ItemID: 1, Similarity: 0.9},
+				{ItemID: 2, Similarity: 0.8},
+				{ItemID: 3, Similarity: 0.7},
+			}, 0.5)
+			if !errors.Is(err, cancellation) {
+				t.Fatalf("filterVectorResultsContext error = %v, want %v", err, cancellation)
+			}
+			if results != nil {
+				t.Fatalf("filterVectorResultsContext returned partial results: %+v", results)
+			}
+		})
+	}
+}
+
+func TestOptionalStatsQueryCancellationClassifiesDriverErrors(t *testing.T) {
+	for _, cancellation := range []error{context.Canceled, context.DeadlineExceeded} {
+		t.Run(cancellation.Error(), func(t *testing.T) {
+			driverErr := fmt.Errorf("optional count: %w", cancellation)
+			got := optionalStatsQueryCancellation(context.Background(), driverErr)
+			if !errors.Is(got, cancellation) {
+				t.Fatalf("optionalStatsQueryCancellation error = %v, want %v", got, cancellation)
+			}
+		})
+	}
+	if got := optionalStatsQueryCancellation(context.Background(), errors.New("no such table")); got != nil {
+		t.Fatalf("genuine optional-schema error was not tolerated: %v", got)
 	}
 }
 

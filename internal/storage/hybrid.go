@@ -38,10 +38,7 @@ func (d *Database) HybridSearchContext(ctx context.Context, query string, opts m
 
 	// Skip vector path when explicitly requested or no provider configured.
 	if opts.LexicalOnly || d.embeddingProvider == nil {
-		if err := ctx.Err(); err != nil {
-			return nil, err
-		}
-		return bm25Results, nil
+		return lexicalFallback(ctx, bm25Results)
 	}
 
 	// Check if any vectors are stored.
@@ -50,13 +47,10 @@ func (d *Database) HybridSearchContext(ctx context.Context, query string, opts m
 		if cancellation := contextCancellation(ctx, err); cancellation != nil {
 			return nil, cancellation
 		}
-		return bm25Results, nil
+		return lexicalFallback(ctx, bm25Results)
 	}
 	if vectorCount == 0 {
-		if err := ctx.Err(); err != nil {
-			return nil, err
-		}
-		return bm25Results, nil
+		return lexicalFallback(ctx, bm25Results)
 	}
 
 	// Embed the query.
@@ -66,7 +60,7 @@ func (d *Database) HybridSearchContext(ctx context.Context, query string, opts m
 			return nil, cancellation
 		}
 		// Provider unavailable (e.g. ONNX stub) — fall back to BM25.
-		return bm25Results, nil
+		return lexicalFallback(ctx, bm25Results)
 	}
 	if err := ctx.Err(); err != nil {
 		return nil, err
@@ -82,22 +76,15 @@ func (d *Database) HybridSearchContext(ctx context.Context, query string, opts m
 		if cancellation := contextCancellation(ctx, err); cancellation != nil {
 			return nil, cancellation
 		}
-		return bm25Results, nil
+		return lexicalFallback(ctx, bm25Results)
 	}
 
-	// Apply similarity threshold
-	if opts.SimilarityThreshold > 0 {
-		filtered := vecResults[:0]
-		for _, vr := range vecResults {
-			if vr.Similarity >= opts.SimilarityThreshold {
-				filtered = append(filtered, vr)
-			}
-		}
-		vecResults = filtered
+	vecResults, err = filterVectorResultsContext(ctx, vecResults, opts.SimilarityThreshold)
+	if err != nil {
+		return nil, err
 	}
-
 	if len(vecResults) == 0 {
-		return bm25Results, nil
+		return lexicalFallback(ctx, bm25Results)
 	}
 
 	// Convert to RRF ranking lists
@@ -142,6 +129,39 @@ func (d *Database) HybridSearchContext(ctx context.Context, query string, opts m
 	}
 
 	return final, nil
+}
+
+func lexicalFallback(ctx context.Context, results []SearchResult) ([]SearchResult, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	return results, nil
+}
+
+func filterVectorResultsContext(ctx context.Context, results []VectorResult, threshold float64) ([]VectorResult, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	if threshold <= 0 {
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
+		return results, nil
+	}
+
+	filtered := make([]VectorResult, 0, len(results))
+	for _, result := range results {
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
+		if result.Similarity >= threshold {
+			filtered = append(filtered, result)
+		}
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	return filtered, nil
 }
 
 func contextCancellation(ctx context.Context, err error) error {
