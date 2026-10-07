@@ -6,6 +6,8 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/pablontiv/backscroll/internal/models"
+	"github.com/pablontiv/backscroll/internal/services"
 	"github.com/pablontiv/backscroll/internal/storage"
 	picokitoutput "github.com/pablontiv/picokit/output"
 )
@@ -31,6 +33,27 @@ func TestSearchRelaxationBudgetKeepsProvenanceWithEachResult(t *testing.T) {
 				t.Fatalf("unescaped provenance split a robot line: %s", payload)
 			}
 		}
+	}
+}
+
+func TestSearchRelaxationValidationMatchesServiceBytes(t *testing.T) {
+	testEnv(t)
+	query := `"unclosed`
+	serviceErr := services.ValidateSearchRequest(services.SearchRequest{
+		Query:   query,
+		Options: models.SearchOptions{Limit: 20},
+		Relax:   true,
+	})
+	if serviceErr == nil {
+		t.Fatal("service validation accepted invalid relaxation syntax")
+	}
+
+	stdout, stderr, cliErr := runCmd("search", "--text", query, "--relax", "--robot")
+	if cliErr == nil || cliErr.Error() != serviceErr.Error() {
+		t.Fatalf("CLI error = %v, service error = %v", cliErr, serviceErr)
+	}
+	if stdout != "" || stderr != "" {
+		t.Fatalf("CLI output = (%q, %q), want empty output", stdout, stderr)
 	}
 }
 
