@@ -4,6 +4,7 @@ package skillinstall
 import (
 	"bytes"
 	"crypto/sha256"
+	"embed"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -19,6 +20,29 @@ import (
 )
 
 const statePath = ".local/state/backscroll/skill-install"
+
+//go:embed assets/*
+var officialShimFiles embed.FS
+
+// OfficialShim returns a copy of the skill discovery shim shipped with Backscroll.
+func OfficialShim() (map[string][]byte, error) {
+	entries, err := officialShimFiles.ReadDir("assets")
+	if err != nil {
+		return nil, fmt.Errorf("read embedded shim: %w", err)
+	}
+	shim := make(map[string][]byte, len(entries))
+	for _, entry := range entries {
+		if entry.IsDir() {
+			return nil, fmt.Errorf("embedded shim contains an unsupported directory: %s", entry.Name())
+		}
+		data, err := officialShimFiles.ReadFile("assets/" + entry.Name())
+		if err != nil {
+			return nil, fmt.Errorf("read embedded shim file %s: %w", entry.Name(), err)
+		}
+		shim[entry.Name()] = data
+	}
+	return shim, nil
+}
 
 // Options defines one skill installation.
 type Options struct {

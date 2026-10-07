@@ -26,20 +26,21 @@ var presetFiles embed.FS
 
 // Options controls preset installation.
 type Options struct {
-	Overwrite bool
+	Overwrite  bool
+	ConfigHome string
 }
 
 // Result reports the presets that Install changed or preserved.
 type Result struct {
-	Installed []string
-	Skipped   []string
+	Installed []string `json:"installed"`
+	Skipped   []string `json:"skipped"`
 }
 
 // Install writes the shipped presets to the resolved Backscroll inputs directory.
 func Install(options Options) (Result, error) {
-	dir, err := input_config.InputsDir()
+	dir, err := inputsDir(options.ConfigHome)
 	if err != nil {
-		return Result{}, fmt.Errorf("resolve inputs directory: %w", err)
+		return Result{}, err
 	}
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return Result{}, fmt.Errorf("create inputs directory %s: %w", dir, err)
@@ -58,6 +59,20 @@ func Install(options Options) (Result, error) {
 		}
 	}
 	return result, nil
+}
+
+func inputsDir(configHome string) (string, error) {
+	if configHome == "" {
+		dir, err := input_config.InputsDir()
+		if err != nil {
+			return "", fmt.Errorf("resolve inputs directory: %w", err)
+		}
+		return dir, nil
+	}
+	if !filepath.IsAbs(configHome) {
+		return "", errors.New("config home must be absolute")
+	}
+	return filepath.Join(filepath.Clean(configHome), "backscroll", "inputs"), nil
 }
 
 func installOne(dir, name string, overwrite bool) (bool, error) {

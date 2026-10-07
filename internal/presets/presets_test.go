@@ -8,6 +8,32 @@ import (
 	"testing"
 )
 
+func TestInstallUsesExplicitConfigHome(t *testing.T) {
+	root := t.TempDir()
+	configHome := filepath.Join(root, "explicit")
+	t.Setenv("BACKSCROLL_CONFIG_DIR", filepath.Join(root, "ambient"))
+
+	result, err := Install(Options{ConfigHome: configHome})
+	if err != nil {
+		t.Fatalf("Install: %v", err)
+	}
+	if !reflect.DeepEqual(result.Installed, presetNames) {
+		t.Fatalf("Installed = %v, want %v", result.Installed, presetNames)
+	}
+	for _, name := range presetNames {
+		assertInstalledPreset(t, filepath.Join(configHome, "backscroll", "inputs"), name)
+	}
+	if _, err := os.Stat(filepath.Join(root, "ambient")); !os.IsNotExist(err) {
+		t.Fatalf("Install touched ambient config directory: %v", err)
+	}
+}
+
+func TestInstallRejectsRelativeConfigHome(t *testing.T) {
+	if _, err := Install(Options{ConfigHome: "relative"}); err == nil || !strings.Contains(err.Error(), "must be absolute") {
+		t.Fatalf("Install relative config home error = %v", err)
+	}
+}
+
 func TestInstallInitial(t *testing.T) {
 	inputsDir := isolatedInputsDir(t)
 	if err := os.MkdirAll(inputsDir, 0o700); err != nil {

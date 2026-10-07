@@ -23,6 +23,8 @@ func TestEveryOperationalCommandHasApprovedStartupClass(t *testing.T) {
 		"purge":    startupMutation,
 		"rebuild":  startupMutation,
 		"recover":  startupRemediation,
+		"skill":    startupBypass,
+		"presets":  startupBypass,
 	}
 	if len(root.Commands()) != len(want) {
 		t.Fatalf("operational command count=%d want=%d", len(root.Commands()), len(want))

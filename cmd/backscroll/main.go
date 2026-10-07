@@ -104,9 +104,8 @@ func run(stdout, stderr io.Writer, args []string) error {
 }
 
 func runContext(ctx context.Context, stdout, stderr io.Writer, args []string) error {
-	// The skill is informational, self-contained output. Validate and handle its
-	// global option before constructing the updater or command tree, while
-	// preserving arguments after the POSIX -- separator as command literals.
+	// Validate the compatibility alias before constructing the updater or command
+	// tree. Preserve arguments after the POSIX -- separator as command literals.
 	printSkill, err := validateSkillInvocation(args)
 	if err != nil {
 		return err
@@ -115,14 +114,32 @@ func runContext(ctx context.Context, stdout, stderr io.Writer, args []string) er
 		_, err := io.WriteString(stdout, embeddedBackscrollSkill)
 		return err
 	}
+	if startupBypassInvocation(args) {
+		return executeRoot(ctx, buildRootCmd(stdout, stderr), args)
+	}
 
 	return runContextWithDependencies(ctx, stdout, stderr, args, newRunDependencies(stdout, stderr))
+}
+
+func startupBypassInvocation(args []string) bool {
+	return len(args) > 0 && (args[0] == "skill" || args[0] == "presets")
+}
+
+func executeRoot(ctx context.Context, root *cobra.Command, args []string) error {
+	if indexPolicyMachineArgs(args) || startupBypassInvocation(args) {
+		root.SilenceUsage = true
+	}
+	root.SetArgs(args)
+	return root.ExecuteContext(ctx)
 }
 
 func runContextWithDependencies(ctx context.Context, stdout, stderr io.Writer, args []string, deps runDependencies) error {
 	root := deps.root
 	if root == nil {
 		root = buildRootCmd(stdout, stderr)
+	}
+	if startupBypassInvocation(args) {
+		return executeRoot(ctx, root, args)
 	}
 	stagingWait := deps.stagingWait
 	if stagingWait <= 0 {
@@ -144,11 +161,7 @@ func runContextWithDependencies(ctx context.Context, stdout, stderr io.Writer, a
 		staged <- struct{}{}
 	}()
 
-	if indexPolicyMachineArgs(args) {
-		root.SilenceUsage = true
-	}
-	root.SetArgs(args)
-	if err := root.ExecuteContext(ctx); err != nil {
+	if err := executeRoot(ctx, root, args); err != nil {
 		return err
 	}
 

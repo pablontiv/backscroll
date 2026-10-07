@@ -215,6 +215,9 @@ query merges both by rank position (RRF).`,
 				return err
 			}
 			class, _ := startupCommandClassFor(cmd)
+			if class == startupBypass {
+				return nil
+			}
 			result := policy(cmd.Context(), startupProgressWriter(cmd, stderr), class)
 			cmd.SetContext(context.WithValue(cmd.Context(), startupContextKey{}, result))
 			if result.Warning != nil {
@@ -248,6 +251,8 @@ query merges both by rank position (RRF).`,
 	registerStartupCommand(root, startupMetadataRead, newConfigCmd(stdout, stderr))
 	registerStartupCommand(root, startupMutation, newAnnotateCmd(stdout, stderr))
 	registerStartupCommand(root, startupRemediation, newRecoverCmd(stdout, stderr, syncService, execute))
+	registerStartupCommand(root, startupBypass, newSkillCmd(stdout))
+	registerStartupCommand(root, startupBypass, newPresetsCmd(stdout))
 
 	return root
 }

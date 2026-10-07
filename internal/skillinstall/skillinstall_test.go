@@ -10,6 +10,29 @@ import (
 	"testing"
 )
 
+func TestOfficialShimMatchesRepositoryTree(t *testing.T) {
+	shim, err := OfficialShim()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, name := range []string{"SKILL.md", "ref-context-mode.md"} {
+		got, ok := shim[name]
+		if !ok {
+			t.Fatalf("official shim does not contain %s", name)
+		}
+		want, err := os.ReadFile(filepath.Join("..", "..", ".claude", "skills", "backscroll", name))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !reflect.DeepEqual(got, want) {
+			t.Fatalf("embedded %s differs from the repository shim", name)
+		}
+	}
+	if len(shim) != 2 {
+		t.Fatalf("official shim contains %d files, want 2", len(shim))
+	}
+}
+
 func TestInstallSuccessAndIdempotence(t *testing.T) {
 	home := testHome(t)
 	installer := testInstaller(t, home, dependencies{exchange: exchangePaths, moveNoReplace: moveNoReplace, syncDir: syncDirectory})
