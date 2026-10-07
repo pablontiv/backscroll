@@ -180,7 +180,7 @@ func buildRootCmdWithCoordinator(stdout, stderr io.Writer, coordinator *startupC
 	return buildRootCmdWithDependencies(stdout, stderr, coordinator.defaultStartupPolicy, coordinator.syncService, recovery.Execute)
 }
 
-func buildRootCmdWithDependencies(stdout, stderr io.Writer, policy startupPolicyFunc, syncService *startupSyncService, execute func(context.Context, recovery.Options) (recovery.Report, error)) *cobra.Command {
+func buildRootCmdWithDependencies(stdout, stderr io.Writer, policy startupPolicyFunc, syncService *startupSyncService, execute func(context.Context, recovery.Options) (recovery.Report, error), rebuildRunners ...*rebuildRunner) *cobra.Command {
 	if syncService == nil {
 		syncService = newStartupSyncService()
 	}
@@ -189,6 +189,13 @@ func buildRootCmdWithDependencies(stdout, stderr io.Writer, policy startupPolicy
 	}
 	if execute == nil {
 		execute = recovery.Execute
+	}
+	var rebuild *rebuildRunner
+	if len(rebuildRunners) > 0 {
+		rebuild = rebuildRunners[0]
+	}
+	if rebuild == nil {
+		rebuild = newRebuildRunner(nil)
 	}
 
 	root := &cobra.Command{
@@ -234,7 +241,7 @@ query merges both by rank position (RRF).`,
 	registerStartupCommand(root, startupSnapshotRead, newContextCmd(stdout, stderr))
 	registerStartupCommand(root, startupSnapshotRead, newListCmd(stdout, stderr))
 	registerStartupCommand(root, startupSnapshotRead, newPatternsCmd(stdout, stderr))
-	registerStartupCommand(root, startupMutation, newRebuildCmd(stdout, stderr))
+	registerStartupCommand(root, startupMutation, newRebuildCmd(stdout, stderr, rebuild))
 	registerStartupCommand(root, startupMutation, newPurgeCmd(stdout, stderr))
 	registerStartupCommand(root, startupSnapshotRead, newValidateCmd(stdout, stderr))
 	registerStartupCommand(root, startupSnapshotRead, newStatusCmd(stdout, stderr))

@@ -550,14 +550,15 @@ func TestValidateRobotResultLinesRejectsNonResultLines(t *testing.T) {
 func TestRebuildFailsOnDerivedMaintenanceError(t *testing.T) {
 	dbPath := newSupportedIndexedConsumerDB(t)
 	setIndexPolicyEnv(t, dbPath, t.TempDir())
-	orig := rebuildBackfillDerived
-	rebuildBackfillDerived = func(*storage.Database, storage.BackfillDerivedOpts) error {
-		return fmt.Errorf("injected derived failure")
-	}
-	t.Cleanup(func() { rebuildBackfillDerived = orig })
+	runner := newRebuildRunner(&rebuildDependencies{
+		backfillDerivedContext: func(*storage.Database, context.Context, storage.BackfillDerivedOpts) error {
+			return fmt.Errorf("injected derived failure")
+		},
+	})
 
 	var stdout, stderr bytes.Buffer
-	err := run(&stdout, &stderr, []string{"rebuild"})
+	root := buildRootCmdWithDependencies(&stdout, &stderr, nil, nil, nil, runner)
+	err := runContextWithDependencies(context.Background(), &stdout, &stderr, []string{"rebuild"}, runDependencies{root: root})
 	if err == nil {
 		t.Fatalf("rebuild succeeded despite derived failure; stdout=%q stderr=%q", stdout.String(), stderr.String())
 	}
