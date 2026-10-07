@@ -11,6 +11,7 @@ import (
 
 	"github.com/pablontiv/backscroll/internal/compat"
 	"github.com/pablontiv/backscroll/internal/config"
+	"github.com/pablontiv/backscroll/internal/input_config"
 	"github.com/pablontiv/backscroll/internal/storage"
 )
 
@@ -23,6 +24,11 @@ func TestStartupCoordinatorsIsolateDependencies(t *testing.T) {
 			t.Parallel()
 			lease := &fakeStartupLease{}
 			syncCalls := 0
+			syncService := newStartupSyncService()
+			syncService.activeInputs = func([]string) ([]input_config.InputDefinition, input_config.InputMode, error) {
+				syncCalls++
+				return nil, input_config.ModeLegacy, nil
+			}
 			coordinator := &startupCoordinator{
 				mutationWait: defaultStartupMutationWait,
 				tryAcquire: func(path string) (startupLease, bool, error) {
@@ -38,13 +44,7 @@ func TestStartupCoordinatorsIsolateDependencies(t *testing.T) {
 				prepareIndex: func(context.Context, *config.Config, indexCommandClass) (*storage.Database, *compat.Diagnostic, error) {
 					return nil, nil, nil
 				},
-				sync: func(_ context.Context, cfg *config.Config, _ io.Writer) error {
-					if !strings.Contains(cfg.DatabasePath, name) {
-						t.Fatalf("%s sync received another coordinator's config %q", name, cfg.DatabasePath)
-					}
-					syncCalls++
-					return nil
-				},
+				syncService: syncService,
 			}
 
 			result := coordinator.coordinate(context.Background(), &config.Config{DatabasePath: filepath.Join(t.TempDir(), name+".db")}, io.Discard, startupSnapshotRead)
@@ -66,12 +66,12 @@ func TestCoordinateStartupImmediateOwnerSnapshotSyncsAndReleasesBeforeResult(t *
 	coordinator.prepareIndex = func(context.Context, *config.Config, indexCommandClass) (*storage.Database, *compat.Diagnostic, error) {
 		return nil, nil, nil
 	}
-	coordinator.sync = func(context.Context, *config.Config, io.Writer) error {
+	coordinator.syncService.activeInputs = func([]string) ([]input_config.InputDefinition, input_config.InputMode, error) {
 		syncCalls++
 		if lease.releases != 0 {
 			t.Fatalf("lease released before sync")
 		}
-		return nil
+		return nil, input_config.ModeLegacy, nil
 	}
 
 	result := coordinator.coordinate(context.Background(), &config.Config{DatabasePath: filepath.Join(t.TempDir(), "index.db")}, io.Discard, startupSnapshotRead)
@@ -97,7 +97,10 @@ func TestCoordinateStartupImmediateOwnerMutationSyncsAndRetainsLease(t *testing.
 	coordinator.prepareIndex = func(context.Context, *config.Config, indexCommandClass) (*storage.Database, *compat.Diagnostic, error) {
 		return nil, nil, nil
 	}
-	coordinator.sync = func(context.Context, *config.Config, io.Writer) error { syncCalls++; return nil }
+	coordinator.syncService.activeInputs = func([]string) ([]input_config.InputDefinition, input_config.InputMode, error) {
+		syncCalls++
+		return nil, input_config.ModeLegacy, nil
+	}
 
 	result := coordinator.coordinate(context.Background(), &config.Config{DatabasePath: filepath.Join(t.TempDir(), "index.db")}, io.Discard, startupMutation)
 	if result.Failure != nil {
@@ -122,9 +125,9 @@ func TestCoordinateStartupImmediateRemediationRetainsLeaseWithoutPrepareOrSync(t
 		t.Fatal("remediation must not prepare the index")
 		return nil, nil, nil
 	}
-	coordinator.sync = func(context.Context, *config.Config, io.Writer) error {
+	coordinator.syncService.activeInputs = func([]string) ([]input_config.InputDefinition, input_config.InputMode, error) {
 		t.Fatal("remediation must not run pre-handler sync")
-		return nil
+		return nil, input_config.ModeLegacy, nil
 	}
 
 	cfg := &config.Config{DatabasePath: filepath.Join(t.TempDir(), "index.db")}
@@ -146,7 +149,10 @@ func TestCoordinateStartupBusySnapshotUsesCompatibleReadOnlySnapshot(t *testing.
 	cfg := &config.Config{DatabasePath: dbPath}
 	syncCalls := 0
 	coordinator.tryAcquire = func(string) (startupLease, bool, error) { return nil, false, nil }
-	coordinator.sync = func(context.Context, *config.Config, io.Writer) error { syncCalls++; return nil }
+	coordinator.syncService.activeInputs = func([]string) ([]input_config.InputDefinition, input_config.InputMode, error) {
+		syncCalls++
+		return nil, input_config.ModeLegacy, nil
+	}
 
 	result := coordinator.coordinate(context.Background(), cfg, io.Discard, startupSnapshotRead)
 	if result.Failure != nil {
@@ -204,7 +210,10 @@ func TestCoordinateStartupBusyMutationAcquiresWithinWaitAndBecomesOwner(t *testi
 	coordinator.prepareIndex = func(context.Context, *config.Config, indexCommandClass) (*storage.Database, *compat.Diagnostic, error) {
 		return nil, nil, nil
 	}
-	coordinator.sync = func(context.Context, *config.Config, io.Writer) error { syncCalls++; return nil }
+	coordinator.syncService.activeInputs = func([]string) ([]input_config.InputDefinition, input_config.InputMode, error) {
+		syncCalls++
+		return nil, input_config.ModeLegacy, nil
+	}
 
 	result := coordinator.coordinate(context.Background(), &config.Config{DatabasePath: filepath.Join(t.TempDir(), "index.db")}, io.Discard, startupMutation)
 	if result.Failure != nil {
@@ -235,9 +244,9 @@ func TestCoordinateStartupBusyRemediationAcquiresAndBypassesPrepareSync(t *testi
 		t.Fatal("remediation must not prepare")
 		return nil, nil, nil
 	}
-	coordinator.sync = func(context.Context, *config.Config, io.Writer) error {
+	coordinator.syncService.activeInputs = func([]string) ([]input_config.InputDefinition, input_config.InputMode, error) {
 		t.Fatal("remediation must not sync")
-		return nil
+		return nil, input_config.ModeLegacy, nil
 	}
 
 	result := coordinator.coordinate(context.Background(), &config.Config{DatabasePath: filepath.Join(t.TempDir(), "index.db")}, io.Discard, startupRemediation)
@@ -263,9 +272,9 @@ func TestCoordinateStartupBusyMutationDeadlineReturnsSyncInProgressWithoutContin
 				t.Fatal("prepare after timeout")
 				return nil, nil, nil
 			}
-			coordinator.sync = func(context.Context, *config.Config, io.Writer) error {
+			coordinator.syncService.activeInputs = func([]string) ([]input_config.InputDefinition, input_config.InputMode, error) {
 				t.Fatal("sync after timeout")
-				return nil
+				return nil, input_config.ModeLegacy, nil
 			}
 
 			result := coordinator.coordinate(context.Background(), &config.Config{DatabasePath: filepath.Join(t.TempDir(), "index.db")}, io.Discard, class)
@@ -325,7 +334,9 @@ func TestCoordinateStartupOwnerFailureLeaseRetentionByCommandClass(t *testing.T)
 				}
 				return nil, nil, nil
 			}
-			coordinator.sync = func(context.Context, *config.Config, io.Writer) error { return syncErr }
+			coordinator.syncService.activeInputs = func([]string) ([]input_config.InputDefinition, input_config.InputMode, error) {
+				return nil, input_config.ModeLegacy, syncErr
+			}
 
 			result := coordinator.coordinate(context.Background(), &config.Config{DatabasePath: filepath.Join(t.TempDir(), "index.db")}, io.Discard, tc.class)
 			failure := result.startupFailure()

@@ -14,10 +14,123 @@ import (
 
 	"github.com/pablontiv/backscroll/internal/compat"
 	"github.com/pablontiv/backscroll/internal/config"
+	"github.com/pablontiv/backscroll/internal/input_config"
 	"github.com/pablontiv/backscroll/internal/recovery"
 	"github.com/pablontiv/backscroll/internal/storage"
 	"github.com/spf13/cobra"
 )
+
+func TestInjectableConstructionDefaultsNilDependencies(t *testing.T) {
+	t.Run("coordinator sync service", func(t *testing.T) {
+		coordinator := newStartupCoordinatorWithSyncService(nil)
+		if coordinator == nil || coordinator.syncService == nil {
+			t.Fatal("nil sync service did not produce a valid coordinator")
+		}
+	})
+
+	t.Run("root coordinator", func(t *testing.T) {
+		setIndexPolicyEnv(t, filepath.Join(t.TempDir(), "index.db"), t.TempDir())
+		var stdout, stderr bytes.Buffer
+		root := buildRootCmdWithCoordinator(&stdout, &stderr, nil)
+		root.SetArgs([]string{"config", "--json"})
+		if err := root.Execute(); err != nil {
+			t.Fatalf("nil coordinator root: %v; stdout=%q stderr=%q", err, stdout.String(), stderr.String())
+		}
+	})
+
+	t.Run("startup policy", func(t *testing.T) {
+		setIndexPolicyEnv(t, filepath.Join(t.TempDir(), "index.db"), t.TempDir())
+		syncService := newStartupSyncService()
+		activeInputCalls := 0
+		syncService.activeInputs = func([]string) ([]input_config.InputDefinition, input_config.InputMode, error) {
+			activeInputCalls++
+			return nil, input_config.ModeLegacy, nil
+		}
+		root := buildRootCmdWithDependencies(io.Discard, io.Discard, nil, syncService, nil)
+		root.SetArgs([]string{"config", "--json"})
+		if err := root.Execute(); err != nil {
+			t.Fatalf("nil policy root: %v", err)
+		}
+		if activeInputCalls != 1 {
+			t.Fatalf("default policy sync calls=%d, want 1", activeInputCalls)
+		}
+	})
+
+	t.Run("sync service", func(t *testing.T) {
+		t.Setenv("BACKSCROLL_STARTUP_DIAGNOSTICS", "")
+		setIndexPolicyEnv(t, filepath.Join(t.TempDir(), "active.db"), t.TempDir())
+		emptyInputs := t.TempDir()
+		cfg := &config.Config{DatabasePath: os.Getenv("BACKSCROLL_DATABASE_PATH"), SessionDirs: []string{emptyInputs}}
+		execute := func(context.Context, recovery.Options) (recovery.Report, error) {
+			return recovery.Report{ActivePath: cfg.DatabasePath}, nil
+		}
+		var stdout, stderr bytes.Buffer
+		root := buildRootCmdWithDependencies(&stdout, &stderr, func(context.Context, io.Writer, startupCommandClass) startupResult {
+			return startupResult{Config: cfg}
+		}, nil, execute)
+		root.SetArgs([]string{"recover", "--from", "stranded.db"})
+		if err := root.Execute(); err != nil {
+			t.Fatalf("nil sync service root: %v; stdout=%q stderr=%q", err, stdout.String(), stderr.String())
+		}
+	})
+
+	t.Run("recover sync service", func(t *testing.T) {
+		t.Setenv("BACKSCROLL_STARTUP_DIAGNOSTICS", "")
+		activePath := filepath.Join(t.TempDir(), "active.db")
+		setIndexPolicyEnv(t, activePath, t.TempDir())
+		execute := func(context.Context, recovery.Options) (recovery.Report, error) {
+			return recovery.Report{ActivePath: activePath}, nil
+		}
+		cmd := newRecoverCmd(io.Discard, io.Discard, nil, execute)
+		cmd.SetArgs([]string{"--from", "stranded.db"})
+		if err := cmd.Execute(); err != nil {
+			t.Fatalf("nil recover sync service: %v", err)
+		}
+	})
+
+	t.Run("recover execute", func(t *testing.T) {
+		setIndexPolicyEnv(t, filepath.Join(t.TempDir(), "active.db"), t.TempDir())
+		cmd := newRecoverCmd(io.Discard, io.Discard, newStartupSyncService(), nil)
+		cmd.SetArgs([]string{"--from", filepath.Join(t.TempDir(), "missing.db"), "--dry-run"})
+		err := cmd.Execute()
+		if err == nil || !strings.Contains(err.Error(), "recovery failed") {
+			t.Fatalf("nil recover execute error=%v, want controlled production recovery failure", err)
+		}
+	})
+}
+
+func TestInjectedRootSharesStartupAndRecoverSyncService(t *testing.T) {
+	t.Setenv("BACKSCROLL_STARTUP_DIAGNOSTICS", "")
+	dbPath := filepath.Join(t.TempDir(), "index.db")
+	setIndexPolicyEnv(t, dbPath, t.TempDir())
+
+	syncService := newStartupSyncService()
+	syncCalls := 0
+	syncService.activeInputs = func([]string) ([]input_config.InputDefinition, input_config.InputMode, error) {
+		syncCalls++
+		return nil, input_config.ModeLegacy, nil
+	}
+	coordinator := newStartupCoordinatorWithSyncService(syncService)
+	executeCalls := 0
+	execute := func(context.Context, recovery.Options) (recovery.Report, error) {
+		executeCalls++
+		return recovery.Report{ActivePath: dbPath}, nil
+	}
+
+	var stdout, stderr bytes.Buffer
+	root := buildRootCmdWithDependencies(&stdout, &stderr, coordinator.defaultStartupPolicy, syncService, execute)
+	root.SetArgs([]string{"config", "--json"})
+	if err := root.Execute(); err != nil {
+		t.Fatalf("startup command: %v; stdout=%q stderr=%q", err, stdout.String(), stderr.String())
+	}
+	root.SetArgs([]string{"recover", "--from", "stranded.db"})
+	if err := root.Execute(); err != nil {
+		t.Fatalf("recover command: %v; stdout=%q stderr=%q", err, stdout.String(), stderr.String())
+	}
+	if syncCalls != 2 || executeCalls != 1 {
+		t.Fatalf("shared service sync calls=%d execute calls=%d, want 2/1", syncCalls, executeCalls)
+	}
+}
 
 func TestInvalidOperationalCommandsSkipStartup(t *testing.T) {
 	testCases := []struct {
@@ -54,10 +167,10 @@ func TestInvalidOperationalCommandsSkipStartup(t *testing.T) {
 	for _, tc := range testCases {
 		t.Run(tc.name, func(t *testing.T) {
 			startupCalls := 0
-			root := buildRootCmdWithStartup(io.Discard, io.Discard, func(context.Context, io.Writer, startupCommandClass) startupResult {
+			root := buildRootCmdWithDependencies(io.Discard, io.Discard, func(context.Context, io.Writer, startupCommandClass) startupResult {
 				startupCalls++
 				return startupResult{Config: &config.Config{DatabasePath: filepath.Join(t.TempDir(), "index.db")}}
-			})
+			}, newStartupSyncService(), recovery.Execute)
 			root.SetArgs(tc.argv)
 
 			if err := root.Execute(); err == nil {
@@ -127,7 +240,7 @@ func TestEveryOperationalCommandRunsStartupBeforeHandler(t *testing.T) {
 				events = append(events, "startup")
 				return startupResult{Config: &config.Config{DatabasePath: filepath.Join(t.TempDir(), "index.db")}}
 			}
-			root := buildRootCmdWithStartup(io.Discard, io.Discard, policy)
+			root := buildRootCmdWithDependencies(io.Discard, io.Discard, policy, newStartupSyncService(), recovery.Execute)
 			replaceRootCommandRunE(t, root, argv[0], func(cmd *cobra.Command, args []string) error {
 				markerCalls++
 				events = append(events, "handler")
@@ -155,13 +268,13 @@ func TestEveryOperationalCommandRunsStartupBeforeHandler(t *testing.T) {
 
 func TestRemediationCommandDoesNotIgnorePolicyFailure(t *testing.T) {
 	policyErr := errors.New("configuration cannot be interpreted")
-	root := buildRootCmdWithStartup(io.Discard, io.Discard, func(context.Context, io.Writer, startupCommandClass) startupResult {
+	root := buildRootCmdWithDependencies(io.Discard, io.Discard, func(context.Context, io.Writer, startupCommandClass) startupResult {
 		return startupResult{Failure: &startupFailure{
 			Stage:      startupStageConfigLoad,
 			Cause:      policyErr,
 			Diagnostic: compat.Diagnostic{Code: compat.CodeMigrationFailed, Summary: policyErr.Error()},
 		}}
-	})
+	}, newStartupSyncService(), recovery.Execute)
 	root.SetArgs([]string{"recover", "--from", "stranded.db", "--dry-run"})
 	err := root.Execute()
 	if !errors.Is(err, policyErr) {
@@ -172,9 +285,9 @@ func TestRemediationCommandDoesNotIgnorePolicyFailure(t *testing.T) {
 func TestStartupFailurePreventsHandlerOutput(t *testing.T) {
 	var stdout, stderr bytes.Buffer
 	policyErr := errors.New("injected startup failure")
-	root := buildRootCmdWithStartup(&stdout, &stderr, func(context.Context, io.Writer, startupCommandClass) startupResult {
+	root := buildRootCmdWithDependencies(&stdout, &stderr, func(context.Context, io.Writer, startupCommandClass) startupResult {
 		return startupResult{Failure: &startupFailure{Stage: startupStageConfigLoad, Cause: policyErr, Diagnostic: compat.Diagnostic{Code: compat.CodeMigrationFailed, Summary: "injected startup failure"}}}
-	})
+	}, newStartupSyncService(), recovery.Execute)
 	root.SetArgs([]string{"config", "--json"})
 	err := root.Execute()
 	if !errors.Is(err, policyErr) {
@@ -202,22 +315,20 @@ func TestRecoverBlocksNonrecoverableStartupFailures(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			cause := errors.New("nonrecoverable " + tc.name)
 			called := false
-			originalExecute := recoverExecute
-			recoverExecute = func(context.Context, recovery.Options) (recovery.Report, error) {
+			execute := func(context.Context, recovery.Options) (recovery.Report, error) {
 				called = true
 				return recovery.Report{}, nil
 			}
-			t.Cleanup(func() { recoverExecute = originalExecute })
 
 			var stdout, stderr bytes.Buffer
-			root := buildRootCmdWithStartup(&stdout, &stderr, func(context.Context, io.Writer, startupCommandClass) startupResult {
+			root := buildRootCmdWithDependencies(&stdout, &stderr, func(context.Context, io.Writer, startupCommandClass) startupResult {
 				return startupResult{Config: cfg, Failure: &startupFailure{
 					Stage:       tc.stage,
 					Cause:       cause,
 					Diagnostic:  compat.Diagnostic{Code: compat.CodeMigrationFailed, Summary: "blocked " + tc.name},
 					Recoverable: false,
 				}}
-			})
+			}, newStartupSyncService(), execute)
 			root.SetArgs([]string{"recover", "--from", "stranded.db", "--dry-run"})
 			err := root.Execute()
 			if err == nil {
@@ -240,15 +351,13 @@ func TestSuccessfulStartupRecoveryFailureOmitsTypedNilStartupFailure(t *testing.
 	cfg := &config.Config{DatabasePath: filepath.Join(t.TempDir(), "active.db")}
 	recoveryErr := errors.New("injected recovery failure")
 
-	originalExecute := recoverExecute
-	recoverExecute = func(context.Context, recovery.Options) (recovery.Report, error) {
+	execute := func(context.Context, recovery.Options) (recovery.Report, error) {
 		return recovery.Report{}, recoveryErr
 	}
-	t.Cleanup(func() { recoverExecute = originalExecute })
 
-	root := buildRootCmdWithStartup(io.Discard, io.Discard, func(context.Context, io.Writer, startupCommandClass) startupResult {
+	root := buildRootCmdWithDependencies(io.Discard, io.Discard, func(context.Context, io.Writer, startupCommandClass) startupResult {
 		return startupResult{Config: cfg}
-	})
+	}, newStartupSyncService(), execute)
 	root.SetArgs([]string{"recover", "--from", "stranded.db"})
 	err := root.Execute()
 	if !errors.Is(err, recoveryErr) {
@@ -267,20 +376,16 @@ func TestSuccessfulStartupPostInstallSyncFailureOmitsTypedNilStartupFailure(t *t
 	cfg := &config.Config{DatabasePath: filepath.Join(t.TempDir(), "active.db")}
 	syncErr := errors.New("injected post-install sync failure")
 
-	originalExecute := recoverExecute
-	recoverExecute = func(context.Context, recovery.Options) (recovery.Report, error) {
+	execute := func(context.Context, recovery.Options) (recovery.Report, error) {
 		return recovery.Report{ActivePath: cfg.DatabasePath}, nil
 	}
-	t.Cleanup(func() { recoverExecute = originalExecute })
-
-	originalPostInstallSync := recoverPostInstallSync
-	recoverPostInstallSync = func(context.Context, *config.Config, io.Writer) error { return syncErr }
-	t.Cleanup(func() { recoverPostInstallSync = originalPostInstallSync })
+	syncService := newStartupSyncService()
+	syncService.open = func(context.Context, string) (*storage.Database, error) { return nil, syncErr }
 
 	var stdout bytes.Buffer
-	root := buildRootCmdWithStartup(&stdout, io.Discard, func(context.Context, io.Writer, startupCommandClass) startupResult {
+	root := buildRootCmdWithDependencies(&stdout, io.Discard, func(context.Context, io.Writer, startupCommandClass) startupResult {
 		return startupResult{Config: cfg}
-	})
+	}, syncService, execute)
 	root.SetArgs([]string{"recover", "--from", "stranded.db"})
 	err := root.Execute()
 	if !errors.Is(err, syncErr) {
@@ -326,13 +431,13 @@ func TestStartupFailureMachineDiagnosticsAreStructuredAndUncontaminated(t *testi
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			var stdout, stderr bytes.Buffer
-			root := buildRootCmdWithStartup(&stdout, &stderr, func(context.Context, io.Writer, startupCommandClass) startupResult {
+			root := buildRootCmdWithDependencies(&stdout, &stderr, func(context.Context, io.Writer, startupCommandClass) startupResult {
 				return startupResult{Failure: &startupFailure{
 					Stage:      startupStageActiveManifest,
 					Cause:      errors.New("active manifest invalid"),
 					Diagnostic: compat.Diagnostic{Code: compat.CodeMigrationFailed, Summary: "active manifest invalid"},
 				}}
-			})
+			}, newStartupSyncService(), recovery.Execute)
 			root.SetArgs(tc.argv)
 			err := root.Execute()
 			if err == nil {
@@ -377,9 +482,9 @@ func TestRobotDiagnosticEscapesMultilineValuesAndEncodesContinuationArgv(t *test
 		Summary:      "first line\\with slash\r\nsecond line",
 		Continuation: []string{"recover", "--from", "path with spaces\\and\\slashes\r\nnext", "--dry-run"},
 	}
-	root := buildRootCmdWithStartup(&stdout, &stderr, func(context.Context, io.Writer, startupCommandClass) startupResult {
+	root := buildRootCmdWithDependencies(&stdout, &stderr, func(context.Context, io.Writer, startupCommandClass) startupResult {
 		return startupResult{Failure: &startupFailure{Stage: startupStageStartupSync, Diagnostic: diag, Recoverable: true}}
-	})
+	}, newStartupSyncService(), recovery.Execute)
 	root.SetArgs([]string{"search", "needle", "--robot"})
 	if err := root.Execute(); err == nil {
 		t.Fatalf("robot diagnostic command unexpectedly succeeded; stdout=%q", stdout.String())
@@ -424,9 +529,9 @@ func TestDefaultStartupPolicyCallsSyncExactlyOnce(t *testing.T) {
 	setIndexPolicyEnv(t, dbPath, t.TempDir())
 	calls := 0
 	coordinator := newStartupCoordinator()
-	coordinator.sync = func(context.Context, *config.Config, io.Writer) error {
+	coordinator.syncService.activeInputs = func([]string) ([]input_config.InputDefinition, input_config.InputMode, error) {
 		calls++
-		return nil
+		return nil, input_config.ModeLegacy, nil
 	}
 
 	result := coordinator.defaultStartupPolicy(context.Background(), io.Discard, startupMutation)
@@ -494,9 +599,9 @@ func TestDefaultStartupPolicyNonrecoverableStages(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			coordinator := newStartupCoordinator()
-			coordinator.sync = func(context.Context, *config.Config, io.Writer) error {
+			coordinator.syncService.open = func(context.Context, string) (*storage.Database, error) {
 				t.Fatal("startup sync should not run after nonrecoverable startup stage")
-				return nil
+				return nil, nil
 			}
 			tc.setup(t)
 
@@ -527,7 +632,7 @@ func TestStartupWarningsAlwaysRenderToStderr(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			var stdout, stderr bytes.Buffer
-			root := buildRootCmdWithStartup(&stdout, &stderr, func(context.Context, io.Writer, startupCommandClass) startupResult {
+			root := buildRootCmdWithDependencies(&stdout, &stderr, func(context.Context, io.Writer, startupCommandClass) startupResult {
 				return startupResult{
 					Config: &config.Config{DatabasePath: filepath.Join(t.TempDir(), "index.db")},
 					Warning: &startupWarning{
@@ -535,7 +640,7 @@ func TestStartupWarningsAlwaysRenderToStderr(t *testing.T) {
 						Summary: "startup sync active; using last committed index snapshot",
 					},
 				}
-			})
+			}, newStartupSyncService(), recovery.Execute)
 			replaceRootCommandRunE(t, root, "search", func(cmd *cobra.Command, args []string) error {
 				_, err := io.WriteString(cmd.OutOrStdout(), tc.stdoutText)
 				return err
@@ -566,7 +671,9 @@ func TestReadOwnerLeaseReleasedBeforeHandler(t *testing.T) {
 	coordinator.prepareIndex = func(context.Context, *config.Config, indexCommandClass) (*storage.Database, *compat.Diagnostic, error) {
 		return nil, nil, nil
 	}
-	coordinator.sync = func(context.Context, *config.Config, io.Writer) error { return nil }
+	coordinator.syncService.activeInputs = func([]string) ([]input_config.InputDefinition, input_config.InputMode, error) {
+		return nil, input_config.ModeLegacy, nil
+	}
 
 	var stdout, stderr bytes.Buffer
 	root := buildRootCmdWithCoordinator(&stdout, &stderr, coordinator)
@@ -597,9 +704,9 @@ func TestMutationLeaseReleasedAfterHandlerSuccessAndError(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			lease := &fakeStartupLease{}
 			var stdout, stderr bytes.Buffer
-			root := buildRootCmdWithStartup(&stdout, &stderr, func(context.Context, io.Writer, startupCommandClass) startupResult {
+			root := buildRootCmdWithDependencies(&stdout, &stderr, func(context.Context, io.Writer, startupCommandClass) startupResult {
 				return startupResult{Config: &config.Config{DatabasePath: filepath.Join(t.TempDir(), "index.db")}, Lease: lease}
-			})
+			}, newStartupSyncService(), recovery.Execute)
 			replaceRootCommandRunEWrapped(t, root, "rebuild", func(cmd *cobra.Command, args []string) error {
 				if lease.releases != 0 {
 					t.Fatalf("handler saw early release count %d", lease.releases)
@@ -625,14 +732,14 @@ func TestRejectedNonRecoverCommandReleasesBeforeDiagnostic(t *testing.T) {
 	lease := &fakeStartupLease{}
 	startupErr := errors.New("startup blocked")
 	var stdout, stderr bytes.Buffer
-	root := buildRootCmdWithStartup(&stdout, &stderr, func(context.Context, io.Writer, startupCommandClass) startupResult {
+	root := buildRootCmdWithDependencies(&stdout, &stderr, func(context.Context, io.Writer, startupCommandClass) startupResult {
 		return startupResult{Config: &config.Config{DatabasePath: filepath.Join(t.TempDir(), "index.db")}, Lease: lease, Failure: &startupFailure{
 			Stage:       startupStageStartupSync,
 			Cause:       startupErr,
 			Diagnostic:  compat.Diagnostic{Code: compat.CodeIndexStale, Summary: "startup blocked", Continuation: []string{"recover", "--from", "x", "--dry-run"}},
 			Recoverable: true,
 		}}
-	})
+	}, newStartupSyncService(), recovery.Execute)
 	replaceRootCommandRunE(t, root, "search", func(cmd *cobra.Command, args []string) error {
 		t.Fatal("handler should not run")
 		return nil
@@ -653,9 +760,9 @@ func TestRejectedNonRecoverCommandReleasesBeforeDiagnostic(t *testing.T) {
 func TestRecoverRemediationRetainsLeaseUntilHandlerReturns(t *testing.T) {
 	lease := &fakeStartupLease{}
 	var stdout, stderr bytes.Buffer
-	root := buildRootCmdWithStartup(&stdout, &stderr, func(context.Context, io.Writer, startupCommandClass) startupResult {
+	root := buildRootCmdWithDependencies(&stdout, &stderr, func(context.Context, io.Writer, startupCommandClass) startupResult {
 		return startupResult{Config: &config.Config{DatabasePath: filepath.Join(t.TempDir(), "index.db")}, Lease: lease}
-	})
+	}, newStartupSyncService(), recovery.Execute)
 	replaceRootCommandRunEWrapped(t, root, "recover", func(cmd *cobra.Command, args []string) error {
 		if lease.releases != 0 {
 			t.Fatalf("recover handler saw releases=%d want retained", lease.releases)
@@ -676,9 +783,9 @@ func TestStartupLeaseReleaseErrorsAreJoined(t *testing.T) {
 		handlerErr := errors.New("handler failed")
 		releaseErr := errors.New("release failed")
 		lease := &fakeStartupLease{err: releaseErr}
-		root := buildRootCmdWithStartup(io.Discard, io.Discard, func(context.Context, io.Writer, startupCommandClass) startupResult {
+		root := buildRootCmdWithDependencies(io.Discard, io.Discard, func(context.Context, io.Writer, startupCommandClass) startupResult {
 			return startupResult{Config: &config.Config{DatabasePath: filepath.Join(t.TempDir(), "index.db")}, Lease: lease}
-		})
+		}, newStartupSyncService(), recovery.Execute)
 		replaceRootCommandRunEWrapped(t, root, "rebuild", func(cmd *cobra.Command, args []string) error { return handlerErr })
 		root.SetArgs([]string{"rebuild"})
 		err := root.Execute()
@@ -690,13 +797,13 @@ func TestStartupLeaseReleaseErrorsAreJoined(t *testing.T) {
 		startupErr := errors.New("startup failed")
 		releaseErr := errors.New("release failed")
 		lease := &fakeStartupLease{err: releaseErr}
-		root := buildRootCmdWithStartup(io.Discard, io.Discard, func(context.Context, io.Writer, startupCommandClass) startupResult {
+		root := buildRootCmdWithDependencies(io.Discard, io.Discard, func(context.Context, io.Writer, startupCommandClass) startupResult {
 			return startupResult{Config: &config.Config{DatabasePath: filepath.Join(t.TempDir(), "index.db")}, Lease: lease, Failure: &startupFailure{
 				Stage:      startupStageStartupSync,
 				Cause:      startupErr,
 				Diagnostic: compat.Diagnostic{Code: compat.CodeIndexStale, Summary: startupErr.Error()},
 			}}
-		})
+		}, newStartupSyncService(), recovery.Execute)
 		root.SetArgs([]string{"search", "needle"})
 		err := root.Execute()
 		if !errors.Is(err, startupErr) || !errors.Is(err, releaseErr) {
@@ -722,10 +829,10 @@ func TestDiagnosticAlreadyRenderedOnlySuppressesTopLevelDiagnostic(t *testing.T)
 func TestMetadataCommandsSkipStartup(t *testing.T) {
 	for _, argv := range [][]string{{"--help"}, {"--version"}, {"search", "--help"}} {
 		calls := 0
-		root := buildRootCmdWithStartup(io.Discard, io.Discard, func(context.Context, io.Writer, startupCommandClass) startupResult {
+		root := buildRootCmdWithDependencies(io.Discard, io.Discard, func(context.Context, io.Writer, startupCommandClass) startupResult {
 			calls++
 			return startupResult{}
-		})
+		}, newStartupSyncService(), recovery.Execute)
 		root.SetArgs(argv)
 		if err := root.Execute(); err != nil {
 			t.Fatalf("%v: %v", argv, err)

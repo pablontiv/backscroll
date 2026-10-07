@@ -2,10 +2,8 @@ package main
 
 import (
 	"bytes"
-	"context"
 	"encoding/json"
 	"fmt"
-	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -14,7 +12,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/pablontiv/backscroll/internal/config"
+	"github.com/pablontiv/backscroll/internal/input_config"
 	"github.com/pablontiv/backscroll/internal/startuplock"
 	"github.com/pablontiv/backscroll/internal/storage"
 )
@@ -42,7 +40,7 @@ func TestStartupCoordinationHelperProcess(t *testing.T) {
 		coordinator.mutationWait = parsed
 	}
 
-	coordinator.sync = func(context.Context, *config.Config, io.Writer) error {
+	syncHook := func() error {
 		if counter == "" {
 			return fmt.Errorf("BACKSCROLL_SYNC_COUNTER is required when startup sync runs")
 		}
@@ -82,6 +80,9 @@ func TestStartupCoordinationHelperProcess(t *testing.T) {
 			}
 		}
 		return nil
+	}
+	coordinator.syncService.activeInputs = func([]string) ([]input_config.InputDefinition, input_config.InputMode, error) {
+		return nil, input_config.ModeLegacy, syncHook()
 	}
 
 	argvJSON := os.Getenv("BACKSCROLL_HELPER_ARGV")

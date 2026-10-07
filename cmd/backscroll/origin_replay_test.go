@@ -92,12 +92,8 @@ func TestOriginParserSyncReplayIsBoundedAndConverges(t *testing.T) {
 	}
 
 	reader := &originReplayClaudeReader{}
-	oldActiveInputs, oldNewRegistry := maybeAutoSyncActiveInputs, maybeAutoSyncNewRegistry
-	t.Cleanup(func() {
-		maybeAutoSyncActiveInputs = oldActiveInputs
-		maybeAutoSyncNewRegistry = oldNewRegistry
-	})
-	maybeAutoSyncActiveInputs = func([]string) ([]input_config.InputDefinition, input_config.InputMode, error) {
+	syncService := newStartupSyncService()
+	syncService.activeInputs = func([]string) ([]input_config.InputDefinition, input_config.InputMode, error) {
 		return []input_config.InputDefinition{{
 			ID:     "origin-replay-claude",
 			Source: "session",
@@ -109,14 +105,14 @@ func TestOriginParserSyncReplayIsBoundedAndConverges(t *testing.T) {
 			Decode: input_config.DecodeConfig{Format: "claude"},
 		}}, input_config.ModeDeclarative, nil
 	}
-	maybeAutoSyncNewRegistry = func() *readers.Registry {
+	syncService.newRegistry = func() *readers.Registry {
 		registry := readers.NewRegistry()
 		registry.Register(reader)
 		return registry
 	}
 
 	cfg := config.Config{DatabasePath: filepath.Join(tmp, "index.db")}
-	if err := maybeAutoSync(&cfg, &bytes.Buffer{}); err != nil {
+	if err := syncService.sync(context.Background(), &cfg, &bytes.Buffer{}, startupPhaseTiming{}); err != nil {
 		t.Fatalf("initial sync: %v", err)
 	}
 	if reader.parseCalls != liveFiles {
@@ -219,7 +215,7 @@ func TestOriginParserSyncReplayIsBoundedAndConverges(t *testing.T) {
 	reader.replayUUIDLessRows = true
 	reader.parsePaths = nil
 	beforeReplay := reader.parseCalls
-	if err := maybeAutoSync(&cfg, &bytes.Buffer{}); err != nil {
+	if err := syncService.sync(context.Background(), &cfg, &bytes.Buffer{}, startupPhaseTiming{}); err != nil {
 		t.Fatalf("first origin replay: %v", err)
 	}
 	if got := reader.parseCalls - beforeReplay; got != 200 {
@@ -270,7 +266,7 @@ func TestOriginParserSyncReplayIsBoundedAndConverges(t *testing.T) {
 
 	reader.parsePaths = nil
 	beforeReplay = reader.parseCalls
-	if err := maybeAutoSync(&cfg, &bytes.Buffer{}); err != nil {
+	if err := syncService.sync(context.Background(), &cfg, &bytes.Buffer{}, startupPhaseTiming{}); err != nil {
 		t.Fatalf("second origin replay: %v", err)
 	}
 	if got := reader.parseCalls - beforeReplay; got != 1 {
@@ -301,7 +297,7 @@ func TestOriginParserSyncReplayIsBoundedAndConverges(t *testing.T) {
 	}
 
 	beforeReplay = reader.parseCalls
-	if err := maybeAutoSync(&cfg, &bytes.Buffer{}); err != nil {
+	if err := syncService.sync(context.Background(), &cfg, &bytes.Buffer{}, startupPhaseTiming{}); err != nil {
 		t.Fatalf("converged origin replay: %v", err)
 	}
 	if got := reader.parseCalls - beforeReplay; got != 0 {
@@ -326,12 +322,8 @@ func TestOriginPerennialZeroMessageReplayPreservesHistoryAndConverges(t *testing
 	}
 
 	reader := &originReplayClaudeReader{}
-	oldActiveInputs, oldNewRegistry := maybeAutoSyncActiveInputs, maybeAutoSyncNewRegistry
-	t.Cleanup(func() {
-		maybeAutoSyncActiveInputs = oldActiveInputs
-		maybeAutoSyncNewRegistry = oldNewRegistry
-	})
-	maybeAutoSyncActiveInputs = func([]string) ([]input_config.InputDefinition, input_config.InputMode, error) {
+	syncService := newStartupSyncService()
+	syncService.activeInputs = func([]string) ([]input_config.InputDefinition, input_config.InputMode, error) {
 		return []input_config.InputDefinition{{
 			ID:     "origin-zero-claude",
 			Source: "session",
@@ -343,14 +335,14 @@ func TestOriginPerennialZeroMessageReplayPreservesHistoryAndConverges(t *testing
 			Decode: input_config.DecodeConfig{Format: "claude"},
 		}}, input_config.ModeDeclarative, nil
 	}
-	maybeAutoSyncNewRegistry = func() *readers.Registry {
+	syncService.newRegistry = func() *readers.Registry {
 		registry := readers.NewRegistry()
 		registry.Register(reader)
 		return registry
 	}
 
 	cfg := config.Config{DatabasePath: filepath.Join(tmp, "index.db")}
-	if err := maybeAutoSync(&cfg, &bytes.Buffer{}); err != nil {
+	if err := syncService.sync(context.Background(), &cfg, &bytes.Buffer{}, startupPhaseTiming{}); err != nil {
 		t.Fatalf("initial sync: %v", err)
 	}
 
@@ -376,7 +368,7 @@ func TestOriginPerennialZeroMessageReplayPreservesHistoryAndConverges(t *testing
 	}
 
 	reader.parseErr = fmt.Errorf("injected parse failure")
-	if err := maybeAutoSync(&cfg, &bytes.Buffer{}); err == nil {
+	if err := syncService.sync(context.Background(), &cfg, &bytes.Buffer{}, startupPhaseTiming{}); err == nil {
 		t.Fatal("parse failure unexpectedly succeeded")
 	}
 	db, err = storage.Open(cfg.DatabasePath)
@@ -405,7 +397,7 @@ func TestOriginPerennialZeroMessageReplayPreservesHistoryAndConverges(t *testing
 	reader.zeroRecords = true
 	reader.parsePaths = nil
 	beforeReplay := reader.parseCalls
-	if err := maybeAutoSync(&cfg, &bytes.Buffer{}); err != nil {
+	if err := syncService.sync(context.Background(), &cfg, &bytes.Buffer{}, startupPhaseTiming{}); err != nil {
 		t.Fatalf("zero-message replay: %v", err)
 	}
 	if got := reader.parseCalls - beforeReplay; got != 1 {
@@ -440,7 +432,7 @@ func TestOriginPerennialZeroMessageReplayPreservesHistoryAndConverges(t *testing
 	}
 
 	beforeReplay = reader.parseCalls
-	if err := maybeAutoSync(&cfg, &bytes.Buffer{}); err != nil {
+	if err := syncService.sync(context.Background(), &cfg, &bytes.Buffer{}, startupPhaseTiming{}); err != nil {
 		t.Fatalf("converged zero-message replay: %v", err)
 	}
 	if got := reader.parseCalls - beforeReplay; got != 0 {

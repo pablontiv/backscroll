@@ -14,6 +14,7 @@ import (
 
 	"github.com/pablontiv/backscroll/internal/compat"
 	"github.com/pablontiv/backscroll/internal/config"
+	"github.com/pablontiv/backscroll/internal/recovery"
 	"github.com/pablontiv/backscroll/internal/storage"
 )
 
@@ -67,7 +68,7 @@ func TestRootContextRunsStartupOnceAndSupportsAllFormats(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			var stdout, stderr bytes.Buffer
 			startupCalls := 0
-			root := buildRootCmdWithStartup(&stdout, &stderr, func(_ context.Context, progress io.Writer, class startupCommandClass) startupResult {
+			root := buildRootCmdWithDependencies(&stdout, &stderr, func(_ context.Context, progress io.Writer, class startupCommandClass) startupResult {
 				startupCalls++
 				if class != startupSnapshotRead {
 					t.Fatalf("context startup class=%q want %q", class, startupSnapshotRead)
@@ -76,7 +77,7 @@ func TestRootContextRunsStartupOnceAndSupportsAllFormats(t *testing.T) {
 					t.Fatalf("write startup progress: %v", err)
 				}
 				return startupResult{Config: cfg}
-			})
+			}, newStartupSyncService(), recovery.Execute)
 			root.SetArgs(tc.args)
 
 			if err := root.Execute(); err != nil {
@@ -112,10 +113,10 @@ func TestRootContextEmitsCommandDiagnosticsInEveryFormat(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			var stdout, stderr bytes.Buffer
 			startupCalls := 0
-			root := buildRootCmdWithStartup(&stdout, &stderr, func(context.Context, io.Writer, startupCommandClass) startupResult {
+			root := buildRootCmdWithDependencies(&stdout, &stderr, func(context.Context, io.Writer, startupCommandClass) startupResult {
 				startupCalls++
 				return startupResult{Config: cfg}
-			})
+			}, newStartupSyncService(), recovery.Execute)
 			root.SetArgs(tc.args)
 
 			err := root.Execute()
@@ -166,17 +167,17 @@ func TestRootContextBusyFollowerUsesCommittedSnapshot(t *testing.T) {
 		}
 		return originalPrepare(ctx, gotCfg, class)
 	}
-	coordinator.sync = func(context.Context, *config.Config, io.Writer) error {
+	coordinator.syncService.open = func(context.Context, string) (*storage.Database, error) {
 		t.Fatal("busy snapshot follower must not synchronize")
-		return nil
+		return nil, nil
 	}
 
 	var stdout, stderr bytes.Buffer
 	startupCalls := 0
-	root := buildRootCmdWithStartup(&stdout, &stderr, func(ctx context.Context, progress io.Writer, class startupCommandClass) startupResult {
+	root := buildRootCmdWithDependencies(&stdout, &stderr, func(ctx context.Context, progress io.Writer, class startupCommandClass) startupResult {
 		startupCalls++
 		return coordinator.coordinate(ctx, cfg, progress, class)
-	})
+	}, coordinator.syncService, recovery.Execute)
 	root.SetArgs([]string{"context", "--uuid", "anchor", "--before", "0", "--after", "0", "--max-tokens", "16384", "--json"})
 
 	if err := root.Execute(); err != nil {

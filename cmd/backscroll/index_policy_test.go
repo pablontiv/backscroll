@@ -363,11 +363,6 @@ func TestAutoSyncFailuresBlockCachedConsumers(t *testing.T) {
 			setup: func(t *testing.T, root string) {
 				writeInputManifest(t, root, "claude", root, []string{"*.jsonl"}, nil)
 				writeFile(t, filepath.Join(root, "session.jsonl"), `{"type":"message","message":{"role":"user","content":"fresh"}}`+"\n")
-				orig := maybeAutoSyncSyncFiles
-				maybeAutoSyncSyncFiles = func(context.Context, *storage.Database, []storage.IndexedFile) error {
-					return fmt.Errorf("injected sync failure")
-				}
-				t.Cleanup(func() { maybeAutoSyncSyncFiles = orig })
 			},
 			wantError: "sync files",
 		},
@@ -395,8 +390,16 @@ func TestAutoSyncFailuresBlockCachedConsumers(t *testing.T) {
 					setIndexPolicyEnv(t, dbPath, t.TempDir())
 					tc.setup(t, root)
 
+					syncService := newStartupSyncService()
+					if tc.name == "sync" {
+						syncService.syncFiles = func(context.Context, *storage.Database, []storage.IndexedFile) error {
+							return fmt.Errorf("injected sync failure")
+						}
+					}
 					var stdout, stderr bytes.Buffer
-					err := run(&stdout, &stderr, mode.argv)
+					cmd := buildRootCmdWithCoordinator(&stdout, &stderr, newStartupCoordinatorWithSyncService(syncService))
+					cmd.SetArgs(mode.argv)
+					err := cmd.Execute()
 					if err == nil {
 						t.Fatalf("auto-sync %s failure succeeded; stdout=%q stderr=%q", tc.name, stdout.String(), stderr.String())
 					}

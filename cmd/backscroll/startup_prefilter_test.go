@@ -60,12 +60,8 @@ func TestMetadataPrefilterAlwaysHashesOpenCode(t *testing.T) {
 	}
 
 	reader := &sidecarBackedReader{path: sourcePath, hash: "watermark-1", content: "first"}
-	oldActiveInputs, oldNewRegistry := maybeAutoSyncActiveInputs, maybeAutoSyncNewRegistry
-	t.Cleanup(func() {
-		maybeAutoSyncActiveInputs = oldActiveInputs
-		maybeAutoSyncNewRegistry = oldNewRegistry
-	})
-	maybeAutoSyncActiveInputs = func([]string) ([]input_config.InputDefinition, input_config.InputMode, error) {
+	syncService := newStartupSyncService()
+	syncService.activeInputs = func([]string) ([]input_config.InputDefinition, input_config.InputMode, error) {
 		return []input_config.InputDefinition{{
 			ID:     "opencode",
 			Source: "session",
@@ -73,14 +69,14 @@ func TestMetadataPrefilterAlwaysHashesOpenCode(t *testing.T) {
 			Decode: input_config.DecodeConfig{Format: "opencode"},
 		}}, input_config.ModeDeclarative, nil
 	}
-	maybeAutoSyncNewRegistry = func() *readers.Registry {
+	syncService.newRegistry = func() *readers.Registry {
 		registry := readers.NewRegistry()
 		registry.Register(reader)
 		return registry
 	}
 
 	cfg := config.Config{DatabasePath: filepath.Join(tmpDir, "index.db")}
-	if err := maybeAutoSync(&cfg, &bytes.Buffer{}); err != nil {
+	if err := syncService.sync(context.Background(), &cfg, &bytes.Buffer{}, startupPhaseTiming{}); err != nil {
 		t.Fatalf("initial sync: %v", err)
 	}
 
@@ -88,7 +84,7 @@ func TestMetadataPrefilterAlwaysHashesOpenCode(t *testing.T) {
 	// database file metadata remains identical.
 	reader.hash = "watermark-2"
 	reader.content = "second"
-	if err := maybeAutoSync(&cfg, &bytes.Buffer{}); err != nil {
+	if err := syncService.sync(context.Background(), &cfg, &bytes.Buffer{}, startupPhaseTiming{}); err != nil {
 		t.Fatalf("sync after sidecar change: %v", err)
 	}
 	if reader.hashCalls != 2 || reader.parseCalls != 2 {
@@ -96,7 +92,7 @@ func TestMetadataPrefilterAlwaysHashesOpenCode(t *testing.T) {
 	}
 
 	// An unchanged watermark is still queried, but does not require a full parse.
-	if err := maybeAutoSync(&cfg, &bytes.Buffer{}); err != nil {
+	if err := syncService.sync(context.Background(), &cfg, &bytes.Buffer{}, startupPhaseTiming{}); err != nil {
 		t.Fatalf("sync after unchanged watermark: %v", err)
 	}
 	if reader.hashCalls != 3 || reader.parseCalls != 2 {
@@ -185,14 +181,8 @@ func TestMetadataPrefilterSkipsHashingOnUnchangedFiles(t *testing.T) {
 
 	db.Close()
 
-	// Now run second sync without changing the file
-	// The file should be skipped (not re-hashed) because size and mtime match
-	oldMaybeAutoSyncOpen := maybeAutoSyncOpen
-	defer func() { maybeAutoSyncOpen = oldMaybeAutoSyncOpen }()
-
-	maybeAutoSyncOpen = func(ctx context.Context, dbPath string) (*storage.Database, error) {
-		return oldMaybeAutoSyncOpen(ctx, dbPath)
-	}
+	// Now run second sync without changing the file.
+	// The file should be skipped (not re-hashed) because size and mtime match.
 
 	// Note: We can't easily inject into the actual reader registry without
 	// modifying the interface, so this test validates the behavior by measuring
