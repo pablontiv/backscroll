@@ -364,7 +364,9 @@ func TestAutoSyncFailuresBlockCachedConsumers(t *testing.T) {
 				writeInputManifest(t, root, "claude", root, []string{"*.jsonl"}, nil)
 				writeFile(t, filepath.Join(root, "session.jsonl"), `{"type":"message","message":{"role":"user","content":"fresh"}}`+"\n")
 				orig := maybeAutoSyncSyncFiles
-				maybeAutoSyncSyncFiles = func(*storage.Database, []storage.IndexedFile) error { return fmt.Errorf("injected sync failure") }
+				maybeAutoSyncSyncFiles = func(context.Context, *storage.Database, []storage.IndexedFile) error {
+					return fmt.Errorf("injected sync failure")
+				}
 				t.Cleanup(func() { maybeAutoSyncSyncFiles = orig })
 			},
 			wantError: "sync files",

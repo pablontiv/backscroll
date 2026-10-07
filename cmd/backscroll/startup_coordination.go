@@ -33,6 +33,10 @@ var (
 )
 
 func coordinateStartup(ctx context.Context, cfg *config.Config, progress io.Writer, class startupCommandClass) startupResult {
+	if err := ctx.Err(); err != nil {
+		return canceledStartupResult(cfg, startupStageSyncLock, err)
+	}
+
 	// Measure lock acquisition time
 	var lockStart time.Time
 	if diagnosticsEnabled() {
@@ -40,6 +44,13 @@ func coordinateStartup(ctx context.Context, cfg *config.Config, progress io.Writ
 	}
 
 	lease, acquired, err := startupTryAcquire(cfg.DatabasePath)
+	if ctxErr := ctx.Err(); ctxErr != nil {
+		result := canceledStartupResult(cfg, startupStageSyncLock, ctxErr)
+		if acquired {
+			return ownedStartupFailureResult(cfg, class, lease, result.Failure)
+		}
+		return result
+	}
 
 	// Record lock acquisition timing for successful immediate acquisition
 	if diagnosticsEnabled() && acquired && lockStart != (time.Time{}) {
@@ -127,6 +138,9 @@ func runOwnedStartup(ctx context.Context, cfg *config.Config, progress io.Writer
 		startupDiags.IndexPrepareTime = time.Since(indexPrepareStart)
 	}
 
+	if ctxErr := ctx.Err(); ctxErr != nil && diag == nil && err == nil {
+		err = ctxErr
+	}
 	if diag != nil || err != nil {
 		d := compat.Diagnostic{Code: compat.CodeMigrationFailed, Summary: "prepare index failed"}
 		if diag != nil {
@@ -136,7 +150,12 @@ func runOwnedStartup(ctx context.Context, cfg *config.Config, progress io.Writer
 		}
 		return ownedStartupFailureResult(cfg, class, lease, &startupFailure{Stage: startupStageIndexPrepare, Cause: err, Diagnostic: d, Recoverable: true})
 	}
-	if err := startupSync(cfg, progress); err != nil {
+	if err := startupSync(ctx, cfg, progress); err != nil {
+		activePath, _ := resolveActiveIndexPath(cfg.DatabasePath)
+		d := continuationFor(compat.Diagnostic{Code: compat.CodeIndexStale, Summary: fmt.Sprintf("index sync failed: %v", err)}, activePath)
+		return ownedStartupFailureResult(cfg, class, lease, &startupFailure{Stage: startupStageStartupSync, Cause: err, Diagnostic: d, Recoverable: true})
+	}
+	if err := ctx.Err(); err != nil {
 		activePath, _ := resolveActiveIndexPath(cfg.DatabasePath)
 		d := continuationFor(compat.Diagnostic{Code: compat.CodeIndexStale, Summary: fmt.Sprintf("index sync failed: %v", err)}, activePath)
 		return ownedStartupFailureResult(cfg, class, lease, &startupFailure{Stage: startupStageStartupSync, Cause: err, Diagnostic: d, Recoverable: true})
@@ -221,6 +240,17 @@ func startupLockFailure(cfg *config.Config, err error) startupResult {
 		Diagnostic: compat.Diagnostic{
 			Code:    compat.CodeMigrationFailed,
 			Summary: fmt.Sprintf("startup sync lock failed: %v", err),
+		},
+	}}
+}
+
+func canceledStartupResult(cfg *config.Config, stage startupStage, err error) startupResult {
+	return startupResult{Config: cfg, Failure: &startupFailure{
+		Stage: stage,
+		Cause: err,
+		Diagnostic: compat.Diagnostic{
+			Code:    compat.CodeMigrationFailed,
+			Summary: fmt.Sprintf("startup canceled: %v", err),
 		},
 	}}
 }

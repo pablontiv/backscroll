@@ -190,8 +190,8 @@ func TestMetadataPrefilterSkipsHashingOnUnchangedFiles(t *testing.T) {
 	oldMaybeAutoSyncOpen := maybeAutoSyncOpen
 	defer func() { maybeAutoSyncOpen = oldMaybeAutoSyncOpen }()
 
-	maybeAutoSyncOpen = func(dbPath string) (*storage.Database, error) {
-		return oldMaybeAutoSyncOpen(dbPath)
+	maybeAutoSyncOpen = func(ctx context.Context, dbPath string) (*storage.Database, error) {
+		return oldMaybeAutoSyncOpen(ctx, dbPath)
 	}
 
 	// Note: We can't easily inject into the actual reader registry without

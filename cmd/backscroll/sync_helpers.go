@@ -1,11 +1,11 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"fmt"
 	"io"
 	"os"
-	"sort"
 	"strings"
 	"time"
 
@@ -39,12 +39,23 @@ func contentHashesEqual(readerName, persistedHash, observedHash string) bool {
 }
 
 var (
-	maybeAutoSyncOpen               = storage.Open
+	maybeAutoSyncOpen = func(ctx context.Context, path string) (*storage.Database, error) {
+		db, diag, err := storage.OpenCompatible(ctx, path)
+		if diag != nil {
+			if db != nil {
+				_ = db.Close()
+			}
+			return nil, fmt.Errorf("%s: %s", diag.Code, diag.Summary)
+		}
+		return db, err
+	}
 	maybeAutoSyncActiveInputs       = input_config.ActiveInputs
 	maybeAutoSyncLoadGlobalRegistry = projects.LoadGlobalRegistry
 	maybeAutoSyncNewRegistry        = newDefaultAutoSyncRegistry
-	maybeAutoSyncSyncFiles          = func(db *storage.Database, files []storage.IndexedFile) error { return db.SyncFiles(files) }
-	maybeAutoSyncGetFileMetadata    = getFileMetadata // for testability
+	maybeAutoSyncSyncFiles          = func(ctx context.Context, db *storage.Database, files []storage.IndexedFile) error {
+		return db.SyncFilesContext(ctx, files)
+	}
+	maybeAutoSyncGetFileMetadata = getFileMetadata // for testability
 )
 
 // startupPhaseTiming holds measurements for startup phases that occur before maybeAutoSync.
@@ -117,38 +128,138 @@ func claimDescription(claim discoveredPathClaim) string {
 		claim.def.ID, semantics.source, semantics.format, semantics.indexReasoning)
 }
 
+// contextMergeSort applies a stable deterministic ordering while checking ctx
+// throughout copying and merging. Unlike the standard sort helpers, a canceled
+// caller can interrupt a large in-memory sort rather than waiting for it to end.
+func contextMergeSort[T any](ctx context.Context, values []T, less func(T, T) bool) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if len(values) < 2 {
+		return nil
+	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	scratch := make([]T, len(values))
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+
+	source, target := values, scratch
+	for width := 1; width < len(values); width *= 2 {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		for left := 0; left < len(values); left += 2 * width {
+			if err := ctx.Err(); err != nil {
+				return err
+			}
+			middle := min(left+width, len(values))
+			right := min(left+2*width, len(values))
+			i, j := left, middle
+			for out := left; out < right; out++ {
+				if err := ctx.Err(); err != nil {
+					return err
+				}
+				switch {
+				case i >= middle:
+					target[out] = source[j]
+					j++
+				case j >= right:
+					target[out] = source[i]
+					i++
+				case less(source[j], source[i]):
+					target[out] = source[j]
+					j++
+				default:
+					target[out] = source[i]
+					i++
+				}
+			}
+		}
+		source, target = target, source
+		if width > len(values)/2 {
+			break
+		}
+	}
+	if &source[0] != &values[0] {
+		for i := range values {
+			if err := ctx.Err(); err != nil {
+				return err
+			}
+			values[i] = source[i]
+		}
+	}
+	return ctx.Err()
+}
+
 // deduplicatePathClaims establishes one canonical parser contract per path.
 // Discovery settings and input IDs do not affect parsing, so equivalent inputs
 // may overlap. Source, effective reader format, and parser options must agree.
-func deduplicatePathClaims(claims []discoveredPathClaim) ([]discoveredPathClaim, error) {
+func deduplicatePathClaims(ctx context.Context, claims []discoveredPathClaim) ([]discoveredPathClaim, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 	byPath := make(map[string][]discoveredPathClaim)
 	for _, claim := range claims {
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
 		byPath[claim.path] = append(byPath[claim.path], claim)
 	}
 
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 	paths := make([]string, 0, len(byPath))
 	for path := range byPath {
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
 		paths = append(paths, path)
 	}
-	sort.Strings(paths)
+	if err := contextMergeSort(ctx, paths, func(left, right string) bool { return left < right }); err != nil {
+		return nil, err
+	}
 
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 	unique := make([]discoveredPathClaim, 0, len(paths))
 	for _, path := range paths {
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
 		pathClaims := byPath[path]
-		sort.Slice(pathClaims, func(i, j int) bool {
-			return claimDescription(pathClaims[i]) < claimDescription(pathClaims[j])
-		})
+		if err := contextMergeSort(ctx, pathClaims, func(left, right discoveredPathClaim) bool {
+			return claimDescription(left) < claimDescription(right)
+		}); err != nil {
+			return nil, err
+		}
 		want := semanticsForClaim(pathClaims[0])
 		for _, claim := range pathClaims[1:] {
+			if err := ctx.Err(); err != nil {
+				return nil, err
+			}
 			if semanticsForClaim(claim) != want {
+				if err := ctx.Err(); err != nil {
+					return nil, err
+				}
 				descriptions := make([]string, 0, len(pathClaims))
 				for _, conflicting := range pathClaims {
+					if err := ctx.Err(); err != nil {
+						return nil, err
+					}
 					descriptions = append(descriptions, claimDescription(conflicting))
 				}
 				return nil, fmt.Errorf("path %q is claimed by incompatible inputs: %s", path, strings.Join(descriptions, ", "))
 			}
 		}
 		unique = append(unique, pathClaims[0])
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, err
 	}
 	return unique, nil
 }
@@ -182,24 +293,48 @@ type syncPathState struct {
 // all reasons and consume at most one slot. Only discovered, hash-immutable
 // paths spend the replay budget; natural parses perform the same maintenance
 // for free.
-func selectReplayPaths(states map[string]*syncPathState, queues replayQueues, limit int) map[string]replayReason {
+func selectReplayPaths(ctx context.Context, states map[string]*syncPathState, queues replayQueues, limit int) (map[string]replayReason, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 	reasons := make(map[string]replayReason)
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 	ordered := make([]string, 0)
-	addQueue := func(paths []string, reason replayReason) {
+	addQueue := func(paths []string, reason replayReason) error {
 		for _, path := range paths {
+			if err := ctx.Err(); err != nil {
+				return err
+			}
 			if reasons[path] == 0 {
 				ordered = append(ordered, path)
 			}
 			reasons[path] |= reason
 		}
+		return nil
 	}
-	addQueue(queues.origin, replayOrigin)
-	addQueue(queues.echo, replayEcho)
-	addQueue(queues.stale, replayStale)
-	addQueue(queues.emptyPi, replayEmptyPi)
+	if err := addQueue(queues.origin, replayOrigin); err != nil {
+		return nil, err
+	}
+	if err := addQueue(queues.echo, replayEcho); err != nil {
+		return nil, err
+	}
+	if err := addQueue(queues.stale, replayStale); err != nil {
+		return nil, err
+	}
+	if err := addQueue(queues.emptyPi, replayEmptyPi); err != nil {
+		return nil, err
+	}
 
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 	selected := make(map[string]replayReason)
 	for _, path := range ordered {
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
 		if len(selected) >= limit {
 			break
 		}
@@ -214,7 +349,10 @@ func selectReplayPaths(states map[string]*syncPathState, queues replayQueues, li
 		}
 		selected[path] = reason
 	}
-	return selected
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	return selected, nil
 }
 
 // isRacyCleanFile reports whether a file's mtime suggests it could be racy clean.
@@ -253,12 +391,30 @@ func isRacyCleanFile(fileMtime string, lastIndexed string) bool {
 	return fileMt.After(indexTime.Add(-time.Duration(racyMarginSeconds) * time.Second))
 }
 
-// maybeAutoSync performs an incremental sync operation if the database exists.
-// It is intended to be called before query commands to ensure fresh index state.
-// If sync fails, it returns an error (caller decides whether to warn/ignore).
-func maybeAutoSync(cfg *config.Config, progress io.Writer) (retErr error) {
-	// Startup context propagation is a later phase; preserve current behavior here.
-	ctx := context.Background()
+// maybeAutoSync preserves the legacy non-cancellable entry point.
+func maybeAutoSync(cfg *config.Config, progress io.Writer) error {
+	return maybeAutoSyncContext(context.Background(), cfg, progress)
+}
+
+// maybeAutoSyncContext performs an incremental sync operation with cancellation
+// propagated through reader and storage work. Progress is transactional at this
+// boundary: callers receive it only after every sync and maintenance phase succeeds.
+func maybeAutoSyncContext(ctx context.Context, cfg *config.Config, progress io.Writer) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	var bufferedProgress bytes.Buffer
+	if err := maybeAutoSyncWithProgress(ctx, cfg, &bufferedProgress); err != nil {
+		return err
+	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	_, _ = bufferedProgress.WriteTo(progress)
+	return nil
+}
+
+func maybeAutoSyncWithProgress(ctx context.Context, cfg *config.Config, progress io.Writer) (retErr error) {
 	diag := diagnosticsEnabled()
 	var startTime time.Time
 	if diag {
@@ -267,33 +423,36 @@ func maybeAutoSync(cfg *config.Config, progress io.Writer) (retErr error) {
 
 	// Open database for reading to check if it exists
 	// (this will auto-create if missing)
-	db, err := maybeAutoSyncOpen(cfg.DatabasePath)
+	db, err := maybeAutoSyncOpen(ctx, cfg.DatabasePath)
 	if err != nil {
 		return fmt.Errorf("open database: %w", err)
 	}
 	defer func() { retErr = closeIndexDB(db, retErr) }()
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 
 	// Get existing file metadata for prefiltering
-	existingMetadata, err := db.GetFileMetadata()
+	existingMetadata, err := db.GetFileMetadataContext(ctx)
 	if err != nil {
 		return fmt.Errorf("get file metadata: %w", err)
 	}
 
 	// Load every durable parser-backed maintenance queue. Selection happens only
 	// after natural new/modified work has been classified.
-	stalePaths, err := db.StalePaths(storage.CurrentExtractionVersion)
+	stalePaths, err := db.StalePathsContext(ctx, storage.CurrentExtractionVersion)
 	if err != nil {
 		return fmt.Errorf("discover stale paths: %w", err)
 	}
-	emptyPaths, err := db.EmptyIndexedPaths()
+	emptyPaths, err := db.EmptyIndexedPathsContext(ctx)
 	if err != nil {
 		return fmt.Errorf("discover empty indexed paths: %w", err)
 	}
-	echoPaths, err := db.PendingSearchEchoPaths()
+	echoPaths, err := db.PendingSearchEchoPathsContext(ctx)
 	if err != nil {
 		return fmt.Errorf("discover pending search echo paths: %w", err)
 	}
-	originPaths, err := db.PendingOriginPaths(storage.CurrentOriginVersion, len(existingMetadata))
+	originPaths, err := db.PendingOriginPathsContext(ctx, storage.CurrentOriginVersion, len(existingMetadata))
 	if err != nil {
 		return fmt.Errorf("discover pending message origins: %w", err)
 	}
@@ -307,9 +466,15 @@ func maybeAutoSync(cfg *config.Config, progress io.Writer) (retErr error) {
 	if err != nil {
 		return fmt.Errorf("resolve inputs: %w", err)
 	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 
 	// Load project registry
 	registry := maybeAutoSyncLoadGlobalRegistry()
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 
 	// Track diagnostics
 	var discoveryTime, metadataTime, hashingTime, parsingTime time.Duration
@@ -320,6 +485,9 @@ func maybeAutoSync(cfg *config.Config, progress io.Writer) (retErr error) {
 	// This makes hashing, parsing, and replay selection global rather than input-local.
 	var claims []discoveredPathClaim
 	for _, def := range defs {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
 		if def.Source == "" {
 			def.Source = "session"
 		}
@@ -336,14 +504,20 @@ func maybeAutoSync(cfg *config.Config, progress io.Writer) (retErr error) {
 		if err != nil {
 			return fmt.Errorf("discover input %q: %w", def.ID, err)
 		}
+		if err := ctx.Err(); err != nil {
+			return err
+		}
 		if diag {
 			discoveryTime += time.Since(discoveryStart)
 		}
 		for _, ref := range refs {
+			if err := ctx.Err(); err != nil {
+				return err
+			}
 			claims = append(claims, discoveredPathClaim{path: ref, def: def, reader: reader})
 		}
 	}
-	uniqueClaims, err := deduplicatePathClaims(claims)
+	uniqueClaims, err := deduplicatePathClaims(ctx, claims)
 	if err != nil {
 		return err
 	}
@@ -352,6 +526,9 @@ func maybeAutoSync(cfg *config.Config, progress io.Writer) (retErr error) {
 	// files are natural parses and therefore never spend the maintenance cap.
 	states := make(map[string]*syncPathState, len(uniqueClaims))
 	for _, claim := range uniqueClaims {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
 		ref, reader := claim.path, claim.reader
 		existingMeta, exists := existingMetadata[ref]
 		state := &syncPathState{claim: claim, existingMeta: existingMeta, exists: exists}
@@ -368,6 +545,9 @@ func maybeAutoSync(cfg *config.Config, progress io.Writer) (retErr error) {
 				state.hash = existingMeta.Hash
 			}
 		}
+		if err := ctx.Err(); err != nil {
+			return err
+		}
 		if diag {
 			metadataTime += time.Since(metadataStart)
 		}
@@ -380,6 +560,9 @@ func maybeAutoSync(cfg *config.Config, progress io.Writer) (retErr error) {
 			state.hash, err = reader.Hash(ctx, ref)
 			if err != nil {
 				return fmt.Errorf("hash %s: %w", ref, err)
+			}
+			if err := ctx.Err(); err != nil {
+				return err
 			}
 			if diag {
 				filesHashed++
@@ -398,18 +581,24 @@ func maybeAutoSync(cfg *config.Config, progress io.Writer) (retErr error) {
 		states[ref] = state
 	}
 
-	replaySet := selectReplayPaths(states, replayQueues{
+	replaySet, err := selectReplayPaths(ctx, states, replayQueues{
 		origin:  originPaths,
 		echo:    echoPaths,
 		stale:   stalePaths,
 		emptyPi: emptyPaths,
 	}, replayParsesCap)
+	if err != nil {
+		return err
+	}
 
 	// Collect indexed files. uniqueClaims is path-sorted, so natural work and
 	// selected replays are deterministic even when discovery order changes.
 	var indexedFiles []storage.IndexedFile
 	staleReplaysDone, emptyPiReplaysDone := 0, 0
 	for _, claim := range uniqueClaims {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
 		ref, def, reader := claim.path, claim.def, claim.reader
 		state := states[ref]
 		reason, replaySelected := replaySet[ref]
@@ -434,6 +623,9 @@ func maybeAutoSync(cfg *config.Config, progress io.Writer) (retErr error) {
 		if err != nil {
 			return fmt.Errorf("parse %s: %w", ref, err)
 		}
+		if err := ctx.Err(); err != nil {
+			return err
+		}
 		if diag {
 			parsingTime += time.Since(parsingStart)
 		}
@@ -444,10 +636,16 @@ func maybeAutoSync(cfg *config.Config, progress io.Writer) (retErr error) {
 			identPath = ref
 		}
 		ident := projects.Identify(identPath, registry)
+		if err := ctx.Err(); err != nil {
+			return err
+		}
 
 		var sessionTags tagging.Accumulator
 		var indexedMsgs []storage.IndexedMessage
 		for ordinal, msg := range pf.Records {
+			if err := ctx.Err(); err != nil {
+				return err
+			}
 			sessionTags.Add(msg.Content)
 			indexedMsgs = append(indexedMsgs, storage.IndexedMessage{
 				Ordinal:           ordinal,
@@ -468,6 +666,9 @@ func maybeAutoSync(cfg *config.Config, progress io.Writer) (retErr error) {
 		}
 
 		fileSize, fileMtime, _ := maybeAutoSyncGetFileMetadata(ref)
+		if err := ctx.Err(); err != nil {
+			return err
+		}
 		indexedHash := pf.Hash
 		if reader.Name() == "pi" && len(pf.Records) == 0 {
 			// Mark a zero-row parse with the Pi parser epoch. Old unmarked hashes
@@ -496,8 +697,11 @@ func maybeAutoSync(cfg *config.Config, progress io.Writer) (retErr error) {
 
 	// Sync all files
 	if len(indexedFiles) > 0 {
-		if err := maybeAutoSyncSyncFiles(db, indexedFiles); err != nil {
+		if err := maybeAutoSyncSyncFiles(ctx, db, indexedFiles); err != nil {
 			return fmt.Errorf("sync files: %w", err)
+		}
+		if err := ctx.Err(); err != nil {
+			return err
 		}
 	}
 
@@ -506,7 +710,7 @@ func maybeAutoSync(cfg *config.Config, progress io.Writer) (retErr error) {
 	miner := templates.NewMiner()
 	const staleTemplateCap = 200
 	const currentNormalizationVersion = 2
-	staleTemplatePaths, err := db.StaleTemplatePaths(currentNormalizationVersion)
+	staleTemplatePaths, err := db.StaleTemplatePathsContext(ctx, currentNormalizationVersion)
 	if err != nil {
 		return fmt.Errorf("discover stale templates: %w", err)
 	} else if len(staleTemplatePaths) > 0 {
@@ -516,12 +720,15 @@ func maybeAutoSync(cfg *config.Config, progress io.Writer) (retErr error) {
 		}
 
 		for _, sourcePath := range staleTemplatePaths {
-			msgs, err := db.LoadMessagesForPath(sourcePath)
+			if err := ctx.Err(); err != nil {
+				return err
+			}
+			msgs, err := db.LoadMessagesForPathContext(ctx, sourcePath)
 			if err != nil {
 				return fmt.Errorf("load messages for stale template path %s: %w", sourcePath, err)
 			}
 
-			deletedCount, err := db.BackfillTemplatesForFile(miner, sourcePath, msgs)
+			deletedCount, err := db.BackfillTemplatesForFileContext(ctx, miner, sourcePath, msgs)
 			if err != nil {
 				return fmt.Errorf("re-mine templates for %s: %w", sourcePath, err)
 			}
@@ -536,8 +743,12 @@ func maybeAutoSync(cfg *config.Config, progress io.Writer) (retErr error) {
 	// row remains: SyncFiles skips it (not on disk) and BackfillDerived skips it (not
 	// absent from indexed_files), so without this a detector fix never reaches it.
 	// Bounded per run and convergent — see RederiveSupersededCorrections.
-	if _, err := db.RederiveSupersededCorrections(staleTemplateCap); err != nil {
+	if _, err := db.RederiveSupersededCorrectionsContext(ctx, staleTemplateCap); err != nil {
 		return fmt.Errorf("re-derive superseded correction signals: %w", err)
+	}
+
+	if err := ctx.Err(); err != nil {
+		return err
 	}
 
 	if diag {

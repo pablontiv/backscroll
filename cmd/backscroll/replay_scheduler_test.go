@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -17,6 +18,19 @@ import (
 	"github.com/pablontiv/backscroll/internal/readers"
 	"github.com/pablontiv/backscroll/internal/storage"
 )
+
+type cancelAfterErrChecksContext struct {
+	context.Context
+	remaining int
+}
+
+func (c *cancelAfterErrChecksContext) Err() error {
+	c.remaining--
+	if c.remaining <= 0 {
+		return context.Canceled
+	}
+	return nil
+}
 
 type replaySchedulerReader struct {
 	name       string
@@ -52,6 +66,15 @@ func (r *replaySchedulerReader) Parse(_ context.Context, path string, _ input_co
 	}, nil
 }
 
+func mustSelectReplayPaths(t *testing.T, states map[string]*syncPathState, queues replayQueues, limit int) map[string]replayReason {
+	t.Helper()
+	selected, err := selectReplayPaths(context.Background(), states, queues, limit)
+	if err != nil {
+		t.Fatalf("select replay paths: %v", err)
+	}
+	return selected
+}
+
 func schedulerState(path, readerName string) *syncPathState {
 	reader := &replaySchedulerReader{name: readerName}
 	return &syncPathState{
@@ -84,13 +107,48 @@ func schedulerStates(groups ...[]string) map[string]*syncPathState {
 	return states
 }
 
+func TestDeduplicatePathClaimsCancellationInterruptsSort(t *testing.T) {
+	reader := &replaySchedulerReader{name: "claude"}
+	claims := make([]discoveredPathClaim, 128)
+	for i := range claims {
+		claims[i] = discoveredPathClaim{
+			path:   "/same",
+			reader: reader,
+			def: input_config.InputDefinition{
+				ID:     fmt.Sprintf("input-%03d", len(claims)-i),
+				Source: "session",
+			},
+		}
+	}
+	ctx := &cancelAfterErrChecksContext{Context: context.Background(), remaining: 150}
+	unique, err := deduplicatePathClaims(ctx, claims)
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("error=%v want context.Canceled", err)
+	}
+	if unique != nil {
+		t.Fatalf("canceled dedup returned partial claims: %#v", unique)
+	}
+}
+
+func TestSelectReplayPathsCancellationStopsMidQueue(t *testing.T) {
+	paths := schedulerPaths("cancel", 100)
+	ctx := &cancelAfterErrChecksContext{Context: context.Background(), remaining: 12}
+	selected, err := selectReplayPaths(ctx, schedulerStates(paths), replayQueues{origin: paths}, 100)
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("error=%v want context.Canceled", err)
+	}
+	if selected != nil {
+		t.Fatalf("canceled replay selection returned partial result: %v", selected)
+	}
+}
+
 func TestReplaySchedulerCombinedCapAndStaleCannotBypass(t *testing.T) {
 	origin := schedulerPaths("origin", 100)
 	echo := schedulerPaths("echo", 100)
 	stale := schedulerPaths("stale", 20)
 	states := schedulerStates(origin, echo, stale)
 
-	selected := selectReplayPaths(states, replayQueues{origin: origin, echo: echo, stale: stale}, 200)
+	selected := mustSelectReplayPaths(t, states, replayQueues{origin: origin, echo: echo, stale: stale}, 200)
 	if len(selected) != 200 {
 		t.Fatalf("selected %d immutable replays, want exact global cap 200", len(selected))
 	}
@@ -104,7 +162,7 @@ func TestReplaySchedulerCombinedCapAndStaleCannotBypass(t *testing.T) {
 	outside := "/origin-outside-cap"
 	originWithTail := append(append([]string(nil), schedulerPaths("full", 200)...), outside)
 	states = schedulerStates(originWithTail)
-	selected = selectReplayPaths(states, replayQueues{origin: originWithTail, stale: []string{outside}}, 200)
+	selected = mustSelectReplayPaths(t, states, replayQueues{origin: originWithTail, stale: []string{outside}}, 200)
 	if selected[outside] != 0 {
 		t.Fatalf("provenance tail re-entered through stale queue: reason=%v", selected[outside])
 	}
@@ -113,7 +171,7 @@ func TestReplaySchedulerCombinedCapAndStaleCannotBypass(t *testing.T) {
 func TestReplaySchedulerOverlapChargesOnce(t *testing.T) {
 	const path = "/all-reasons.jsonl"
 	states := schedulerStates([]string{path})
-	selected := selectReplayPaths(states, replayQueues{
+	selected := mustSelectReplayPaths(t, states, replayQueues{
 		origin: []string{path},
 		echo:   []string{path},
 		stale:  []string{path},
@@ -132,7 +190,7 @@ func TestReplaySchedulerSelectionIgnoresDiscoveryOrder(t *testing.T) {
 	for _, path := range []string{"/c", "/b", "/a"} { // inverse discovery insertion
 		states[path] = schedulerState(path, "claude")
 	}
-	selected := selectReplayPaths(states, replayQueues{origin: []string{"/a", "/b", "/c"}}, 2)
+	selected := mustSelectReplayPaths(t, states, replayQueues{origin: []string{"/a", "/b", "/c"}}, 2)
 	if selected["/a"] == 0 || selected["/b"] == 0 || selected["/c"] != 0 {
 		t.Fatalf("selection followed discovery order: %v", selected)
 	}
@@ -146,7 +204,7 @@ func TestReplaySchedulerUndiscoveredAndModifiedDoNotConsume(t *testing.T) {
 		"/modified":  modified,
 		"/immutable": schedulerState("/immutable", "claude"),
 	}
-	selected := selectReplayPaths(states, replayQueues{origin: []string{
+	selected := mustSelectReplayPaths(t, states, replayQueues{origin: []string{
 		"/undiscovered", "/modified", "/immutable",
 	}}, 1)
 	if len(selected) != 1 || selected["/immutable"] == 0 {
@@ -161,7 +219,7 @@ func TestReplaySchedulerDrains200Then1Then0(t *testing.T) {
 	remaining := schedulerPaths("drain", 201)
 	states := schedulerStates(remaining)
 	for run, want := range []int{200, 1, 0} {
-		selected := selectReplayPaths(states, replayQueues{origin: remaining}, 200)
+		selected := mustSelectReplayPaths(t, states, replayQueues{origin: remaining}, 200)
 		if len(selected) != want {
 			t.Fatalf("run %d selected %d, want %d", run+1, len(selected), want)
 		}
@@ -178,7 +236,7 @@ func TestReplaySchedulerDrains200Then1Then0(t *testing.T) {
 func TestReplaySchedulerEmptyPiOverlapDoesNotDuplicate(t *testing.T) {
 	const path = "/empty-pi.jsonl"
 	states := map[string]*syncPathState{path: schedulerState(path, "pi")}
-	selected := selectReplayPaths(states, replayQueues{
+	selected := mustSelectReplayPaths(t, states, replayQueues{
 		origin:  []string{path},
 		echo:    []string{path},
 		stale:   []string{path},
@@ -194,7 +252,7 @@ func TestReplaySchedulerEmptyPiOverlapDoesNotDuplicate(t *testing.T) {
 
 	states[path].existingMeta.Hash = emptyPiHashPrefix + "same"
 	states[path].hash = "same" // racy-clean hashing returns the unmarked content hash
-	if got := selectReplayPaths(states, replayQueues{emptyPi: []string{path}}, 200); len(got) != 0 {
+	if got := mustSelectReplayPaths(t, states, replayQueues{emptyPi: []string{path}}, 200); len(got) != 0 {
 		t.Fatalf("marked empty Pi path replayed again after forced hash: %v", got)
 	}
 }
@@ -215,18 +273,18 @@ func TestReplaySchedulerEquivalentAndIncompatibleClaims(t *testing.T) {
 		{path: "/same", reader: reader, def: input_config.InputDefinition{ID: "z", Source: "session", Decode: input_config.DecodeConfig{Format: "claude"}}},
 		{path: "/same", reader: reader, def: input_config.InputDefinition{ID: "a", Source: "session"}},
 	}
-	unique, err := deduplicatePathClaims(equivalent)
+	unique, err := deduplicatePathClaims(context.Background(), equivalent)
 	if err != nil || len(unique) != 1 || unique[0].def.ID != "a" {
 		t.Fatalf("equivalent claims = %#v, err=%v; want canonical input a", unique, err)
 	}
 
 	incompatible := append([]discoveredPathClaim(nil), equivalent...)
 	incompatible[0].def.Decode.IndexReasoning = true
-	_, firstErr := deduplicatePathClaims(incompatible)
+	_, firstErr := deduplicatePathClaims(context.Background(), incompatible)
 	for left, right := 0, len(incompatible)-1; left < right; left, right = left+1, right-1 {
 		incompatible[left], incompatible[right] = incompatible[right], incompatible[left]
 	}
-	_, secondErr := deduplicatePathClaims(incompatible)
+	_, secondErr := deduplicatePathClaims(context.Background(), incompatible)
 	if firstErr == nil || secondErr == nil || firstErr.Error() != secondErr.Error() {
 		t.Fatalf("incompatible error is not deterministic: first=%v second=%v", firstErr, secondErr)
 	}
