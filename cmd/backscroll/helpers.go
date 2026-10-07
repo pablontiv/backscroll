@@ -3,6 +3,7 @@ package main
 import (
 	"fmt"
 	"os"
+	"strings"
 
 	"github.com/pablontiv/backscroll/internal/projects"
 )
@@ -24,7 +25,11 @@ func effectiveProject(project string, allProjects bool) (string, error) {
 	}
 	registry := projects.LoadGlobalRegistry()
 	result := projects.Identify(cwd, registry)
-	if result.ProjectID == "unknown" {
+	projectID := strings.TrimSpace(result.ProjectID)
+	if projectID == "" {
+		return "", fmt.Errorf("resolve project from current working directory %q: project ID is empty; use --project NAME or --all-projects", cwd)
+	}
+	if projectID == "unknown" {
 		return "", fmt.Errorf("resolve project from current working directory %q: project is unknown; use --project NAME or --all-projects", cwd)
 	}
 	return result.ProjectID, nil

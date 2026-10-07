@@ -1,7 +1,9 @@
 package main
 
 import (
+	"bytes"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -29,6 +31,69 @@ func TestEffectiveProjectExplicitProject(t *testing.T) {
 	}
 	if result != "myproject" {
 		t.Errorf("effectiveProject with explicit project should return that project, got %q", result)
+	}
+}
+
+func TestCommandsRejectEmptyInferredProjectBeforeDatabaseOpen(t *testing.T) {
+	commands := []struct {
+		name string
+		args []string
+	}{
+		{name: "list", args: []string{"list"}},
+		{name: "search", args: []string{"search", "scope-sentinel"}},
+		{name: "patterns", args: []string{"patterns", "--kind", "commands"}},
+	}
+	for _, projectID := range []struct {
+		name string
+		id   string
+	}{
+		{name: "empty", id: ""},
+		{name: "whitespace", id: "   "},
+	} {
+		for _, command := range commands {
+			t.Run(projectID.name+"/"+command.name, func(t *testing.T) {
+				root := t.TempDir()
+				home := filepath.Join(root, "home")
+				registryDir := filepath.Join(home, ".config", "backscroll")
+				configDir := filepath.Join(root, "config")
+				inputsDir := filepath.Join(root, "inputs")
+				projectDir := filepath.Join(root, "project")
+				for _, dir := range []string{registryDir, configDir, inputsDir, projectDir} {
+					if err := os.MkdirAll(dir, 0o755); err != nil {
+						t.Fatal(err)
+					}
+				}
+				registry := fmt.Sprintf("[[projects]]\nid = %q\nroots = [%q]\n", projectID.id, projectDir)
+				if err := os.WriteFile(filepath.Join(registryDir, "projects.toml"), []byte(registry), 0o600); err != nil {
+					t.Fatal(err)
+				}
+				dbPath := filepath.Join(root, "must-not-exist.db")
+				t.Setenv("HOME", home)
+				t.Setenv("BACKSCROLL_CONFIG_DIR", configDir)
+				t.Setenv("BACKSCROLL_DATABASE_PATH", dbPath)
+				t.Setenv("BACKSCROLL_SESSION_DIRS", inputsDir)
+				t.Chdir(projectDir)
+
+				var stdout, stderr bytes.Buffer
+				cmd := buildRootCmd(&stdout, &stderr)
+				cmd.SetArgs(command.args)
+				err := cmd.Execute()
+				if err == nil {
+					t.Fatal("command succeeded with an empty inferred project ID")
+				}
+				for _, want := range []string{"project ID is empty", "--project NAME", "--all-projects"} {
+					if !strings.Contains(err.Error(), want) {
+						t.Errorf("error %q missing guidance %q", err, want)
+					}
+				}
+				if stdout.Len() != 0 {
+					t.Errorf("stdout = %q, want empty", stdout.String())
+				}
+				if _, statErr := os.Stat(dbPath); !os.IsNotExist(statErr) {
+					t.Errorf("database touched before scope resolution: stat error=%v", statErr)
+				}
+			})
+		}
 	}
 }
 
