@@ -1,6 +1,7 @@
 package readers
 
 import (
+	"context"
 	"database/sql"
 	"encoding/json"
 	"path/filepath"
@@ -15,7 +16,7 @@ import (
 func TestOpenCodeReader_MessageOrigins(t *testing.T) {
 	dbPath := createOpenCodeOriginDB(t)
 
-	parsed, err := (&OpenCodeReader{}).Parse(dbPath, input_config.InputDefinition{})
+	parsed, err := (&OpenCodeReader{}).Parse(context.Background(), dbPath, input_config.InputDefinition{})
 	if err != nil {
 		t.Fatalf("Parse: %v", err)
 	}
@@ -49,7 +50,7 @@ func TestOpenCodeReader_MessageOrigins(t *testing.T) {
 func TestOpenCodeReader_ToolOriginsUseStructuredBoundaries(t *testing.T) {
 	dbPath := createOpenCodeOriginDB(t)
 
-	parsed, err := (&OpenCodeReader{}).Parse(dbPath, input_config.InputDefinition{})
+	parsed, err := (&OpenCodeReader{}).Parse(context.Background(), dbPath, input_config.InputDefinition{})
 	if err != nil {
 		t.Fatalf("Parse: %v", err)
 	}

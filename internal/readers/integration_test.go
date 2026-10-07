@@ -1,6 +1,7 @@
 package readers
 
 import (
+	"context"
 	"database/sql"
 	"encoding/json"
 	"os"
@@ -60,7 +61,7 @@ func TestPipeline_ClaudeJSONL(t *testing.T) {
 
 	r := &ClaudeReader{}
 
-	refs, err := r.Discover(def)
+	refs, err := r.Discover(context.Background(), def)
 	if err != nil {
 		t.Fatalf("Discover: %v", err)
 	}
@@ -68,7 +69,7 @@ func TestPipeline_ClaudeJSONL(t *testing.T) {
 		t.Fatalf("Discover: got %d refs, want 1", len(refs))
 	}
 
-	hash, err := r.Hash(refs[0])
+	hash, err := r.Hash(context.Background(), refs[0])
 	if err != nil {
 		t.Fatalf("Hash: %v", err)
 	}
@@ -76,7 +77,7 @@ func TestPipeline_ClaudeJSONL(t *testing.T) {
 		t.Error("Hash should not be empty")
 	}
 
-	pf, err := r.Parse(refs[0], def)
+	pf, err := r.Parse(context.Background(), refs[0], def)
 	if err != nil {
 		t.Fatalf("Parse: %v", err)
 	}
@@ -101,7 +102,7 @@ func TestPipeline_PiJSONL(t *testing.T) {
 	r := &PiReader{}
 	def := input_config.InputDefinition{}
 
-	refs, err := r.Discover(input_config.InputDefinition{
+	refs, err := r.Discover(context.Background(), input_config.InputDefinition{
 		Discover: input_config.DiscoverConfig{
 			Roots:   []string{filepath.Dir(piFixture)},
 			Include: []string{"pi-session.jsonl"},
@@ -114,7 +115,7 @@ func TestPipeline_PiJSONL(t *testing.T) {
 		t.Fatal("Discover Pi: no refs found")
 	}
 
-	pf, err := r.Parse(refs[0], def)
+	pf, err := r.Parse(context.Background(), refs[0], def)
 	if err != nil {
 		t.Fatalf("Parse Pi: %v", err)
 	}
@@ -146,7 +147,7 @@ func TestPipeline_OpenCode(t *testing.T) {
 
 	r := &OpenCodeReader{}
 
-	refs, err := r.Discover(def)
+	refs, err := r.Discover(context.Background(), def)
 	if err != nil {
 		t.Fatalf("Discover OpenCode: %v", err)
 	}
@@ -154,11 +155,11 @@ func TestPipeline_OpenCode(t *testing.T) {
 		t.Fatalf("Discover OpenCode: got %d refs, want 1", len(refs))
 	}
 
-	hash1, err := r.Hash(refs[0])
+	hash1, err := r.Hash(context.Background(), refs[0])
 	if err != nil {
 		t.Fatalf("Hash: %v", err)
 	}
-	hash2, err := r.Hash(refs[0])
+	hash2, err := r.Hash(context.Background(), refs[0])
 	if err != nil {
 		t.Fatalf("Hash 2: %v", err)
 	}
@@ -166,7 +167,7 @@ func TestPipeline_OpenCode(t *testing.T) {
 		t.Error("Hash not deterministic")
 	}
 
-	pf, err := r.Parse(refs[0], def)
+	pf, err := r.Parse(context.Background(), refs[0], def)
 	if err != nil {
 		t.Fatalf("Parse OpenCode: %v", err)
 	}

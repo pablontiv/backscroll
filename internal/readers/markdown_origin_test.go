@@ -1,6 +1,7 @@
 package readers
 
 import (
+	"context"
 	"testing"
 
 	"github.com/pablontiv/backscroll/internal/input_config"
@@ -31,7 +32,7 @@ func TestMarkdownReadersAlwaysUseUnknownOrigin(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			path := writeMarkdownTestFile(t, tt.name+".md", tt.content)
-			parsed, err := tt.reader.Parse(path, input_config.InputDefinition{Source: "test"})
+			parsed, err := tt.reader.Parse(context.Background(), path, input_config.InputDefinition{Source: "test"})
 			if err != nil {
 				t.Fatalf("Parse() error = %v", err)
 			}

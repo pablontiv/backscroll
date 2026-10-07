@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"context"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -27,8 +28,8 @@ type originReplayClaudeReader struct {
 
 func (*originReplayClaudeReader) Name() string { return "claude" }
 
-func (r *originReplayClaudeReader) Discover(def input_config.InputDefinition) ([]string, error) {
-	refs, err := r.delegate.Discover(def)
+func (r *originReplayClaudeReader) Discover(ctx context.Context, def input_config.InputDefinition) ([]string, error) {
+	refs, err := r.delegate.Discover(ctx, def)
 	if err != nil || !r.reverseDiscovery {
 		return refs, err
 	}
@@ -38,17 +39,17 @@ func (r *originReplayClaudeReader) Discover(def input_config.InputDefinition) ([
 	return refs, nil
 }
 
-func (r *originReplayClaudeReader) Hash(path string) (string, error) {
-	return r.delegate.Hash(path)
+func (r *originReplayClaudeReader) Hash(ctx context.Context, path string) (string, error) {
+	return r.delegate.Hash(ctx, path)
 }
 
-func (r *originReplayClaudeReader) Parse(path string, def input_config.InputDefinition) (models.ParsedFile, error) {
+func (r *originReplayClaudeReader) Parse(ctx context.Context, path string, def input_config.InputDefinition) (models.ParsedFile, error) {
 	r.parseCalls++
 	r.parsePaths = append(r.parsePaths, path)
 	if r.parseErr != nil {
 		return models.ParsedFile{}, r.parseErr
 	}
-	parsed, err := r.delegate.Parse(path, def)
+	parsed, err := r.delegate.Parse(ctx, path, def)
 	if err != nil {
 		return models.ParsedFile{}, err
 	}

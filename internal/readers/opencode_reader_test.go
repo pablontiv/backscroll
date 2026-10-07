@@ -1,6 +1,7 @@
 package readers
 
 import (
+	"context"
 	"database/sql"
 	"encoding/json"
 	"os"
@@ -109,7 +110,7 @@ func TestOpenCodeReader_Hash(t *testing.T) {
 	dbPath := createOpenCodeDB(t)
 	r := &OpenCodeReader{}
 
-	h, err := r.Hash(dbPath)
+	h, err := r.Hash(context.Background(), dbPath)
 	if err != nil {
 		t.Fatalf("Hash: %v", err)
 	}
@@ -136,7 +137,7 @@ func TestOpenCodeReader_Hash_Empty(t *testing.T) {
 	}
 
 	r := &OpenCodeReader{}
-	h, err := r.Hash(dbPath)
+	h, err := r.Hash(context.Background(), dbPath)
 	if err != nil {
 		t.Fatalf("Hash empty: %v", err)
 	}
@@ -147,7 +148,7 @@ func TestOpenCodeReader_Hash_Empty(t *testing.T) {
 
 func TestOpenCodeReader_Hash_MissingFile(t *testing.T) {
 	r := &OpenCodeReader{}
-	_, err := r.Hash("/nonexistent/opencode.db")
+	_, err := r.Hash(context.Background(), "/nonexistent/opencode.db")
 	if err == nil {
 		t.Error("expected error for missing file")
 	}
@@ -157,7 +158,7 @@ func TestOpenCodeReader_Parse_MessageCount(t *testing.T) {
 	dbPath := createOpenCodeDB(t)
 	r := &OpenCodeReader{}
 
-	pf, err := r.Parse(dbPath, input_config.InputDefinition{})
+	pf, err := r.Parse(context.Background(), dbPath, input_config.InputDefinition{})
 	if err != nil {
 		t.Fatalf("Parse: %v", err)
 	}
@@ -173,7 +174,7 @@ func TestOpenCodeReader_Parse_Roles(t *testing.T) {
 	dbPath := createOpenCodeDB(t)
 	r := &OpenCodeReader{}
 
-	pf, err := r.Parse(dbPath, input_config.InputDefinition{})
+	pf, err := r.Parse(context.Background(), dbPath, input_config.InputDefinition{})
 	if err != nil {
 		t.Fatalf("Parse: %v", err)
 	}
@@ -193,7 +194,7 @@ func TestOpenCodeReader_Parse_Content(t *testing.T) {
 	dbPath := createOpenCodeDB(t)
 	r := &OpenCodeReader{}
 
-	pf, err := r.Parse(dbPath, input_config.InputDefinition{})
+	pf, err := r.Parse(context.Background(), dbPath, input_config.InputDefinition{})
 	if err != nil {
 		t.Fatalf("Parse: %v", err)
 	}
@@ -213,7 +214,7 @@ func TestOpenCodeReader_Parse_NonTextNotIndexed(t *testing.T) {
 	dbPath := createOpenCodeDB(t)
 	r := &OpenCodeReader{}
 
-	pf, err := r.Parse(dbPath, input_config.InputDefinition{})
+	pf, err := r.Parse(context.Background(), dbPath, input_config.InputDefinition{})
 	if err != nil {
 		t.Fatalf("Parse: %v", err)
 	}
@@ -255,7 +256,7 @@ func TestOpenCodeReader_Parse_Ignored(t *testing.T) {
 	_ = db.Close()
 
 	r := &OpenCodeReader{}
-	pf, err := r.Parse(dbPath, input_config.InputDefinition{})
+	pf, err := r.Parse(context.Background(), dbPath, input_config.InputDefinition{})
 	if err != nil {
 		t.Fatalf("Parse: %v", err)
 	}
@@ -296,7 +297,7 @@ func TestOpenCodeReader_Parse_MultipleTextParts(t *testing.T) {
 	_ = db.Close()
 
 	r := &OpenCodeReader{}
-	pf, err := r.Parse(dbPath, input_config.InputDefinition{})
+	pf, err := r.Parse(context.Background(), dbPath, input_config.InputDefinition{})
 	if err != nil {
 		t.Fatalf("Parse: %v", err)
 	}
@@ -312,12 +313,12 @@ func TestOpenCodeReader_Parse_HashConsistency(t *testing.T) {
 	dbPath := createOpenCodeDB(t)
 	r := &OpenCodeReader{}
 
-	pf, err := r.Parse(dbPath, input_config.InputDefinition{})
+	pf, err := r.Parse(context.Background(), dbPath, input_config.InputDefinition{})
 	if err != nil {
 		t.Fatalf("Parse: %v", err)
 	}
 
-	h, err := r.Hash(dbPath)
+	h, err := r.Hash(context.Background(), dbPath)
 	if err != nil {
 		t.Fatalf("Hash: %v", err)
 	}
@@ -330,7 +331,7 @@ func TestOpenCodeReader_Parse_Path(t *testing.T) {
 	dbPath := createOpenCodeDB(t)
 	r := &OpenCodeReader{}
 
-	pf, err := r.Parse(dbPath, input_config.InputDefinition{})
+	pf, err := r.Parse(context.Background(), dbPath, input_config.InputDefinition{})
 	if err != nil {
 		t.Fatalf("Parse: %v", err)
 	}
@@ -343,7 +344,7 @@ func TestOpenCodeReader_Parse_Timestamps(t *testing.T) {
 	dbPath := createOpenCodeDB(t)
 	r := &OpenCodeReader{}
 
-	pf, err := r.Parse(dbPath, input_config.InputDefinition{})
+	pf, err := r.Parse(context.Background(), dbPath, input_config.InputDefinition{})
 	if err != nil {
 		t.Fatalf("Parse: %v", err)
 	}
@@ -358,7 +359,7 @@ func TestOpenCodeReader_Parse_Timestamps(t *testing.T) {
 
 func TestOpenCodeReader_Parse_MissingFile(t *testing.T) {
 	r := &OpenCodeReader{}
-	_, err := r.Parse("/nonexistent/opencode.db", input_config.InputDefinition{})
+	_, err := r.Parse(context.Background(), "/nonexistent/opencode.db", input_config.InputDefinition{})
 	if err == nil {
 		t.Error("expected error for missing file")
 	}
@@ -382,7 +383,7 @@ func TestOpenCodeReader_Discover(t *testing.T) {
 		},
 	}
 
-	paths, err := r.Discover(def)
+	paths, err := r.Discover(context.Background(), def)
 	if err != nil {
 		t.Fatalf("Discover: %v", err)
 	}
@@ -440,7 +441,7 @@ func createOpenCodeDBWithTool(t *testing.T) string {
 }
 
 func TestOpenCodeReader_CapturesToolInputOutput(t *testing.T) {
-	pf, err := (&OpenCodeReader{}).Parse(createOpenCodeDBWithTool(t), input_config.InputDefinition{})
+	pf, err := (&OpenCodeReader{}).Parse(context.Background(), createOpenCodeDBWithTool(t), input_config.InputDefinition{})
 	if err != nil {
 		t.Fatalf("Parse: %v", err)
 	}
@@ -491,7 +492,7 @@ func TestOpenCodeReader_ToolOnlyMessageEmitted(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	pf, err := (&OpenCodeReader{}).Parse(dbPath, input_config.InputDefinition{})
+	pf, err := (&OpenCodeReader{}).Parse(context.Background(), dbPath, input_config.InputDefinition{})
 	if err != nil {
 		t.Fatal(err)
 	}

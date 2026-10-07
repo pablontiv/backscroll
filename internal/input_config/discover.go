@@ -1,6 +1,7 @@
 package input_config
 
 import (
+	"context"
 	"io/fs"
 	"os"
 	"path/filepath"
@@ -14,12 +15,26 @@ import (
 // Patterns in Exclude are matched against the full path; any match skips the file.
 // Tilde (~) in roots is expanded to the user's home directory.
 func DiscoverFiles(cfg DiscoverConfig) ([]string, error) {
+	return DiscoverFilesContext(context.Background(), cfg)
+}
+
+// DiscoverFilesContext is DiscoverFiles with cancellation support while walking roots.
+func DiscoverFilesContext(ctx context.Context, cfg DiscoverConfig) ([]string, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 	home, _ := os.UserHomeDir()
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 
 	var results []string
 	seen := map[string]struct{}{}
 
 	for _, root := range cfg.Roots {
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
 		root = expandTilde(root, home)
 		absRoot, err := filepath.Abs(root)
 		if err != nil {
@@ -27,7 +42,10 @@ func DiscoverFiles(cfg DiscoverConfig) ([]string, error) {
 		}
 
 		for _, pattern := range cfg.Include {
-			matches, err := walkGlob(absRoot, pattern, cfg.Exclude, cfg.FollowSymlinks, seen)
+			if err := ctx.Err(); err != nil {
+				return nil, err
+			}
+			matches, err := walkGlobContext(ctx, absRoot, pattern, cfg.Exclude, cfg.FollowSymlinks, seen)
 			if err != nil {
 				return nil, err
 			}
@@ -37,10 +55,13 @@ func DiscoverFiles(cfg DiscoverConfig) ([]string, error) {
 	return results, nil
 }
 
-func walkGlob(root, pattern string, excludes []string, followSymlinks bool, seen map[string]struct{}) ([]string, error) {
+func walkGlobContext(ctx context.Context, root, pattern string, excludes []string, followSymlinks bool, seen map[string]struct{}) ([]string, error) {
 	var results []string
 
 	err := filepath.WalkDir(root, func(path string, d fs.DirEntry, err error) error {
+		if ctxErr := ctx.Err(); ctxErr != nil {
+			return ctxErr
+		}
 		if err != nil {
 			return nil // skip unreadable entries
 		}
@@ -93,6 +114,9 @@ func walkGlob(root, pattern string, excludes []string, followSymlinks bool, seen
 
 		// Validate path stays within root and resolves symlinks securely
 		abs, _, err := pathsec.ResolveInside(root, rel)
+		if ctxErr := ctx.Err(); ctxErr != nil {
+			return ctxErr
+		}
 		if err != nil {
 			return nil // Skip paths that escape root or are invalid
 		}

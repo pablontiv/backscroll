@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"context"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -25,16 +26,16 @@ type sidecarBackedReader struct {
 
 func (*sidecarBackedReader) Name() string { return "opencode" }
 
-func (r *sidecarBackedReader) Discover(input_config.InputDefinition) ([]string, error) {
+func (r *sidecarBackedReader) Discover(context.Context, input_config.InputDefinition) ([]string, error) {
 	return []string{r.path}, nil
 }
 
-func (r *sidecarBackedReader) Hash(string) (string, error) {
+func (r *sidecarBackedReader) Hash(context.Context, string) (string, error) {
 	r.hashCalls++
 	return r.hash, nil
 }
 
-func (r *sidecarBackedReader) Parse(string, input_config.InputDefinition) (models.ParsedFile, error) {
+func (r *sidecarBackedReader) Parse(context.Context, string, input_config.InputDefinition) (models.ParsedFile, error) {
 	r.parseCalls++
 	return models.ParsedFile{
 		Path: r.path,

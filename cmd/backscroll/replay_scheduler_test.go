@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"context"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -27,16 +28,16 @@ type replaySchedulerReader struct {
 
 func (r *replaySchedulerReader) Name() string { return r.name }
 
-func (r *replaySchedulerReader) Discover(def input_config.InputDefinition) ([]string, error) {
+func (r *replaySchedulerReader) Discover(_ context.Context, def input_config.InputDefinition) ([]string, error) {
 	return append([]string(nil), r.pathsByID[def.ID]...), nil
 }
 
-func (r *replaySchedulerReader) Hash(path string) (string, error) {
+func (r *replaySchedulerReader) Hash(_ context.Context, path string) (string, error) {
 	r.hashCalls[path]++
 	return r.hashes[path], nil
 }
 
-func (r *replaySchedulerReader) Parse(path string, _ input_config.InputDefinition) (models.ParsedFile, error) {
+func (r *replaySchedulerReader) Parse(_ context.Context, path string, _ input_config.InputDefinition) (models.ParsedFile, error) {
 	r.parseCalls[path]++
 	return models.ParsedFile{
 		Path: path,

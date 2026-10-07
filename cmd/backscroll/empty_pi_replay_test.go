@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"context"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -24,16 +25,16 @@ type emptyPiReplayReader struct {
 
 func (*emptyPiReplayReader) Name() string { return "pi" }
 
-func (r *emptyPiReplayReader) Discover(input_config.InputDefinition) ([]string, error) {
+func (r *emptyPiReplayReader) Discover(context.Context, input_config.InputDefinition) ([]string, error) {
 	return append([]string(nil), r.paths...), nil
 }
 
-func (r *emptyPiReplayReader) Hash(path string) (string, error) {
+func (r *emptyPiReplayReader) Hash(_ context.Context, path string) (string, error) {
 	r.hashCalls++
 	return r.hashes[path], nil
 }
 
-func (r *emptyPiReplayReader) Parse(path string, _ input_config.InputDefinition) (models.ParsedFile, error) {
+func (r *emptyPiReplayReader) Parse(_ context.Context, path string, _ input_config.InputDefinition) (models.ParsedFile, error) {
 	r.parseCalls++
 	return models.ParsedFile{Path: path, Hash: r.hashes[path]}, nil
 }

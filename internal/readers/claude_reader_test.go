@@ -1,6 +1,7 @@
 package readers
 
 import (
+	"context"
 	"encoding/json"
 	"os"
 	"path/filepath"
@@ -25,7 +26,7 @@ func TestClaudeReader_TextAndCwd(t *testing.T) {
 	line := `{"type":"user","timestamp":"2024-01-01T00:00:00Z","cwd":"/home/me/proj","message":{"role":"user","content":"hello world"}}` + "\n"
 	p := writeClaudeFixture(t, line)
 	r := &ClaudeReader{}
-	pf, err := r.Parse(p, input_config.InputDefinition{})
+	pf, err := r.Parse(context.Background(), p, input_config.InputDefinition{})
 	if err != nil {
 		t.Fatalf("Parse: %v", err)
 	}
@@ -44,7 +45,7 @@ func TestClaudeReader_SkipsNoiseAndMeta(t *testing.T) {
 	lines := `{"type":"system-reminder","timestamp":"2024-01-01T00:00:00Z","message":{"role":"user","content":"x"}}` + "\n" +
 		`{"type":"user","isMeta":true,"timestamp":"2024-01-01T00:00:00Z","message":{"role":"user","content":"y"}}` + "\n"
 	p := writeClaudeFixture(t, lines)
-	pf, err := (&ClaudeReader{}).Parse(p, input_config.InputDefinition{})
+	pf, err := (&ClaudeReader{}).Parse(context.Background(), p, input_config.InputDefinition{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -63,7 +64,7 @@ func TestClaudeReader_CapturesToolUseAndResult(t *testing.T) {
 	lines := `{"type":"assistant","timestamp":"2024-01-01T00:00:00Z","message":{"role":"assistant","content":[{"type":"text","text":"running it"},{"type":"tool_use","name":"Bash","input":{"command":"go test ./...","description":"run tests"}}]}}` + "\n" +
 		`{"type":"user","timestamp":"2024-01-01T00:00:01Z","message":{"role":"user","content":[{"type":"tool_result","content":"FAIL: build broken","is_error":true}]}}` + "\n"
 	p := writeClaudeFixture(t, lines)
-	pf, err := (&ClaudeReader{}).Parse(p, input_config.InputDefinition{})
+	pf, err := (&ClaudeReader{}).Parse(context.Background(), p, input_config.InputDefinition{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -112,13 +113,16 @@ func TestClaudeMessageOriginRequiresEnvelopeRoleAgreement(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			got := extractClaudeMessages(claudeRecord{
+			got, err := extractClaudeMessages(context.Background(), claudeRecord{
 				Type: tt.recordType,
 				Message: &claudeMessage{
 					Role:    tt.role,
 					Content: content,
 				},
 			})
+			if err != nil {
+				t.Fatal(err)
+			}
 			if len(got) != 1 {
 				t.Fatalf("records = %+v, want one", got)
 			}
@@ -133,7 +137,7 @@ func TestClaudeToolOriginPreservesPairingMetadata(t *testing.T) {
 	lines := `{"type":"assistant","uuid":"use","timestamp":"2024-01-01T00:00:00Z","message":{"role":"assistant","content":[{"type":"tool_use","id":"call-1","name":"Bash","input":{"command":"backscroll search orchard"}}]}}` + "\n" +
 		`{"type":"user","uuid":"result","timestamp":"2024-01-01T00:00:01Z","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"call-1","content":"failed\nexit code 7","is_error":true}]}}` + "\n"
 	p := writeClaudeFixture(t, lines)
-	pf, err := (&ClaudeReader{}).Parse(p, input_config.InputDefinition{})
+	pf, err := (&ClaudeReader{}).Parse(context.Background(), p, input_config.InputDefinition{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -155,13 +159,16 @@ func TestClaudeToolOriginPreservesPairingMetadata(t *testing.T) {
 }
 
 func TestClaudeExplicitToolResultOriginOverridesAmbiguousEnvelope(t *testing.T) {
-	got := extractClaudeMessages(claudeRecord{
+	got, err := extractClaudeMessages(context.Background(), claudeRecord{
 		Type: "assistant",
 		Message: &claudeMessage{
 			Role:    "user",
 			Content: json.RawMessage(`[{"type":"tool_result","content":"user said this"}]`),
 		},
 	})
+	if err != nil {
+		t.Fatal(err)
+	}
 	if len(got) != 1 || got[0].Origin != models.OriginAutomation {
 		t.Fatalf("tool_result records = %+v, want automation origin", got)
 	}

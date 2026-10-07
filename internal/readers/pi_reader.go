@@ -1,6 +1,7 @@
 package readers
 
 import (
+	"context"
 	"encoding/json"
 	"strings"
 	"time"
@@ -8,7 +9,6 @@ import (
 	"github.com/pablontiv/backscroll/internal/input_config"
 	"github.com/pablontiv/backscroll/internal/models"
 	"github.com/pablontiv/backscroll/internal/sync"
-	"github.com/pablontiv/picokit/hashfile"
 )
 
 // PiReader implements SessionReader for Pi agent JSONL sessions.
@@ -18,12 +18,12 @@ type PiReader struct{}
 
 func (r *PiReader) Name() string { return "pi" }
 
-func (r *PiReader) Discover(def input_config.InputDefinition) ([]string, error) {
-	return input_config.DiscoverFiles(def.Discover)
+func (r *PiReader) Discover(ctx context.Context, def input_config.InputDefinition) ([]string, error) {
+	return input_config.DiscoverFilesContext(ctx, def.Discover)
 }
 
-func (r *PiReader) Hash(path string) (string, error) {
-	return hashfile.HashFile(path)
+func (r *PiReader) Hash(ctx context.Context, path string) (string, error) {
+	return hashFile(ctx, path)
 }
 
 type piRecord struct {
@@ -51,8 +51,8 @@ type piBlock struct {
 // Parse reads a Pi or Pion JSONL session and returns its messages as a ParsedFile.
 // Legacy `type` envelopes support message and custom records. Pion `recordType`
 // envelopes support message records. If both fields exist, they must agree.
-func (r *PiReader) Parse(path string, def input_config.InputDefinition) (models.ParsedFile, error) {
-	hash, err := hashfile.HashFile(path)
+func (r *PiReader) Parse(ctx context.Context, path string, def input_config.InputDefinition) (models.ParsedFile, error) {
+	hash, err := hashFile(ctx, path)
 	if err != nil {
 		return models.ParsedFile{}, err
 	}
@@ -60,7 +60,7 @@ func (r *PiReader) Parse(path string, def input_config.InputDefinition) (models.
 	var msgs []models.Message
 	var cwd string
 	indexReasoning := def.Decode.IndexReasoning
-	err = sync.IterateJSONLFile(path, func(_ int, line []byte) error {
+	err = sync.IterateJSONLFileContext(ctx, path, func(_ int, line []byte) error {
 		var rec piRecord
 		if err := json.Unmarshal(line, &rec); err != nil {
 			return nil // skip malformed lines
@@ -74,7 +74,11 @@ func (r *PiReader) Parse(path string, def input_config.InputDefinition) (models.
 		}
 		switch recordType {
 		case "message":
-			msgs = append(msgs, extractPiMessages(rec, indexReasoning)...)
+			extracted, err := extractPiMessages(ctx, rec, indexReasoning)
+			if err != nil {
+				return err
+			}
+			msgs = append(msgs, extracted...)
 		case "custom":
 			if m, ok := extractPiCustom(rec); ok {
 				msgs = append(msgs, m)
@@ -133,13 +137,16 @@ func piTimestamp(s string) time.Time {
 	return ts
 }
 
-func extractPiMessages(rec piRecord, indexReasoning bool) []models.Message {
+func extractPiMessages(ctx context.Context, rec piRecord, indexReasoning bool) ([]models.Message, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 	if rec.Message == nil {
-		return nil
+		return nil, nil
 	}
 	role := rec.Message.Role
 	if role != "user" && role != "assistant" {
-		return nil
+		return nil, nil
 	}
 	ts := piTimestamp(rec.Timestamp)
 
@@ -148,19 +155,22 @@ func extractPiMessages(rec piRecord, indexReasoning bool) []models.Message {
 	if err := json.Unmarshal(rec.Message.Content, &s); err == nil {
 		text := sync.CleanContent(s)
 		if text == "" {
-			return nil
+			return nil, nil
 		}
-		return []models.Message{{Role: role, Origin: piMessageOrigin(role), Content: text, ContentType: classifyText(text), Timestamp: ts}}
+		return []models.Message{{Role: role, Origin: piMessageOrigin(role), Content: text, ContentType: classifyText(text), Timestamp: ts}}, nil
 	}
 
 	// content as an array of blocks
 	var blocks []piBlock
 	if err := json.Unmarshal(rec.Message.Content, &blocks); err != nil {
-		return nil
+		return nil, nil
 	}
 	var out []models.Message
 	var textParts []string
 	for _, b := range blocks {
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
 		switch b.Type {
 		case "text":
 			if c := sync.CleanContent(b.Text); c != "" {
@@ -183,7 +193,7 @@ func extractPiMessages(rec piRecord, indexReasoning bool) []models.Message {
 		text := strings.TrimSpace(strings.Join(textParts, " "))
 		out = append([]models.Message{{Role: role, Origin: piMessageOrigin(role), Content: text, ContentType: classifyText(text), Timestamp: ts}}, out...)
 	}
-	return out
+	return out, nil
 }
 
 func piMessageOrigin(role string) models.MessageOrigin {

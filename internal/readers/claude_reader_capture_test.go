@@ -1,6 +1,7 @@
 package readers
 
 import (
+	"context"
 	"os"
 	"path/filepath"
 	"testing"
@@ -19,7 +20,7 @@ func TestClaudeReaderRichCapture(t *testing.T) {
 	if err := os.WriteFile(path, []byte(captureFixture), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	pf, err := (&ClaudeReader{}).Parse(path, input_config.InputDefinition{})
+	pf, err := (&ClaudeReader{}).Parse(context.Background(), path, input_config.InputDefinition{})
 	if err != nil {
 		t.Fatalf("parse: %v", err)
 	}

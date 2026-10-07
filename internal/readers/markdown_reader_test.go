@@ -1,6 +1,7 @@
 package readers
 
 import (
+	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"os"
@@ -24,7 +25,7 @@ func TestMarkdownDocumentReaderParse(t *testing.T) {
 		t.Fatalf("Name() = %q, want markdown_document", got)
 	}
 
-	pf, err := reader.Parse(path, input_config.InputDefinition{Source: "ke"})
+	pf, err := reader.Parse(context.Background(), path, input_config.InputDefinition{Source: "ke"})
 	if err != nil {
 		t.Fatalf("Parse() error = %v", err)
 	}
@@ -54,7 +55,7 @@ func TestMarkdownSectionsReaderParse(t *testing.T) {
 		t.Fatalf("Name() = %q, want markdown_sections", got)
 	}
 
-	pf, err := reader.Parse(path, input_config.InputDefinition{Source: "decision"})
+	pf, err := reader.Parse(context.Background(), path, input_config.InputDefinition{Source: "decision"})
 	if err != nil {
 		t.Fatalf("Parse() error = %v", err)
 	}
@@ -79,7 +80,7 @@ func TestMarkdownSectionsReaderDropsPreamble(t *testing.T) {
 	content := "# Preamble\nNot a section record.\n\n## First\nIndexed content.\n"
 	path := writeMarkdownTestFile(t, "sectioned.md", content)
 
-	pf, err := (&MarkdownSectionsReader{}).Parse(path, input_config.InputDefinition{Source: "decision"})
+	pf, err := (&MarkdownSectionsReader{}).Parse(context.Background(), path, input_config.InputDefinition{Source: "decision"})
 	if err != nil {
 		t.Fatalf("Parse() error = %v", err)
 	}
@@ -96,7 +97,7 @@ func TestMarkdownSectionsReaderFallsBackToDocument(t *testing.T) {
 	path := writeMarkdownTestFile(t, "notes.md", "\nNo section heading here.\n\n")
 	modTime := fixedMarkdownModTime(t, path)
 
-	pf, err := (&MarkdownSectionsReader{}).Parse(path, input_config.InputDefinition{Source: "rule"})
+	pf, err := (&MarkdownSectionsReader{}).Parse(context.Background(), path, input_config.InputDefinition{Source: "rule"})
 	if err != nil {
 		t.Fatalf("Parse() error = %v", err)
 	}
@@ -122,7 +123,7 @@ func TestMarkdownReaderDiscoverAndHash(t *testing.T) {
 		Exclude: []string{"excluded.md"},
 	}}
 
-	got, err := reader.Discover(def)
+	got, err := reader.Discover(context.Background(), def)
 	if err != nil {
 		t.Fatalf("Discover() error = %v", err)
 	}
@@ -133,7 +134,7 @@ func TestMarkdownReaderDiscoverAndHash(t *testing.T) {
 		t.Fatalf("Discover() = %#v, want %#v", got, want)
 	}
 
-	hash, err := reader.Hash(filepath.Join(root, "nested", "keep.md"))
+	hash, err := reader.Hash(context.Background(), filepath.Join(root, "nested", "keep.md"))
 	if err != nil {
 		t.Fatalf("Hash() error = %v", err)
 	}
@@ -144,7 +145,7 @@ func TestMarkdownReaderDiscoverAndHash(t *testing.T) {
 
 func TestMarkdownReaderReportsPathErrors(t *testing.T) {
 	missing := filepath.Join(t.TempDir(), "missing.md")
-	_, err := (&MarkdownDocumentReader{}).Parse(missing, input_config.InputDefinition{Source: "ke"})
+	_, err := (&MarkdownDocumentReader{}).Parse(context.Background(), missing, input_config.InputDefinition{Source: "ke"})
 	if err == nil {
 		t.Fatal("Parse() error = nil, want missing-file error")
 	}

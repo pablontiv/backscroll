@@ -378,7 +378,7 @@ func TestPendingSearchEchoPathsRequeuesCodexShellRoundTrip(t *testing.T) {
 			if err := os.WriteFile(path, []byte(jsonl), 0o644); err != nil {
 				t.Fatal(err)
 			}
-			parsed, err := (&readers.CodexReader{}).Parse(path, input_config.InputDefinition{})
+			parsed, err := (&readers.CodexReader{}).Parse(context.Background(), path, input_config.InputDefinition{})
 			if err != nil {
 				t.Fatal(err)
 			}
