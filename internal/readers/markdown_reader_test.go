@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"errors"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -14,6 +15,7 @@ import (
 
 	"github.com/pablontiv/backscroll/internal/input_config"
 	"github.com/pablontiv/backscroll/internal/models"
+	"github.com/pablontiv/backscroll/internal/sources"
 )
 
 func TestMarkdownDocumentReaderParse(t *testing.T) {
@@ -140,6 +142,41 @@ func TestMarkdownReaderDiscoverAndHash(t *testing.T) {
 	}
 	if hash != sha256Hex("keep nested") {
 		t.Errorf("Hash() = %q, want SHA-256 of file content", hash)
+	}
+}
+
+func TestParseMarkdownFileDiscardsPartialItemsOnCancellation(t *testing.T) {
+	path := writeMarkdownTestFile(t, "cancel.md", "content")
+	parser := func(context.Context, string, string) ([]sources.SourceItem, error) {
+		return []sources.SourceItem{{Content: "partial"}}, context.Canceled
+	}
+
+	parsed, err := parseMarkdownFile(context.Background(), path, "ke", parser)
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("parseMarkdownFile() error = %v, want context.Canceled", err)
+	}
+	if !reflect.DeepEqual(parsed, models.ParsedFile{}) {
+		t.Fatalf("parseMarkdownFile() returned partial result: %+v", parsed)
+	}
+}
+
+func TestParseMarkdownFileForwardsAndRechecksContext(t *testing.T) {
+	path := writeMarkdownTestFile(t, "cancel-after-parse.md", "content")
+	ctx, cancel := context.WithCancel(context.Background())
+	parser := func(parserCtx context.Context, _, _ string) ([]sources.SourceItem, error) {
+		if parserCtx != ctx {
+			t.Fatalf("parser context = %p, want %p", parserCtx, ctx)
+		}
+		cancel()
+		return []sources.SourceItem{{Content: "partial"}}, nil
+	}
+
+	parsed, err := parseMarkdownFile(ctx, path, "ke", parser)
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("parseMarkdownFile() error = %v, want context.Canceled", err)
+	}
+	if !reflect.DeepEqual(parsed, models.ParsedFile{}) {
+		t.Fatalf("parseMarkdownFile() returned partial result: %+v", parsed)
 	}
 }
 

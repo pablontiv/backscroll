@@ -69,7 +69,7 @@ func hashMarkdownFile(ctx context.Context, path string) (string, error) {
 	return hash, nil
 }
 
-type markdownParser func(path, source string) ([]sources.SourceItem, error)
+type markdownParser func(ctx context.Context, path, source string) ([]sources.SourceItem, error)
 
 func parseMarkdownFile(ctx context.Context, path, source string, parser markdownParser) (models.ParsedFile, error) {
 	hash, err := hashMarkdownFile(ctx, path)
@@ -88,7 +88,7 @@ func parseMarkdownFile(ctx context.Context, path, source string, parser markdown
 		return models.ParsedFile{}, err
 	}
 
-	items, err := parser(path, source)
+	items, err := parser(ctx, path, source)
 	if err != nil {
 		return models.ParsedFile{}, err
 	}
@@ -110,6 +110,9 @@ func parseMarkdownFile(ctx context.Context, path, source string, parser markdown
 			UUID:        "",
 		})
 	}
+	if err := ctx.Err(); err != nil {
+		return models.ParsedFile{}, err
+	}
 
 	return models.ParsedFile{
 		Path:    path,
@@ -119,16 +122,16 @@ func parseMarkdownFile(ctx context.Context, path, source string, parser markdown
 	}, nil
 }
 
-func parseMarkdownDocument(path, source string) ([]sources.SourceItem, error) {
-	item, err := sources.ParseDocument(path, source)
+func parseMarkdownDocument(ctx context.Context, path, source string) ([]sources.SourceItem, error) {
+	item, err := sources.ParseDocumentContext(ctx, path, source)
 	if err != nil {
 		return nil, fmt.Errorf("parse markdown document %s: %w", path, err)
 	}
 	return []sources.SourceItem{item}, nil
 }
 
-func parseMarkdownSections(path, source string) ([]sources.SourceItem, error) {
-	items, err := sources.ParseSectioned(path, source)
+func parseMarkdownSections(ctx context.Context, path, source string) ([]sources.SourceItem, error) {
+	items, err := sources.ParseSectionedContext(ctx, path, source)
 	if err != nil {
 		return nil, fmt.Errorf("parse markdown sections %s: %w", path, err)
 	}
