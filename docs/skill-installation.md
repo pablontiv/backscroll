@@ -1,5 +1,8 @@
 # Installing the Backscroll skill
 
+> [!NOTE]
+> This page documents the current Python v1 installer. [ADR 0010](adr/0010-integrar-skill-y-presets-en-la-cli.md) supersedes ADR 0008 and defines the planned native CLI contract. Keep this procedure until the native implementation reaches parity.
+
 Backscroll has two deliberately separate skill artifacts:
 
 - `.claude/skills/backscroll/SKILL.md` is a minimal discovery shim. It instructs
