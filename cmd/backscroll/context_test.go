@@ -278,6 +278,73 @@ func TestContextTextAndRobotSuccessfulPayloadBudgetBoundaries(t *testing.T) {
 	}
 }
 
+func TestContextValidationGoldenErrorsAndOrder(t *testing.T) {
+	tests := []struct {
+		name string
+		opts contextCommandOptions
+		want string
+	}{
+		{
+			name: "selector wins",
+			opts: contextCommandOptions{before: -1, after: -1, maxTokens: 63},
+			want: "provide exactly one anchor selector: --uuid or --source-path with --ordinal",
+		},
+		{
+			name: "ambiguous selector",
+			opts: contextCommandOptions{uuid: "u", uuidSet: true, sourcePath: "/x", sourcePathSet: true, ordinalSet: true, maxTokens: contextDefaultMaxTokens},
+			want: "provide exactly one anchor selector: --uuid or --source-path with --ordinal",
+		},
+		{
+			name: "empty UUID wins",
+			opts: contextCommandOptions{uuidSet: true, before: -1, after: -1, maxTokens: 63},
+			want: "--uuid must not be empty",
+		},
+		{
+			name: "empty path wins",
+			opts: contextCommandOptions{sourcePathSet: true, ordinalSet: true, before: -1, after: -1, maxTokens: 63},
+			want: "--source-path must not be empty",
+		},
+		{
+			name: "before wins",
+			opts: contextCommandOptions{uuid: "u", uuidSet: true, before: 51, after: -1, maxTokens: 63},
+			want: "--before must be between 0 and 50",
+		},
+		{
+			name: "after wins",
+			opts: contextCommandOptions{uuid: "u", uuidSet: true, after: 51, maxTokens: 63},
+			want: "--after must be between 0 and 50",
+		},
+		{
+			name: "max tokens low",
+			opts: contextCommandOptions{uuid: "u", uuidSet: true, maxTokens: 63},
+			want: "--max-tokens must be between 64 and 16384",
+		},
+		{
+			name: "max tokens high",
+			opts: contextCommandOptions{uuid: "u", uuidSet: true, maxTokens: 16385},
+			want: "--max-tokens must be between 64 and 16384",
+		},
+		{
+			name: "format conflict follows shared validation",
+			opts: contextCommandOptions{uuid: "u", uuidSet: true, maxTokens: contextDefaultMaxTokens, jsonFormat: true, robotFormat: true},
+			want: "--json and --robot are mutually exclusive",
+		},
+		{
+			name: "minimum bounds",
+			opts: contextCommandOptions{uuid: "u", uuidSet: true, before: 0, after: 0, maxTokens: 64},
+		},
+		{
+			name: "maximum bounds",
+			opts: contextCommandOptions{sourcePath: "/x", sourcePathSet: true, ordinalSet: true, before: 50, after: 50, maxTokens: 16384},
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			assertCLIValidationError(t, validateContextRequest(test.opts), test.want)
+		})
+	}
+}
+
 func TestContextValidationLimitsAndSelectors(t *testing.T) {
 	validUUID := contextCommandOptions{uuid: "opaque", uuidSet: true, before: 0, after: 50, maxTokens: 64}
 	if err := validateContextRequest(validUUID); err != nil {

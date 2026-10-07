@@ -20,11 +20,10 @@ import (
 
 const (
 	contextDefaultWindow    = 5
-	contextMaxWindow        = 50
 	contextMaxTextRunes     = 4000
-	contextDefaultMaxTokens = 2000
-	contextMinMaxTokens     = 64
-	contextMaxMaxTokens     = 16384
+	contextDefaultMaxTokens = services.DefaultContextMaxTokens
+	contextMinMaxTokens     = services.MinContextMaxTokens
+	contextMaxMaxTokens     = services.MaxContextMaxTokens
 )
 
 type contextCommandOptions struct {
@@ -121,30 +120,27 @@ func (opts *contextCommandOptions) captureSelectorFlags(cmd *cobra.Command) {
 }
 
 func validateContextRequest(opts contextCommandOptions) error {
-	uuidSelector := opts.uuidSet && !opts.sourcePathSet && !opts.ordinalSet
-	pathOrdinalSelector := !opts.uuidSet && opts.sourcePathSet && opts.ordinalSet
-	if !uuidSelector && !pathOrdinalSelector {
-		return fmt.Errorf("provide exactly one anchor selector: --uuid or --source-path with --ordinal")
-	}
-	if uuidSelector && opts.uuid == "" {
-		return fmt.Errorf("--uuid must not be empty")
-	}
-	if pathOrdinalSelector && opts.sourcePath == "" {
-		return fmt.Errorf("--source-path must not be empty")
-	}
-	if opts.before < 0 || opts.before > contextMaxWindow {
-		return fmt.Errorf("--before must be between 0 and %d", contextMaxWindow)
-	}
-	if opts.after < 0 || opts.after > contextMaxWindow {
-		return fmt.Errorf("--after must be between 0 and %d", contextMaxWindow)
-	}
-	if opts.maxTokens < contextMinMaxTokens || opts.maxTokens > contextMaxMaxTokens {
-		return fmt.Errorf("--max-tokens must be between %d and %d", contextMinMaxTokens, contextMaxMaxTokens)
+	if err := services.ValidateContextRequest(contextServiceRequest(opts)); err != nil {
+		return err
 	}
 	if opts.jsonFormat && opts.robotFormat {
 		return fmt.Errorf("--json and --robot are mutually exclusive")
 	}
 	return nil
+}
+
+func contextServiceRequest(opts contextCommandOptions) services.ContextRequest {
+	request := services.ContextRequest{Before: opts.before, After: opts.after, MaxTokens: opts.maxTokens}
+	if opts.uuidSet {
+		request.UUID = &opts.uuid
+	}
+	if opts.sourcePathSet {
+		request.SourcePath = &opts.sourcePath
+	}
+	if opts.ordinalSet {
+		request.Ordinal = &opts.ordinal
+	}
+	return request
 }
 
 func runContextCommand(ctx context.Context, stdout, stderr io.Writer, cfg *config.Config, opts contextCommandOptions) (retErr error) {
@@ -161,13 +157,7 @@ func runContextCommand(ctx context.Context, stdout, stderr io.Writer, cfg *confi
 	}
 	defer func() { retErr = closeIndexDB(db, retErr) }()
 
-	request := services.ContextRequest{Before: opts.before, After: opts.after}
-	if opts.uuidSet {
-		request.UUID = &opts.uuid
-	} else {
-		request.SourcePath = &opts.sourcePath
-		request.Ordinal = &opts.ordinal
-	}
+	request := contextServiceRequest(opts)
 	queryService := services.QueryService{DB: db}
 	response, err := queryService.Context(ctx, request)
 	if err != nil {
@@ -187,13 +177,13 @@ func runContextCommand(ctx context.Context, stdout, stderr io.Writer, cfg *confi
 	} else if opts.robotFormat {
 		format = contextRobotFormat
 	}
-	payload, successfulPayloadFits, err := contextSuccessfulPayloadWithinBudget(response.Records, format, opts.maxTokens)
+	payload, successfulPayloadFits, err := contextSuccessfulPayloadWithinBudget(response.Records, format, request.MaxTokens)
 	if err != nil {
 		return fmt.Errorf("format context records: %w", err)
 	}
 	if !successfulPayloadFits {
 		return writeContextDiagnostic(stdout, stderr, "context_budget_too_small",
-			fmt.Sprintf("--max-tokens %d cannot fit the anchor and required metadata", opts.maxTokens), opts)
+			fmt.Sprintf("--max-tokens %d cannot fit the anchor and required metadata", request.MaxTokens), opts)
 	}
 	if _, err := stdout.Write(payload); err != nil {
 		return fmt.Errorf("write context records: %w", err)
