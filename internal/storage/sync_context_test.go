@@ -12,6 +12,7 @@ import (
 	"testing"
 
 	"modernc.org/sqlite"
+	sqlite3 "modernc.org/sqlite/lib"
 )
 
 const cancelSyncFunction = "backscroll_test_cancel_sync_context"
@@ -158,6 +159,13 @@ func TestSyncTransactionGateNormalizesSQLiteAutomaticCancellationRollback(t *tes
 	if ctxErr != context.Canceled {
 		t.Fatalf("context error = %v, want context.Canceled; write error = %v", ctxErr, writeErr)
 	}
+	if !errors.Is(writeErr, context.Canceled) {
+		t.Fatalf("write error = %v, want context.Canceled", writeErr)
+	}
+	var writeSQLiteErr *sqlite.Error
+	if errors.As(writeErr, &writeSQLiteErr) && writeSQLiteErr.Code() != sqlite3.SQLITE_INTERRUPT {
+		t.Fatalf("write SQLite error code = %d, want SQLITE_INTERRUPT", writeSQLiteErr.Code())
+	}
 	<-gate.callbackDone
 
 	gate.mu.Lock()
@@ -168,8 +176,8 @@ func TestSyncTransactionGateNormalizesSQLiteAutomaticCancellationRollback(t *tes
 		t.Fatalf("raw rollback error = %T %v, want *sqlite.Error", rawRollbackErr, rawRollbackErr)
 	}
 	const completedRollbackMessage = "SQL logic error: cannot rollback - no transaction is active (1)"
-	if sqliteErr.Code() != 1 || sqliteErr.Error() != completedRollbackMessage {
-		t.Fatalf("raw rollback error = code %d, %q; want code 1, %q", sqliteErr.Code(), sqliteErr.Error(), completedRollbackMessage)
+	if sqliteErr.Code() != sqlite3.SQLITE_ERROR || sqliteErr.Error() != completedRollbackMessage {
+		t.Fatalf("raw rollback error = code %d, %q; want SQLITE_ERROR, %q", sqliteErr.Code(), sqliteErr.Error(), completedRollbackMessage)
 	}
 	if rollbackErr := gate.rollback(); rollbackErr != nil {
 		t.Fatalf("normalized gate rollback = %v, want nil", rollbackErr)
@@ -186,7 +194,33 @@ func TestSyncTransactionGateNormalizesSQLiteAutomaticCancellationRollback(t *tes
 		t.Fatalf("final error contains benign rollback failure: %v", finalErr)
 	}
 
-	assertTableCount(t, db, "cancellation_rollback_probe", 0)
+	if rows := tableCount(t, db, "cancellation_rollback_probe"); rows != 0 {
+		t.Fatalf("interrupt path left %d rows; want canceled write, completed rollback, and zero rows", rows)
+	}
+}
+
+func TestSyncTransactionGateWithoutCancellationPreservesSQLiteCompletedRollback(t *testing.T) {
+	db, cleanup := newTestDB(t)
+	defer cleanup()
+
+	tx, err := db.db.BeginTx(context.Background(), nil)
+	if err != nil {
+		t.Fatalf("begin transaction: %v", err)
+	}
+	if _, err := tx.Exec("ROLLBACK"); err != nil {
+		t.Fatalf("complete transaction with SQL rollback: %v", err)
+	}
+	gate := newSyncTransactionGate(context.Background(), tx)
+
+	err = gate.rollback()
+	var sqliteErr *sqlite.Error
+	if !errors.As(err, &sqliteErr) {
+		t.Fatalf("rollback error = %T %v, want *sqlite.Error", err, err)
+	}
+	const completedRollbackMessage = "SQL logic error: cannot rollback - no transaction is active (1)"
+	if sqliteErr.Code() != sqlite3.SQLITE_ERROR || sqliteErr.Error() != completedRollbackMessage {
+		t.Fatalf("rollback error = code %d, %q; want SQLITE_ERROR, %q", sqliteErr.Code(), sqliteErr.Error(), completedRollbackMessage)
+	}
 }
 
 func TestSyncFilesContextStopwordFailureRollsBackSyncAndStopwords(t *testing.T) {

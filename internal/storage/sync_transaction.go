@@ -150,7 +150,7 @@ func (g *syncTransactionGate) rollback() error {
 		<-g.callbackDone
 	}
 	g.mu.Lock()
-	err := normalizeSyncRollbackError(g.rollbackErr)
+	err := normalizeSyncRollbackError(g.rollbackErr, g.canceled)
 	g.mu.Unlock()
 	return err
 }
@@ -165,8 +165,8 @@ func completedSyncRollbackError(err error) bool {
 		sqliteErr.Error() == "SQL logic error: cannot rollback - no transaction is active (1)"
 }
 
-func normalizeSyncRollbackError(err error) error {
-	if err == nil || completedSyncRollbackError(err) {
+func normalizeSyncRollbackError(err error, canceled bool) error {
+	if err == nil || (canceled && completedSyncRollbackError(err)) {
 		return nil
 	}
 	return err
@@ -175,7 +175,7 @@ func normalizeSyncRollbackError(err error) error {
 func (g *syncTransactionGate) cancellationError() error {
 	g.mu.Lock()
 	ctxErr := g.ctx.Err()
-	rollbackErr := normalizeSyncRollbackError(g.rollbackErr)
+	rollbackErr := normalizeSyncRollbackError(g.rollbackErr, g.canceled)
 	g.mu.Unlock()
 	if ctxErr == nil {
 		ctxErr = context.Canceled
