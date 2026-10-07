@@ -3,6 +3,7 @@ package storage
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
 	"time"
 
@@ -112,7 +113,7 @@ func (d *Database) SyncFiles(files []IndexedFile) error {
 // SyncFilesContext syncs a batch of files into the database. All records and
 // derived stopwords are updated in one transaction, so cancellation or any
 // error leaves no partial rows or file metadata from the call.
-func (d *Database) SyncFilesContext(ctx context.Context, files []IndexedFile) error {
+func (d *Database) SyncFilesContext(ctx context.Context, files []IndexedFile) (retErr error) {
 	if err := ctx.Err(); err != nil {
 		return err
 	}
@@ -120,11 +121,23 @@ func (d *Database) SyncFilesContext(ctx context.Context, files []IndexedFile) er
 		return nil
 	}
 
-	tx, err := d.db.BeginTx(ctx, nil)
+	// The transaction lifetime is deliberately detached from cancellation.
+	// Statements use the original ctx; syncTransactionGate alone owns the
+	// synchronized rollback-versus-commit decision.
+	tx, err := d.db.BeginTx(context.WithoutCancel(ctx), nil)
 	if err != nil {
 		return fmt.Errorf("begin transaction: %w", err)
 	}
-	defer func() { _ = tx.Rollback() }()
+	gate := newSyncTransactionGate(ctx, tx)
+	defer func() {
+		if rollbackErr := gate.rollback(); rollbackErr != nil && !errors.Is(retErr, rollbackErr) {
+			wrapped := fmt.Errorf("rollback transaction: %w", rollbackErr)
+			retErr = errors.Join(retErr, wrapped)
+		}
+		if cancelErr := gate.cancellationBeforeCommit(); cancelErr != nil && !errors.Is(retErr, cancelErr) {
+			retErr = errors.Join(cancelErr, retErr)
+		}
+	}()
 
 	existingUUIDs, err := validateSyncUUIDs(ctx, tx, files)
 	if err != nil {
@@ -373,9 +386,9 @@ func (d *Database) SyncFilesContext(ctx context.Context, files []IndexedFile) er
 
 		// Run detectors with prose-only filter: lexicon, rephrase, denial on
 		// content_type='text'|'code' + role='user'; interrupt on all user messages.
-		detections := corrections.RunDetectorsFiltered(detectionMsgs)
-		if err := ctx.Err(); err != nil {
-			return err
+		detections, err := corrections.RunDetectorsFilteredContext(ctx, detectionMsgs)
+		if err != nil {
+			return fmt.Errorf("detect corrections for %s: %w", file.SourcePath, err)
 		}
 		for ordinal, dets := range detections {
 			if err := ctx.Err(); err != nil {
@@ -402,11 +415,8 @@ func (d *Database) SyncFilesContext(ctx context.Context, files []IndexedFile) er
 	if err := refreshStopwordsContext(ctx, tx); err != nil {
 		return fmt.Errorf("refresh stopwords: %w", err)
 	}
-	if err := ctx.Err(); err != nil {
+	if err := gate.commit(); err != nil {
 		return err
-	}
-	if err := tx.Commit(); err != nil {
-		return fmt.Errorf("commit transaction: %w", err)
 	}
 
 	return nil

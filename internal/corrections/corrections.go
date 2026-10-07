@@ -1,6 +1,7 @@
 package corrections
 
 import (
+	"context"
 	"regexp"
 	"strings"
 
@@ -46,53 +47,93 @@ func RunDetectors(msgs []models.Message) map[int][]Detection {
 	return result
 }
 
-// RunDetectorsFiltered executes detectors with prose-only filtering:
-// Lexicon, rephrase, and denial detectors run only on messages where
-// role='user' AND content_type IN ('text', 'code'). Interrupt detector
-// runs on all user messages (interrupt is a message-level property).
-// Returns a map of message ordinal -> slice of Detections.
+// RunDetectorsFiltered executes detectors with prose-only filtering without
+// cancellation. It is retained for compatibility with existing callers.
 func RunDetectorsFiltered(msgs []models.Message) map[int][]Detection {
+	result, _ := RunDetectorsFilteredContext(context.Background(), msgs)
+	return result
+}
+
+// RunDetectorsFilteredContext executes detectors with prose-only filtering:
+// Lexicon, rephrase, and denial detectors run only on messages where
+// role='user' AND content_type IN ('text', 'code'). Interrupt detector runs on
+// all user messages. Cancellation discards all detections rather than exposing
+// a partial result.
+func RunDetectorsFilteredContext(ctx context.Context, msgs []models.Message) (map[int][]Detection, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 	if len(msgs) == 0 {
-		return nil
+		return nil, nil
 	}
 	result := make(map[int][]Detection)
 
 	for i, msg := range msgs {
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
 		isProse := msg.Role == "user" && (msg.ContentType == "text" || msg.ContentType == "code")
 
-		// Lexicon detector: prose only
+		// Each detector is currently noncancelable internally. Check on both
+		// sides of every call so cancellation is observed at its boundary and
+		// no accumulated detections escape.
 		if isProse {
-			if detection := cCorrectionLexiconDetector(msgs, i); detection != nil {
+			if err := ctx.Err(); err != nil {
+				return nil, err
+			}
+			detection := cCorrectionLexiconDetector(msgs, i)
+			if err := ctx.Err(); err != nil {
+				return nil, err
+			}
+			if detection != nil {
 				detection.DetectorName = "lexicon"
 				result[i] = append(result[i], *detection)
 			}
 		}
 
-		// Interrupt detector: all user messages
 		if msg.Role == "user" {
-			if detection := cInterruptDetector(msgs, i); detection != nil {
+			if err := ctx.Err(); err != nil {
+				return nil, err
+			}
+			detection := cInterruptDetector(msgs, i)
+			if err := ctx.Err(); err != nil {
+				return nil, err
+			}
+			if detection != nil {
 				detection.DetectorName = "interrupt"
 				result[i] = append(result[i], *detection)
 			}
 		}
 
-		// Denial detector: prose only
 		if isProse {
-			if detection := cDenialDetector(msgs, i); detection != nil {
+			if err := ctx.Err(); err != nil {
+				return nil, err
+			}
+			detection := cDenialDetector(msgs, i)
+			if err := ctx.Err(); err != nil {
+				return nil, err
+			}
+			if detection != nil {
 				detection.DetectorName = "denial"
 				result[i] = append(result[i], *detection)
 			}
 		}
 
-		// Rephrase detector: prose only
 		if isProse {
-			if detection := cRephraseDetector(msgs, i); detection != nil {
+			if err := ctx.Err(); err != nil {
+				return nil, err
+			}
+			detection := cRephraseDetector(msgs, i)
+			if err := ctx.Err(); err != nil {
+				return nil, err
+			}
+			if detection != nil {
 				detection.DetectorName = "rephrase"
 				result[i] = append(result[i], *detection)
 			}
 		}
 	}
-	return result
+	return result, nil
 }
 
 // Chat-export detection constants and regexes.
