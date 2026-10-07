@@ -66,8 +66,17 @@ protected. All scope filters remain fixed; no OR or semantic expansion is used.`
 			return validateCommandBeforeStartup(cmd, args, cobra.MaximumNArgs(1), func() error {
 				query := searchQuery(text, args)
 				_, _, err := validateAndParseSearchRequest(query, fields, contentType, after, before)
-				if err == nil && relax {
-					return storage.ValidateRelaxationQuery(query)
+				if err != nil {
+					return err
+				}
+				if relax {
+					if err := storage.ValidateRelaxationQuery(query); err != nil {
+						return err
+					}
+				}
+				resolved, err := effectiveProject(project, allProjects)
+				if err == nil {
+					project = resolved
 				}
 				return err
 			})
@@ -168,6 +177,11 @@ func runSearch(ctx context.Context, stdout, stderr io.Writer, cfg *config.Config
 		}
 	}
 
+	project, err = effectiveProject(project, allProjects)
+	if err != nil {
+		return err
+	}
+
 	db, diag, err := prepareIndex(ctx, cfg, indexDataRead)
 	if diag != nil {
 		return refuseIndex(stdout, stderr, *diag, jsonFormat, robotFormat)
@@ -178,9 +192,6 @@ func runSearch(ctx context.Context, stdout, stderr io.Writer, cfg *config.Config
 	defer func() { retErr = closeIndexDB(db, retErr) }()
 
 	warnShortToolQuery(stderr, contentType, query)
-
-	// Derive effective project from cwd if not explicitly set
-	project = effectiveProject(project, allProjects)
 
 	// Build search options
 	opts := models.SearchOptions{

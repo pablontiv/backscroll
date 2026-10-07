@@ -166,12 +166,11 @@ type SessionEntry struct {
 	Tags      []string
 }
 
-// ListOptions encapsulates flexible list query parameters (v2 grammar).
-// Supports input filtering, ordering, limits/offsets.
+// ListOptions encapsulates flexible session-list query parameters (v2 grammar).
+// Supports project filtering, ordering, pagination, and date bounds.
 type ListOptions struct {
 	Project     string // filter to project
 	AllProjects bool   // if true, ignore Project filter
-	Input       string // filter to input ID (maps to source field)
 	Order       string // e.g., "timestamp:desc", "timestamp:asc" (default: no ordering)
 	Limit       int    // result limit (0 = no limit)
 	Offset      int    // result offset
@@ -179,25 +178,16 @@ type ListOptions struct {
 	Before      *time.Time
 }
 
-// ListItemsV2 lists indexed search items using v2 filter grammar.
-// Supports --input (maps to source), --order (timestamp:asc|desc), --limit, --offset, --after, --before.
+// ListItemsV2 lists indexed sessions using v2 filter grammar.
+// Supports --order (timestamp:asc|desc), --limit, --offset, --after, and --before.
 func (d *Database) ListItemsV2(opts ListOptions) ([]SessionEntry, error) {
 	query := `
 		SELECT si.source_path, si.project, MAX(si.timestamp) as ts
 		FROM search_items si
-		WHERE 1=1
+		WHERE si.source = 'session'
 	`
 
 	var args []interface{}
-
-	// Filter by input (source field)
-	if opts.Input != "" {
-		// Map input IDs to source field values
-		source := opts.Input
-		// For now, map directly; in future may need mapping table
-		query += " AND si.source = ?"
-		args = append(args, source)
-	}
 
 	// Filter by project
 	if opts.Project != "" && !opts.AllProjects {

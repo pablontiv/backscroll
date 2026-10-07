@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"encoding/json"
 	"os"
 	"strings"
@@ -8,6 +9,22 @@ import (
 
 	"github.com/pablontiv/backscroll/internal/storage"
 )
+
+func TestPatternsHelpDescribesProjectScope(t *testing.T) {
+	var stdout, stderr bytes.Buffer
+	cmd := buildRootCmd(&stdout, &stderr)
+	cmd.SetArgs([]string{"patterns", "--help"})
+	if err := cmd.Execute(); err != nil {
+		t.Fatalf("patterns --help: %v", err)
+	}
+	if stderr.Len() != 0 {
+		t.Fatalf("patterns --help stderr = %q, want empty", stderr.String())
+	}
+	want := "Query across all projects (default: project inferred from current working directory)"
+	if !strings.Contains(stdout.String(), want) {
+		t.Errorf("patterns --help missing %q:\n%s", want, stdout.String())
+	}
+}
 
 // seedToolEvents plants a small deterministic tool-event corpus for census tests.
 func seedToolEvents(t *testing.T) {

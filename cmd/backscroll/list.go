@@ -43,7 +43,13 @@ Use --json to output as JSON.`,
 					return fmt.Errorf("unexpected positional argument %q; use --text for text search", args[0])
 				}
 				return nil
-			}, nil)
+			}, func() error {
+				resolved, err := effectiveProject(project, allProjects)
+				if err == nil {
+					project = resolved
+				}
+				return err
+			})
 		},
 		RunE: func(cmd *cobra.Command, args []string) error {
 			startup := startupResultFrom(cmd)
@@ -71,6 +77,11 @@ func runList(ctx context.Context, stdout, stderr io.Writer, cfg *config.Config,
 	project string, allProjects bool, recent int, jsonFormat, robotFormat bool,
 	order string, limit, offset int) (retErr error) {
 
+	project, err := effectiveProject(project, allProjects)
+	if err != nil {
+		return err
+	}
+
 	db, diag, err := prepareIndex(ctx, cfg, indexDataRead)
 	if diag != nil {
 		return refuseIndex(stdout, stderr, *diag, jsonFormat, robotFormat)
@@ -80,10 +91,7 @@ func runList(ctx context.Context, stdout, stderr io.Writer, cfg *config.Config,
 	}
 	defer func() { retErr = closeIndexDB(db, retErr) }()
 
-	// Derive effective project from cwd if not explicitly set
-	project = effectiveProject(project, allProjects)
-
-	// If v2 grammar flags are provided (input, order, limit, offset), use ListItemsV2
+	// If v2 grammar flags are provided (order, limit, offset), use ListItemsV2.
 	// Otherwise fall back to legacy ListSessions for backward compat
 	var sessions []storage.SessionEntry
 	if order != "" || limit > 0 || offset > 0 {
@@ -114,7 +122,7 @@ func runList(ctx context.Context, stdout, stderr io.Writer, cfg *config.Config,
 		} else {
 			_, _ = fmt.Fprintf(stdout, "No sessions found\n")
 		}
-		writeSearchHints(stderr, allProjects, true)
+		writeListEmptyHint(stderr, project, allProjects)
 		return nil
 	}
 
@@ -153,4 +161,12 @@ func runList(ctx context.Context, stdout, stderr io.Writer, cfg *config.Config,
 	}
 
 	return nil
+}
+
+func writeListEmptyHint(w io.Writer, project string, allProjects bool) {
+	if allProjects {
+		fmt.Fprintln(w, "no sessions found across all projects")
+		return
+	}
+	fmt.Fprintf(w, "no sessions found for project %q; use --all-projects to list sessions across all projects\n", project)
 }
