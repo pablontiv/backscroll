@@ -12,6 +12,12 @@ import (
 )
 
 func newRecoverCmd(stdout, stderr io.Writer, syncService *startupSyncService, execute func(context.Context, recovery.Options) (recovery.Report, error)) *cobra.Command {
+	if syncService == nil {
+		syncService = newStartupSyncService()
+	}
+	if execute == nil {
+		execute = recovery.Execute
+	}
 	var from string
 	var dryRun bool
 	fromValue := singleUseStringValue{target: &from}

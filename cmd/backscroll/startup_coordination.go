@@ -31,6 +31,9 @@ func newStartupCoordinator() *startupCoordinator {
 }
 
 func newStartupCoordinatorWithSyncService(syncService *startupSyncService) *startupCoordinator {
+	if syncService == nil {
+		syncService = newStartupSyncService()
+	}
 	return &startupCoordinator{
 		mutationWait: defaultStartupMutationWait,
 		tryAcquire: func(path string) (startupLease, bool, error) {

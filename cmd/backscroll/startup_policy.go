@@ -168,18 +168,29 @@ func validateRequiredFlagsAndGroups(cmd *cobra.Command) error {
 }
 
 func buildRootCmd(stdout, stderr io.Writer) *cobra.Command {
-	return buildRootCmdWithCoordinator(stdout, stderr, newStartupCoordinator())
+	return buildRootCmdWithDependencies(stdout, stderr, nil, nil, nil)
 }
 
 func buildRootCmdWithCoordinator(stdout, stderr io.Writer, coordinator *startupCoordinator) *cobra.Command {
+	if coordinator == nil {
+		coordinator = newStartupCoordinator()
+	} else if coordinator.syncService == nil {
+		coordinator.syncService = newStartupSyncService()
+	}
 	return buildRootCmdWithDependencies(stdout, stderr, coordinator.defaultStartupPolicy, coordinator.syncService, recovery.Execute)
 }
 
-func buildRootCmdWithStartup(stdout, stderr io.Writer, policy startupPolicyFunc) *cobra.Command {
-	return buildRootCmdWithDependencies(stdout, stderr, policy, newStartupSyncService(), recovery.Execute)
-}
-
 func buildRootCmdWithDependencies(stdout, stderr io.Writer, policy startupPolicyFunc, syncService *startupSyncService, execute func(context.Context, recovery.Options) (recovery.Report, error)) *cobra.Command {
+	if syncService == nil {
+		syncService = newStartupSyncService()
+	}
+	if policy == nil {
+		policy = newStartupCoordinatorWithSyncService(syncService).defaultStartupPolicy
+	}
+	if execute == nil {
+		execute = recovery.Execute
+	}
+
 	root := &cobra.Command{
 		Use:           "backscroll",
 		Short:         "A permanent, searchable record of your coding-agent sessions",

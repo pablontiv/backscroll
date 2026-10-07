@@ -50,9 +50,9 @@ func buildRecoverRootWithConfig(t *testing.T, stdout, stderr io.Writer, activePa
 		t.Fatalf("mkdir empty recovery inputs: %v", err)
 	}
 	cfg := &config.Config{DatabasePath: activePath, SessionDirs: []string{emptyInputs}}
-	return buildRootCmdWithStartup(stdout, stderr, func(context.Context, io.Writer, startupCommandClass) startupResult {
+	return buildRootCmdWithDependencies(stdout, stderr, func(context.Context, io.Writer, startupCommandClass) startupResult {
 		return startupResult{Config: cfg}
-	})
+	}, newStartupSyncService(), recovery.Execute)
 }
 
 func TestRecoverExecuteReceivesCommandContext(t *testing.T) {

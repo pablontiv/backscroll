@@ -381,7 +381,7 @@ func TestCanceledMutationReleasesRetainedLeaseExactlyOnce(t *testing.T) {
 		t.Run(phase, func(t *testing.T) {
 			lease := &fakeStartupLease{}
 			var stdout, stderr bytes.Buffer
-			root := buildRootCmdWithStartup(&stdout, &stderr, func(context.Context, io.Writer, startupCommandClass) startupResult {
+			root := buildRootCmdWithDependencies(&stdout, &stderr, func(context.Context, io.Writer, startupCommandClass) startupResult {
 				result := startupResult{Config: &config.Config{DatabasePath: filepath.Join(t.TempDir(), "index.db")}, Lease: lease}
 				if phase == "pre-run" {
 					result.Failure = &startupFailure{
@@ -391,7 +391,7 @@ func TestCanceledMutationReleasesRetainedLeaseExactlyOnce(t *testing.T) {
 					}
 				}
 				return result
-			})
+			}, newStartupSyncService(), recovery.Execute)
 			if phase == "run" {
 				replaceRootCommandRunEWrapped(t, root, "rebuild", func(*cobra.Command, []string) error {
 					return context.Canceled
