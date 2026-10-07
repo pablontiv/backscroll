@@ -1,11 +1,11 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"fmt"
 	"io"
 	"os"
-	"sort"
 	"strings"
 	"time"
 
@@ -128,38 +128,138 @@ func claimDescription(claim discoveredPathClaim) string {
 		claim.def.ID, semantics.source, semantics.format, semantics.indexReasoning)
 }
 
+// contextMergeSort applies a stable deterministic ordering while checking ctx
+// throughout copying and merging. Unlike the standard sort helpers, a canceled
+// caller can interrupt a large in-memory sort rather than waiting for it to end.
+func contextMergeSort[T any](ctx context.Context, values []T, less func(T, T) bool) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if len(values) < 2 {
+		return nil
+	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	scratch := make([]T, len(values))
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+
+	source, target := values, scratch
+	for width := 1; width < len(values); width *= 2 {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		for left := 0; left < len(values); left += 2 * width {
+			if err := ctx.Err(); err != nil {
+				return err
+			}
+			middle := min(left+width, len(values))
+			right := min(left+2*width, len(values))
+			i, j := left, middle
+			for out := left; out < right; out++ {
+				if err := ctx.Err(); err != nil {
+					return err
+				}
+				switch {
+				case i >= middle:
+					target[out] = source[j]
+					j++
+				case j >= right:
+					target[out] = source[i]
+					i++
+				case less(source[j], source[i]):
+					target[out] = source[j]
+					j++
+				default:
+					target[out] = source[i]
+					i++
+				}
+			}
+		}
+		source, target = target, source
+		if width > len(values)/2 {
+			break
+		}
+	}
+	if &source[0] != &values[0] {
+		for i := range values {
+			if err := ctx.Err(); err != nil {
+				return err
+			}
+			values[i] = source[i]
+		}
+	}
+	return ctx.Err()
+}
+
 // deduplicatePathClaims establishes one canonical parser contract per path.
 // Discovery settings and input IDs do not affect parsing, so equivalent inputs
 // may overlap. Source, effective reader format, and parser options must agree.
-func deduplicatePathClaims(claims []discoveredPathClaim) ([]discoveredPathClaim, error) {
+func deduplicatePathClaims(ctx context.Context, claims []discoveredPathClaim) ([]discoveredPathClaim, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 	byPath := make(map[string][]discoveredPathClaim)
 	for _, claim := range claims {
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
 		byPath[claim.path] = append(byPath[claim.path], claim)
 	}
 
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 	paths := make([]string, 0, len(byPath))
 	for path := range byPath {
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
 		paths = append(paths, path)
 	}
-	sort.Strings(paths)
+	if err := contextMergeSort(ctx, paths, func(left, right string) bool { return left < right }); err != nil {
+		return nil, err
+	}
 
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 	unique := make([]discoveredPathClaim, 0, len(paths))
 	for _, path := range paths {
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
 		pathClaims := byPath[path]
-		sort.Slice(pathClaims, func(i, j int) bool {
-			return claimDescription(pathClaims[i]) < claimDescription(pathClaims[j])
-		})
+		if err := contextMergeSort(ctx, pathClaims, func(left, right discoveredPathClaim) bool {
+			return claimDescription(left) < claimDescription(right)
+		}); err != nil {
+			return nil, err
+		}
 		want := semanticsForClaim(pathClaims[0])
 		for _, claim := range pathClaims[1:] {
+			if err := ctx.Err(); err != nil {
+				return nil, err
+			}
 			if semanticsForClaim(claim) != want {
+				if err := ctx.Err(); err != nil {
+					return nil, err
+				}
 				descriptions := make([]string, 0, len(pathClaims))
 				for _, conflicting := range pathClaims {
+					if err := ctx.Err(); err != nil {
+						return nil, err
+					}
 					descriptions = append(descriptions, claimDescription(conflicting))
 				}
 				return nil, fmt.Errorf("path %q is claimed by incompatible inputs: %s", path, strings.Join(descriptions, ", "))
 			}
 		}
 		unique = append(unique, pathClaims[0])
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, err
 	}
 	return unique, nil
 }
@@ -193,24 +293,48 @@ type syncPathState struct {
 // all reasons and consume at most one slot. Only discovered, hash-immutable
 // paths spend the replay budget; natural parses perform the same maintenance
 // for free.
-func selectReplayPaths(states map[string]*syncPathState, queues replayQueues, limit int) map[string]replayReason {
+func selectReplayPaths(ctx context.Context, states map[string]*syncPathState, queues replayQueues, limit int) (map[string]replayReason, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 	reasons := make(map[string]replayReason)
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 	ordered := make([]string, 0)
-	addQueue := func(paths []string, reason replayReason) {
+	addQueue := func(paths []string, reason replayReason) error {
 		for _, path := range paths {
+			if err := ctx.Err(); err != nil {
+				return err
+			}
 			if reasons[path] == 0 {
 				ordered = append(ordered, path)
 			}
 			reasons[path] |= reason
 		}
+		return nil
 	}
-	addQueue(queues.origin, replayOrigin)
-	addQueue(queues.echo, replayEcho)
-	addQueue(queues.stale, replayStale)
-	addQueue(queues.emptyPi, replayEmptyPi)
+	if err := addQueue(queues.origin, replayOrigin); err != nil {
+		return nil, err
+	}
+	if err := addQueue(queues.echo, replayEcho); err != nil {
+		return nil, err
+	}
+	if err := addQueue(queues.stale, replayStale); err != nil {
+		return nil, err
+	}
+	if err := addQueue(queues.emptyPi, replayEmptyPi); err != nil {
+		return nil, err
+	}
 
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 	selected := make(map[string]replayReason)
 	for _, path := range ordered {
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
 		if len(selected) >= limit {
 			break
 		}
@@ -225,7 +349,10 @@ func selectReplayPaths(states map[string]*syncPathState, queues replayQueues, li
 		}
 		selected[path] = reason
 	}
-	return selected
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	return selected, nil
 }
 
 // isRacyCleanFile reports whether a file's mtime suggests it could be racy clean.
@@ -270,11 +397,24 @@ func maybeAutoSync(cfg *config.Config, progress io.Writer) error {
 }
 
 // maybeAutoSyncContext performs an incremental sync operation with cancellation
-// propagated through reader and storage work.
-func maybeAutoSyncContext(ctx context.Context, cfg *config.Config, progress io.Writer) (retErr error) {
+// propagated through reader and storage work. Progress is transactional at this
+// boundary: callers receive it only after every sync and maintenance phase succeeds.
+func maybeAutoSyncContext(ctx context.Context, cfg *config.Config, progress io.Writer) error {
 	if err := ctx.Err(); err != nil {
 		return err
 	}
+	var bufferedProgress bytes.Buffer
+	if err := maybeAutoSyncWithProgress(ctx, cfg, &bufferedProgress); err != nil {
+		return err
+	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	_, _ = bufferedProgress.WriteTo(progress)
+	return nil
+}
+
+func maybeAutoSyncWithProgress(ctx context.Context, cfg *config.Config, progress io.Writer) (retErr error) {
 	diag := diagnosticsEnabled()
 	var startTime time.Time
 	if diag {
@@ -377,7 +517,7 @@ func maybeAutoSyncContext(ctx context.Context, cfg *config.Config, progress io.W
 			claims = append(claims, discoveredPathClaim{path: ref, def: def, reader: reader})
 		}
 	}
-	uniqueClaims, err := deduplicatePathClaims(claims)
+	uniqueClaims, err := deduplicatePathClaims(ctx, claims)
 	if err != nil {
 		return err
 	}
@@ -441,12 +581,15 @@ func maybeAutoSyncContext(ctx context.Context, cfg *config.Config, progress io.W
 		states[ref] = state
 	}
 
-	replaySet := selectReplayPaths(states, replayQueues{
+	replaySet, err := selectReplayPaths(ctx, states, replayQueues{
 		origin:  originPaths,
 		echo:    echoPaths,
 		stale:   stalePaths,
 		emptyPi: emptyPaths,
 	}, replayParsesCap)
+	if err != nil {
+		return err
+	}
 
 	// Collect indexed files. uniqueClaims is path-sorted, so natural work and
 	// selected replays are deterministic even when discovery order changes.

@@ -1,7 +1,6 @@
 package main
 
 import (
-	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -151,8 +150,7 @@ func runOwnedStartup(ctx context.Context, cfg *config.Config, progress io.Writer
 		}
 		return ownedStartupFailureResult(cfg, class, lease, &startupFailure{Stage: startupStageIndexPrepare, Cause: err, Diagnostic: d, Recoverable: true})
 	}
-	var bufferedProgress bytes.Buffer
-	if err := startupSync(ctx, cfg, &bufferedProgress); err != nil {
+	if err := startupSync(ctx, cfg, progress); err != nil {
 		activePath, _ := resolveActiveIndexPath(cfg.DatabasePath)
 		d := continuationFor(compat.Diagnostic{Code: compat.CodeIndexStale, Summary: fmt.Sprintf("index sync failed: %v", err)}, activePath)
 		return ownedStartupFailureResult(cfg, class, lease, &startupFailure{Stage: startupStageStartupSync, Cause: err, Diagnostic: d, Recoverable: true})
@@ -162,7 +160,6 @@ func runOwnedStartup(ctx context.Context, cfg *config.Config, progress io.Writer
 		d := continuationFor(compat.Diagnostic{Code: compat.CodeIndexStale, Summary: fmt.Sprintf("index sync failed: %v", err)}, activePath)
 		return ownedStartupFailureResult(cfg, class, lease, &startupFailure{Stage: startupStageStartupSync, Cause: err, Diagnostic: d, Recoverable: true})
 	}
-	_, _ = bufferedProgress.WriteTo(progress)
 	result := startupResult{Config: cfg}
 	if startupClassRetainsLease(class) {
 		result.Lease = lease
