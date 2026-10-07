@@ -12,6 +12,7 @@ import (
 	"github.com/pablontiv/backscroll/internal/compat"
 	"github.com/pablontiv/backscroll/internal/config"
 	"github.com/pablontiv/backscroll/internal/input_config"
+	"github.com/pablontiv/backscroll/internal/services"
 	"github.com/pablontiv/backscroll/internal/storage"
 )
 
@@ -54,10 +55,12 @@ func runStatus(ctx context.Context, stdout, stderr io.Writer, cfg *config.Config
 	}
 	defer func() { retErr = closeIndexDB(db, retErr) }()
 
-	stats, err := db.GetStatsContext(ctx)
+	queryService := services.QueryService{DB: db}
+	response, err := queryService.Status(ctx, services.StatusRequest{})
 	if err != nil {
 		return fmt.Errorf("get stats: %w", err)
 	}
+	stats := response.Stats
 
 	// Resolve active inputs for status display
 	activeInputNames, usingDeclarative := resolveInputsForStatus(cfg.SessionDirs)

@@ -14,6 +14,7 @@ import (
 
 	"github.com/pablontiv/backscroll/internal/compat"
 	"github.com/pablontiv/backscroll/internal/config"
+	"github.com/pablontiv/backscroll/internal/services"
 	"github.com/pablontiv/backscroll/internal/storage"
 )
 
@@ -160,14 +161,15 @@ func runContext(ctx context.Context, stdout, stderr io.Writer, cfg *config.Confi
 	}
 	defer func() { retErr = closeIndexDB(db, retErr) }()
 
-	query := storage.ContextRecordQuery{Before: opts.before, After: opts.after}
+	request := services.ContextRequest{Before: opts.before, After: opts.after}
 	if opts.uuidSet {
-		query.UUID = &opts.uuid
+		request.UUID = &opts.uuid
 	} else {
-		query.SourcePath = &opts.sourcePath
-		query.Ordinal = &opts.ordinal
+		request.SourcePath = &opts.sourcePath
+		request.Ordinal = &opts.ordinal
 	}
-	records, err := db.QueryContextRecords(ctx, query)
+	queryService := services.QueryService{DB: db}
+	response, err := queryService.Context(ctx, request)
 	if err != nil {
 		switch {
 		case errors.Is(err, storage.ErrContextRecordNotFound):
@@ -185,7 +187,7 @@ func runContext(ctx context.Context, stdout, stderr io.Writer, cfg *config.Confi
 	} else if opts.robotFormat {
 		format = contextRobotFormat
 	}
-	payload, successfulPayloadFits, err := contextSuccessfulPayloadWithinBudget(records, format, opts.maxTokens)
+	payload, successfulPayloadFits, err := contextSuccessfulPayloadWithinBudget(response.Records, format, opts.maxTokens)
 	if err != nil {
 		return fmt.Errorf("format context records: %w", err)
 	}

@@ -14,6 +14,7 @@ import (
 
 	"github.com/pablontiv/backscroll/internal/config"
 	"github.com/pablontiv/backscroll/internal/models"
+	"github.com/pablontiv/backscroll/internal/services"
 	"github.com/pablontiv/backscroll/internal/storage"
 )
 
@@ -210,22 +211,21 @@ func runSearch(ctx context.Context, stdout, stderr io.Writer, cfg *config.Config
 		SimilarityThreshold: similarityThreshold,
 	}
 
-	// The existing path is unchanged unless lexical relaxation is explicit.
-	var results []storage.SearchResult
-	var stages []string
-	if relax {
-		results, stages, err = db.SearchRelaxedContext(ctx, query, opts)
-	} else {
-		results, err = db.HybridSearchContext(ctx, query, opts)
-	}
+	queryService := services.QueryService{DB: db}
+	response, err := queryService.Search(ctx, services.SearchRequest{
+		Query:   query,
+		Options: opts,
+		Relax:   relax,
+	})
 	if err != nil {
 		return fmt.Errorf("search: %w", err)
 	}
+	results := response.Results
 
 	if len(results) == 0 {
 		writeSearchHints(stderr, allProjects, contentType == "tool")
 		if relax {
-			fmt.Fprintf(stderr, "relaxation stages tried: %s; stemming/phrase expansion and scope widening skipped\n", strings.Join(stages, ", "))
+			fmt.Fprintf(stderr, "relaxation stages tried: %s; stemming/phrase expansion and scope widening skipped\n", strings.Join(response.Provenance.RelaxationStages, ", "))
 		}
 	}
 
