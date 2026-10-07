@@ -8,7 +8,7 @@ Backscroll is a Go CLI tool that indexes Claude Code, Pi, OMP, OpenCode, Codex C
 
 **Status**: Go port complete — `main` branch is the active Go implementation. The Rust implementation is frozen in the `v0` branch.
 
-Implemented: `internal/config`, `internal/input_config`, `internal/models`, `internal/readers`, `internal/sync`, `internal/tagging`, `internal/plans`, `internal/sources`, `internal/storage`, `internal/services`, `internal/projects`, `internal/templates`, `internal/corrections`, `internal/categories`, `internal/sequences`, `internal/chunking`, `internal/embedding`, `internal/hybrid`, `internal/compat`, `internal/recovery`, `internal/startuplock`. CLI commands in `cmd/backscroll/` (11 v2 commands via cobra).
+Implemented: `internal/config`, `internal/input_config`, `internal/models`, `internal/readers`, `internal/sync`, `internal/tagging`, `internal/plans`, `internal/sources`, `internal/storage`, `internal/services`, `internal/projects`, `internal/templates`, `internal/corrections`, `internal/categories`, `internal/sequences`, `internal/chunking`, `internal/embedding`, `internal/hybrid`, `internal/compat`, `internal/recovery`, `internal/startuplock`, `internal/skillinstall`. CLI commands in `cmd/backscroll/` (11 v2 commands via cobra).
 
 Stack: cobra, go-toml/v2, goldmark, modernc.org/sqlite (pure Go, no CGO), stdlib testing.
 
@@ -67,6 +67,7 @@ internal/
 ├── readers/           — SessionReader interface, Registry, ClaudeReader (text+tool_use+tool_result), PiReader (text+toolCall+custom results), OMPReader (native v3 text+thinking+toolCall+toolResult; parser-backed identities and origin), OpenCodeReader (text+tool state.input+state.output), CodexReader (rollout response items; docs/input-contract.md), MarkdownDocumentReader (`markdown_document`), MarkdownSectionsReader (`markdown_sections`); toolfmt serializer
 ├── recovery/          — stranded database recovery orchestration, verified active+stranded union, durable backup, atomic replacement, and post-install sync
 ├── startuplock/       — canonical database lock coordination via persistent OS advisory sidecar
+├── skillinstall/      — safe Backscroll skill installation, receipts, rollback, and Python v1 restore compatibility
 ├── templates/         — F2 Drain-inspired miner: Miner, ProcessLine, ExtractErrorLines, deterministic signature via SHA256
 ├── corrections/       — F3 correction detection: bilingual lexicon, interrupt flags, denial heuristics, rephrase-similarity; detector registry + implementations
 ├── categories/        — F4 category map loader (rule engine, versioning, tool→category mapping) with embedded default preset
@@ -261,6 +262,7 @@ github.com/pablontiv/backscroll/internal/projects      — Project identity regi
 github.com/pablontiv/backscroll/internal/readers       — SessionReader interface, Registry, ClaudeReader (text+tool_use+tool_result), PiReader (text+toolCall+custom results), OMPReader (native v3 text+thinking+toolCall+toolResult; parser-backed identities and origin), OpenCodeReader (text+tool state.input+state.output), CodexReader (rollout response items; docs/input-contract.md), MarkdownDocumentReader (`markdown_document`), MarkdownSectionsReader (`markdown_sections`); toolfmt serializer
 github.com/pablontiv/backscroll/internal/recovery      — Stranded database recovery orchestration, durable backup, atomic replacement, and post-install sync
 github.com/pablontiv/backscroll/internal/startuplock   — Canonical database lock coordination via persistent OS advisory sidecar
+github.com/pablontiv/backscroll/internal/skillinstall  — Safe Backscroll skill installation, receipts, rollback, and Python v1 restore compatibility
 github.com/pablontiv/backscroll/scripts/recall-eval    — Isolated recall evaluation runner and cohort reporter
 ```
 
