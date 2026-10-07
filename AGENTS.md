@@ -8,7 +8,7 @@ Backscroll is a Go CLI tool that indexes Claude Code, Pi, OMP, OpenCode, Codex C
 
 **Status**: Go port complete — `main` branch is the active Go implementation. The Rust implementation is frozen in the `v0` branch.
 
-Implemented: `internal/config`, `internal/input_config`, `internal/models`, `internal/readers`, `internal/sync`, `internal/tagging`, `internal/plans`, `internal/sources`, `internal/storage`, `internal/services`, `internal/projects`, `internal/templates`, `internal/corrections`, `internal/categories`, `internal/sequences`, `internal/chunking`, `internal/embedding`, `internal/hybrid`, `internal/compat`, `internal/recovery`, `internal/startuplock`, `internal/skillinstall`. CLI commands in `cmd/backscroll/` (11 v2 commands via cobra).
+Implemented: `internal/config`, `internal/input_config`, `internal/presets`, `internal/models`, `internal/readers`, `internal/sync`, `internal/tagging`, `internal/plans`, `internal/sources`, `internal/storage`, `internal/services`, `internal/projects`, `internal/templates`, `internal/corrections`, `internal/categories`, `internal/sequences`, `internal/chunking`, `internal/embedding`, `internal/hybrid`, `internal/compat`, `internal/recovery`, `internal/startuplock`, `internal/skillinstall`. CLI commands in `cmd/backscroll/` (11 v2 commands via cobra).
 
 Stack: cobra, go-toml/v2, goldmark, modernc.org/sqlite (pure Go, no CGO), stdlib testing.
 
@@ -58,6 +58,7 @@ internal/
 ├── compat/            — stateless schema-shape inspection, release lineage catalog, migration plans, and canonical recovery planning
 ├── directsearch/      — shared direct-search predicates (IsDirectSearchCommand, IsCodexDirectSearchCall, IsSerializedDirectSearchCall): the single strict boundary for "is this a direct search call", at ingest (readers, raw input) and at query/replay (storage, serialized text)
 ├── input_config/      — input manifest loading, discovery, and legacy session-dirs compatibility
+├── presets/           — embedded input preset installation with explicit overwrite control
 ├── models/            — domain types: SessionRecord, MessageContent, ParsedFile, SearchResult, Stats
 ├── sync/              — WalkDir, SHA-256 dedup, JSONL parsing, noise filtering, content-type classification
 ├── tagging/           — heuristic auto-tagging (debugging, refactoring, feature, testing, docs, config)
@@ -244,6 +245,7 @@ github.com/pablontiv/backscroll/internal/config        — Config structs and re
 github.com/pablontiv/backscroll/internal/compat        — Stateless schema inspection, release lineage catalog, migration planning, and canonical recovery planning
 github.com/pablontiv/backscroll/internal/directsearch  — Shared direct-search predicates (IsDirectSearchCommand, IsCodexDirectSearchCall, IsSerializedDirectSearchCall): the single strict boundary used by readers at ingest and by storage at query/replay time
 github.com/pablontiv/backscroll/internal/input_config  — Input manifest loading, discovery, and legacy session-dirs compatibility
+github.com/pablontiv/backscroll/internal/presets       — Embedded input preset installation with explicit overwrite control
 github.com/pablontiv/backscroll/internal/models        — Domain types and SearchEngine interface
 github.com/pablontiv/backscroll/internal/sync          — Session parsing and noise filtering
 github.com/pablontiv/backscroll/internal/plans         — Markdown plan parsing
