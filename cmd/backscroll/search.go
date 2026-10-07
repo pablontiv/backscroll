@@ -66,14 +66,9 @@ protected. All scope filters remain fixed; no OR or semantic expansion is used.`
 		Args: func(cmd *cobra.Command, args []string) error {
 			return validateCommandBeforeStartup(cmd, args, cobra.MaximumNArgs(1), func() error {
 				query := searchQuery(text, args)
-				_, _, err := validateAndParseSearchRequest(query, fields, contentType, after, before)
+				_, _, err := validateAndParseSearchRequest(query, fields, contentType, after, before, relax)
 				if err != nil {
 					return err
-				}
-				if relax {
-					if err := storage.ValidateRelaxationQuery(query); err != nil {
-						return err
-					}
 				}
 				resolved, err := effectiveProject(project, allProjects)
 				if err == nil {
@@ -124,22 +119,18 @@ func searchQuery(text string, args []string) string {
 	return text
 }
 
-func validateAndParseSearchRequest(query, fields, contentType, after, before string) (*time.Time, *time.Time, error) {
-	if query == "" {
-		return nil, nil, fmt.Errorf("search query required (use --text <query> or positional argument)")
+func validateAndParseSearchRequest(query, fields, contentType, after, before string, relax bool) (*time.Time, *time.Time, error) {
+	request := services.SearchRequest{Query: query}
+	if err := services.ValidateSearchRequest(request); err != nil {
+		return nil, nil, err
 	}
 	if fields != "minimal" && fields != "full" {
 		return nil, nil, fmt.Errorf("invalid --fields value %q: must be minimal or full", fields)
 	}
 
-	validContentTypes := map[string]bool{
-		"text":      true,
-		"code":      true,
-		"tool":      true,
-		"reasoning": true,
-	}
-	if contentType != "" && !validContentTypes[contentType] {
-		return nil, nil, fmt.Errorf("invalid --content-type %q; must be one of: text, code, tool, reasoning", contentType)
+	request.Options.ContentType = contentType
+	if err := services.ValidateSearchRequest(request); err != nil {
+		return nil, nil, err
 	}
 
 	var afterTime, beforeTime *time.Time
@@ -157,6 +148,13 @@ func validateAndParseSearchRequest(query, fields, contentType, after, before str
 		}
 		beforeTime = &parsed
 	}
+
+	request.Options.After = afterTime
+	request.Options.Before = beforeTime
+	request.Relax = relax
+	if err := services.ValidateSearchRequest(request); err != nil {
+		return nil, nil, err
+	}
 	return afterTime, beforeTime, nil
 }
 
@@ -168,14 +166,9 @@ func runSearch(ctx context.Context, stdout, stderr io.Writer, cfg *config.Config
 	fields string, maxTokens int,
 	lexicalOnly bool, similarityThreshold float64, relax bool) (retErr error) {
 
-	afterTime, beforeTime, err := validateAndParseSearchRequest(query, fields, contentType, after, before)
+	afterTime, beforeTime, err := validateAndParseSearchRequest(query, fields, contentType, after, before, relax)
 	if err != nil {
 		return err
-	}
-	if relax {
-		if err := storage.ValidateRelaxationQuery(query); err != nil {
-			return err
-		}
 	}
 
 	project, err = effectiveProject(project, allProjects)

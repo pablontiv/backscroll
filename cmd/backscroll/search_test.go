@@ -11,7 +11,40 @@ import (
 	picokitoutput "github.com/pablontiv/picokit/output"
 
 	"github.com/pablontiv/backscroll/internal/models"
+	"github.com/pablontiv/backscroll/internal/services"
 )
+
+func TestSearchValidationMatchesServices(t *testing.T) {
+	tests := []struct {
+		name        string
+		query       string
+		contentType string
+		relax       bool
+	}{
+		{name: "missing query"},
+		{name: "invalid content type", query: "needle", contentType: "audio"},
+		{name: "invalid relaxation query", query: `"unclosed`, relax: true},
+		{name: "valid", query: "needle", contentType: "text"},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			_, _, cliErr := validateAndParseSearchRequest(test.query, "minimal", test.contentType, "", "", test.relax)
+			serviceErr := services.ValidateSearchRequest(services.SearchRequest{
+				Query: test.query,
+				Options: models.SearchOptions{
+					ContentType: test.contentType,
+				},
+				Relax: test.relax,
+			})
+			if (cliErr == nil) != (serviceErr == nil) {
+				t.Fatalf("CLI error = %v, service error = %v", cliErr, serviceErr)
+			}
+			if cliErr != nil && cliErr.Error() != serviceErr.Error() {
+				t.Fatalf("CLI error = %q, service error = %q", cliErr, serviceErr)
+			}
+		})
+	}
+}
 
 func TestSearchOutputFormatText(t *testing.T) {
 	_, cleanup := testEnv(t)

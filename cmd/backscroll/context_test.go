@@ -12,6 +12,7 @@ import (
 
 	"github.com/pablontiv/backscroll/internal/config"
 	"github.com/pablontiv/backscroll/internal/models"
+	"github.com/pablontiv/backscroll/internal/services"
 	"github.com/pablontiv/backscroll/internal/storage"
 )
 
@@ -273,6 +274,31 @@ func TestContextTextAndRobotSuccessfulPayloadBudgetBoundaries(t *testing.T) {
 				if strings.Contains(stderr.String(), "Record 0") {
 					t.Fatalf("text budget diagnostic leaked a partial record: %q", stderr.String())
 				}
+			}
+		})
+	}
+}
+
+func TestContextValidationMatchesServices(t *testing.T) {
+	tests := []struct {
+		name string
+		opts contextCommandOptions
+	}{
+		{name: "no selector", opts: contextCommandOptions{maxTokens: contextDefaultMaxTokens}},
+		{name: "both selectors", opts: contextCommandOptions{uuid: "u", uuidSet: true, sourcePath: "/x", sourcePathSet: true, ordinalSet: true, maxTokens: contextDefaultMaxTokens}},
+		{name: "empty UUID", opts: contextCommandOptions{uuidSet: true, maxTokens: contextDefaultMaxTokens}},
+		{name: "before high", opts: contextCommandOptions{uuid: "u", uuidSet: true, before: 51, maxTokens: contextDefaultMaxTokens}},
+		{name: "valid", opts: contextCommandOptions{uuid: "u", uuidSet: true, before: 0, after: 50, maxTokens: contextDefaultMaxTokens}},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			cliErr := validateContextRequest(test.opts)
+			serviceErr := services.ValidateContextRequest(contextServiceRequest(test.opts))
+			if (cliErr == nil) != (serviceErr == nil) {
+				t.Fatalf("CLI error = %v, service error = %v", cliErr, serviceErr)
+			}
+			if cliErr != nil && cliErr.Error() != serviceErr.Error() {
+				t.Fatalf("CLI error = %q, service error = %q", cliErr, serviceErr)
 			}
 		})
 	}

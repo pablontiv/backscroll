@@ -5,6 +5,7 @@ import (
 	"errors"
 	"path/filepath"
 	"reflect"
+	"strings"
 	"testing"
 
 	"github.com/pablontiv/backscroll/internal/models"
@@ -91,6 +92,125 @@ func TestQueryServiceContext(t *testing.T) {
 		}
 		assertContextWindow(t, response.Records)
 	})
+}
+
+func TestValidateSearchRequestAndExplicitScope(t *testing.T) {
+	for _, contentType := range []string{"", "text", "code", "tool", "reasoning"} {
+		request := SearchRequest{Query: "needle", Options: models.SearchOptions{ContentType: contentType}}
+		if err := ValidateSearchRequest(request); err != nil {
+			t.Errorf("content type %q: %v", contentType, err)
+		}
+	}
+
+	tests := []struct {
+		name    string
+		request SearchRequest
+		want    string
+	}{
+		{
+			name: "missing query",
+			want: "search query required (use --text <query> or positional argument)",
+		},
+		{
+			name:    "invalid content type",
+			request: SearchRequest{Query: "needle", Options: models.SearchOptions{ContentType: "audio"}},
+			want:    "invalid --content-type \"audio\"; must be one of: text, code, tool, reasoning",
+		},
+		{
+			name:    "invalid relaxation query",
+			request: SearchRequest{Query: `"unclosed`, Relax: true},
+			want:    "invalid --relax query",
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			err := ValidateSearchRequest(test.request)
+			if err == nil || !strings.Contains(err.Error(), test.want) {
+				t.Fatalf("error = %v, want substring %q", err, test.want)
+			}
+		})
+	}
+
+	for _, request := range []SearchRequest{
+		{Options: models.SearchOptions{Project: "alpha"}},
+		{Options: models.SearchOptions{AllProjects: true}},
+	} {
+		if err := ValidateExplicitSearchScope(request); err != nil {
+			t.Errorf("explicit scope %+v: %v", request.Options, err)
+		}
+	}
+	for _, request := range []SearchRequest{
+		{},
+		{Options: models.SearchOptions{Project: "alpha", AllProjects: true}},
+	} {
+		if err := ValidateExplicitSearchScope(request); err == nil {
+			t.Errorf("ambiguous or missing scope %+v was accepted", request.Options)
+		}
+	}
+}
+
+func TestValidateContextRequestSelectorsAndLimits(t *testing.T) {
+	uuid := "opaque"
+	path := "/session"
+	ordinal := int64(-9)
+	for _, request := range []ContextRequest{
+		{UUID: &uuid, Before: 0, After: 50},
+		{SourcePath: &path, Ordinal: &ordinal, Before: 50, After: 0},
+	} {
+		if err := ValidateContextRequest(request); err != nil {
+			t.Errorf("valid request %+v: %v", request, err)
+		}
+	}
+
+	empty := ""
+	tests := []struct {
+		name    string
+		request ContextRequest
+		want    string
+	}{
+		{name: "no selector", want: "provide exactly one anchor selector"},
+		{name: "both selectors", request: ContextRequest{UUID: &uuid, SourcePath: &path, Ordinal: &ordinal}, want: "provide exactly one anchor selector"},
+		{name: "path without ordinal", request: ContextRequest{SourcePath: &path}, want: "provide exactly one anchor selector"},
+		{name: "ordinal without path", request: ContextRequest{Ordinal: &ordinal}, want: "provide exactly one anchor selector"},
+		{name: "empty UUID", request: ContextRequest{UUID: &empty}, want: "--uuid must not be empty"},
+		{name: "empty path", request: ContextRequest{SourcePath: &empty, Ordinal: &ordinal}, want: "--source-path must not be empty"},
+		{name: "before low", request: ContextRequest{UUID: &uuid, Before: -1}, want: "--before must be between 0 and 50"},
+		{name: "before high", request: ContextRequest{UUID: &uuid, Before: 51}, want: "--before must be between 0 and 50"},
+		{name: "after low", request: ContextRequest{UUID: &uuid, After: -1}, want: "--after must be between 0 and 50"},
+		{name: "after high", request: ContextRequest{UUID: &uuid, After: 51}, want: "--after must be between 0 and 50"},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			err := ValidateContextRequest(test.request)
+			if err == nil || err.Error() != test.want && !strings.Contains(err.Error(), test.want) {
+				t.Fatalf("error = %v, want %q", err, test.want)
+			}
+		})
+	}
+}
+
+func TestQueryServiceRejectsInvalidRequestsWithoutDatabaseAccess(t *testing.T) {
+	service := QueryService{}
+	if _, err := service.Search(context.Background(), SearchRequest{}); err == nil || !strings.Contains(err.Error(), "search query required") {
+		t.Fatalf("search error = %v", err)
+	}
+	if _, err := service.Context(context.Background(), ContextRequest{}); err == nil || !strings.Contains(err.Error(), "exactly one anchor selector") {
+		t.Fatalf("context error = %v", err)
+	}
+}
+
+func TestQueryServiceChecksCancellationWithoutDatabaseAccess(t *testing.T) {
+	service := QueryService{}
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	if _, err := service.Search(ctx, SearchRequest{Query: "needle"}); !errors.Is(err, context.Canceled) {
+		t.Fatalf("search error = %v, want context.Canceled", err)
+	}
+	uuid := "opaque"
+	if _, err := service.Context(ctx, ContextRequest{UUID: &uuid}); !errors.Is(err, context.Canceled) {
+		t.Fatalf("context error = %v, want context.Canceled", err)
+	}
 }
 
 func TestQueryServiceStatus(t *testing.T) {
