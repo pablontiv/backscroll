@@ -121,7 +121,13 @@ func (d *Database) BackfillDerivedContext(ctx context.Context, opts BackfillDeri
 		totalEvents += batchEvents
 		if opts.OnProgress != nil {
 			opts.OnProgress(batchEnd, totalTemplates, totalSignals, totalEvents)
+			if err := ctx.Err(); err != nil {
+				return err
+			}
 		}
+	}
+	if err := ctx.Err(); err != nil {
+		return err
 	}
 	return nil
 }
