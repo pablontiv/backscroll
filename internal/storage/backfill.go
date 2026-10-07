@@ -3,13 +3,15 @@ package storage
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
+	"sort"
 	"strings"
+	"time"
 
 	"github.com/pablontiv/backscroll/internal/corrections"
 	"github.com/pablontiv/backscroll/internal/models"
 	"github.com/pablontiv/backscroll/internal/templates"
-	"time"
 )
 
 // BackfillDerivedOpts configures BackfillDerived behavior.
@@ -23,38 +25,37 @@ type BackfillDerivedOpts struct {
 // Incremented when template mining heuristics change (e.g., v1→v2).
 const CurrentNormalizationVersion = 2
 
-// BackfillDerived mines templates, corrections, and lossy tool_events from
-// stored text for files that are EXPIRED (absent from disk) or have STALE TEMPLATES
-// (with normalization_version < current). Results are inserted idempotently (INSERT OR IGNORE).
-// Extraction_version=0 marks lossy (reverse-parsed) rows. On-disk files are handled by B1's
-// rich re-parse path; this path avoids duplicate lossy rows.
+type derivedBackfillFile struct {
+	SourcePath string
+}
+
+// BackfillDerived mines derived data without cancellation. It is retained for
+// compatibility with existing callers.
 func (d *Database) BackfillDerived(opts BackfillDerivedOpts) error {
-	type fileToBackfill struct {
-		SourcePath string
-		Source     string
+	return d.BackfillDerivedContext(context.Background(), opts)
+}
+
+// BackfillDerivedContext mines templates, corrections, and lossy tool_events
+// from stored text for expired, recovered, or stale-template paths. Discovery
+// and processing are deterministic by source path. Each batch is atomic:
+// cancellation rolls back the active batch, preserves earlier batches, and
+// prevents later batches from starting.
+func (d *Database) BackfillDerivedContext(ctx context.Context, opts BackfillDerivedOpts) error {
+	if err := ctx.Err(); err != nil {
+		return err
 	}
 
-	// First, discover and process stale templates (v1 → v2 epoch upgrade).
-	// These are templates with normalization_version < CurrentNormalizationVersion.
-	stalePaths, err := d.StaleTemplatePaths(CurrentNormalizationVersion)
+	stalePaths, err := d.StaleTemplatePathsContext(ctx, CurrentNormalizationVersion)
 	if err != nil {
 		return fmt.Errorf("query stale template paths: %w", err)
 	}
-
-	// Deduplicate stale paths and expired files using a map.
-	pathsToProcess := make(map[string]string)
-	for _, p := range stalePaths {
-		pathsToProcess[p] = "session"
+	pathsToProcess := make(map[string]struct{}, len(stalePaths))
+	for _, path := range stalePaths {
+		pathsToProcess[path] = struct{}{}
 	}
 
-	// Find files in search_items that are EXPIRED (absent from indexed_files)
-	// or provisionally recovered. Within those files, process only those missing
-	// at least one of the three derivations:
-	// - template_matches (templates mined), OR
-	// - correction_signals (corrections detected), OR
-	// - tool_events with extraction_version = 0 (lossy tool metadata extracted)
-	rows, err := d.db.Query(`
-		SELECT DISTINCT si.source_path, si.source
+	rows, err := d.db.QueryContext(ctx, `
+		SELECT DISTINCT si.source_path
 		FROM search_items si
 		LEFT JOIN indexed_files ifx ON si.source_path = ifx.path
 		WHERE
@@ -62,129 +63,148 @@ func (d *Database) BackfillDerived(opts BackfillDerivedOpts) error {
 			(NOT EXISTS (SELECT 1 FROM template_matches WHERE source_path = si.source_path) OR
 			 NOT EXISTS (SELECT 1 FROM correction_signals WHERE source_path = si.source_path) OR
 			 NOT EXISTS (SELECT 1 FROM tool_events WHERE source_path = si.source_path AND extraction_version = 0))
-		ORDER BY si.source_path
+		ORDER BY si.source_path ASC
 	`, recoveredSourceHash)
 	if err != nil {
 		return fmt.Errorf("query expired files: %w", err)
 	}
-	defer rows.Close()
-
 	for rows.Next() {
-		var sourcePath, source string
-		if err := rows.Scan(&sourcePath, &source); err != nil {
+		if err := ctx.Err(); err != nil {
+			_ = rows.Close()
+			return err
+		}
+		var sourcePath string
+		if err := rows.Scan(&sourcePath); err != nil {
+			_ = rows.Close()
 			return fmt.Errorf("scan file: %w", err)
 		}
-		pathsToProcess[sourcePath] = source
+		pathsToProcess[sourcePath] = struct{}{}
 	}
-
-	// Convert map to list of files to backfill
-	var filesToBackfill []fileToBackfill
-	for path, source := range pathsToProcess {
-		filesToBackfill = append(filesToBackfill, fileToBackfill{path, source})
+	if err := ctx.Err(); err != nil {
+		_ = rows.Close()
+		return err
 	}
 	if err := rows.Err(); err != nil {
+		_ = rows.Close()
 		return fmt.Errorf("iterate expired files: %w", err)
 	}
+	if err := rows.Close(); err != nil {
+		return fmt.Errorf("close expired files query: %w", err)
+	}
 
-	if len(filesToBackfill) == 0 {
-		return nil // nothing to backfill
+	paths := make([]string, 0, len(pathsToProcess))
+	for path := range pathsToProcess {
+		paths = append(paths, path)
+	}
+	sort.Strings(paths)
+	files := make([]derivedBackfillFile, 0, len(paths))
+	for _, path := range paths {
+		files = append(files, derivedBackfillFile{SourcePath: path})
 	}
 
 	const batchSize = 100
-	totalTemplates := 0
-	totalSignals := 0
-	totalEvents := 0
-
-	for batchStart := 0; batchStart < len(filesToBackfill); batchStart += batchSize {
+	var totalTemplates, totalSignals, totalEvents int
+	for batchStart := 0; batchStart < len(files); batchStart += batchSize {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
 		batchEnd := batchStart + batchSize
-		if batchEnd > len(filesToBackfill) {
-			batchEnd = len(filesToBackfill)
+		if batchEnd > len(files) {
+			batchEnd = len(files)
 		}
-		batch := filesToBackfill[batchStart:batchEnd]
-
-		tx, err := d.db.Begin()
+		batchTemplates, batchSignals, batchEvents, err := d.backfillDerivedBatch(ctx, files[batchStart:batchEnd])
 		if err != nil {
-			return fmt.Errorf("begin transaction: %w", err)
+			return err
 		}
-
-		batchTemplates := 0
-		batchSignals := 0
-		batchEvents := 0
-
-		for _, file := range batch {
-			// Load messages for this file from search_items
-			msgRows, err := tx.Query(`
-				SELECT ordinal, role, text, uuid, content_type, was_interrupted
-				FROM search_items
-				WHERE source_path = ?
-				ORDER BY ordinal
-			`, file.SourcePath)
-			if err != nil {
-				_ = tx.Rollback()
-				return fmt.Errorf("load messages for %s: %w", file.SourcePath, err)
-			}
-
-			var messages []IndexedMessage
-			for msgRows.Next() {
-				var m IndexedMessage
-				var uuid sql.NullString
-				var wasInterrupted sql.NullInt64
-				if err := msgRows.Scan(&m.Ordinal, &m.Role, &m.Text, &uuid,
-					&m.ContentType, &wasInterrupted); err != nil {
-					msgRows.Close()
-					_ = tx.Rollback()
-					return fmt.Errorf("scan message: %w", err)
-				}
-				if uuid.Valid {
-					m.UUID = uuid.String
-				}
-				m.WasInterrupted = wasInterrupted.Valid && wasInterrupted.Int64 != 0
-				m.Timestamp = time.Now().Format(time.RFC3339) // not needed for backfill
-				m.ExtractionVersion = 0                       // lossy marker
-				messages = append(messages, m)
-			}
-			msgRows.Close()
-
-			// Mine templates from tool messages with is_error
-			miner := templates.NewMiner()
-			templateCount, err := d.backfillTemplatesForFile(tx, file.SourcePath, messages, miner)
-			if err != nil {
-				_ = tx.Rollback()
-				return fmt.Errorf("backfill templates for %s: %w", file.SourcePath, err)
-			}
-			batchTemplates += templateCount
-
-			// Mine corrections from user prose messages (content_type='text'|'code')
-			signalCount, err := d.backfillCorrectionsForFile(tx, file.SourcePath, messages)
-			if err != nil {
-				_ = tx.Rollback()
-				return fmt.Errorf("backfill corrections for %s: %w", file.SourcePath, err)
-			}
-			batchSignals += signalCount
-
-			// Extract lossy tool_events (uuid-NULL rows)
-			eventCount, err := d.backfillToolEventsForFile(tx, file.SourcePath, messages)
-			if err != nil {
-				_ = tx.Rollback()
-				return fmt.Errorf("backfill tool_events for %s: %w", file.SourcePath, err)
-			}
-			batchEvents += eventCount
-		}
-
-		if err := tx.Commit(); err != nil {
-			return fmt.Errorf("commit backfill batch: %w", err)
-		}
-
 		totalTemplates += batchTemplates
 		totalSignals += batchSignals
 		totalEvents += batchEvents
-
 		if opts.OnProgress != nil {
 			opts.OnProgress(batchEnd, totalTemplates, totalSignals, totalEvents)
 		}
 	}
-
 	return nil
+}
+
+func (d *Database) backfillDerivedBatch(ctx context.Context, batch []derivedBackfillFile) (templatesCount, signalsCount, eventsCount int, retErr error) {
+	tx, err := d.db.BeginTx(context.WithoutCancel(ctx), nil)
+	if err != nil {
+		return 0, 0, 0, fmt.Errorf("begin backfill batch: %w", err)
+	}
+	gate := newSyncTransactionGate(ctx, tx)
+	defer func() {
+		if rollbackErr := gate.rollback(); rollbackErr != nil && !errors.Is(retErr, rollbackErr) {
+			retErr = errors.Join(retErr, fmt.Errorf("rollback backfill batch: %w", rollbackErr))
+		}
+		if cancelErr := gate.cancellationBeforeCommit(); cancelErr != nil && !errors.Is(retErr, cancelErr) {
+			retErr = errors.Join(cancelErr, retErr)
+		}
+	}()
+
+	for _, file := range batch {
+		if err := ctx.Err(); err != nil {
+			return 0, 0, 0, err
+		}
+		msgRows, err := tx.QueryContext(ctx, `
+			SELECT ordinal, role, text, uuid, content_type, was_interrupted
+			FROM search_items WHERE source_path = ? ORDER BY ordinal ASC
+		`, file.SourcePath)
+		if err != nil {
+			return 0, 0, 0, fmt.Errorf("load messages for %s: %w", file.SourcePath, err)
+		}
+		var messages []IndexedMessage
+		for msgRows.Next() {
+			if err := ctx.Err(); err != nil {
+				_ = msgRows.Close()
+				return 0, 0, 0, err
+			}
+			var message IndexedMessage
+			var uuid sql.NullString
+			var wasInterrupted sql.NullInt64
+			if err := msgRows.Scan(&message.Ordinal, &message.Role, &message.Text, &uuid, &message.ContentType, &wasInterrupted); err != nil {
+				_ = msgRows.Close()
+				return 0, 0, 0, fmt.Errorf("scan message for %s: %w", file.SourcePath, err)
+			}
+			if uuid.Valid {
+				message.UUID = uuid.String
+			}
+			message.WasInterrupted = wasInterrupted.Valid && wasInterrupted.Int64 != 0
+			message.Timestamp = time.Now().Format(time.RFC3339)
+			message.ExtractionVersion = 0
+			messages = append(messages, message)
+		}
+		if err := ctx.Err(); err != nil {
+			_ = msgRows.Close()
+			return 0, 0, 0, err
+		}
+		if err := msgRows.Err(); err != nil {
+			_ = msgRows.Close()
+			return 0, 0, 0, fmt.Errorf("iterate messages for %s: %w", file.SourcePath, err)
+		}
+		if err := msgRows.Close(); err != nil {
+			return 0, 0, 0, fmt.Errorf("close messages for %s: %w", file.SourcePath, err)
+		}
+
+		count, err := d.backfillTemplatesForFileContext(ctx, tx, file.SourcePath, messages, templates.NewMiner())
+		if err != nil {
+			return 0, 0, 0, fmt.Errorf("backfill templates for %s: %w", file.SourcePath, err)
+		}
+		templatesCount += count
+		count, err = d.backfillCorrectionsForFileContext(ctx, tx, file.SourcePath, messages)
+		if err != nil {
+			return 0, 0, 0, fmt.Errorf("backfill corrections for %s: %w", file.SourcePath, err)
+		}
+		signalsCount += count
+		count, err = d.backfillToolEventsForFileContext(ctx, tx, file.SourcePath, messages)
+		if err != nil {
+			return 0, 0, 0, fmt.Errorf("backfill tool_events for %s: %w", file.SourcePath, err)
+		}
+		eventsCount += count
+	}
+	if err := gate.commit(); err != nil {
+		return 0, 0, 0, fmt.Errorf("commit backfill batch: %w", err)
+	}
+	return templatesCount, signalsCount, eventsCount, nil
 }
 
 // backfillTemplatesForFile mines templates from tool messages in the file.
@@ -459,8 +479,18 @@ func (d *Database) backfillCorrectionsForFileContext(ctx context.Context, tx *sq
 // NOTE: outputs (tool_result text) cannot be attributed without tool_use_id linkage,
 // so they are skipped (ParseToolFromSerialized returns empty toolName for outputs).
 func (d *Database) backfillToolEventsForFile(tx *sql.Tx, sourcePath string, messages []IndexedMessage) (int, error) {
+	return d.backfillToolEventsForFileContext(context.Background(), tx, sourcePath, messages)
+}
+
+func (d *Database) backfillToolEventsForFileContext(ctx context.Context, tx *sql.Tx, sourcePath string, messages []IndexedMessage) (int, error) {
+	if err := ctx.Err(); err != nil {
+		return 0, err
+	}
 	count := 0
 	for _, m := range messages {
+		if err := ctx.Err(); err != nil {
+			return 0, err
+		}
 		if m.ContentType != "tool" {
 			continue
 		}
@@ -479,7 +509,7 @@ func (d *Database) backfillToolEventsForFile(tx *sql.Tx, sourcePath string, mess
 		}
 
 		// uuid-NULL for lossy rows (no tool_use_id linkage available)
-		_, err := tx.Exec(`
+		_, err := tx.ExecContext(ctx, `
 			INSERT OR IGNORE INTO tool_events
 			(message_uuid, source_path, ordinal, tool_name, command_head, extraction_version)
 			VALUES (?, ?, ?, ?, ?, ?)
