@@ -8,7 +8,7 @@ Backscroll is a Go CLI tool that indexes Claude Code, Pi, OpenCode, Codex CLI, a
 
 **Status**: Go port complete — `main` branch is the active Go implementation. The Rust implementation is frozen in the `v0` branch.
 
-Implemented: `internal/config`, `internal/input_config`, `internal/models`, `internal/readers`, `internal/sync`, `internal/tagging`, `internal/plans`, `internal/sources`, `internal/storage`, `internal/projects`, `internal/templates`, `internal/corrections`, `internal/categories`, `internal/sequences`, `internal/chunking`, `internal/embedding`, `internal/hybrid`, `internal/compat`, `internal/recovery`, `internal/startuplock`. CLI commands in `cmd/backscroll/` (11 v2 commands via cobra).
+Implemented: `internal/config`, `internal/input_config`, `internal/models`, `internal/readers`, `internal/sync`, `internal/tagging`, `internal/plans`, `internal/sources`, `internal/storage`, `internal/services`, `internal/projects`, `internal/templates`, `internal/corrections`, `internal/categories`, `internal/sequences`, `internal/chunking`, `internal/embedding`, `internal/hybrid`, `internal/compat`, `internal/recovery`, `internal/startuplock`. CLI commands in `cmd/backscroll/` (11 v2 commands via cobra).
 
 Stack: cobra, go-toml/v2, goldmark, modernc.org/sqlite (pure Go, no CGO), stdlib testing.
 
@@ -74,6 +74,7 @@ internal/
 ├── embedding/         — Embedding provider interfaces, mock provider, and ONNX provider implementation
 ├── hybrid/            — Reciprocal Rank Fusion helpers for merged lexical/vector retrieval
 ├── sequences/         — F4 PrefixSpan mining (deterministic discovery of frequent tool-call sequences per session)
+├── services/          — Concrete typed read-only query orchestration over storage
 └── storage/           — SQLite adapter (dual FTS5 indexes: tool_fts + messages_fts, BM25, WAL mode, migrations v1–v16, search_items, session_tags, tool_events, message_templates, template_matches, correction_signals, annotations, AggregateCommands, AggregateFailures, AggregateTemplates, AggregateCorrections, UpsertAnnotation, LoadToolSequences)
 scripts/
 └── recall-eval/       — isolated legacy/synthetic recall evaluator and cohort reporter
@@ -252,6 +253,7 @@ github.com/pablontiv/backscroll/internal/chunking      — Token-aware text chun
 github.com/pablontiv/backscroll/internal/embedding     — Embedding provider interface, mock provider, and ONNX provider implementation
 github.com/pablontiv/backscroll/internal/hybrid        — Reciprocal Rank Fusion helpers for merged lexical/vector retrieval
 github.com/pablontiv/backscroll/internal/sequences     — F4 PrefixSpan mining (deterministic pattern discovery per session)
+github.com/pablontiv/backscroll/internal/services      — Concrete typed read-only query orchestration over storage
 github.com/pablontiv/backscroll/internal/storage       — Database schema, migrations v1–v16, FTS5 indexes
 github.com/pablontiv/backscroll/internal/projects      — Project identity registry
 github.com/pablontiv/backscroll/internal/readers       — SessionReader interface, Registry, ClaudeReader (text+tool_use+tool_result), PiReader (text+toolCall+custom results), OpenCodeReader (text+tool state.input+state.output), CodexReader (rollout response items; docs/input-contract.md), MarkdownDocumentReader (`markdown_document`), MarkdownSectionsReader (`markdown_sections`); toolfmt serializer
