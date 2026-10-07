@@ -1,6 +1,7 @@
 package storage
 
 import (
+	"context"
 	"database/sql"
 	"errors"
 	"fmt"
@@ -13,6 +14,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/pablontiv/backscroll/internal/compat"
 	"github.com/pablontiv/backscroll/internal/models"
 )
 
@@ -70,21 +72,21 @@ func TestConcurrentOpenOfMissingDatabasePublishesOneCompleteDatabase(t *testing.
 		t.Run(fmt.Sprintf("workers_%d", workers), func(t *testing.T) {
 			directory := t.TempDir()
 			dbPath := filepath.Join(directory, "concurrent.db")
-			originalInitialize := initializeNewDatabaseSchema
+			deps := defaultDatabaseCreationDeps()
+			originalV1 := deps.migrations[0]
 			var entered atomic.Int32
 			release := make(chan struct{})
-			initializeNewDatabaseSchema = func(db *Database) error {
+			deps.migrations[0] = func(ctx context.Context, tx *sql.Tx, from compat.SchemaShape) error {
 				if entered.Add(1) == int32(workers) {
 					close(release)
 				}
 				select {
+				case <-ctx.Done():
+					return ctx.Err()
 				case <-release:
-					return originalInitialize(db)
-				case <-time.After(5 * time.Second):
-					return errors.New("timed out waiting for concurrent creators")
+					return originalV1(ctx, tx, from)
 				}
 			}
-			defer func() { initializeNewDatabaseSchema = originalInitialize }()
 
 			type openResult struct {
 				db  *Database
@@ -98,7 +100,7 @@ func TestConcurrentOpenOfMissingDatabasePublishesOneCompleteDatabase(t *testing.
 				go func() {
 					defer group.Done()
 					<-start
-					db, err := Open(dbPath)
+					db, err := openContextWithCreationDeps(context.Background(), dbPath, deps)
 					results <- openResult{db: db, err: err}
 				}()
 			}
@@ -153,11 +155,10 @@ func TestOpenInitializationFailureDoesNotPublishDatabase(t *testing.T) {
 	directory := t.TempDir()
 	dbPath := filepath.Join(directory, "failed.db")
 	initErr := errors.New("injected initialization failure")
-	originalInitialize := initializeNewDatabaseSchema
-	initializeNewDatabaseSchema = func(*Database) error { return initErr }
-	defer func() { initializeNewDatabaseSchema = originalInitialize }()
+	deps := defaultDatabaseCreationDeps()
+	deps.migrations[7] = func(context.Context, *sql.Tx, compat.SchemaShape) error { return initErr }
 
-	db, err := Open(dbPath)
+	db, err := openContextWithCreationDeps(context.Background(), dbPath, deps)
 	if db != nil {
 		_ = db.Close()
 		t.Fatal("Open returned database after initialization failure")
