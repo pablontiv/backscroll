@@ -98,7 +98,7 @@ func newContextCmd(stdout, stderr io.Writer) *cobra.Command {
 			if startup.Config == nil {
 				return fmt.Errorf("startup configuration unavailable")
 			}
-			return runContext(cmd.Context(), stdout, stderr, startup.Config, opts)
+			return runContextCommand(cmd.Context(), stdout, stderr, startup.Config, opts)
 		},
 	}
 
@@ -147,7 +147,7 @@ func validateContextRequest(opts contextCommandOptions) error {
 	return nil
 }
 
-func runContext(ctx context.Context, stdout, stderr io.Writer, cfg *config.Config, opts contextCommandOptions) (retErr error) {
+func runContextCommand(ctx context.Context, stdout, stderr io.Writer, cfg *config.Config, opts contextCommandOptions) (retErr error) {
 	if err := validateContextRequest(opts); err != nil {
 		return err
 	}
