@@ -7,6 +7,8 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"runtime"
+	"strings"
 
 	"github.com/pablontiv/backscroll/internal/input_config"
 )
@@ -42,8 +44,14 @@ func Install(options Options) (Result, error) {
 	if err != nil {
 		return Result{}, err
 	}
+	if err := safeParents(dir); err != nil {
+		return Result{}, err
+	}
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return Result{}, fmt.Errorf("create inputs directory %s: %w", dir, err)
+	}
+	if err := safeParents(filepath.Join(dir, "placeholder")); err != nil {
+		return Result{}, err
 	}
 
 	var result Result
@@ -67,12 +75,26 @@ func inputsDir(configHome string) (string, error) {
 		if err != nil {
 			return "", fmt.Errorf("resolve inputs directory: %w", err)
 		}
-		return dir, nil
+		return canonicalDarwinPath(dir)
 	}
 	if !filepath.IsAbs(configHome) {
 		return "", errors.New("config home must be absolute")
 	}
-	return filepath.Join(filepath.Clean(configHome), "backscroll", "inputs"), nil
+	return canonicalDarwinPath(filepath.Join(filepath.Clean(configHome), "backscroll", "inputs"))
+}
+
+func canonicalDarwinPath(path string) (string, error) {
+	if runtime.GOOS != "darwin" || path != "/var" && !strings.HasPrefix(path, "/var/") {
+		return path, nil
+	}
+	resolved, err := filepath.EvalSymlinks("/var")
+	if err != nil {
+		return "", err
+	}
+	if path == "/var" {
+		return resolved, nil
+	}
+	return filepath.Join(resolved, strings.TrimPrefix(path, "/var/")), nil
 }
 
 func installOne(dir, name string, overwrite bool) (bool, error) {
@@ -102,6 +124,9 @@ func installOne(dir, name string, overwrite bool) (bool, error) {
 		if err := os.Rename(temporary, destination); err != nil {
 			return false, fmt.Errorf("replace preset %s: %w", destination, err)
 		}
+		if err := syncDirectory(dir); err != nil {
+			return false, fmt.Errorf("sync preset directory: %w", err)
+		}
 		return true, nil
 	}
 
@@ -111,7 +136,38 @@ func installOne(dir, name string, overwrite bool) (bool, error) {
 		}
 		return false, fmt.Errorf("install preset %s: %w", destination, err)
 	}
+	if err := os.Remove(temporary); err != nil {
+		return false, fmt.Errorf("remove temporary preset %s: %w", temporary, err)
+	}
+	temporary = ""
+	if err := syncDirectory(dir); err != nil {
+		return false, fmt.Errorf("sync preset directory: %w", err)
+	}
 	return true, nil
+}
+
+func safeParents(path string) error {
+	for parent := filepath.Dir(path); ; parent = filepath.Dir(parent) {
+		info, err := os.Lstat(parent)
+		if err == nil {
+			if info.Mode()&os.ModeSymlink != 0 || !info.IsDir() {
+				return fmt.Errorf("unsafe preset ancestor: %s", parent)
+			}
+		} else if !errors.Is(err, os.ErrNotExist) {
+			return err
+		}
+		if filepath.Dir(parent) == parent {
+			return nil
+		}
+	}
+}
+
+func syncDirectory(path string) error {
+	directory, err := os.Open(path)
+	if err != nil {
+		return err
+	}
+	return errors.Join(directory.Sync(), directory.Close())
 }
 
 func writeTemporary(dir, name string, data []byte) (path string, err error) {

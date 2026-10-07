@@ -8,6 +8,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 
 	"github.com/pablontiv/backscroll/internal/presets"
@@ -216,38 +217,18 @@ func resolveConfigHome(home, value string) (string, error) {
 	if !filepath.IsAbs(value) {
 		return "", errors.New("config home must be an absolute path")
 	}
-	resolved, err := resolvePathWithMissingTail(value)
-	if err != nil {
-		return "", fmt.Errorf("resolve config home: %w", err)
-	}
-	return resolved, nil
-}
-
-func resolvePathWithMissingTail(path string) (string, error) {
-	current := filepath.Clean(path)
-	var tail []string
-	for {
-		_, err := os.Lstat(current)
-		if err == nil {
-			resolved, err := filepath.EvalSymlinks(current)
-			if err != nil {
-				return "", err
-			}
-			for index := len(tail) - 1; index >= 0; index-- {
-				resolved = filepath.Join(resolved, tail[index])
-			}
+	value = filepath.Clean(value)
+	if runtime.GOOS == "darwin" && (value == "/var" || strings.HasPrefix(value, "/var/")) {
+		resolved, err := filepath.EvalSymlinks("/var")
+		if err != nil {
+			return "", fmt.Errorf("resolve config home: %w", err)
+		}
+		if value == "/var" {
 			return resolved, nil
 		}
-		if !errors.Is(err, os.ErrNotExist) {
-			return "", err
-		}
-		parent := filepath.Dir(current)
-		if parent == current {
-			return "", fmt.Errorf("no existing ancestor for %s", path)
-		}
-		tail = append(tail, filepath.Base(current))
-		current = parent
+		return filepath.Join(resolved, strings.TrimPrefix(value, "/var/")), nil
 	}
+	return value, nil
 }
 
 func encodeSkillInstallResult(stdout io.Writer, result skillinstall.ApplyResult) error {

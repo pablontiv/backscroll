@@ -677,7 +677,7 @@ func validateBackscrollInvocations(root *cobra.Command, path string, lineNumber 
 		args := shellishTokenValues(argsTokens)
 		cmd := root
 		cmdName := root.Name()
-		flagArgsTokens := argsTokens
+		consumed := 0
 		if len(args) > 0 && !strings.HasPrefix(args[0], "-") {
 			child := findSubcommand(root, args[0])
 			if child == nil {
@@ -695,8 +695,16 @@ func validateBackscrollInvocations(root *cobra.Command, path string, lineNumber 
 			}
 			cmd = child
 			cmdName = root.Name() + " " + child.Name()
-			flagArgsTokens = argsTokens[1:]
+			consumed = 1
+			if len(args) > 1 && !strings.HasPrefix(args[1], "-") {
+				if grandchild := findSubcommand(child, args[1]); grandchild != nil {
+					cmd = grandchild
+					cmdName += " " + grandchild.Name()
+					consumed = 2
+				}
+			}
 		}
+		flagArgsTokens := argsTokens[consumed:]
 
 		flagArgs := shellishTokenValues(flagArgsTokens)
 		for _, flagName := range longFlags(flagArgs) {

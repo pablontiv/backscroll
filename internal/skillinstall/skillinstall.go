@@ -13,13 +13,18 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"runtime"
 	"sort"
 	"strings"
+	"unicode/utf8"
 
 	"github.com/google/uuid"
 )
 
-const statePath = ".local/state/backscroll/skill-install"
+const (
+	statePath   = ".local/state/backscroll/skill-install"
+	managedPath = ".local/share/backscroll/skill/backscroll"
+)
 
 //go:embed assets/*
 var officialShimFiles embed.FS
@@ -139,9 +144,10 @@ type receipt struct {
 }
 
 type dependencies struct {
-	exchange      func(string, string) error
-	moveNoReplace func(string, string) error
-	syncDir       func(string) error
+	exchange       func(string, string) error
+	moveNoReplace  func(string, string) error
+	syncDir        func(string) error
+	sameFilesystem func(string, string) error
 }
 
 // Installer holds validated paths and immutable shim bytes.
@@ -156,10 +162,16 @@ type Installer struct {
 
 // New validates an installation request. It does not modify the filesystem.
 func New(options Options) (*Installer, error) {
-	return newInstaller(options, dependencies{exchange: exchangePaths, moveNoReplace: moveNoReplace, syncDir: syncDirectory})
+	return newInstaller(options, dependencies{
+		exchange: exchangePaths, moveNoReplace: moveNoReplace,
+		syncDir: syncDirectory, sameFilesystem: sameFilesystemWithMissing,
+	})
 }
 
 func newInstaller(options Options, deps dependencies) (*Installer, error) {
+	if deps.sameFilesystem == nil {
+		deps.sameFilesystem = sameFilesystemWithMissing
+	}
 	home, err := canonicalHome(options.Home)
 	if err != nil {
 		return nil, err
@@ -193,7 +205,7 @@ func (i *Installer) Plan() (Plan, error) {
 	if err != nil {
 		return Plan{}, err
 	}
-	managed := filepath.Join(i.state, "managed", treeDigest, "backscroll")
+	managed := filepath.Join(i.home, managedPath, treeDigest, "backscroll")
 	if err := validateLayout(i.home, i.configHome, i.state, managed, targetPaths(i.home, i.configHome)); err != nil {
 		return Plan{}, err
 	}
@@ -223,7 +235,13 @@ func (i *Installer) Plan() (Plan, error) {
 		}
 		change := !reflect.DeepEqual(before, Snapshot{Kind: "link", Target: managed})
 		if change && before.Kind != "absent" {
-			plan.RequiresApproval = true
+			owned, err := i.isManagedTarget(before)
+			if err != nil {
+				return Plan{}, fmt.Errorf("inspect managed destination %s: %w", path, err)
+			}
+			if !owned {
+				plan.RequiresApproval = true
+			}
 		}
 		plan.Targets = append(plan.Targets, Target{Path: path, Before: before, Change: change})
 	}
@@ -262,6 +280,13 @@ func (i *Installer) Apply(approval string) (result ApplyResult, err error) {
 	}
 	if !reflect.DeepEqual(lockedPlan, plan) {
 		return ApplyResult{}, errors.New("inventory changed before installation")
+	}
+	for _, row := range plan.Targets {
+		if row.Change {
+			if err := i.deps.sameFilesystem(filepath.Dir(row.Path), i.state); err != nil {
+				return ApplyResult{}, err
+			}
+		}
 	}
 
 	runName := uuid.NewString()
@@ -365,7 +390,10 @@ func Restore(home, receiptPath, approval string) (result RestoreResult, err erro
 	if err := validateReceipt(receiptValue, canonical, path); err != nil {
 		return RestoreResult{}, err
 	}
-	deps := dependencies{exchange: exchangePaths, moveNoReplace: moveNoReplace, syncDir: syncDirectory}
+	deps := dependencies{
+		exchange: exchangePaths, moveNoReplace: moveNoReplace,
+		syncDir: syncDirectory, sameFilesystem: sameFilesystemWithMissing,
+	}
 	count, err := restoreRows(filepath.Dir(path), receiptValue, deps)
 	if err != nil {
 		return RestoreResult{}, err
@@ -399,11 +427,12 @@ func (i *Installer) ensureManaged(run, managed string) error {
 	if err := safeParents(managed); err != nil {
 		return err
 	}
-	staging := filepath.Join(run, "managed-backscroll")
+	staging := filepath.Join(parent, ".backscroll-"+filepath.Base(run))
 	if err := writeShimTree(staging, i.shim); err != nil {
 		return err
 	}
-	if err := i.deps.syncDir(run); err != nil {
+	defer func() { _ = removeImmutableTree(staging) }()
+	if err := i.deps.syncDir(parent); err != nil {
 		return err
 	}
 	if err := i.deps.moveNoReplace(staging, managed); err != nil {
@@ -431,9 +460,6 @@ func (i *Installer) installTarget(run, runName string, index int, row Target, ma
 		return fmt.Errorf("create destination parent: %w", err)
 	}
 	if err := safeParents(row.Path); err != nil {
-		return err
-	}
-	if err := sameFilesystem(parent, run); err != nil {
 		return err
 	}
 	if err := appendEvent(run, map[string]any{"event": "install-intent", "path": row.Path}); err != nil {
@@ -637,7 +663,7 @@ func validateReceipt(value receipt, home, path string) error {
 		if value.Plan.Source.Root != "" || value.Plan.Source.Commit != "" || !isSHA256(value.Plan.Source.TreeSHA256) {
 			return errors.New("Go v2 receipt source is invalid")
 		}
-		expectedSource := filepath.Join(home, statePath, "managed", value.Plan.Source.TreeSHA256, "backscroll")
+		expectedSource := filepath.Join(home, managedPath, value.Plan.Source.TreeSHA256, "backscroll")
 		if value.Plan.Source.Path != expectedSource {
 			return errors.New("Go v2 receipt source path is invalid")
 		}
@@ -716,12 +742,42 @@ func digestValue(value any) (string, error) {
 	if err := decoder.Decode(&canonical); err != nil {
 		return "", fmt.Errorf("canonicalize digest input: %w", err)
 	}
-	data, err = json.Marshal(canonical)
+	data, err = pythonCanonicalJSON(canonical)
 	if err != nil {
-		return "", fmt.Errorf("encode canonical digest input: %w", err)
+		return "", err
 	}
 	sum := sha256.Sum256(data)
 	return hex.EncodeToString(sum[:]), nil
+}
+
+func pythonCanonicalJSON(value any) ([]byte, error) {
+	var encoded bytes.Buffer
+	encoder := json.NewEncoder(&encoded)
+	encoder.SetEscapeHTML(false)
+	if err := encoder.Encode(value); err != nil {
+		return nil, fmt.Errorf("encode canonical digest input: %w", err)
+	}
+	data := bytes.TrimSuffix(encoded.Bytes(), []byte{'\n'})
+	var result bytes.Buffer
+	for len(data) > 0 {
+		r, size := utf8.DecodeRune(data)
+		if r == utf8.RuneError && size == 1 {
+			return nil, errors.New("canonical digest input contains invalid UTF-8")
+		}
+		switch {
+		case r < utf8.RuneSelf:
+			result.WriteByte(byte(r))
+		case r <= 0xffff:
+			_, _ = fmt.Fprintf(&result, `\u%04x`, r)
+		default:
+			r -= 0x10000
+			high := 0xd800 + (r >> 10)
+			low := 0xdc00 + (r & 0x3ff)
+			_, _ = fmt.Fprintf(&result, `\u%04x\u%04x`, high, low)
+		}
+		data = data[size:]
+	}
+	return result.Bytes(), nil
 }
 
 func validateSnapshot(value Snapshot) error {
@@ -827,7 +883,7 @@ func snapshot(path string) (Snapshot, error) {
 }
 
 func desiredSnapshot(shim map[string][]byte) Snapshot {
-	root := Snapshot{Kind: "directory", Mode: 0o755, Entries: map[string]Snapshot{}}
+	root := Snapshot{Kind: "directory", Mode: 0o555, Entries: map[string]Snapshot{}}
 	for name, data := range shim {
 		parts := strings.Split(filepath.ToSlash(name), "/")
 		insertDesired(&root, parts, data)
@@ -843,7 +899,7 @@ func insertDesired(root *Snapshot, parts []string, data []byte) {
 	}
 	child, ok := root.Entries[parts[0]]
 	if !ok {
-		child = Snapshot{Kind: "directory", Mode: 0o755, Entries: map[string]Snapshot{}}
+		child = Snapshot{Kind: "directory", Mode: 0o555, Entries: map[string]Snapshot{}}
 	}
 	insertDesired(&child, parts[1:], data)
 	root.Entries[parts[0]] = child
@@ -912,7 +968,7 @@ func writeShimTree(root string, shim map[string][]byte) error {
 	}
 	sort.Slice(dirs, func(a, b int) bool { return len(dirs[a]) > len(dirs[b]) })
 	for _, dir := range dirs {
-		if err := os.Chmod(dir, 0o755); err != nil {
+		if err := os.Chmod(dir, 0o555); err != nil {
 			return err
 		}
 		if err := syncDirectory(dir); err != nil {
@@ -920,6 +976,16 @@ func writeShimTree(root string, shim map[string][]byte) error {
 		}
 	}
 	return nil
+}
+
+func removeImmutableTree(root string) error {
+	_ = filepath.WalkDir(root, func(path string, entry os.DirEntry, err error) error {
+		if err == nil && entry.IsDir() {
+			_ = os.Chmod(path, 0o700)
+		}
+		return nil
+	})
+	return os.RemoveAll(root)
 }
 
 func writeJSONExclusive(path string, value any) error {
@@ -1016,11 +1082,25 @@ func absolutePath(path string) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	result = filepath.Clean(result)
+	result = canonicalDarwinVar(filepath.Clean(result))
 	if err := safeParents(result); err != nil {
 		return "", err
 	}
 	return result, nil
+}
+
+func canonicalDarwinVar(path string) string {
+	if runtime.GOOS != "darwin" || path != "/var" && !strings.HasPrefix(path, "/var/") {
+		return path
+	}
+	resolved, err := filepath.EvalSymlinks("/var")
+	if err != nil {
+		return path
+	}
+	if path == "/var" {
+		return resolved
+	}
+	return filepath.Join(resolved, strings.TrimPrefix(path, "/var/"))
 }
 
 func safeParents(path string) error {
@@ -1073,12 +1153,12 @@ func makePrivateDir(path string) error {
 	return nil
 }
 
-func sameFilesystem(left, right string) error {
-	leftInfo, err := os.Stat(left)
+func sameFilesystemWithMissing(left, right string) error {
+	leftInfo, err := statExistingAncestor(left)
 	if err != nil {
 		return err
 	}
-	rightInfo, err := os.Stat(right)
+	rightInfo, err := statExistingAncestor(right)
 	if err != nil {
 		return err
 	}
@@ -1094,6 +1174,50 @@ func sameFilesystem(left, right string) error {
 		return errors.New("backup and destination must be on the same filesystem")
 	}
 	return nil
+}
+
+func statExistingAncestor(path string) (os.FileInfo, error) {
+	for {
+		info, err := os.Stat(path)
+		if err == nil {
+			return info, nil
+		}
+		if !os.IsNotExist(err) {
+			return nil, err
+		}
+		parent := filepath.Dir(path)
+		if parent == path {
+			return nil, fmt.Errorf("no existing ancestor for %s", path)
+		}
+		path = parent
+	}
+}
+
+func (i *Installer) isManagedTarget(before Snapshot) (bool, error) {
+	if before.Kind != "link" || !filepath.IsAbs(before.Target) {
+		return false, nil
+	}
+	root := filepath.Join(i.home, managedPath)
+	relative, err := filepath.Rel(root, before.Target)
+	if err != nil {
+		return false, nil
+	}
+	parts := strings.Split(filepath.ToSlash(relative), "/")
+	if len(parts) != 2 || parts[1] != "backscroll" || !isSHA256(parts[0]) {
+		return false, nil
+	}
+	current, err := snapshot(before.Target)
+	if err != nil {
+		return false, err
+	}
+	if current.Kind != "directory" {
+		return false, nil
+	}
+	digest, err := digestValue(current)
+	if err != nil {
+		return false, err
+	}
+	return digest == parts[0], nil
 }
 
 func countChanges(targets []Target) int {

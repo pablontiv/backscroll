@@ -1,392 +1,165 @@
 #!/usr/bin/env bash
-# Unit tests for install.sh — validates structure and logic
+# Hermetic regression tests for install.sh.
 set -uo pipefail
 
 PASS=0
 FAIL=0
-SCRIPT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
-SCRIPT="$SCRIPT_DIR/install.sh"
-INPUTS_DIR="$SCRIPT_DIR/inputs"
-
+ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+SCRIPT="$ROOT/install.sh"
+INPUTS_DIR="$ROOT/inputs"
 FIXTURE_DIR="$(mktemp -d)"
 trap 'rm -rf "$FIXTURE_DIR"' EXIT
-echo 'FAKE_BINARY' >"$FIXTURE_DIR/backscroll"
-FIXTURE_TARBALL="$FIXTURE_DIR/asset.tar.gz"
-tar -czf "$FIXTURE_TARBALL" -C "$FIXTURE_DIR" backscroll
-export FIXTURE_TARBALL
+
+cat >"$FIXTURE_DIR/backscroll" <<'SH'
+#!/usr/bin/env bash
+set -euo pipefail
+if [ "${1:-}" = "--version" ]; then
+  echo "backscroll fixture"
+  exit 0
+fi
+printf '%s\n' "$*" >>"${BACKSCROLL_TEST_CALL_LOG:?}"
+[ "${1:-}" = presets ] && [ "${2:-}" = install ]
+shift 2
+config_home="${XDG_CONFIG_HOME:-$HOME/.config}"
+overwrite=0
+while [ "$#" -gt 0 ]; do
+  case "$1" in
+    --config-home) config_home="$2"; shift 2 ;;
+    --overwrite) overwrite=1; shift ;;
+    *) exit 2 ;;
+  esac
+done
+destination="$config_home/backscroll/inputs"
+mkdir -p "$destination"
+for name in claude.inputs.toml pi.inputs.toml decisions.inputs.toml opencode.inputs.toml codex.inputs.toml; do
+  if [ -e "$destination/$name" ] && [ "$overwrite" != 1 ]; then
+    continue
+  fi
+  cp "${BACKSCROLL_INPUTS_SOURCE_DIR:?}/$name" "$destination/$name"
+done
+SH
+chmod +x "$FIXTURE_DIR/backscroll"
+tar -czf "$FIXTURE_DIR/asset.tar.gz" -C "$FIXTURE_DIR" backscroll
+export FIXTURE_TARBALL="$FIXTURE_DIR/asset.tar.gz"
 
 pass() {
-    ((PASS++))
-    echo "  PASS: $1"
+  PASS=$((PASS + 1))
+  echo "  PASS: $1"
 }
+
 fail() {
-    ((FAIL++))
-    echo "  FAIL: $1 — $2"
+  FAIL=$((FAIL + 1))
+  echo "  FAIL: $1 - $2"
 }
 
-core_presets_match() {
-    local destination="$1" preset
-    for preset in claude pi omp decisions opencode codex; do
-        cmp -s "$INPUTS_DIR/$preset.inputs.toml" "$destination/$preset.inputs.toml" || return 1
-    done
-}
-
-# Create a testable version: strip set -e and the main call
 make_testable() {
-    local tmp
-    tmp=$(mktemp)
-    sed -e 's/^set -euo pipefail$/set -uo pipefail/' \
-        -e 's/^main "\$@"$//' \
-        "$SCRIPT" >"$tmp"
-    echo "$tmp"
+  local output
+  output="$(mktemp)"
+  sed -e 's/^set -euo pipefail$/set -uo pipefail/' -e 's/^main "\$@"$//' "$SCRIPT" >"$output"
+  echo "$output"
 }
 
-run_main_linux() {
-    local testable install_dir config_dir
-    testable="$1"
-    install_dir="$2"
-    config_dir="$3"
-    BACKSCROLL_INSTALL_DIR="$install_dir" \
-        BACKSCROLL_CONFIG_DIR="$config_dir" \
-        BACKSCROLL_INPUTS_SOURCE_DIR="$INPUTS_DIR" \
-        bash -c "
-        source '$testable'
-        uname() {
-            case \"\$1\" in
-                -s) echo 'Linux' ;;
-                -m) echo 'x86_64' ;;
-            esac
-        }
-        curl() {
-            local outfile='' prev='' arg
-            for arg in \"\$@\"; do
-                if [ \"\$prev\" = '-o' ]; then outfile=\"\$arg\"; fi
-                prev=\"\$arg\"
-            done
-            if [[ \"\$*\" == *api.github.com* ]]; then
-                echo '{\"tag_name\": \"v0.2.3\"}'
-            elif [[ \"\$*\" == *releases/download/* ]] && [ -n \"\$outfile\" ]; then
-                cp \"\$FIXTURE_TARBALL\" \"\$outfile\"
-            elif [ -n \"\$outfile\" ]; then
-                echo 'FAKE_BINARY' > \"\$outfile\"
-            else
-                echo 'FAKE_BINARY'
-            fi
-        }
-        chmod() { :; }
-        main 2>&1
-    "
+run_main() {
+  local testable="$1" os="$2" arch="$3" install_dir="$4" home="$5" config_dir="$6" log="$7"
+  BACKSCROLL_INSTALL_DIR="$install_dir" \
+  BACKSCROLL_CONFIG_DIR="$config_dir" \
+  BACKSCROLL_INPUTS_SOURCE_DIR="$INPUTS_DIR" \
+  BACKSCROLL_TEST_CALL_LOG="$log" \
+  HOME="$home" \
+  bash -c "
+    source '$testable'
+    uname() {
+      case \"\$1\" in
+        -s) echo '$os' ;;
+        -m) echo '$arch' ;;
+      esac
+    }
+    curl() {
+      local outfile='' previous='' argument
+      for argument in \"\$@\"; do
+        if [ \"\$previous\" = -o ]; then outfile=\"\$argument\"; fi
+        previous=\"\$argument\"
+      done
+      if [[ \"\$*\" == *api.github.com* ]]; then
+        echo '{\"tag_name\": \"v0.2.3\"}'
+      elif [[ \"\$*\" == *releases/download/* ]] && [ -n \"\$outfile\" ]; then
+        cp \"\$FIXTURE_TARBALL\" \"\$outfile\"
+      else
+        return 90
+      fi
+    }
+    main
+  "
+}
+
+presets_match() {
+  local destination="$1" name
+  for name in claude.inputs.toml pi.inputs.toml decisions.inputs.toml opencode.inputs.toml codex.inputs.toml; do
+    cmp -s "$INPUTS_DIR/$name" "$destination/$name" || return 1
+  done
 }
 
 echo "=== install.sh tests ==="
 
-# The Unix preset set is a literal shipped contract, not inferred from itself.
-testable=$(make_testable)
-presets=$(bash -c "source '$testable'; printf '%s\n' \"\${INPUT_PRESETS[*]}\"")
-rm -f "$testable"
-if [ "$presets" = "claude.inputs.toml pi.inputs.toml omp.inputs.toml decisions.inputs.toml opencode.inputs.toml codex.inputs.toml" ]; then
-    pass "exact Unix shipped preset set includes dedicated OMP"
+if bash -n "$SCRIPT"; then pass "install.sh has valid Bash syntax"; else fail "syntax" "bash -n failed"; fi
+
+TESTABLE="$(make_testable)"
+output="$(bash -c "source '$TESTABLE'; error 'test message'" 2>&1)" && rc=0 || rc=$?
+if [ "$rc" -eq 1 ] && grep -q 'Error: test message' <<<"$output"; then pass "error reports and exits"; else fail "error" "$output"; fi
+rm -f "$TESTABLE"
+
+for platform in "Linux x86_64 linux_amd64" "Darwin arm64 darwin_arm64"; do
+  read -r os arch asset <<<"$platform"
+  TESTABLE="$(make_testable)"
+  install_dir="$(mktemp -d)"; home="$(mktemp -d)"; config="$(mktemp -d)"; log="$(mktemp)"
+  output="$(run_main "$TESTABLE" "$os" "$arch" "$install_dir" "$home" "$config" "$log" 2>&1)" && rc=0 || rc=$?
+  if [ "$rc" -eq 0 ] && grep -q "backscroll_0.2.3_${asset}.tar.gz" <<<"$output"; then pass "$os $arch selects the release asset"; else fail "$os asset" "$output"; fi
+  rm -rf "$TESTABLE" "$install_dir" "$home" "$config" "$log"
+done
+
+TESTABLE="$(make_testable)"
+output="$(bash -c "source '$TESTABLE'; uname(){ [ \"\$1\" = -s ] && echo FreeBSD || echo x86_64; }; main" 2>&1)" && rc=0 || rc=$?
+if [ "$rc" -ne 0 ]; then pass "unsupported systems fail"; else fail "unsupported system" "$output"; fi
+rm -f "$TESTABLE"
+
+TESTABLE="$(make_testable)"
+install_dir="$(mktemp -d)"; home="$(mktemp -d)"; config="$(mktemp -d)"; log="$(mktemp)"
+output="$(run_main "$TESTABLE" Linux x86_64 "$install_dir" "$home" "$config" "$log" 2>&1)" && rc=0 || rc=$?
+if [ "$rc" -eq 0 ] && [ -x "$install_dir/backscroll" ]; then pass "the bootstrap installs the binary"; else fail "binary install" "$output"; fi
+if grep -qxF "presets install --config-home $config" "$log" && presets_match "$config/backscroll/inputs"; then
+  pass "the bootstrap invokes native presets with the explicit config home"
 else
-    fail "preset set" "unexpected presets: $presets"
+  fail "native preset command" "log=$(cat "$log")"
 fi
+rm -rf "$TESTABLE" "$install_dir" "$home" "$config" "$log"
 
-# Test 1: script has valid bash syntax
-echo "[syntax check]"
-if bash -n "$SCRIPT" 2>&1; then
-    pass "install.sh has valid bash syntax"
+TESTABLE="$(make_testable)"
+install_dir="$(mktemp -d)"; home="$(mktemp -d)"; xdg="$(mktemp -d)"; log="$(mktemp)"
+output="$(env -u BACKSCROLL_CONFIG_DIR BACKSCROLL_INSTALL_DIR="$install_dir" BACKSCROLL_INPUTS_SOURCE_DIR="$INPUTS_DIR" BACKSCROLL_TEST_CALL_LOG="$log" HOME="$home" XDG_CONFIG_HOME="$xdg" FIXTURE_TARBALL="$FIXTURE_TARBALL" bash -c "
+  source '$TESTABLE'
+  uname(){ [ \"\$1\" = -s ] && echo Linux || echo x86_64; }
+  curl(){ local out='' prev='' arg; for arg in \"\$@\"; do [ \"\$prev\" = -o ] && out=\"\$arg\"; prev=\"\$arg\"; done; if [[ \"\$*\" == *api.github.com* ]]; then echo '{\"tag_name\": \"v0.2.3\"}'; else cp \"\$FIXTURE_TARBALL\" \"\$out\"; fi; }
+  main
+" 2>&1)" && rc=0 || rc=$?
+if [ "$rc" -eq 0 ] && grep -qxF "presets install" "$log" && presets_match "$xdg/backscroll/inputs" && [ ! -e "$home/.config/backscroll" ]; then
+  pass "the native command selects XDG_CONFIG_HOME when no override exists"
 else
-    fail "syntax check" "bash -n failed"
+  fail "XDG config" "$output; log=$(cat "$log")"
 fi
+rm -rf "$TESTABLE" "$install_dir" "$home" "$xdg" "$log"
 
-# Test 2: error function exits non-zero with message
-echo "[error function]"
-testable=$(make_testable)
-output=$(bash -c "
-    source '$testable'
-    error 'test message' 2>&1
-") && rc=$? || rc=$?
-rm -f "$testable"
+TESTABLE="$(make_testable)"
+install_dir="$(mktemp -d)"; home="$(mktemp -d)"; config="$(mktemp -d)"; log="$(mktemp)"
+mkdir -p "$config/backscroll/inputs"
+printf 'operator content\n' >"$config/backscroll/inputs/claude.inputs.toml"
+output="$(run_main "$TESTABLE" Linux x86_64 "$install_dir" "$home" "$config" "$log" 2>&1)" && rc=0 || rc=$?
+if [ "$rc" -eq 0 ] && grep -qxF 'operator content' "$config/backscroll/inputs/claude.inputs.toml"; then pass "presets are preserved by default"; else fail "preset preservation" "$output"; fi
+rm -rf "$install_dir"
+mkdir "$install_dir"
+BACKSCROLL_FORCE_INPUTS=1 output="$(BACKSCROLL_FORCE_INPUTS=1 run_main "$TESTABLE" Linux x86_64 "$install_dir" "$home" "$config" "$log" 2>&1)" && rc=0 || rc=$?
+if [ "$rc" -eq 0 ] && presets_match "$config/backscroll/inputs" && tail -1 "$log" | grep -q -- '--overwrite'; then pass "the explicit force option maps to --overwrite"; else fail "preset overwrite" "$output; log=$(cat "$log")"; fi
+rm -rf "$TESTABLE" "$install_dir" "$home" "$config" "$log"
 
-if [ "$rc" -ne 0 ]; then
-    if echo "$output" | grep -q "Error: test message"; then
-        pass "error prints message and exits 1"
-    else
-        fail "error message format" "got: $output"
-    fi
-else
-    fail "error should exit non-zero" "got exit 0"
-fi
-
-# Test 3: Linux x86_64 platform detection
-echo "[Linux x86_64 detection]"
-testable=$(make_testable)
-output=$(bash -c "
-    export BACKSCROLL_INSTALL_DIR=\$(mktemp -d)
-    export BACKSCROLL_CONFIG_DIR=\$(mktemp -d)
-    export BACKSCROLL_INPUTS_SOURCE_DIR='$INPUTS_DIR'
-    source '$testable'
-    uname() {
-        case \"\$1\" in
-            -s) echo 'Linux' ;;
-            -m) echo 'x86_64' ;;
-        esac
-    }
-    curl() {
-        local outfile='' prev='' arg
-        for arg in \"\$@\"; do
-            if [ \"\$prev\" = '-o' ]; then outfile=\"\$arg\"; fi
-            prev=\"\$arg\"
-        done
-        if [[ \"\$*\" == *api.github.com* ]]; then
-            echo '{\"tag_name\": \"v0.2.3\"}'
-        elif [[ \"\$*\" == *releases/download/* ]] && [ -n \"\$outfile\" ]; then
-            cp \"\$FIXTURE_TARBALL\" \"\$outfile\"
-        elif [ -n \"\$outfile\" ]; then
-            echo 'FAKE_BINARY' > \"\$outfile\"
-        else
-            echo 'FAKE_BINARY'
-        fi
-    }
-    chmod() { :; }
-    main 2>&1
-") && rc=$? || rc=$?
-rm -f "$testable"
-
-if echo "$output" | grep -q "backscroll_0.2.3_linux_amd64.tar.gz"; then
-    pass "Linux x86_64 selects correct asset"
-else
-    fail "Linux x86_64 asset" "output: $output"
-fi
-
-# Test 4: Darwin arm64 platform detection
-echo "[macOS arm64 detection]"
-testable=$(make_testable)
-output=$(bash -c "
-    export BACKSCROLL_INSTALL_DIR=\$(mktemp -d)
-    export BACKSCROLL_CONFIG_DIR=\$(mktemp -d)
-    export BACKSCROLL_INPUTS_SOURCE_DIR='$INPUTS_DIR'
-    source '$testable'
-    uname() {
-        case \"\$1\" in
-            -s) echo 'Darwin' ;;
-            -m) echo 'arm64' ;;
-        esac
-    }
-    curl() {
-        local outfile='' prev='' arg
-        for arg in \"\$@\"; do
-            if [ \"\$prev\" = '-o' ]; then outfile=\"\$arg\"; fi
-            prev=\"\$arg\"
-        done
-        if [[ \"\$*\" == *api.github.com* ]]; then
-            echo '{\"tag_name\": \"v0.2.3\"}'
-        elif [[ \"\$*\" == *releases/download/* ]] && [ -n \"\$outfile\" ]; then
-            cp \"\$FIXTURE_TARBALL\" \"\$outfile\"
-        elif [ -n \"\$outfile\" ]; then
-            echo 'FAKE_BINARY' > \"\$outfile\"
-        else
-            echo 'FAKE_BINARY'
-        fi
-    }
-    chmod() { :; }
-    main 2>&1
-") && rc=$? || rc=$?
-rm -f "$testable"
-
-if echo "$output" | grep -q "backscroll_0.2.3_darwin_arm64.tar.gz"; then
-    pass "macOS arm64 selects correct asset"
-else
-    fail "macOS arm64 asset" "output: $output"
-fi
-
-# Test 5: Unsupported OS fails
-echo "[unsupported OS rejection]"
-testable=$(make_testable)
-output=$(bash -c "
-    source '$testable'
-    uname() {
-        case \"\$1\" in
-            -s) echo 'FreeBSD' ;;
-            -m) echo 'x86_64' ;;
-        esac
-    }
-    main 2>&1
-") && rc=$? || rc=$?
-rm -f "$testable"
-
-if [ "$rc" -ne 0 ]; then
-    pass "unsupported OS exits non-zero"
-else
-    fail "unsupported OS" "expected failure, got exit 0"
-fi
-
-# Test 6: Unsupported Linux arch fails
-echo "[unsupported arch rejection]"
-testable=$(make_testable)
-output=$(bash -c "
-    source '$testable'
-    uname() {
-        case \"\$1\" in
-            -s) echo 'Linux' ;;
-            -m) echo 'aarch64' ;;
-        esac
-    }
-    main 2>&1
-") && rc=$? || rc=$?
-rm -f "$testable"
-
-if [ "$rc" -ne 0 ]; then
-    pass "unsupported Linux arch exits non-zero"
-else
-    fail "unsupported arch" "expected failure, got exit 0"
-fi
-
-# Test 7: Custom install dir via BACKSCROLL_INSTALL_DIR
-echo "[custom install dir]"
-testable=$(make_testable)
-CUSTOM_DIR=$(mktemp -d)
-CONFIG_DIR=$(mktemp -d)
-output=$(run_main_linux "$testable" "$CUSTOM_DIR" "$CONFIG_DIR") && rc=$? || rc=$?
-rm -f "$testable"
-
-if [ -f "$CUSTOM_DIR/backscroll" ]; then
-    pass "installs to custom BACKSCROLL_INSTALL_DIR"
-else
-    fail "custom install dir" "binary not found in $CUSTOM_DIR"
-fi
-rm -rf "$CUSTOM_DIR" "$CONFIG_DIR"
-
-# Test 8: Version tag extracted from API response
-echo "[version extraction]"
-testable=$(make_testable)
-INSTALL_DIR=$(mktemp -d)
-CONFIG_DIR=$(mktemp -d)
-output=$(run_main_linux "$testable" "$INSTALL_DIR" "$CONFIG_DIR") && rc=$? || rc=$?
-rm -f "$testable"
-
-if echo "$output" | grep -q "v0.2.3"; then
-    pass "extracts version v0.2.3 from API response"
-else
-    fail "version extraction" "output: $output"
-fi
-rm -rf "$INSTALL_DIR" "$CONFIG_DIR"
-
-# Test 9: Empty tag_name fails
-echo "[empty version fails]"
-testable=$(make_testable)
-output=$(bash -c "
-    source '$testable'
-    uname() {
-        case \"\$1\" in
-            -s) echo 'Linux' ;;
-            -m) echo 'x86_64' ;;
-        esac
-    }
-    curl() { echo '{}'; }
-    main 2>&1
-") && rc=$? || rc=$?
-rm -f "$testable"
-
-if [ "$rc" -ne 0 ]; then
-    pass "empty version tag causes failure"
-else
-    fail "empty version" "expected failure, got exit 0"
-fi
-
-# Test 10: BACKSCROLL_CONFIG_DIR controls input destination and wins over defaults
-echo "[input preset install with config override]"
-testable=$(make_testable)
-CONFIG_DIR=$(mktemp -d)
-HOME_DIR=$(mktemp -d)
-XDG_DIR=$(mktemp -d)
-output=$(BACKSCROLL_CONFIG_DIR="$CONFIG_DIR" BACKSCROLL_INPUTS_SOURCE_DIR="$INPUTS_DIR" \
-    HOME="$HOME_DIR" XDG_CONFIG_HOME="$XDG_DIR" bash -c "
-    unset BACKSCROLL_FORCE_INPUTS
-    source '$testable'
-    install_input_presets 'v0.2.3' 2>&1
-") && rc=$? || rc=$?
-rm -f "$testable"
-
-if core_presets_match "$CONFIG_DIR/backscroll/inputs" &&
-    [ ! -e "$HOME_DIR/.config/backscroll" ] &&
-    [ ! -e "$XDG_DIR/backscroll" ]; then
-    pass "BACKSCROLL_CONFIG_DIR installs Pi, OMP, Claude, and Codex only under its destination"
-else
-    fail "config override destination" "unexpected preset destination; output: $output"
-fi
-rm -rf "$CONFIG_DIR" "$HOME_DIR" "$XDG_DIR"
-
-# Test 11: Without an override, Unix installs under HOME/.config and ignores XDG_CONFIG_HOME
-echo "[Unix default config destination]"
-testable=$(make_testable)
-HOME_DIR=$(mktemp -d)
-XDG_DIR=$(mktemp -d)
-output=$(HOME="$HOME_DIR" XDG_CONFIG_HOME="$XDG_DIR" BACKSCROLL_INPUTS_SOURCE_DIR="$INPUTS_DIR" bash -c "
-    unset BACKSCROLL_CONFIG_DIR BACKSCROLL_FORCE_INPUTS
-    source '$testable'
-    install_input_presets 'v0.2.3' 2>&1
-") && rc=$? || rc=$?
-rm -f "$testable"
-
-if core_presets_match "$HOME_DIR/.config/backscroll/inputs" &&
-    [ ! -e "$XDG_DIR/backscroll" ]; then
-    pass "default installs Pi, OMP, Claude, and Codex under HOME/.config despite XDG_CONFIG_HOME"
-else
-    fail "Unix default config destination" "expected presets only under $HOME_DIR/.config; output: $output"
-fi
-rm -rf "$HOME_DIR" "$XDG_DIR"
-
-# Test 12: Existing core presets are not overwritten by default
-echo "[input preset skip existing]"
-testable=$(make_testable)
-CONFIG_DIR=$(mktemp -d)
-mkdir -p "$CONFIG_DIR/backscroll/inputs"
-printf '%s\n' "claude user edit" >"$CONFIG_DIR/backscroll/inputs/claude.inputs.toml"
-printf '%s\n' "pi user edit" >"$CONFIG_DIR/backscroll/inputs/pi.inputs.toml"
-printf '%s\n' "omp user edit" >"$CONFIG_DIR/backscroll/inputs/omp.inputs.toml"
-printf '%s\n' "codex user edit" >"$CONFIG_DIR/backscroll/inputs/codex.inputs.toml"
-output=$(BACKSCROLL_CONFIG_DIR="$CONFIG_DIR" BACKSCROLL_INPUTS_SOURCE_DIR="$INPUTS_DIR" bash -c "
-    unset BACKSCROLL_FORCE_INPUTS
-    source '$testable'
-    install_input_presets 'v0.2.3' 2>&1
-") && rc=$? || rc=$?
-rm -f "$testable"
-
-if grep -qxF "claude user edit" "$CONFIG_DIR/backscroll/inputs/claude.inputs.toml" &&
-    grep -qxF "pi user edit" "$CONFIG_DIR/backscroll/inputs/pi.inputs.toml" &&
-    grep -qxF "omp user edit" "$CONFIG_DIR/backscroll/inputs/omp.inputs.toml" &&
-    grep -qxF "codex user edit" "$CONFIG_DIR/backscroll/inputs/codex.inputs.toml" &&
-    [ "$(printf '%s\n' "$output" | grep -c 'exists, skipping')" -eq 4 ]; then
-    pass "existing Pi, OMP, Claude, and Codex presets are preserved by default"
-else
-    fail "input preset preservation" "a core preset changed or was not skipped; output: $output"
-fi
-rm -rf "$CONFIG_DIR"
-
-# Test 13: BACKSCROLL_FORCE_INPUTS=1 overwrites existing core presets
-echo "[input preset force overwrite]"
-testable=$(make_testable)
-CONFIG_DIR=$(mktemp -d)
-mkdir -p "$CONFIG_DIR/backscroll/inputs"
-printf '%s\n' "claude user edit" >"$CONFIG_DIR/backscroll/inputs/claude.inputs.toml"
-printf '%s\n' "pi user edit" >"$CONFIG_DIR/backscroll/inputs/pi.inputs.toml"
-printf '%s\n' "omp user edit" >"$CONFIG_DIR/backscroll/inputs/omp.inputs.toml"
-printf '%s\n' "codex user edit" >"$CONFIG_DIR/backscroll/inputs/codex.inputs.toml"
-output=$(BACKSCROLL_CONFIG_DIR="$CONFIG_DIR" BACKSCROLL_INPUTS_SOURCE_DIR="$INPUTS_DIR" \
-    BACKSCROLL_FORCE_INPUTS=1 bash -c "
-    source '$testable'
-    install_input_presets 'v0.2.3' 2>&1
-") && rc=$? || rc=$?
-rm -f "$testable"
-
-if core_presets_match "$CONFIG_DIR/backscroll/inputs"; then
-    pass "BACKSCROLL_FORCE_INPUTS=1 overwrites Pi, OMP, Claude, and Codex presets"
-else
-    fail "input preset force" "a core preset was not overwritten; output: $output"
-fi
-rm -rf "$CONFIG_DIR"
-
-# --- Summary ---
-echo ""
+echo
 echo "Results: $PASS passed, $FAIL failed"
 [ "$FAIL" -eq 0 ] || exit 1

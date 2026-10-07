@@ -18,11 +18,14 @@ test:
     config_dir="$(mktemp -d)" && trap 'rm -rf "$config_dir"' EXIT && \
     BACKSCROLL_CONFIG_DIR="$config_dir" go test ./...
 
-# Isolated skill installer filesystem + installed-recipe E2E (Python 3.9+)
+# Native skill and preset unit tests plus hermetic CLI E2E tests.
 test-skills:
-    mkdir -p .local-evidence
-    go build -o .local-evidence/backscroll ./cmd/backscroll
-    BACKSCROLL_TEST_BINARY="$PWD/.local-evidence/backscroll" python3 tests/test_skill_install.py -v
+    config_dir="$(mktemp -d)" && home="$(mktemp -d)" && \
+    gomodcache="$(go env GOMODCACHE)" && gocache="$(go env GOCACHE)" && \
+    trap 'rm -rf "$config_dir" "$home"' EXIT && \
+    HOME="$home" BACKSCROLL_CONFIG_DIR="$config_dir" \
+    GOMODCACHE="$gomodcache" GOCACHE="$gocache" \
+        go test ./internal/skillinstall ./internal/presets ./cmd/backscroll
 
 # Build binary
 build:

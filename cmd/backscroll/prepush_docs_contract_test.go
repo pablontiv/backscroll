@@ -85,16 +85,19 @@ func TestPrePushDocumentationGateUsesSubstantiveAGENTS(t *testing.T) {
 	}
 }
 
-func TestGitHooksDoNotInstallBinary(t *testing.T) {
+func TestGitHooksDoNotInstallBinarySkillsOrPresets(t *testing.T) {
 	repoRoot := prePushRepositoryRoot(t)
 	for _, name := range []string{"pre-push", "post-merge"} {
 		hook, err := os.ReadFile(filepath.Join(repoRoot, ".githooks", name))
 		if err != nil {
 			t.Fatal(err)
 		}
-		for _, forbidden := range []string{"BACKSCROLL_BIN", "install_backscroll_binary", "go build"} {
+		for _, forbidden := range []string{
+			"BACKSCROLL_BIN", "install_backscroll_binary", "go build",
+			"install_input_presets", "inputs.toml", "presets install", "skills/backscroll",
+		} {
 			if strings.Contains(string(hook), forbidden) {
-				t.Errorf("%s installs a source-built binary via %q", name, forbidden)
+				t.Errorf("%s contains prohibited installation logic %q", name, forbidden)
 			}
 		}
 	}

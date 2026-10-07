@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Pre-push: validate docs, check drift, install input presets
+# Pre-push: validate docs and check drift
 
 remote="$1"
 REPO_ROOT="$(git rev-parse --show-toplevel)"
@@ -66,32 +66,3 @@ while read local_ref local_sha remote_ref remote_sha; do
     echo "CI gate passed."
   fi
 done
-
-install_input_presets() {
-  local config_dir inputs_dest preset dest
-  if [ -n "${BACKSCROLL_CONFIG_DIR:-}" ]; then
-    config_dir="$BACKSCROLL_CONFIG_DIR"
-  elif [ "$(uname -s)" = "Darwin" ]; then
-    config_dir="$HOME/Library/Application Support"
-  else
-    config_dir="${XDG_CONFIG_HOME:-$HOME/.config}"
-  fi
-
-  inputs_dest="$config_dir/backscroll/inputs"
-  mkdir -p "$inputs_dest"
-  for preset in claude.inputs.toml pi.inputs.toml omp.inputs.toml decisions.inputs.toml opencode.inputs.toml codex.inputs.toml; do
-    dest="$inputs_dest/$preset"
-    if [ -e "$dest" ] && [ "${BACKSCROLL_FORCE_INPUTS:-0}" != "1" ]; then
-      echo "backscroll: $dest exists, skipping"
-      continue
-    fi
-    cp "$REPO_ROOT/inputs/$preset" "$dest"
-    echo "backscroll: installed input preset → $dest"
-  done
-}
-
-# Skill replacement is an explicit, digest-approved operator action, never a
-# side effect of pushing from a potentially disposable worktree.
-# See docs/skill-installation.md and scripts/install-skills.py.
-echo "backscroll: skills unchanged; explicit installation: docs/skill-installation.md"
-install_input_presets

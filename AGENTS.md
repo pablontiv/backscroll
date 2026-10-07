@@ -23,6 +23,7 @@ just coverage-summary   # go test -cover ./...
 just coverage           # coverage report via pkcov
 just coverage-check     # coverage report + enforce per-package floors (≥85%)
 just audit              # go mod verify
+just test-skills        # native skill/preset unit and hermetic E2E tests
 just ci                 # local mirror of CI gate: build + scrubbed-HOME tests + coverage ≥85%
 ```
 
@@ -189,8 +190,8 @@ External knowledge sources are configured with active `*.inputs.toml` manifests 
 
 - `docs/research/` — Structured research documents: feasibility study and architecture decisions
 - `docs/roadmap/` — Roadmap decomposition (O01–O06): outcomes and tasks with frontmatter metadata
-- `.claude/skills/backscroll/` — installable discovery shim for Claude, Agents (Codex), and OpenCode. `cmd/backscroll/backscroll_skill.md`, printed by `backscroll --skill`, is the sole authoritative source of complete instructions. Explicit stable-source installation, approvals, backup/restore, and runtime checks are owned by `docs/skill-installation.md` and `scripts/install-skills.py`; Git hooks never replace skills. `just test-skills` runs isolated filesystem and installed-shim E2E tests.
-- `inputs/` — Shipped input presets (`claude.inputs.toml`, `pi.inputs.toml`, `omp.inputs.toml`, `decisions.inputs.toml`, `opencode.inputs.toml`, `codex.inputs.toml`, `categories.toml`); copied to `<config_dir>/backscroll/inputs/` by `install.sh` and the pre-push hook (skips if already present; `BACKSCROLL_FORCE_INPUTS=1` to overwrite)
+- `.claude/skills/backscroll/` — discovery shim for Claude, Agents/Codex, and OpenCode. `cmd/backscroll/backscroll_skill.md` is the sole authoritative source of complete instructions. `backscroll skill --install` installs the embedded shim with approval, backup, receipt, and restore controls. Git hooks do not install skills or presets. `just test-skills` runs native unit and hermetic E2E tests.
+- `inputs/` — Shipped input presets (`claude.inputs.toml`, `pi.inputs.toml`, `omp.inputs.toml`, `decisions.inputs.toml`, `opencode.inputs.toml`, `codex.inputs.toml`, `categories.toml`). `backscroll presets install` installs the six managed input manifests. It preserves existing files unless the operator passes `--overwrite`. `install.sh` invokes this native command after it installs the binary.
 
 - Documentation is written in a mix of Spanish and English (roadmap fields like `estado`, `tipo` are in Spanish)
 

@@ -7,8 +7,10 @@ import (
 	"errors"
 	"io"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"reflect"
+	"runtime"
 	"strings"
 	"testing"
 
@@ -111,6 +113,7 @@ func TestSkillInvalidArgumentsHaveNoEffects(t *testing.T) {
 
 func TestSkillInstallIdempotenceAndRestore(t *testing.T) {
 	rootDir := t.TempDir()
+	t.Cleanup(func() { makeTreeRemovable(rootDir) })
 	home := filepath.Join(rootDir, "home")
 	configHome := filepath.Join(rootDir, "config")
 	if err := os.Mkdir(home, 0o700); err != nil {
@@ -326,6 +329,146 @@ func TestPresetsInstallUsesExplicitConfigHome(t *testing.T) {
 	if _, err := os.Stat(ambient); !os.IsNotExist(err) {
 		t.Fatalf("presets install touched ambient config home: %v", err)
 	}
+}
+
+func TestInstalledSkillDelegatesToPayloadAndRetrievesFixture(t *testing.T) {
+	buildDir := t.TempDir()
+	binary := filepath.Join(buildDir, "backscroll")
+	if runtime.GOOS == "windows" {
+		binary += ".exe"
+	}
+	build := exec.Command("go", "build", "-buildvcs=false", "-o", binary, ".")
+	if output, err := build.CombinedOutput(); err != nil {
+		t.Fatalf("build dev binary: %v\n%s", err, output)
+	}
+
+	root := t.TempDir()
+	t.Cleanup(func() { makeTreeRemovable(root) })
+	home := filepath.Join(root, "home")
+	configHome := filepath.Join(root, "config")
+	work := filepath.Join(root, "application")
+	sessions := filepath.Join(root, "sessions")
+	for _, path := range []string{home, work, sessions} {
+		if err := os.MkdirAll(path, 0o700); err != nil {
+			t.Fatal(err)
+		}
+	}
+	environment := environmentWithOverrides(os.Environ(), map[string]string{
+		"HOME": home, "XDG_CONFIG_HOME": configHome,
+		"XDG_CACHE_HOME":           filepath.Join(root, "cache"),
+		"XDG_DATA_HOME":            filepath.Join(root, "data"),
+		"XDG_STATE_HOME":           filepath.Join(root, "state"),
+		"BACKSCROLL_CONFIG_DIR":    configHome,
+		"BACKSCROLL_DATABASE_PATH": filepath.Join(root, "index.db"),
+		"BACKSCROLL_SESSION_DIRS":  sessions,
+	})
+	runBinary := func(directory string, args ...string) (string, string, error) {
+		command := exec.Command(binary, args...)
+		command.Dir = directory
+		command.Env = environment
+		var stdout, stderr bytes.Buffer
+		command.Stdout = &stdout
+		command.Stderr = &stderr
+		err := command.Run()
+		return stdout.String(), stderr.String(), err
+	}
+
+	stdout, stderr, err := runBinary(work, "skill", "--install", "--home", home, "--config-home", configHome)
+	if err != nil || stderr != "" {
+		t.Fatalf("skill install error = %v, stderr = %q, stdout = %q", err, stderr, stdout)
+	}
+	var install struct {
+		Changed int `json:"changed"`
+	}
+	if err := json.Unmarshal([]byte(stdout), &install); err != nil || install.Changed != 3 {
+		t.Fatalf("skill install result = %q, error = %v", stdout, err)
+	}
+	targets := []string{
+		filepath.Join(home, ".claude/skills/backscroll"),
+		filepath.Join(home, ".agents/skills/backscroll"),
+		filepath.Join(configHome, "opencode/skills/backscroll"),
+	}
+	managed := ""
+	for _, target := range targets {
+		link, err := os.Readlink(target)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if managed == "" {
+			managed = link
+		} else if link != managed {
+			t.Fatalf("installed links differ: %s and %s", managed, link)
+		}
+		shim, err := os.ReadFile(filepath.Join(target, "SKILL.md"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !bytes.Contains(shim, []byte("`backscroll --skill`")) || bytes.Contains(shim, []byte("result_N_filepath")) {
+			t.Fatalf("installed discovery shim is not minimal: %s", shim)
+		}
+	}
+
+	payload, payloadStderr, err := runBinary(work, "--skill")
+	if err != nil || payloadStderr != "" || payload != embeddedBackscrollSkill {
+		t.Fatalf("--skill error = %v, stderr = %q, exact payload = %v", err, payloadStderr, payload == embeddedBackscrollSkill)
+	}
+	if !strings.Contains(payload, "result_N_filepath") || strings.Contains(payload, "result_N_source_path") {
+		t.Fatal("authoritative payload does not contain the observed robot keys")
+	}
+
+	document := filepath.Join(sessions, "fixture.jsonl")
+	record := map[string]any{
+		"type": "user", "uuid": "skill-install-fixture", "cwd": work,
+		"timestamp": "2026-01-01T00:00:00Z",
+		"message":   map[string]any{"role": "user", "content": "installationoraclecobalt"},
+	}
+	encoded, err := json.Marshal(record)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(document, append(encoded, '\n'), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	projectConfig := filepath.Join(configHome, "backscroll")
+	if err := os.MkdirAll(projectConfig, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	projects := "[[projects]]\nid = \"skill-fixture\"\nroots = [" + string(mustJSON(t, work)) + "]\n"
+	if err := os.WriteFile(filepath.Join(projectConfig, "projects.toml"), []byte(projects), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	stdout, stderr, err = runBinary(work, "search", "--text", "installationoraclecobalt", "--robot", "--fields", "minimal", "--max-tokens", "2000")
+	if err != nil || stderr != "" {
+		t.Fatalf("installed recipe search error = %v, stderr = %q, stdout = %q", err, stderr, stdout)
+	}
+	fields := map[string]string{}
+	for _, line := range strings.Split(strings.TrimSpace(stdout), "\n") {
+		key, value, ok := strings.Cut(line, "=")
+		if ok {
+			fields[key] = value
+		}
+	}
+	if fields["result_0_filepath"] != document || fields["result_0_source_path"] != "" {
+		t.Fatalf("installed recipe robot output = %q", stdout)
+	}
+}
+
+func makeTreeRemovable(root string) {
+	_ = filepath.WalkDir(root, func(path string, entry os.DirEntry, err error) error {
+		if err == nil && entry.IsDir() {
+			_ = os.Chmod(path, 0o700)
+		}
+		return nil
+	})
+}
+
+func mustJSON(t *testing.T, value string) []byte {
+	t.Helper()
+	encoded, err := json.Marshal(value)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return encoded
 }
 
 func directoryTree(t *testing.T, root string) ([]string, error) {

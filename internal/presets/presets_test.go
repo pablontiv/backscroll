@@ -113,6 +113,67 @@ func TestInstallOverwritesWithExplicitOption(t *testing.T) {
 	assertInstalledPreset(t, inputsDir, presetNames[0])
 }
 
+func TestInstallPreservesSymlinkAndUnrelatedFilesByDefault(t *testing.T) {
+	inputsDir := isolatedInputsDir(t)
+	if err := os.MkdirAll(inputsDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	external := filepath.Join(filepath.Dir(inputsDir), "external-preset")
+	if err := os.WriteFile(external, []byte("external content\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	managed := filepath.Join(inputsDir, presetNames[0])
+	if err := os.Symlink(external, managed); err != nil {
+		t.Fatal(err)
+	}
+	unrelated := filepath.Join(inputsDir, "operator.inputs.toml")
+	if err := os.WriteFile(unrelated, []byte("operator content\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Install(Options{}); err != nil {
+		t.Fatal(err)
+	}
+	link, err := os.Readlink(managed)
+	if err != nil || link != external {
+		t.Fatalf("preserved link = %q, error = %v", link, err)
+	}
+	if content, err := os.ReadFile(unrelated); err != nil || string(content) != "operator content\n" {
+		t.Fatalf("unrelated content = %q, error = %v", content, err)
+	}
+	if _, err := Install(Options{Overwrite: true}); err != nil {
+		t.Fatal(err)
+	}
+	info, err := os.Lstat(managed)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if info.Mode()&os.ModeSymlink != 0 {
+		t.Fatalf("overwrite did not replace symlink: mode=%v", info.Mode())
+	}
+	if content, err := os.ReadFile(external); err != nil || string(content) != "external content\n" {
+		t.Fatalf("overwrite changed external target = %q, error = %v", content, err)
+	}
+}
+
+func TestInstallRejectsSymlinkedAncestor(t *testing.T) {
+	root := t.TempDir()
+	outside := filepath.Join(root, "outside")
+	if err := os.Mkdir(outside, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	configHome := filepath.Join(root, "config")
+	if err := os.Symlink(outside, configHome); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Install(Options{ConfigHome: configHome}); err == nil || !strings.Contains(err.Error(), "unsafe preset ancestor") {
+		t.Fatalf("Install symlink ancestor error = %v", err)
+	}
+	entries, err := os.ReadDir(outside)
+	if err != nil || len(entries) != 0 {
+		t.Fatalf("outside entries = %v, error = %v", entries, err)
+	}
+}
+
 func TestInstallCreatesMissingDirectories(t *testing.T) {
 	inputsDir := isolatedInputsDir(t)
 	if _, err := os.Stat(inputsDir); !os.IsNotExist(err) {

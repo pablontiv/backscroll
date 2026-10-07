@@ -128,7 +128,7 @@ La implementación rechaza solapamientos entre destinos, estado, copia gestionad
 
 ## Aprobación
 
-La implementación construye primero un plan v1. El campo `approval` es el SHA-256 del plan sin el propio campo `approval`.
+La implementación nativa construye un plan v2. El campo `approval` es el SHA-256 del plan sin el propio campo `approval`. La versión distingue la copia incorporada de la fuente Git que registraba el plan Python v1.
 
 La serialización canónica conserva el algoritmo de Python v1:
 
@@ -156,30 +156,28 @@ Cada cambio usa un directorio de transacción con un identificador aleatorio. El
 
 El recibo se escribe antes del primer cambio. La implementación hace `fsync` del recibo, del directorio de transacción y de la raíz de estado. Después añade un evento `prepared` que incluye `restore_approval`. La implementación hace `fsync` del diario después de cada evento.
 
-Antes de cada cambio, la implementación añade `install-intent`. Después mueve la preimagen a `backup-N` mediante un renombrado en el mismo sistema de archivos. Hace `fsync` del directorio de respaldo y del padre del destino.
+Antes de cada cambio, la implementación añade `install-intent`. La implementación crea un enlace temporal en el directorio padre del destino. Después intercambia de forma atómica el enlace temporal y la preimagen. La implementación mueve la preimagen intercambiada a `backup-N` sin sobrescribir. Hace `fsync` del directorio de respaldo y del padre del destino.
 
-La implementación crea un enlace temporal en el directorio padre del destino. Después renombra el enlace temporal al nombre final. Este renombrado publica el reemplazo de forma atómica. El destino nunca expone un árbol parcial. La implementación hace `fsync` del padre después del renombrado. Después añade `installed` al diario.
+Para un destino ausente, la implementación renombra el enlace temporal sin sobrescribir. El destino nunca expone un árbol parcial. La implementación hace `fsync` del padre después del renombrado. Después añade `installed` al diario.
 
 Los respaldos y su destino deben estar en el mismo sistema de archivos. La implementación rechaza la transacción antes de cambiar destinos cuando esta condición no se cumple.
 
 El diario usa los eventos v1 existentes: `prepared`, `install-intent`, `installed`, `failed`, `complete`, `restore-intent`, `restored` y `restore-complete`. Cada línea es un objeto JSON completo. El diario solo crece.
 
-## Recibo v1
+## Recibos v2 y compatibilidad v1
 
-La implementación nativa lee y escribe el formato Python v1. No cambia el significado de una preimagen.
+La implementación nativa escribe recibos v2. La forma de preimagen no cambia.
 
 ```json
 {
-  "version": 1,
+  "version": 2,
   "plan": {
-    "version": 1,
+    "version": 2,
     "action": "install",
     "home": "/absolute/home",
     "config_home": "/absolute/config",
     "source": {
-      "root": "/absolute/home/.local/share/backscroll/skill/backscroll",
       "path": "/absolute/home/.local/share/backscroll/skill/backscroll/TREE/backscroll",
-      "commit": "native:SHIM_SHA256",
       "tree_sha256": "TREE"
     },
     "targets": [
@@ -189,13 +187,14 @@ La implementación nativa lee y escribe el formato Python v1. No cambia el signi
         "change": true
       }
     ],
+    "managed_change": true,
     "approval": "PLAN_SHA256"
   },
   "run": "TRANSACTION_ID"
 }
 ```
 
-El valor `source.commit` distingue el origen nativo. El lector v1 no usa este campo para restaurar. Los recibos Python conservan su SHA de commit Git sin conversión.
+`managed_change` indica que la transacción debe publicar la copia incorporada. `requires_approval` aparece cuando una preimagen contiene datos desconocidos.
 
 `restore_approval` es el digest canónico del recibo completo. No se guarda dentro del recibo. La salida de una instalación aplicada contiene `changed`, `receipt` y `restore_approval`.
 
@@ -203,7 +202,7 @@ Un no-op contiene `changed: 0`. También contiene `receipt: null` y `restore_app
 
 El lector nativo acepta recibos Python v1 con acciones `install` y `uninstall`. Valida `version`, `run`, `home`, `config_home`, destinos, preimágenes, respaldos y digest. No exige que el clon indicado por `source.path` todavía exista.
 
-El instalador Python puede restaurar un recibo nativo v1 porque la ubicación, la forma JSON, el digest y las preimágenes permanecen compatibles.
+La migración es unidireccional. La implementación nativa restaura recibos Python v1 existentes. Las instalaciones nuevas usan recibos v2 y no dependen del instalador Python.
 
 ## Reversión y restore
 
@@ -235,7 +234,7 @@ codex.inputs.toml
 
 La operación conserva cada archivo existente de forma predeterminada. Esta regla se aplica aunque el contenido difiera del preset incorporado.
 
-`--overwrite` autoriza la sustitución de los cinco nombres gestionados. La operación no modifica otros archivos. Cada escritura usa un archivo temporal hermano, `fsync`, renombrado y `fsync` del directorio padre.
+`--overwrite` autoriza la sustitución de los cinco nombres gestionados. La operación no modifica otros archivos. Cada escritura usa un archivo temporal hermano y `fsync`. La ruta sin sobrescritura publica mediante un enlace físico exclusivo y elimina el nombre temporal. La ruta con sobrescritura usa un renombrado. Ambas rutas ejecutan `fsync` del directorio padre.
 
 La operación no compila ni instala el binario. `install.sh` permanece como bootstrap de Unix. Después de instalar el binario, el script ejecuta `backscroll presets install`. Si el operador solicita la compatibilidad de sobrescritura del bootstrap, el script traduce esa solicitud a `--overwrite`.
 
@@ -252,7 +251,7 @@ La implementación sigue este orden:
 3. Mantiene la prueba manual con runtimes externos fuera de la CLI pública.
 4. Cambia `install.sh` para invocar la operación nativa de presets.
 5. Retira la mutación de presets de los hooks.
-6. Retira `scripts/install-skills.py` y sus pruebas Python solo después de demostrar compatibilidad v1.
+6. Retira el instalador Python y sus pruebas después de demostrar compatibilidad v1.
 
 La migración revisa los scripts de aceptación existentes. Porta a Go cada aserción vigente antes de retirar un script.
 
@@ -264,7 +263,7 @@ Las pruebas deben cubrir ancestros simbólicos, enlaces físicos, archivos espec
 
 Las pruebas deben cubrir bloqueo, diario, recibo, cada punto de `fsync`, reemplazo, fallo parcial, reversión, idempotencia y restore.
 
-Las pruebas deben restaurar un recibo producido por Python v1. También deben verificar que Python v1 puede restaurar un recibo nativo v1 durante la transición.
+Las pruebas deben restaurar un recibo producido por Python v1. También deben verificar el digest canónico Python v1 para rutas no ASCII.
 
 Las pruebas deben verificar los bytes exactos de stdout y stderr vacío para `backscroll --skill`. También deben demostrar la ausencia de configuración, SQLite, sincronización, autoupdate y cambios de archivos.
 
