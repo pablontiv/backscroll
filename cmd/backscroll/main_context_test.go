@@ -10,27 +10,12 @@ import (
 	"github.com/spf13/cobra"
 )
 
-type fakeStagedUpdater struct {
-	apply func() error
-	fetch func(string) error
+func testRunDependencies(root *cobra.Command, fetch func(context.Context, string) error) runDependencies {
+	return runDependencies{root: root, fetchAndStage: fetch, stagingWait: autoupdateStagingWait}
 }
 
-func (u fakeStagedUpdater) ApplyStagedIfAvailable() error {
-	if u.apply == nil {
-		return nil
-	}
-	return u.apply()
-}
-
-func (u fakeStagedUpdater) FetchAndStage(currentVersion string) error {
-	if u.fetch == nil {
-		return nil
-	}
-	return u.fetch(currentVersion)
-}
-
-func testRunDependencies(root *cobra.Command, updater stagedUpdater) runDependencies {
-	return runDependencies{updater: updater, root: root, stagingWait: autoupdateStagingWait}
+func runWithTestDependencies(ctx context.Context, args []string, deps runDependencies) error {
+	return runContextWithDependencies(ctx, new(bytes.Buffer), new(bytes.Buffer), args, deps)
 }
 
 func TestRunBackgroundWrapperCompatibility(t *testing.T) {
@@ -62,6 +47,22 @@ func TestRunBackgroundWrapperCompatibility(t *testing.T) {
 	}
 }
 
+func TestRunContextDependenciesAreNilSafe(t *testing.T) {
+	var root *cobra.Command
+	var apply func() error
+	var fetch func(context.Context, string) error
+	var stdout, stderr bytes.Buffer
+	err := runContextWithDependencies(context.Background(), &stdout, &stderr, []string{"--help"}, runDependencies{
+		root: root, applyStaged: apply, fetchAndStage: fetch,
+	})
+	if err != nil {
+		t.Fatalf("nil dependencies: %v", err)
+	}
+	if !bytes.Contains(stdout.Bytes(), []byte("backscroll")) {
+		t.Fatalf("default root help missing from stdout: %q", stdout.String())
+	}
+}
+
 func TestRunContextCancellationReachesStartupAndHandler(t *testing.T) {
 	t.Run("startup", func(t *testing.T) {
 		ctx, cancel := context.WithCancel(context.Background())
@@ -81,7 +82,7 @@ func TestRunContextCancellationReachesStartupAndHandler(t *testing.T) {
 			},
 		}
 
-		err := runContextWithDependencies(ctx, nil, testRunDependencies(root, fakeStagedUpdater{}))
+		err := runWithTestDependencies(ctx, nil, testRunDependencies(root, nil))
 		if !errors.Is(err, context.Canceled) {
 			t.Fatalf("error=%v want context.Canceled", err)
 		}
@@ -116,7 +117,7 @@ func TestRunContextCancellationReachesStartupAndHandler(t *testing.T) {
 
 		result := make(chan error, 1)
 		go func() {
-			result <- runContextWithDependencies(ctx, nil, testRunDependencies(root, fakeStagedUpdater{}))
+			result <- runWithTestDependencies(ctx, nil, testRunDependencies(root, nil))
 		}()
 		<-handlerStarted
 		if got := <-startupContext; got != ctx {
@@ -138,32 +139,82 @@ func TestRunContextCancellationReachesStartupAndHandler(t *testing.T) {
 	})
 }
 
-func TestRunContextCanceledStagingWaitReturnsWithoutWaiting(t *testing.T) {
+type cancelOnSecondCheckContext struct {
+	context.Context
+	checks int
+}
+
+func (c *cancelOnSecondCheckContext) Done() <-chan struct{} { return nil }
+
+func (c *cancelOnSecondCheckContext) Err() error {
+	c.checks++
+	if c.checks > 1 {
+		return context.Canceled
+	}
+	return nil
+}
+
+func TestWaitForStagingCancellationDominatesReadyBranches(t *testing.T) {
+	const iterations = 1000
+	for i := 0; i < iterations; i++ {
+		ctx, cancel := context.WithCancel(context.Background())
+		cancel()
+		staged := make(chan struct{}, 1)
+		staged <- struct{}{}
+		if err := waitForStaging(ctx, staged, make(chan time.Time)); !errors.Is(err, context.Canceled) {
+			t.Fatalf("pre-canceled staged-ready iteration %d: error=%v", i, err)
+		}
+
+		ctx, cancel = context.WithCancel(context.Background())
+		cancel()
+		timer := make(chan time.Time, 1)
+		timer <- time.Time{}
+		if err := waitForStaging(ctx, make(chan struct{}), timer); !errors.Is(err, context.Canceled) {
+			t.Fatalf("pre-canceled timer-ready iteration %d: error=%v", i, err)
+		}
+
+		postCtx := &cancelOnSecondCheckContext{Context: context.Background()}
+		staged = make(chan struct{}, 1)
+		staged <- struct{}{}
+		if err := waitForStaging(postCtx, staged, make(chan time.Time)); !errors.Is(err, context.Canceled) {
+			t.Fatalf("post-canceled staged-selected iteration %d: error=%v", i, err)
+		}
+
+		postCtx = &cancelOnSecondCheckContext{Context: context.Background()}
+		timer = make(chan time.Time, 1)
+		timer <- time.Time{}
+		if err := waitForStaging(postCtx, make(chan struct{}), timer); !errors.Is(err, context.Canceled) {
+			t.Fatalf("post-canceled timer-selected iteration %d: error=%v", i, err)
+		}
+	}
+}
+
+func TestRunContextCanceledStagingWorkerExits(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
 	fetchStarted := make(chan struct{})
-	releaseFetch := make(chan struct{})
+	workerExited := make(chan struct{})
 	commandDone := make(chan struct{})
 	root := &cobra.Command{Use: "root", RunE: func(*cobra.Command, []string) error {
 		close(commandDone)
 		return nil
 	}}
-	updater := fakeStagedUpdater{fetch: func(string) error {
+	fetch := func(ctx context.Context, _ string) error {
 		close(fetchStarted)
-		<-releaseFetch
-		return nil
-	}}
+		defer close(workerExited)
+		<-ctx.Done()
+		return ctx.Err()
+	}
 
 	result := make(chan error, 1)
 	go func() {
-		result <- runContextWithDependencies(ctx, nil, testRunDependencies(root, updater))
+		result <- runWithTestDependencies(ctx, nil, testRunDependencies(root, fetch))
 	}()
 	<-fetchStarted
 	<-commandDone
 	select {
 	case err := <-result:
-		close(releaseFetch)
 		t.Fatalf("blocked staging wait returned before cancellation: %v", err)
 	default:
 	}
@@ -171,13 +222,16 @@ func TestRunContextCanceledStagingWaitReturnsWithoutWaiting(t *testing.T) {
 	cancel()
 	select {
 	case err := <-result:
-		close(releaseFetch)
 		if !errors.Is(err, context.Canceled) {
 			t.Fatalf("error=%v want context.Canceled", err)
 		}
 	case <-time.After(2 * time.Second):
-		close(releaseFetch)
 		t.Fatal("blocked staging wait did not return after cancellation")
+	}
+	select {
+	case <-workerExited:
+	case <-time.After(2 * time.Second):
+		t.Fatal("context-aware fake staging worker did not exit")
 	}
 }
 
@@ -189,15 +243,15 @@ func TestRunContextStillWaitsForSuccessfulStaging(t *testing.T) {
 		close(commandDone)
 		return nil
 	}}
-	updater := fakeStagedUpdater{fetch: func(string) error {
+	fetch := func(context.Context, string) error {
 		close(fetchStarted)
 		<-releaseFetch
 		return nil
-	}}
+	}
 
 	result := make(chan error, 1)
 	go func() {
-		result <- runContextWithDependencies(context.Background(), nil, testRunDependencies(root, updater))
+		result <- runWithTestDependencies(context.Background(), nil, testRunDependencies(root, fetch))
 	}()
 	<-fetchStarted
 	<-commandDone
@@ -252,7 +306,7 @@ func TestRunContextCancellationReleasesCommandLease(t *testing.T) {
 
 	result := make(chan error, 1)
 	go func() {
-		result <- runContextWithDependencies(ctx, []string{"mutate"}, testRunDependencies(root, fakeStagedUpdater{}))
+		result <- runWithTestDependencies(ctx, []string{"mutate"}, testRunDependencies(root, nil))
 	}()
 	<-handlerStarted
 	cancel()
