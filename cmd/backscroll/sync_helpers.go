@@ -38,36 +38,46 @@ func contentHashesEqual(readerName, persistedHash, observedHash string) bool {
 	return canonicalContentHash(readerName, persistedHash) == canonicalContentHash(readerName, observedHash)
 }
 
-var (
-	maybeAutoSyncOpen = func(ctx context.Context, path string) (*storage.Database, error) {
-		db, diag, err := storage.OpenCompatible(ctx, path)
-		if diag != nil {
-			if db != nil {
-				_ = db.Close()
-			}
-			return nil, fmt.Errorf("%s: %s", diag.Code, diag.Summary)
-		}
-		return db, err
-	}
-	maybeAutoSyncActiveInputs       = input_config.ActiveInputs
-	maybeAutoSyncLoadGlobalRegistry = projects.LoadGlobalRegistry
-	maybeAutoSyncNewRegistry        = newDefaultAutoSyncRegistry
-	maybeAutoSyncSyncFiles          = func(ctx context.Context, db *storage.Database, files []storage.IndexedFile) error {
-		return db.SyncFilesContext(ctx, files)
-	}
-	maybeAutoSyncGetFileMetadata = getFileMetadata // for testability
-)
+type startupSyncService struct {
+	diagnostics        bool
+	open               func(context.Context, string) (*storage.Database, error)
+	activeInputs       func([]string) ([]input_config.InputDefinition, input_config.InputMode, error)
+	loadGlobalRegistry func() projects.ProjectRegistry
+	newRegistry        func() *readers.Registry
+	syncFiles          func(context.Context, *storage.Database, []storage.IndexedFile) error
+	getFileMetadata    func(string) (*int64, *string, error)
+}
 
-// startupPhaseTiming holds measurements for startup phases that occur before maybeAutoSync.
-// Populated by coordinateStartup if diagnosticsEnabled() is true.
+func newStartupSyncService() *startupSyncService {
+	return &startupSyncService{
+		diagnostics: diagnosticsEnabled(),
+		open: func(ctx context.Context, path string) (*storage.Database, error) {
+			db, diag, err := storage.OpenCompatible(ctx, path)
+			if diag != nil {
+				if db != nil {
+					_ = db.Close()
+				}
+				return nil, fmt.Errorf("%s: %s", diag.Code, diag.Summary)
+			}
+			return db, err
+		},
+		activeInputs:       input_config.ActiveInputs,
+		loadGlobalRegistry: projects.LoadGlobalRegistry,
+		newRegistry:        newDefaultAutoSyncRegistry,
+		syncFiles: func(ctx context.Context, db *storage.Database, files []storage.IndexedFile) error {
+			return db.SyncFilesContext(ctx, files)
+		},
+		getFileMetadata: getFileMetadata,
+	}
+}
+
+// startupPhaseTiming holds measurements for startup phases that occur before sync.
+// Each root execution owns its value; direct legacy syncs leave measured false.
 type startupPhaseTiming struct {
 	LockAcquisitionTime time.Duration
 	IndexPrepareTime    time.Duration
+	measured            bool
 }
-
-// startupDiags holds pre-sync phase timings, set by coordinateStartup.
-// Access must be guarded by checking diagnosticsEnabled() first.
-var startupDiags *startupPhaseTiming
 
 func newDefaultAutoSyncRegistry() *readers.Registry {
 	reg := readers.NewRegistry()
@@ -391,20 +401,21 @@ func isRacyCleanFile(fileMtime string, lastIndexed string) bool {
 	return fileMt.After(indexTime.Add(-time.Duration(racyMarginSeconds) * time.Second))
 }
 
-// maybeAutoSync preserves the legacy non-cancellable entry point.
+// maybeAutoSync preserves the legacy non-cancellable entry point by creating
+// production dependencies for this invocation rather than using shared state.
 func maybeAutoSync(cfg *config.Config, progress io.Writer) error {
-	return maybeAutoSyncContext(context.Background(), cfg, progress)
+	return newStartupSyncService().sync(context.Background(), cfg, progress, startupPhaseTiming{})
 }
 
-// maybeAutoSyncContext performs an incremental sync operation with cancellation
-// propagated through reader and storage work. Progress is transactional at this
-// boundary: callers receive it only after every sync and maintenance phase succeeds.
-func maybeAutoSyncContext(ctx context.Context, cfg *config.Config, progress io.Writer) error {
+// sync performs an incremental sync operation with cancellation propagated
+// through reader and storage work. Progress is transactional at this boundary:
+// callers receive it only after every sync and maintenance phase succeeds.
+func (s *startupSyncService) sync(ctx context.Context, cfg *config.Config, progress io.Writer, timing startupPhaseTiming) error {
 	if err := ctx.Err(); err != nil {
 		return err
 	}
 	var bufferedProgress bytes.Buffer
-	if err := maybeAutoSyncWithProgress(ctx, cfg, &bufferedProgress); err != nil {
+	if err := s.syncWithProgress(ctx, cfg, &bufferedProgress, timing); err != nil {
 		return err
 	}
 	if err := ctx.Err(); err != nil {
@@ -414,8 +425,8 @@ func maybeAutoSyncContext(ctx context.Context, cfg *config.Config, progress io.W
 	return nil
 }
 
-func maybeAutoSyncWithProgress(ctx context.Context, cfg *config.Config, progress io.Writer) (retErr error) {
-	diag := diagnosticsEnabled()
+func (s *startupSyncService) syncWithProgress(ctx context.Context, cfg *config.Config, progress io.Writer, timing startupPhaseTiming) (retErr error) {
+	diag := s.diagnostics
 	var startTime time.Time
 	if diag {
 		startTime = time.Now()
@@ -423,7 +434,7 @@ func maybeAutoSyncWithProgress(ctx context.Context, cfg *config.Config, progress
 
 	// Open database for reading to check if it exists
 	// (this will auto-create if missing)
-	db, err := maybeAutoSyncOpen(ctx, cfg.DatabasePath)
+	db, err := s.open(ctx, cfg.DatabasePath)
 	if err != nil {
 		return fmt.Errorf("open database: %w", err)
 	}
@@ -459,10 +470,10 @@ func maybeAutoSyncWithProgress(ctx context.Context, cfg *config.Config, progress
 	const replayParsesCap = 200
 
 	// Build reader registry
-	reg := maybeAutoSyncNewRegistry()
+	reg := s.newRegistry()
 
 	// Resolve active inputs
-	defs, _, err := maybeAutoSyncActiveInputs(cfg.SessionDirs)
+	defs, _, err := s.activeInputs(cfg.SessionDirs)
 	if err != nil {
 		return fmt.Errorf("resolve inputs: %w", err)
 	}
@@ -471,7 +482,7 @@ func maybeAutoSyncWithProgress(ctx context.Context, cfg *config.Config, progress
 	}
 
 	// Load project registry
-	registry := maybeAutoSyncLoadGlobalRegistry()
+	registry := s.loadGlobalRegistry()
 	if err := ctx.Err(); err != nil {
 		return err
 	}
@@ -539,7 +550,7 @@ func maybeAutoSyncWithProgress(ctx context.Context, cfg *config.Config, progress
 		}
 		if usesFileMetadataPrefilter(reader) && exists && existingMeta.Size != nil && existingMeta.Mtime != nil &&
 			existingMeta.LastIndexed != nil {
-			if fileSize, fileMtime, metadataErr := maybeAutoSyncGetFileMetadata(ref); metadataErr == nil &&
+			if fileSize, fileMtime, metadataErr := s.getFileMetadata(ref); metadataErr == nil &&
 				fileSize != nil && fileMtime != nil && *fileSize == *existingMeta.Size && *fileMtime == *existingMeta.Mtime &&
 				!isRacyCleanFile(*fileMtime, *existingMeta.LastIndexed) {
 				state.hash = existingMeta.Hash
@@ -566,7 +577,7 @@ func maybeAutoSyncWithProgress(ctx context.Context, cfg *config.Config, progress
 			}
 			if diag {
 				filesHashed++
-				if fileSize, _, metadataErr := maybeAutoSyncGetFileMetadata(ref); metadataErr == nil && fileSize != nil {
+				if fileSize, _, metadataErr := s.getFileMetadata(ref); metadataErr == nil && fileSize != nil {
 					bytesHashed += *fileSize
 				}
 			}
@@ -665,7 +676,7 @@ func maybeAutoSyncWithProgress(ctx context.Context, cfg *config.Config, progress
 			})
 		}
 
-		fileSize, fileMtime, _ := maybeAutoSyncGetFileMetadata(ref)
+		fileSize, fileMtime, _ := s.getFileMetadata(ref)
 		if err := ctx.Err(); err != nil {
 			return err
 		}
@@ -697,7 +708,7 @@ func maybeAutoSyncWithProgress(ctx context.Context, cfg *config.Config, progress
 
 	// Sync all files
 	if len(indexedFiles) > 0 {
-		if err := maybeAutoSyncSyncFiles(ctx, db, indexedFiles); err != nil {
+		if err := s.syncFiles(ctx, db, indexedFiles); err != nil {
 			return fmt.Errorf("sync files: %w", err)
 		}
 		if err := ctx.Err(); err != nil {
@@ -757,9 +768,9 @@ func maybeAutoSyncWithProgress(ctx context.Context, cfg *config.Config, progress
 
 		// Report diagnostics
 		_, _ = fmt.Fprintf(progress, "\nStartup diagnostics:\n")
-		if startupDiags != nil {
-			_, _ = fmt.Fprintf(progress, "  Lock Acquisition:%v\n", startupDiags.LockAcquisitionTime)
-			_, _ = fmt.Fprintf(progress, "  Index Prepare:   %v\n", startupDiags.IndexPrepareTime)
+		if timing.measured {
+			_, _ = fmt.Fprintf(progress, "  Lock Acquisition:%v\n", timing.LockAcquisitionTime)
+			_, _ = fmt.Fprintf(progress, "  Index Prepare:   %v\n", timing.IndexPrepareTime)
 		}
 		_, _ = fmt.Fprintf(progress, "  Discovery:       %v\n", discoveryTime)
 		_, _ = fmt.Fprintf(progress, "  Metadata:        %v (%d files checked)\n", metadataTime, filesHashed+filesSkipped)
@@ -770,8 +781,8 @@ func maybeAutoSyncWithProgress(ctx context.Context, cfg *config.Config, progress
 
 		// Calculate unattributed time
 		measuredTime := discoveryTime + metadataTime + hashingTime + parsingTime + databaseTime
-		if startupDiags != nil {
-			measuredTime += startupDiags.LockAcquisitionTime + startupDiags.IndexPrepareTime
+		if timing.measured {
+			measuredTime += timing.LockAcquisitionTime + timing.IndexPrepareTime
 		}
 		unattributedTime := totalTime - measuredTime
 		if unattributedTime > 0 {

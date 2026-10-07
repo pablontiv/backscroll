@@ -23,10 +23,14 @@ type startupCoordinator struct {
 	tryAcquire   func(string) (startupLease, bool, error)
 	acquire      func(context.Context, string, time.Duration) (startupLease, error)
 	prepareIndex func(context.Context, *config.Config, indexCommandClass) (*storage.Database, *compat.Diagnostic, error)
-	sync         func(context.Context, *config.Config, io.Writer) error
+	syncService  *startupSyncService
 }
 
 func newStartupCoordinator() *startupCoordinator {
+	return newStartupCoordinatorWithSyncService(newStartupSyncService())
+}
+
+func newStartupCoordinatorWithSyncService(syncService *startupSyncService) *startupCoordinator {
 	return &startupCoordinator{
 		mutationWait: defaultStartupMutationWait,
 		tryAcquire: func(path string) (startupLease, bool, error) {
@@ -38,7 +42,7 @@ func newStartupCoordinator() *startupCoordinator {
 		prepareIndex: func(ctx context.Context, cfg *config.Config, class indexCommandClass) (*storage.Database, *compat.Diagnostic, error) {
 			return prepareIndex(ctx, cfg, class)
 		},
-		sync: maybeAutoSyncContext,
+		syncService: syncService,
 	}
 }
 
@@ -47,9 +51,9 @@ func (c *startupCoordinator) coordinate(ctx context.Context, cfg *config.Config,
 		return canceledStartupResult(cfg, startupStageSyncLock, err)
 	}
 
-	// Measure lock acquisition time
+	timing := startupPhaseTiming{measured: c.syncService.diagnostics}
 	var lockStart time.Time
-	if diagnosticsEnabled() {
+	if timing.measured {
 		lockStart = time.Now()
 	}
 
@@ -62,19 +66,15 @@ func (c *startupCoordinator) coordinate(ctx context.Context, cfg *config.Config,
 		return result
 	}
 
-	// Record lock acquisition timing for successful immediate acquisition
-	if diagnosticsEnabled() && acquired && lockStart != (time.Time{}) {
-		if startupDiags == nil {
-			startupDiags = &startupPhaseTiming{}
-		}
-		startupDiags.LockAcquisitionTime = time.Since(lockStart)
+	if timing.measured && acquired && lockStart != (time.Time{}) {
+		timing.LockAcquisitionTime = time.Since(lockStart)
 	}
 
 	if err != nil {
 		return startupLockFailure(cfg, err)
 	}
 	if acquired {
-		return c.runOwned(ctx, cfg, progress, class, lease)
+		return c.runOwned(ctx, cfg, progress, class, lease, timing)
 	}
 
 	switch class {
@@ -92,19 +92,14 @@ func (c *startupCoordinator) coordinate(ctx context.Context, cfg *config.Config,
 		waitCtx, cancel := context.WithTimeout(ctx, c.mutationWait)
 		defer cancel()
 
-		// Measure waiting for lock
-		if diagnosticsEnabled() {
+		if timing.measured {
 			lockStart = time.Now()
 		}
 
 		lease, err := c.acquire(waitCtx, cfg.DatabasePath, startupLockRetry)
 
-		// Record lock wait timing
-		if diagnosticsEnabled() && lockStart != (time.Time{}) {
-			if startupDiags == nil {
-				startupDiags = &startupPhaseTiming{}
-			}
-			startupDiags.LockAcquisitionTime = time.Since(lockStart)
+		if timing.measured && lockStart != (time.Time{}) {
+			timing.LockAcquisitionTime = time.Since(lockStart)
 		}
 
 		if err != nil {
@@ -120,18 +115,17 @@ func (c *startupCoordinator) coordinate(ctx context.Context, cfg *config.Config,
 			}
 			return startupLockFailure(cfg, err)
 		}
-		return c.runOwned(ctx, cfg, progress, class, lease)
+		return c.runOwned(ctx, cfg, progress, class, lease, timing)
 	}
 }
 
-func (c *startupCoordinator) runOwned(ctx context.Context, cfg *config.Config, progress io.Writer, class startupCommandClass, lease startupLease) startupResult {
+func (c *startupCoordinator) runOwned(ctx context.Context, cfg *config.Config, progress io.Writer, class startupCommandClass, lease startupLease, timing startupPhaseTiming) startupResult {
 	if class == startupRemediation {
-		return startupResult{Config: cfg, Lease: lease}
+		return startupResult{Config: cfg, Lease: lease, timing: timing}
 	}
 
-	// Measure index preparation time
 	var indexPrepareStart time.Time
-	if diagnosticsEnabled() {
+	if timing.measured {
 		indexPrepareStart = time.Now()
 	}
 
@@ -140,12 +134,8 @@ func (c *startupCoordinator) runOwned(ctx context.Context, cfg *config.Config, p
 		err = closeIndexDB(db, err)
 	}
 
-	// Record index prepare timing
-	if diagnosticsEnabled() && indexPrepareStart != (time.Time{}) {
-		if startupDiags == nil {
-			startupDiags = &startupPhaseTiming{}
-		}
-		startupDiags.IndexPrepareTime = time.Since(indexPrepareStart)
+	if timing.measured && indexPrepareStart != (time.Time{}) {
+		timing.IndexPrepareTime = time.Since(indexPrepareStart)
 	}
 
 	if ctxErr := ctx.Err(); ctxErr != nil && diag == nil && err == nil {
@@ -160,7 +150,7 @@ func (c *startupCoordinator) runOwned(ctx context.Context, cfg *config.Config, p
 		}
 		return ownedStartupFailureResult(cfg, class, lease, &startupFailure{Stage: startupStageIndexPrepare, Cause: err, Diagnostic: d, Recoverable: true})
 	}
-	if err := c.sync(ctx, cfg, progress); err != nil {
+	if err := c.syncService.sync(ctx, cfg, progress, timing); err != nil {
 		activePath, _ := resolveActiveIndexPath(cfg.DatabasePath)
 		d := continuationFor(compat.Diagnostic{Code: compat.CodeIndexStale, Summary: fmt.Sprintf("index sync failed: %v", err)}, activePath)
 		return ownedStartupFailureResult(cfg, class, lease, &startupFailure{Stage: startupStageStartupSync, Cause: err, Diagnostic: d, Recoverable: true})

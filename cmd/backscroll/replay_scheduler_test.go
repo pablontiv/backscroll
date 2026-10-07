@@ -312,25 +312,21 @@ func TestReplaySchedulerProductiveDuplicatePathHashesAndParsesOnce(t *testing.T)
 		hashCalls:  make(map[string]int),
 		parseCalls: make(map[string]int),
 	}
-	oldActiveInputs, oldNewRegistry := maybeAutoSyncActiveInputs, maybeAutoSyncNewRegistry
-	t.Cleanup(func() {
-		maybeAutoSyncActiveInputs = oldActiveInputs
-		maybeAutoSyncNewRegistry = oldNewRegistry
-	})
-	maybeAutoSyncActiveInputs = func([]string) ([]input_config.InputDefinition, input_config.InputMode, error) {
+	syncService := newStartupSyncService()
+	syncService.activeInputs = func([]string) ([]input_config.InputDefinition, input_config.InputMode, error) {
 		return []input_config.InputDefinition{
 			{ID: "z-input", Source: "session", Active: true, Decode: input_config.DecodeConfig{Format: "claude"}},
 			{ID: "a-input", Source: "session", Active: true},
 		}, input_config.ModeDeclarative, nil
 	}
-	maybeAutoSyncNewRegistry = func() *readers.Registry {
+	syncService.newRegistry = func() *readers.Registry {
 		registry := readers.NewRegistry()
 		registry.Register(reader)
 		return registry
 	}
 
 	cfg := config.Config{DatabasePath: filepath.Join(tmp, "index.db")}
-	if err := maybeAutoSync(&cfg, &bytes.Buffer{}); err != nil {
+	if err := syncService.sync(context.Background(), &cfg, &bytes.Buffer{}, startupPhaseTiming{}); err != nil {
 		t.Fatalf("productive sync: %v", err)
 	}
 	if reader.hashCalls[path] != 1 || reader.parseCalls[path] != 1 {

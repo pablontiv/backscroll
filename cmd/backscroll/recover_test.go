@@ -17,6 +17,7 @@ import (
 
 	"github.com/pablontiv/backscroll/internal/compat"
 	"github.com/pablontiv/backscroll/internal/config"
+	"github.com/pablontiv/backscroll/internal/input_config"
 	"github.com/pablontiv/backscroll/internal/recovery"
 	"github.com/pablontiv/backscroll/internal/storage"
 	"github.com/spf13/cobra"
@@ -63,8 +64,7 @@ func TestRecoverExecuteReceivesCommandContext(t *testing.T) {
 	cancel()
 
 	called := false
-	originalExecute := recoverExecute
-	recoverExecute = func(execCtx context.Context, opts recovery.Options) (recovery.Report, error) {
+	execute := func(execCtx context.Context, opts recovery.Options) (recovery.Report, error) {
 		called = true
 		if got := execCtx.Value(markerKey); got != "present" {
 			t.Fatalf("recovery context marker = %v, want present", got)
@@ -77,12 +77,11 @@ func TestRecoverExecuteReceivesCommandContext(t *testing.T) {
 		}
 		return recovery.Report{ActivePath: opts.ActivePath}, nil
 	}
-	t.Cleanup(func() { recoverExecute = originalExecute })
 
 	var stdout, stderr bytes.Buffer
-	root := buildRootCmdWithStartup(&stdout, &stderr, func(context.Context, io.Writer, startupCommandClass) startupResult {
+	root := buildRootCmdWithDependencies(&stdout, &stderr, func(context.Context, io.Writer, startupCommandClass) startupResult {
 		return startupResult{Config: cfg}
-	})
+	}, newStartupSyncService(), execute)
 	root.SetContext(ctx)
 	root.SetArgs([]string{"recover", "--from", "stranded.db", "--dry-run"})
 	if err := root.Execute(); err != nil {
@@ -101,35 +100,33 @@ func TestRecoverPostInstallSyncBeforeReport(t *testing.T) {
 	stdout := &firstWriteMarker{events: &events}
 	var stderr bytes.Buffer
 
-	originalExecute := recoverExecute
-	recoverExecute = func(_ context.Context, opts recovery.Options) (recovery.Report, error) {
+	execute := func(_ context.Context, opts recovery.Options) (recovery.Report, error) {
 		events = append(events, "recover")
 		if opts.ActivePath != cfg.DatabasePath || opts.FromPath != "stranded.db" || opts.DryRun {
 			t.Fatalf("recovery options = %+v, want active=%q from=stranded.db dryRun=false", opts, cfg.DatabasePath)
 		}
 		return recovery.Report{ActivePath: opts.ActivePath}, nil
 	}
-	t.Cleanup(func() { recoverExecute = originalExecute })
 
-	originalPostInstallSync := recoverPostInstallSync
-	recoverPostInstallSync = func(gotCtx context.Context, got *config.Config, progress io.Writer) error {
+	syncService := newStartupSyncService()
+	syncService.activeInputs = func([]string) ([]input_config.InputDefinition, input_config.InputMode, error) {
+		return nil, input_config.ModeLegacy, nil
+	}
+	open := syncService.open
+	syncService.open = func(gotCtx context.Context, path string) (*storage.Database, error) {
 		events = append(events, "sync")
 		if gotCtx.Value(recoverContextKey{}) != "post-install" {
 			t.Fatalf("post-install sync did not receive command context")
 		}
-		if got != cfg {
-			t.Fatalf("post-install sync config pointer = %p, want %p", got, cfg)
+		if path != cfg.DatabasePath {
+			t.Fatalf("post-install sync path = %q, want %q", path, cfg.DatabasePath)
 		}
-		if progress != &stderr {
-			t.Fatalf("post-install sync progress writer = %T, want stderr buffer", progress)
-		}
-		return nil
+		return open(gotCtx, path)
 	}
-	t.Cleanup(func() { recoverPostInstallSync = originalPostInstallSync })
 
-	root := buildRootCmdWithStartup(stdout, &stderr, func(context.Context, io.Writer, startupCommandClass) startupResult {
+	root := buildRootCmdWithDependencies(stdout, &stderr, func(context.Context, io.Writer, startupCommandClass) startupResult {
 		return startupResult{Config: cfg}
-	})
+	}, syncService, execute)
 	root.SetContext(ctx)
 	root.SetArgs([]string{"recover", "--from", "stranded.db"})
 	if err := root.Execute(); err != nil {
@@ -143,27 +140,24 @@ func TestRecoverPostInstallSyncBeforeReport(t *testing.T) {
 
 func TestRecoverDryRunSkipsPostInstallSync(t *testing.T) {
 	cfg := &config.Config{DatabasePath: filepath.Join(t.TempDir(), "active.db")}
-	originalExecute := recoverExecute
-	recoverExecute = func(_ context.Context, opts recovery.Options) (recovery.Report, error) {
+	execute := func(_ context.Context, opts recovery.Options) (recovery.Report, error) {
 		if !opts.DryRun {
 			t.Fatalf("DryRun = false, want true")
 		}
 		return recovery.Report{ActivePath: opts.ActivePath}, nil
 	}
-	t.Cleanup(func() { recoverExecute = originalExecute })
 
 	syncCalled := false
-	originalPostInstallSync := recoverPostInstallSync
-	recoverPostInstallSync = func(context.Context, *config.Config, io.Writer) error {
+	syncService := newStartupSyncService()
+	syncService.open = func(context.Context, string) (*storage.Database, error) {
 		syncCalled = true
-		return nil
+		return nil, errors.New("post-install sync unexpectedly called")
 	}
-	t.Cleanup(func() { recoverPostInstallSync = originalPostInstallSync })
 
 	var stdout, stderr bytes.Buffer
-	root := buildRootCmdWithStartup(&stdout, &stderr, func(context.Context, io.Writer, startupCommandClass) startupResult {
+	root := buildRootCmdWithDependencies(&stdout, &stderr, func(context.Context, io.Writer, startupCommandClass) startupResult {
 		return startupResult{Config: cfg}
-	})
+	}, syncService, execute)
 	root.SetArgs([]string{"recover", "--from", "stranded.db", "--dry-run"})
 	if err := root.Execute(); err != nil {
 		t.Fatalf("recover dry-run returned error: %v", err)
@@ -179,22 +173,16 @@ func TestRecoverPostInstallSyncFailurePreservesSyncCause(t *testing.T) {
 	installedPath := cfg.DatabasePath + ".installed"
 	backupPath := cfg.DatabasePath + ".backup-test"
 
-	originalExecute := recoverExecute
-	recoverExecute = func(context.Context, recovery.Options) (recovery.Report, error) {
+	execute := func(context.Context, recovery.Options) (recovery.Report, error) {
 		return recovery.Report{ActivePath: installedPath, BackupPath: backupPath}, nil
 	}
-	t.Cleanup(func() { recoverExecute = originalExecute })
-
-	originalPostInstallSync := recoverPostInstallSync
-	recoverPostInstallSync = func(context.Context, *config.Config, io.Writer) error {
-		return syncErr
-	}
-	t.Cleanup(func() { recoverPostInstallSync = originalPostInstallSync })
+	syncService := newStartupSyncService()
+	syncService.open = func(context.Context, string) (*storage.Database, error) { return nil, syncErr }
 
 	var stdout, stderr bytes.Buffer
-	root := buildRootCmdWithStartup(&stdout, &stderr, func(context.Context, io.Writer, startupCommandClass) startupResult {
+	root := buildRootCmdWithDependencies(&stdout, &stderr, func(context.Context, io.Writer, startupCommandClass) startupResult {
 		return startupResult{Config: cfg}
-	})
+	}, syncService, execute)
 	root.SetArgs([]string{"recover", "--from", "stranded.db"})
 	err := root.Execute()
 	if !errors.Is(err, syncErr) {

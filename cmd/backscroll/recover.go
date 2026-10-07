@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"fmt"
 	"io"
 	"strings"
@@ -10,10 +11,7 @@ import (
 	"github.com/spf13/cobra"
 )
 
-var recoverExecute = recovery.Execute
-var recoverPostInstallSync = maybeAutoSyncContext
-
-func newRecoverCmd(stdout, stderr io.Writer) *cobra.Command {
+func newRecoverCmd(stdout, stderr io.Writer, syncService *startupSyncService, execute func(context.Context, recovery.Options) (recovery.Report, error)) *cobra.Command {
 	var from string
 	var dryRun bool
 	fromValue := singleUseStringValue{target: &from}
@@ -40,7 +38,7 @@ func newRecoverCmd(stdout, stderr io.Writer) *cobra.Command {
 				}
 				cfg = loaded
 			}
-			report, err := recoverExecute(cmd.Context(), recovery.Options{
+			report, err := execute(cmd.Context(), recovery.Options{
 				ActivePath: cfg.DatabasePath,
 				FromPath:   from,
 				DryRun:     dryRun,
@@ -52,7 +50,7 @@ func newRecoverCmd(stdout, stderr io.Writer) *cobra.Command {
 				return fmt.Errorf("recovery failed: %w", err)
 			}
 			if !dryRun {
-				if err := recoverPostInstallSync(cmd.Context(), cfg, stderr); err != nil {
+				if err := syncService.sync(cmd.Context(), cfg, stderr, startup.timing); err != nil {
 					installedPath := report.ActivePath
 					if installedPath == "" {
 						installedPath = cfg.DatabasePath

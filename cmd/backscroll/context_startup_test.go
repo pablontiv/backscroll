@@ -166,9 +166,9 @@ func TestRootContextBusyFollowerUsesCommittedSnapshot(t *testing.T) {
 		}
 		return originalPrepare(ctx, gotCfg, class)
 	}
-	coordinator.sync = func(context.Context, *config.Config, io.Writer) error {
+	coordinator.syncService.open = func(context.Context, string) (*storage.Database, error) {
 		t.Fatal("busy snapshot follower must not synchronize")
-		return nil
+		return nil, nil
 	}
 
 	var stdout, stderr bytes.Buffer

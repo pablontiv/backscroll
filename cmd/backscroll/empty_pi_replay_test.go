@@ -57,12 +57,8 @@ func TestMarkedEmptyPiRacyCleanComparesCanonicalContentHash(t *testing.T) {
 		hashes: map[string]string{path: initialHash},
 	}
 
-	oldActiveInputs, oldNewRegistry := maybeAutoSyncActiveInputs, maybeAutoSyncNewRegistry
-	t.Cleanup(func() {
-		maybeAutoSyncActiveInputs = oldActiveInputs
-		maybeAutoSyncNewRegistry = oldNewRegistry
-	})
-	maybeAutoSyncActiveInputs = func([]string) ([]input_config.InputDefinition, input_config.InputMode, error) {
+	syncService := newStartupSyncService()
+	syncService.activeInputs = func([]string) ([]input_config.InputDefinition, input_config.InputMode, error) {
 		return []input_config.InputDefinition{{
 			ID:     "marked-empty-pi",
 			Source: "session",
@@ -70,7 +66,7 @@ func TestMarkedEmptyPiRacyCleanComparesCanonicalContentHash(t *testing.T) {
 			Decode: input_config.DecodeConfig{Format: "pi"},
 		}}, input_config.ModeDeclarative, nil
 	}
-	maybeAutoSyncNewRegistry = func() *readers.Registry {
+	syncService.newRegistry = func() *readers.Registry {
 		registry := readers.NewRegistry()
 		registry.Register(reader)
 		return registry
@@ -95,7 +91,7 @@ func TestMarkedEmptyPiRacyCleanComparesCanonicalContentHash(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if err := maybeAutoSync(&cfg, &bytes.Buffer{}); err != nil {
+	if err := syncService.sync(context.Background(), &cfg, &bytes.Buffer{}, startupPhaseTiming{}); err != nil {
 		t.Fatalf("immutable racy-clean sync: %v", err)
 	}
 	if reader.hashCalls != 1 || reader.parseCalls != 0 {
@@ -129,7 +125,7 @@ func TestMarkedEmptyPiRacyCleanComparesCanonicalContentHash(t *testing.T) {
 	}
 	reader.hashes[path] = "raw-changed"
 
-	if err := maybeAutoSync(&cfg, &bytes.Buffer{}); err != nil {
+	if err := syncService.sync(context.Background(), &cfg, &bytes.Buffer{}, startupPhaseTiming{}); err != nil {
 		t.Fatalf("changed racy-clean sync: %v", err)
 	}
 	if reader.hashCalls != 2 || reader.parseCalls != 1 {
@@ -154,12 +150,8 @@ func TestEmptyPiReplayCapDrainsAndConverges(t *testing.T) {
 	reader := &emptyPiReplayReader{hashes: make(map[string]string)}
 	oldTime := time.Now().Add(-time.Hour)
 
-	oldActiveInputs, oldNewRegistry := maybeAutoSyncActiveInputs, maybeAutoSyncNewRegistry
-	t.Cleanup(func() {
-		maybeAutoSyncActiveInputs = oldActiveInputs
-		maybeAutoSyncNewRegistry = oldNewRegistry
-	})
-	maybeAutoSyncActiveInputs = func([]string) ([]input_config.InputDefinition, input_config.InputMode, error) {
+	syncService := newStartupSyncService()
+	syncService.activeInputs = func([]string) ([]input_config.InputDefinition, input_config.InputMode, error) {
 		return []input_config.InputDefinition{{
 			ID:     "empty-pi-replay",
 			Source: "session",
@@ -167,7 +159,7 @@ func TestEmptyPiReplayCapDrainsAndConverges(t *testing.T) {
 			Decode: input_config.DecodeConfig{Format: "pi"},
 		}}, input_config.ModeDeclarative, nil
 	}
-	maybeAutoSyncNewRegistry = func() *readers.Registry {
+	syncService.newRegistry = func() *readers.Registry {
 		registry := readers.NewRegistry()
 		registry.Register(reader)
 		return registry
@@ -211,7 +203,7 @@ func TestEmptyPiReplayCapDrainsAndConverges(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if err := maybeAutoSync(&cfg, &bytes.Buffer{}); err != nil {
+	if err := syncService.sync(context.Background(), &cfg, &bytes.Buffer{}, startupPhaseTiming{}); err != nil {
 		t.Fatalf("first replay: %v", err)
 	}
 	if reader.parseCalls != 200 {
@@ -237,7 +229,7 @@ func TestEmptyPiReplayCapDrainsAndConverges(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if err := maybeAutoSync(&cfg, &bytes.Buffer{}); err != nil {
+	if err := syncService.sync(context.Background(), &cfg, &bytes.Buffer{}, startupPhaseTiming{}); err != nil {
 		t.Fatalf("second replay: %v", err)
 	}
 	if reader.parseCalls != 201 {
@@ -259,7 +251,7 @@ func TestEmptyPiReplayCapDrainsAndConverges(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if err := maybeAutoSync(&cfg, &bytes.Buffer{}); err != nil {
+	if err := syncService.sync(context.Background(), &cfg, &bytes.Buffer{}, startupPhaseTiming{}); err != nil {
 		t.Fatalf("convergence replay: %v", err)
 	}
 	if reader.parseCalls != 201 {

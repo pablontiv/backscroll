@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/pablontiv/backscroll/internal/compat"
 	"github.com/pablontiv/backscroll/internal/config"
@@ -82,38 +83,31 @@ func (r *cancelingSyncReader) Parse(ctx context.Context, path string, _ input_co
 }
 
 func TestMaybeAutoSyncContextCancellationStopsAtEachPhase(t *testing.T) {
-	originalActiveInputs := maybeAutoSyncActiveInputs
-	originalNewRegistry := maybeAutoSyncNewRegistry
-	originalSyncFiles := maybeAutoSyncSyncFiles
-	t.Cleanup(func() {
-		maybeAutoSyncActiveInputs = originalActiveInputs
-		maybeAutoSyncNewRegistry = originalNewRegistry
-		maybeAutoSyncSyncFiles = originalSyncFiles
-	})
-
-	maybeAutoSyncActiveInputs = func([]string) ([]input_config.InputDefinition, input_config.InputMode, error) {
-		return []input_config.InputDefinition{{
-			ID:     "cancel-test",
-			Source: "session",
-			Active: true,
-			Decode: input_config.DecodeConfig{Format: "cancel-test"},
-		}}, input_config.ModeDeclarative, nil
-	}
-
+	t.Parallel()
 	for _, phase := range []string{"discovery", "hash", "parse", "storage"} {
+		phase := phase
 		t.Run(phase, func(t *testing.T) {
+			t.Parallel()
 			ctx, cancel := context.WithCancel(context.Background())
 			defer cancel()
 			reader := &cancelingSyncReader{phase: phase, cancel: cancel}
-			maybeAutoSyncNewRegistry = func() *readers.Registry {
+			syncService := newStartupSyncService()
+			syncService.activeInputs = func([]string) ([]input_config.InputDefinition, input_config.InputMode, error) {
+				return []input_config.InputDefinition{{
+					ID:     "cancel-test",
+					Source: "session",
+					Active: true,
+					Decode: input_config.DecodeConfig{Format: "cancel-test"},
+				}}, input_config.ModeDeclarative, nil
+			}
+			syncService.newRegistry = func() *readers.Registry {
 				registry := readers.NewRegistry()
 				registry.Register(reader)
 				return registry
 			}
-			maybeAutoSyncSyncFiles = originalSyncFiles
 			storageCalls := 0
 			if phase == "storage" {
-				maybeAutoSyncSyncFiles = func(ctx context.Context, db *storage.Database, files []storage.IndexedFile) error {
+				syncService.syncFiles = func(ctx context.Context, db *storage.Database, files []storage.IndexedFile) error {
 					storageCalls++
 					cancel()
 					return db.SyncFilesContext(ctx, files)
@@ -130,7 +124,7 @@ func TestMaybeAutoSyncContextCancellationStopsAtEachPhase(t *testing.T) {
 			}
 
 			var progress bytes.Buffer
-			err = maybeAutoSyncContext(ctx, &config.Config{DatabasePath: dbPath}, &progress)
+			err = syncService.sync(ctx, &config.Config{DatabasePath: dbPath}, &progress, startupPhaseTiming{})
 			if !errors.Is(err, context.Canceled) {
 				t.Fatalf("error=%v, want context.Canceled", err)
 			}
@@ -156,14 +150,46 @@ func TestMaybeAutoSyncContextCancellationStopsAtEachPhase(t *testing.T) {
 	}
 }
 
+func TestStartupSyncServicesIsolateReaderAndStorageDependencies(t *testing.T) {
+	t.Parallel()
+	for _, name := range []string{"first-reader", "second-reader"} {
+		name := name
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			path := "/" + name + ".jsonl"
+			reader := &cancelingSyncReader{name: name, path: path}
+			syncService := newStartupSyncService()
+			syncService.activeInputs = func([]string) ([]input_config.InputDefinition, input_config.InputMode, error) {
+				return []input_config.InputDefinition{{ID: name, Source: "session", Active: true, Decode: input_config.DecodeConfig{Format: name}}}, input_config.ModeDeclarative, nil
+			}
+			syncService.newRegistry = func() *readers.Registry {
+				registry := readers.NewRegistry()
+				registry.Register(reader)
+				return registry
+			}
+			syncCalls := 0
+			syncFiles := syncService.syncFiles
+			syncService.syncFiles = func(ctx context.Context, db *storage.Database, files []storage.IndexedFile) error {
+				syncCalls++
+				if len(files) != 1 || files[0].SourcePath != path {
+					t.Fatalf("%s storage received files %+v", name, files)
+				}
+				return syncFiles(ctx, db, files)
+			}
+
+			if err := syncService.sync(context.Background(), &config.Config{DatabasePath: filepath.Join(t.TempDir(), name+".db")}, io.Discard, startupPhaseTiming{}); err != nil {
+				t.Fatalf("sync: %v", err)
+			}
+			if reader.hashes != 1 || reader.parses != 1 || syncCalls != 1 {
+				t.Fatalf("reader/storage calls=%d/%d/%d, want 1/1/1", reader.hashes, reader.parses, syncCalls)
+			}
+		})
+	}
+}
+
 func TestMaybeAutoSyncContextPublishesSuccessfulProgressInOrder(t *testing.T) {
 	t.Setenv("BACKSCROLL_STARTUP_DIAGNOSTICS", "")
-	originalActiveInputs := maybeAutoSyncActiveInputs
-	originalNewRegistry := maybeAutoSyncNewRegistry
-	t.Cleanup(func() {
-		maybeAutoSyncActiveInputs = originalActiveInputs
-		maybeAutoSyncNewRegistry = originalNewRegistry
-	})
+	syncService := newStartupSyncService()
 
 	dbPath := filepath.Join(t.TempDir(), "index.db")
 	const sourcePath = "/success/empty-pi.jsonl"
@@ -180,17 +206,17 @@ func TestMaybeAutoSyncContextPublishesSuccessfulProgressInOrder(t *testing.T) {
 	}
 
 	reader := &cancelingSyncReader{name: "pi", path: sourcePath}
-	maybeAutoSyncActiveInputs = func([]string) ([]input_config.InputDefinition, input_config.InputMode, error) {
+	syncService.activeInputs = func([]string) ([]input_config.InputDefinition, input_config.InputMode, error) {
 		return []input_config.InputDefinition{{ID: "success-empty-pi", Source: "session", Active: true, Decode: input_config.DecodeConfig{Format: "pi"}}}, input_config.ModeDeclarative, nil
 	}
-	maybeAutoSyncNewRegistry = func() *readers.Registry {
+	syncService.newRegistry = func() *readers.Registry {
 		registry := readers.NewRegistry()
 		registry.Register(reader)
 		return registry
 	}
 
 	var progress bytes.Buffer
-	if err := maybeAutoSyncContext(context.Background(), &config.Config{DatabasePath: dbPath}, &progress); err != nil {
+	if err := syncService.sync(context.Background(), &config.Config{DatabasePath: dbPath}, &progress, startupPhaseTiming{}); err != nil {
 		t.Fatalf("sync: %v", err)
 	}
 	want := "Re-parsing empty Pi file 1: " + sourcePath + "\n"
@@ -199,13 +225,46 @@ func TestMaybeAutoSyncContextPublishesSuccessfulProgressInOrder(t *testing.T) {
 	}
 }
 
+func TestStartupSyncServicesIsolateDiagnosticsTimings(t *testing.T) {
+	t.Parallel()
+	cases := []struct {
+		name      string
+		lock      time.Duration
+		prepare   time.Duration
+		otherLock time.Duration
+	}{
+		{name: "first", lock: 11 * time.Millisecond, prepare: 13 * time.Millisecond, otherLock: 21 * time.Millisecond},
+		{name: "second", lock: 21 * time.Millisecond, prepare: 23 * time.Millisecond, otherLock: 11 * time.Millisecond},
+	}
+	for _, tc := range cases {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			syncService := newStartupSyncService()
+			syncService.diagnostics = true
+			syncService.activeInputs = func([]string) ([]input_config.InputDefinition, input_config.InputMode, error) {
+				return nil, input_config.ModeLegacy, nil
+			}
+			var progress bytes.Buffer
+			timing := startupPhaseTiming{LockAcquisitionTime: tc.lock, IndexPrepareTime: tc.prepare, measured: true}
+			err := syncService.sync(context.Background(), &config.Config{DatabasePath: filepath.Join(t.TempDir(), tc.name+".db")}, &progress, timing)
+			if err != nil {
+				t.Fatalf("sync: %v", err)
+			}
+			for _, want := range []string{"  Lock Acquisition:" + tc.lock.String() + "\n", "  Index Prepare:   " + tc.prepare.String() + "\n"} {
+				if !strings.Contains(progress.String(), want) {
+					t.Fatalf("diagnostics=%q missing %q", progress.String(), want)
+				}
+			}
+			if strings.Contains(progress.String(), "  Lock Acquisition:"+tc.otherLock.String()+"\n") {
+				t.Fatalf("diagnostics leaked another execution's timing: %q", progress.String())
+			}
+		})
+	}
+}
+
 func TestMaybeAutoSyncContextErrorDiscardsBufferedProgress(t *testing.T) {
-	originalActiveInputs := maybeAutoSyncActiveInputs
-	originalNewRegistry := maybeAutoSyncNewRegistry
-	t.Cleanup(func() {
-		maybeAutoSyncActiveInputs = originalActiveInputs
-		maybeAutoSyncNewRegistry = originalNewRegistry
-	})
+	syncService := newStartupSyncService()
 
 	dbPath := filepath.Join(t.TempDir(), "index.db")
 	const sourcePath = "/error/empty-pi.jsonl"
@@ -223,7 +282,7 @@ func TestMaybeAutoSyncContextErrorDiscardsBufferedProgress(t *testing.T) {
 
 	parseErr := errors.New("parse failed after progress")
 	reader := &cancelingSyncReader{name: "pi", path: sourcePath, parseErr: parseErr}
-	maybeAutoSyncActiveInputs = func([]string) ([]input_config.InputDefinition, input_config.InputMode, error) {
+	syncService.activeInputs = func([]string) ([]input_config.InputDefinition, input_config.InputMode, error) {
 		return []input_config.InputDefinition{{
 			ID:     "error-empty-pi",
 			Source: "session",
@@ -231,14 +290,14 @@ func TestMaybeAutoSyncContextErrorDiscardsBufferedProgress(t *testing.T) {
 			Decode: input_config.DecodeConfig{Format: "pi"},
 		}}, input_config.ModeDeclarative, nil
 	}
-	maybeAutoSyncNewRegistry = func() *readers.Registry {
+	syncService.newRegistry = func() *readers.Registry {
 		registry := readers.NewRegistry()
 		registry.Register(reader)
 		return registry
 	}
 
 	var progress bytes.Buffer
-	err = maybeAutoSyncContext(context.Background(), &config.Config{DatabasePath: dbPath}, &progress)
+	err = syncService.sync(context.Background(), &config.Config{DatabasePath: dbPath}, &progress, startupPhaseTiming{})
 	if !errors.Is(err, parseErr) {
 		t.Fatalf("error=%v want %v", err, parseErr)
 	}
@@ -252,16 +311,7 @@ func TestMaybeAutoSyncContextErrorDiscardsBufferedProgress(t *testing.T) {
 
 func TestRecoverCancellationDiscardsBufferedPostInstallProgress(t *testing.T) {
 	t.Setenv("BACKSCROLL_STARTUP_DIAGNOSTICS", "")
-	originalActiveInputs := maybeAutoSyncActiveInputs
-	originalNewRegistry := maybeAutoSyncNewRegistry
-	originalRecoverExecute := recoverExecute
-	originalPostInstallSync := recoverPostInstallSync
-	t.Cleanup(func() {
-		maybeAutoSyncActiveInputs = originalActiveInputs
-		maybeAutoSyncNewRegistry = originalNewRegistry
-		recoverExecute = originalRecoverExecute
-		recoverPostInstallSync = originalPostInstallSync
-	})
+	syncService := newStartupSyncService()
 
 	dbPath := filepath.Join(t.TempDir(), "active.db")
 	const sourcePath = "/recover/empty-pi.jsonl"
@@ -283,7 +333,7 @@ func TestRecoverCancellationDiscardsBufferedPostInstallProgress(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	reader := &cancelingSyncReader{name: "pi", path: sourcePath, phase: "parse", cancel: cancel}
-	maybeAutoSyncActiveInputs = func([]string) ([]input_config.InputDefinition, input_config.InputMode, error) {
+	syncService.activeInputs = func([]string) ([]input_config.InputDefinition, input_config.InputMode, error) {
 		return []input_config.InputDefinition{{
 			ID:     "recover-empty-pi",
 			Source: "session",
@@ -291,22 +341,21 @@ func TestRecoverCancellationDiscardsBufferedPostInstallProgress(t *testing.T) {
 			Decode: input_config.DecodeConfig{Format: "pi"},
 		}}, input_config.ModeDeclarative, nil
 	}
-	maybeAutoSyncNewRegistry = func() *readers.Registry {
+	syncService.newRegistry = func() *readers.Registry {
 		registry := readers.NewRegistry()
 		registry.Register(reader)
 		return registry
 	}
-	recoverExecute = func(context.Context, recovery.Options) (recovery.Report, error) {
+	execute := func(context.Context, recovery.Options) (recovery.Report, error) {
 		return recovery.Report{ActivePath: dbPath}, nil
 	}
-	recoverPostInstallSync = maybeAutoSyncContext
 
 	cfg := &config.Config{DatabasePath: dbPath}
 	lease := &fakeStartupLease{}
 	var stdout, stderr bytes.Buffer
-	root := buildRootCmdWithStartup(&stdout, &stderr, func(context.Context, io.Writer, startupCommandClass) startupResult {
+	root := buildRootCmdWithDependencies(&stdout, &stderr, func(context.Context, io.Writer, startupCommandClass) startupResult {
 		return startupResult{Config: cfg, Lease: lease}
-	})
+	}, syncService, execute)
 	root.SetContext(ctx)
 	root.SetArgs([]string{"recover", "--from", "stranded.db"})
 	err = root.Execute()
@@ -362,26 +411,52 @@ func TestCanceledMutationReleasesRetainedLeaseExactlyOnce(t *testing.T) {
 func TestOwnedStartupPreservesSuccessfulProgressBytes(t *testing.T) {
 	type startupSyncContextKey struct{}
 	ctx := context.WithValue(context.Background(), startupSyncContextKey{}, "startup-sync")
-	coordinator := newStartupCoordinator()
+	dbPath := filepath.Join(t.TempDir(), "index.db")
+	const sourcePath = "/startup/empty-pi.jsonl"
+	db, err := storage.Open(dbPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.DB().Exec(`INSERT INTO indexed_files (path, hash) VALUES (?, ?)`, sourcePath, "cancel-test-hash"); err != nil {
+		_ = db.Close()
+		t.Fatal(err)
+	}
+	if err := db.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	reader := &cancelingSyncReader{name: "pi", path: sourcePath}
+	syncService := newStartupSyncService()
+	syncService.activeInputs = func([]string) ([]input_config.InputDefinition, input_config.InputMode, error) {
+		return []input_config.InputDefinition{{ID: "startup-empty-pi", Source: "session", Active: true, Decode: input_config.DecodeConfig{Format: "pi"}}}, input_config.ModeDeclarative, nil
+	}
+	syncService.newRegistry = func() *readers.Registry {
+		registry := readers.NewRegistry()
+		registry.Register(reader)
+		return registry
+	}
+	open := syncService.open
+	syncService.open = func(gotCtx context.Context, path string) (*storage.Database, error) {
+		if gotCtx.Value(startupSyncContextKey{}) != "startup-sync" {
+			t.Fatal("startup sync did not receive coordinator context")
+		}
+		return open(gotCtx, path)
+	}
+
+	coordinator := newStartupCoordinatorWithSyncService(syncService)
 	lease := &fakeStartupLease{}
 	coordinator.tryAcquire = func(string) (startupLease, bool, error) { return lease, true, nil }
 	coordinator.prepareIndex = func(context.Context, *config.Config, indexCommandClass) (*storage.Database, *compat.Diagnostic, error) {
 		return nil, nil, nil
 	}
-	coordinator.sync = func(gotCtx context.Context, _ *config.Config, progress io.Writer) error {
-		if gotCtx.Value(startupSyncContextKey{}) != "startup-sync" {
-			t.Fatal("startup sync did not receive coordinator context")
-		}
-		_, _ = io.WriteString(progress, "first\nsecond\n")
-		return nil
-	}
 
 	var progress bytes.Buffer
-	result := coordinator.coordinate(ctx, &config.Config{DatabasePath: filepath.Join(t.TempDir(), "index.db")}, &progress, startupSnapshotRead)
+	result := coordinator.coordinate(ctx, &config.Config{DatabasePath: dbPath}, &progress, startupSnapshotRead)
 	if result.Failure != nil {
 		t.Fatalf("failure=%v", result.Failure)
 	}
-	if got, want := progress.String(), "first\nsecond\n"; got != want {
+	want := "Re-parsing empty Pi file 1: " + sourcePath + "\n"
+	if got := progress.String(); got != want {
 		t.Fatalf("progress=%q want %q", got, want)
 	}
 	if lease.releases != 1 {

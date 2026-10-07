@@ -10,6 +10,7 @@ import (
 	"github.com/pablontiv/backscroll/internal/compat"
 	"github.com/pablontiv/backscroll/internal/config"
 	"github.com/pablontiv/backscroll/internal/input_config"
+	"github.com/pablontiv/backscroll/internal/recovery"
 	"github.com/spf13/cobra"
 )
 
@@ -88,6 +89,7 @@ type startupResult struct {
 	Failure *startupFailure
 	Warning *startupWarning
 	Lease   startupLease
+	timing  startupPhaseTiming
 }
 
 func (r startupResult) startupFailure() *startupFailure {
@@ -170,10 +172,14 @@ func buildRootCmd(stdout, stderr io.Writer) *cobra.Command {
 }
 
 func buildRootCmdWithCoordinator(stdout, stderr io.Writer, coordinator *startupCoordinator) *cobra.Command {
-	return buildRootCmdWithStartup(stdout, stderr, coordinator.defaultStartupPolicy)
+	return buildRootCmdWithDependencies(stdout, stderr, coordinator.defaultStartupPolicy, coordinator.syncService, recovery.Execute)
 }
 
 func buildRootCmdWithStartup(stdout, stderr io.Writer, policy startupPolicyFunc) *cobra.Command {
+	return buildRootCmdWithDependencies(stdout, stderr, policy, newStartupSyncService(), recovery.Execute)
+}
+
+func buildRootCmdWithDependencies(stdout, stderr io.Writer, policy startupPolicyFunc, syncService *startupSyncService, execute func(context.Context, recovery.Options) (recovery.Report, error)) *cobra.Command {
 	root := &cobra.Command{
 		Use:           "backscroll",
 		Short:         "A permanent, searchable record of your coding-agent sessions",
@@ -223,7 +229,7 @@ query merges both by rank position (RRF).`,
 	registerStartupCommand(root, startupSnapshotRead, newStatusCmd(stdout, stderr))
 	registerStartupCommand(root, startupMetadataRead, newConfigCmd(stdout, stderr))
 	registerStartupCommand(root, startupMutation, newAnnotateCmd(stdout, stderr))
-	registerStartupCommand(root, startupRemediation, newRecoverCmd(stdout, stderr))
+	registerStartupCommand(root, startupRemediation, newRecoverCmd(stdout, stderr, syncService, execute))
 
 	return root
 }
