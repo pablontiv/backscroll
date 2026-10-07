@@ -628,24 +628,73 @@ func (d *Database) OptimizeFTS() error {
 	return nil
 }
 
-// RebuildFTS re-derives both FTS indexes from search_items using FTS5's
-// external-content 'rebuild' command. It never touches search_items rows —
-// the DB, not the filesystem, is the source of truth (perennity contract).
+// RebuildFTS re-derives both FTS indexes without cancellation.
+// It is retained for compatibility with existing callers.
 func (d *Database) RebuildFTS() error {
-	// Single transaction: either both indexes re-derive or neither does —
-	// a partial rebuild would leave one index stale and queries inconsistent.
-	tx, err := d.db.Begin()
+	return d.RebuildFTSContext(context.Background())
+}
+
+// RebuildFTSContext re-derives both FTS indexes from search_items. FTS5's
+// external-content rebuild command cannot preserve the content-type routing
+// contract because it indexes every content row, so each index is cleared and
+// repopulated with the same exact predicates used by the schema triggers.
+//
+// Both indexes are replaced in one transaction: cancellation or any error
+// restores both prior indexes. search_items is never mutated; the database,
+// not the filesystem, remains the perennial source of truth.
+func (d *Database) RebuildFTSContext(ctx context.Context) (retErr error) {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+
+	// Keep transaction finalization under the gate rather than database/sql's
+	// automatic context rollback so cancellation and commit have one owner.
+	tx, err := d.db.BeginTx(context.WithoutCancel(ctx), nil)
 	if err != nil {
-		return fmt.Errorf("begin transaction: %w", err)
+		return fmt.Errorf("begin FTS rebuild transaction: %w", err)
 	}
-	defer func() { _ = tx.Rollback() }()
-	if _, err := tx.Exec(`INSERT INTO messages_fts(messages_fts) VALUES('rebuild')`); err != nil {
-		return fmt.Errorf("rebuild messages_fts: %w", err)
+	gate := newSyncTransactionGate(ctx, tx)
+	defer func() {
+		if rollbackErr := gate.rollback(); rollbackErr != nil && !errors.Is(retErr, rollbackErr) {
+			retErr = errors.Join(retErr, fmt.Errorf("rollback FTS rebuild transaction: %w", rollbackErr))
+		}
+		if cancelErr := gate.cancellationBeforeCommit(); cancelErr != nil && !errors.Is(retErr, cancelErr) {
+			retErr = errors.Join(cancelErr, retErr)
+		}
+	}()
+
+	statements := []struct {
+		label string
+		sql   string
+	}{
+		{"clear messages_fts", `INSERT INTO messages_fts(messages_fts) VALUES('delete-all')`},
+		{"repopulate messages_fts", `
+			INSERT INTO messages_fts(rowid, text)
+			SELECT id, text FROM search_items
+			WHERE content_type IN ('text', 'code', 'reasoning')
+		`},
+		{"clear tool_fts", `INSERT INTO tool_fts(tool_fts) VALUES('delete-all')`},
+		{"repopulate tool_fts", `
+			INSERT INTO tool_fts(rowid, text)
+			SELECT id, text FROM search_items
+			WHERE content_type = 'tool'
+		`},
 	}
-	if _, err := tx.Exec(`INSERT INTO tool_fts(tool_fts) VALUES('rebuild')`); err != nil {
-		return fmt.Errorf("rebuild tool_fts: %w", err)
+	for _, statement := range statements {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		if _, err := tx.ExecContext(ctx, statement.sql); err != nil {
+			if ctxErr := ctx.Err(); ctxErr != nil {
+				return ctxErr
+			}
+			return fmt.Errorf("%s: %w", statement.label, err)
+		}
 	}
-	return tx.Commit()
+	if err := gate.commit(); err != nil {
+		return fmt.Errorf("commit FTS rebuild: %w", err)
+	}
+	return nil
 }
 
 // TemplateQueryOpts controls template aggregation queries.
@@ -1266,69 +1315,91 @@ func (d *Database) filterEchoZeroPathsContext(ctx context.Context, paths []strin
 	return out, nil
 }
 
-// ReresolveProjects iterates all distinct source_paths where project='unknown' or project IS NULL,
-// calls the resolver function for each path, and updates ALL rows for that path with the returned project ID.
-// If resolver returns empty string or "unknown", the source_path is skipped and rows remain unchanged.
-// Returns the count of DISTINCT source_paths that were successfully resolved (project changed).
+// ReresolveProjects retains the context-taking API used by existing callers.
 func (d *Database) ReresolveProjects(ctx context.Context, resolver func(sourcePath string) string) (int64, error) {
-	// Find all distinct source_paths with unknown or NULL project
+	return d.ReresolveProjectsContext(ctx, resolver)
+}
+
+// ReresolveProjectsContext resolves unknown project labels in deterministic
+// source-path order. Cancellation rolls back the complete resolution set.
+func (d *Database) ReresolveProjectsContext(ctx context.Context, resolver func(sourcePath string) string) (resolvedPaths int64, retErr error) {
+	if err := ctx.Err(); err != nil {
+		return 0, err
+	}
 	rows, err := d.db.QueryContext(ctx, `
 		SELECT DISTINCT source_path FROM search_items
 		WHERE project = 'unknown' OR project IS NULL
+		ORDER BY source_path ASC
 	`)
 	if err != nil {
 		return 0, fmt.Errorf("query unknown source_paths: %w", err)
 	}
-	defer rows.Close()
-
 	var sourcePaths []string
 	for rows.Next() {
+		if err := ctx.Err(); err != nil {
+			_ = rows.Close()
+			return 0, err
+		}
 		var path string
 		if err := rows.Scan(&path); err != nil {
+			_ = rows.Close()
 			return 0, fmt.Errorf("scan source_path: %w", err)
 		}
 		sourcePaths = append(sourcePaths, path)
 	}
+	if err := ctx.Err(); err != nil {
+		_ = rows.Close()
+		return 0, err
+	}
 	if err := rows.Err(); err != nil {
+		_ = rows.Close()
 		return 0, fmt.Errorf("iterate source_paths: %w", err)
 	}
-
+	if err := rows.Close(); err != nil {
+		return 0, fmt.Errorf("close source_paths query: %w", err)
+	}
 	if len(sourcePaths) == 0 {
 		return 0, nil
 	}
 
-	// Resolve each path and update in a single transaction
-	tx, err := d.db.BeginTx(ctx, nil)
+	tx, err := d.db.BeginTx(context.WithoutCancel(ctx), nil)
 	if err != nil {
-		return 0, fmt.Errorf("begin transaction: %w", err)
+		return 0, fmt.Errorf("begin project resolution transaction: %w", err)
 	}
-	defer func() { _ = tx.Rollback() }()
+	gate := newSyncTransactionGate(ctx, tx)
+	defer func() {
+		if rollbackErr := gate.rollback(); rollbackErr != nil && !errors.Is(retErr, rollbackErr) {
+			retErr = errors.Join(retErr, fmt.Errorf("rollback project resolution transaction: %w", rollbackErr))
+		}
+		if cancelErr := gate.cancellationBeforeCommit(); cancelErr != nil && !errors.Is(retErr, cancelErr) {
+			retErr = errors.Join(cancelErr, retErr)
+		}
+	}()
 
-	var resolvedPaths int64
 	for _, sourcePath := range sourcePaths {
+		if err := ctx.Err(); err != nil {
+			return 0, err
+		}
 		resolvedID := resolver(sourcePath)
-
-		// Skip if resolver returned empty or "unknown"
+		if err := ctx.Err(); err != nil {
+			return 0, err
+		}
 		if resolvedID == "" || resolvedID == "unknown" {
 			continue
 		}
-
-		// Update all rows for this source_path
-		_, err := tx.ExecContext(ctx, `
+		if _, err := tx.ExecContext(ctx, `
 			UPDATE search_items SET project = ? WHERE source_path = ?
-		`, resolvedID, sourcePath)
-		if err != nil {
+		`, resolvedID, sourcePath); err != nil {
+			if ctxErr := ctx.Err(); ctxErr != nil {
+				return 0, ctxErr
+			}
 			return 0, fmt.Errorf("update source_path %s: %w", sourcePath, err)
 		}
-
-		// Count this source_path as successfully resolved
 		resolvedPaths++
 	}
-
-	if err := tx.Commit(); err != nil {
-		return 0, fmt.Errorf("commit resolution transaction: %w", err)
+	if err := gate.commit(); err != nil {
+		return 0, fmt.Errorf("commit project resolution transaction: %w", err)
 	}
-
 	return resolvedPaths, nil
 }
 
@@ -1339,80 +1410,101 @@ func (d *Database) ReresolveProjects(ctx context.Context, resolver func(sourcePa
 // from the stored fallback. Returns count of source_paths updated.
 // Only registry matches count — fallback-only paths are skipped (no churn).
 func (d *Database) ReresolveProjectsWithRegistry(ctx context.Context, registry projects.ProjectRegistry) (int64, error) {
-	if len(registry.Projects) == 0 {
-		return 0, nil // no registry entries, nothing to resolve
-	}
+	return d.ReresolveProjectsWithRegistryContext(ctx, registry)
+}
 
-	// Find all distinct (source_path, project) tuples where we might have a fallback label
+// ReresolveProjectsWithRegistryContext corrects fallback project labels using
+// registry matches. Cancellation rolls back all updates from this call.
+func (d *Database) ReresolveProjectsWithRegistryContext(ctx context.Context, registry projects.ProjectRegistry) (updatedPaths int64, retErr error) {
+	if err := ctx.Err(); err != nil {
+		return 0, err
+	}
+	if len(registry.Projects) == 0 {
+		return 0, nil
+	}
 	rows, err := d.db.QueryContext(ctx, `
 		SELECT DISTINCT si.source_path, si.project
 		FROM search_items si
 		WHERE si.project IS NOT NULL
-		ORDER BY si.source_path
+		ORDER BY si.source_path ASC, si.project ASC
 	`)
 	if err != nil {
 		return 0, fmt.Errorf("query paths for registry re-resolution: %w", err)
 	}
-	defer rows.Close()
-
 	type pathLabel struct {
 		path    string
 		project string
 	}
 	var pathLabels []pathLabel
 	for rows.Next() {
-		var path, proj string
-		if err := rows.Scan(&path, &proj); err != nil {
+		if err := ctx.Err(); err != nil {
+			_ = rows.Close()
+			return 0, err
+		}
+		var path, project string
+		if err := rows.Scan(&path, &project); err != nil {
+			_ = rows.Close()
 			return 0, fmt.Errorf("scan path/project: %w", err)
 		}
-		pathLabels = append(pathLabels, pathLabel{path, proj})
+		pathLabels = append(pathLabels, pathLabel{path: path, project: project})
+	}
+	if err := ctx.Err(); err != nil {
+		_ = rows.Close()
+		return 0, err
 	}
 	if err := rows.Err(); err != nil {
+		_ = rows.Close()
 		return 0, fmt.Errorf("iterate path/project: %w", err)
 	}
-
+	if err := rows.Close(); err != nil {
+		return 0, fmt.Errorf("close path/project query: %w", err)
+	}
 	if len(pathLabels) == 0 {
 		return 0, nil
 	}
 
-	// Re-resolve each path against the registry
-	tx, err := d.db.BeginTx(ctx, nil)
+	tx, err := d.db.BeginTx(context.WithoutCancel(ctx), nil)
 	if err != nil {
-		return 0, fmt.Errorf("begin transaction: %w", err)
+		return 0, fmt.Errorf("begin registry re-resolution transaction: %w", err)
 	}
-	defer func() { _ = tx.Rollback() }()
+	gate := newSyncTransactionGate(ctx, tx)
+	defer func() {
+		if rollbackErr := gate.rollback(); rollbackErr != nil && !errors.Is(retErr, rollbackErr) {
+			retErr = errors.Join(retErr, fmt.Errorf("rollback registry re-resolution transaction: %w", rollbackErr))
+		}
+		if cancelErr := gate.cancellationBeforeCommit(); cancelErr != nil && !errors.Is(retErr, cancelErr) {
+			retErr = errors.Join(cancelErr, retErr)
+		}
+	}()
 
-	var updatedPaths int64
-	for _, pl := range pathLabels {
-		cwd := projects.DecodeCwdFromSessionPath(pl.path)
+	for _, path := range pathLabels {
+		if err := ctx.Err(); err != nil {
+			return 0, err
+		}
+		cwd := projects.DecodeCwdFromSessionPath(path.path)
 		if cwd == "" {
-			continue // can't decode path, skip
+			continue
 		}
-
-		// Normalize cross-host equivalences
 		cwd = projects.NormalizeRootEquivalence(cwd, registry)
-
-		// Try registry match
-		id := projects.Identify(cwd, registry)
-		if !id.FromRegistry {
-			continue // registry didn't match, skip (no churn on fallback-only)
+		identity := projects.Identify(cwd, registry)
+		if err := ctx.Err(); err != nil {
+			return 0, err
 		}
-
-		// Update only if the registry ID differs from stored project
-		if id.ProjectID != pl.project {
-			_, err := tx.ExecContext(ctx, `
-				UPDATE search_items SET project = ? WHERE source_path = ?
-			`, id.ProjectID, pl.path)
-			if err != nil {
-				return 0, fmt.Errorf("update source_path %s: %w", pl.path, err)
+		if !identity.FromRegistry || identity.ProjectID == path.project {
+			continue
+		}
+		if _, err := tx.ExecContext(ctx, `
+			UPDATE search_items SET project = ? WHERE source_path = ?
+		`, identity.ProjectID, path.path); err != nil {
+			if ctxErr := ctx.Err(); ctxErr != nil {
+				return 0, ctxErr
 			}
-			updatedPaths++
+			return 0, fmt.Errorf("update source_path %s: %w", path.path, err)
 		}
+		updatedPaths++
 	}
-
-	if err := tx.Commit(); err != nil {
+	if err := gate.commit(); err != nil {
 		return 0, fmt.Errorf("commit registry re-resolution transaction: %w", err)
 	}
-
 	return updatedPaths, nil
 }
