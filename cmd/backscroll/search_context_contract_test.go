@@ -153,7 +153,7 @@ func TestSearchIdentityOutputsAndContextSelectors(t *testing.T) {
 			t.Fatal("search result did not expose UUID selector")
 		}
 		var stdout, stderr bytes.Buffer
-		err := runContext(context.Background(), &stdout, &stderr, cfg, contextCommandOptions{
+		err := runContextCommand(context.Background(), &stdout, &stderr, cfg, contextCommandOptions{
 			uuid: *result.UUID, uuidSet: true, before: 0, after: 0,
 			maxTokens: contextMaxMaxTokens, jsonFormat: true,
 		})
@@ -175,7 +175,7 @@ func TestSearchIdentityOutputsAndContextSelectors(t *testing.T) {
 			t.Fatalf("fallback result unexpectedly has UUID: %+v", result)
 		}
 		var stdout, stderr bytes.Buffer
-		err := runContext(context.Background(), &stdout, &stderr, cfg, contextCommandOptions{
+		err := runContextCommand(context.Background(), &stdout, &stderr, cfg, contextCommandOptions{
 			sourcePath: result.SourcePath, sourcePathSet: true,
 			ordinal: int64(result.Ordinal), ordinalSet: true,
 			before: 0, after: 0, maxTokens: contextMaxMaxTokens, jsonFormat: true,
@@ -195,7 +195,7 @@ func TestSearchIdentityOutputsAndContextSelectors(t *testing.T) {
 	t.Run("ambiguous fallback remains ambiguous", func(t *testing.T) {
 		result := singleMinimalSearchResult(t, runSearchContract(t, cfg, "ambiguousselector", "minimal", true, false))
 		var stdout, stderr bytes.Buffer
-		err := runContext(context.Background(), &stdout, &stderr, cfg, contextCommandOptions{
+		err := runContextCommand(context.Background(), &stdout, &stderr, cfg, contextCommandOptions{
 			sourcePath: result.SourcePath, sourcePathSet: true,
 			ordinal: int64(result.Ordinal), ordinalSet: true,
 			before: 0, after: 0, maxTokens: contextMaxMaxTokens, robotFormat: true,

@@ -230,7 +230,7 @@ func TestContextTextAndRobotSuccessfulPayloadBudgetBoundaries(t *testing.T) {
 				maxTokens: exactBudget, robotFormat: tc.robot,
 			}
 			var stdout, stderr bytes.Buffer
-			if err := runContext(context.Background(), &stdout, &stderr, cfg, opts); err != nil {
+			if err := runContextCommand(context.Background(), &stdout, &stderr, cfg, opts); err != nil {
 				t.Fatalf("run exact-budget context: %v", err)
 			}
 			if stderr.Len() != 0 {
@@ -255,7 +255,7 @@ func TestContextTextAndRobotSuccessfulPayloadBudgetBoundaries(t *testing.T) {
 			opts.maxTokens = exactBudget - 1
 			stdout.Reset()
 			stderr.Reset()
-			err = runContext(context.Background(), &stdout, &stderr, cfg, opts)
+			err = runContextCommand(context.Background(), &stdout, &stderr, cfg, opts)
 			if err == nil {
 				t.Fatal("one-token-smaller budget returned a successful payload")
 			}
@@ -343,7 +343,7 @@ func TestContextCommandUsesIndexedAPIAndEmitsDiagnostics(t *testing.T) {
 
 	t.Run("successful JSON", func(t *testing.T) {
 		var stdout, stderr bytes.Buffer
-		err := runContext(context.Background(), &stdout, &stderr, cfg, contextCommandOptions{
+		err := runContextCommand(context.Background(), &stdout, &stderr, cfg, contextCommandOptions{
 			uuid: "anchor", uuidSet: true, before: 1, after: 1, maxTokens: contextMaxMaxTokens, jsonFormat: true,
 		})
 		if err != nil {
@@ -367,7 +367,7 @@ func TestContextCommandUsesIndexedAPIAndEmitsDiagnostics(t *testing.T) {
 	t.Run("not found JSON is stdout-only", func(t *testing.T) {
 		var stdout, stderr bytes.Buffer
 		missing := strings.Repeat("missing value ", 80)
-		err := runContext(context.Background(), &stdout, &stderr, cfg, contextCommandOptions{
+		err := runContextCommand(context.Background(), &stdout, &stderr, cfg, contextCommandOptions{
 			uuid: missing, uuidSet: true, before: 5, after: 5, maxTokens: 64, jsonFormat: true,
 		})
 		assertContextDiagnostic(t, err, stdout.String(), stderr.String(), "context_not_found", true)
@@ -378,7 +378,7 @@ func TestContextCommandUsesIndexedAPIAndEmitsDiagnostics(t *testing.T) {
 
 	t.Run("ambiguous robot is stdout-only", func(t *testing.T) {
 		var stdout, stderr bytes.Buffer
-		err := runContext(context.Background(), &stdout, &stderr, cfg, contextCommandOptions{
+		err := runContextCommand(context.Background(), &stdout, &stderr, cfg, contextCommandOptions{
 			sourcePath: "/duplicate", sourcePathSet: true, ordinal: 9, ordinalSet: true,
 			before: 5, after: 5, maxTokens: 2000, robotFormat: true,
 		})
@@ -392,7 +392,7 @@ func TestContextCommandUsesIndexedAPIAndEmitsDiagnostics(t *testing.T) {
 
 	t.Run("not found text is stderr-only", func(t *testing.T) {
 		var stdout, stderr bytes.Buffer
-		err := runContext(context.Background(), &stdout, &stderr, cfg, contextCommandOptions{
+		err := runContextCommand(context.Background(), &stdout, &stderr, cfg, contextCommandOptions{
 			uuid: "absent", uuidSet: true, before: 5, after: 5, maxTokens: 2000,
 		})
 		if err == nil || stdout.Len() != 0 || !strings.Contains(stderr.String(), "diagnostic: context_not_found:") {
@@ -402,7 +402,7 @@ func TestContextCommandUsesIndexedAPIAndEmitsDiagnostics(t *testing.T) {
 
 	t.Run("valid tiny budget gets structured diagnostic and no partial payload", func(t *testing.T) {
 		var stdout, stderr bytes.Buffer
-		err := runContext(context.Background(), &stdout, &stderr, cfg, contextCommandOptions{
+		err := runContextCommand(context.Background(), &stdout, &stderr, cfg, contextCommandOptions{
 			uuid: "anchor", uuidSet: true, before: 0, after: 0, maxTokens: 64, jsonFormat: true,
 		})
 		assertContextDiagnostic(t, err, stdout.String(), stderr.String(), "context_budget_too_small", true)
@@ -469,7 +469,7 @@ func TestContextEmptyUUIDFallbackFormats(t *testing.T) {
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
 			var stdout, stderr bytes.Buffer
-			err := runContext(context.Background(), &stdout, &stderr, cfg, contextCommandOptions{
+			err := runContextCommand(context.Background(), &stdout, &stderr, cfg, contextCommandOptions{
 				sourcePath: "/empty-uuid", sourcePathSet: true,
 				ordinal: 11, ordinalSet: true, before: 0, after: 0,
 				maxTokens: contextMaxMaxTokens, jsonFormat: tc.json, robotFormat: tc.robot,
@@ -509,7 +509,7 @@ func TestContextDiagnosticsAreIntentionallyExemptFromSuccessfulPayloadBudget(t *
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
 			var stdout, stderr bytes.Buffer
-			err := runContext(context.Background(), &stdout, &stderr, cfg, tc.opts)
+			err := runContextCommand(context.Background(), &stdout, &stderr, cfg, tc.opts)
 			if err == nil {
 				t.Fatal("missing context returned nil error")
 			}
