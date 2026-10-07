@@ -3499,7 +3499,7 @@ func TestListItemsV2WithDateFilters(t *testing.T) {
 	}
 }
 
-func TestListItemsV2WithInputFilter(t *testing.T) {
+func TestListItemsV2SessionOnly(t *testing.T) {
 	db, cleanup := newTestDB(t)
 	defer cleanup()
 
@@ -3543,14 +3543,6 @@ func TestListItemsV2WithInputFilter(t *testing.T) {
 	}
 	if len(entries) != 1 || entries[0].Path != "session.jsonl" {
 		t.Errorf("V2 list population = %v, want only session.jsonl", entries)
-	}
-
-	entries, err = db.ListItemsV2(ListOptions{Input: "plan", Limit: 10})
-	if err != nil {
-		t.Fatalf("ListItemsV2 plan input error: %v", err)
-	}
-	if len(entries) != 0 {
-		t.Errorf("V2 list accepted non-session input: %v", entries)
 	}
 }
 

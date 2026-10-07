@@ -88,7 +88,7 @@ Use --json, --robot for output formats.`,
 
 	cmd.Flags().StringVar(&kind, "kind", "", "Aggregation kind (required: commands|failures|templates|sequences|corrections)")
 	cmd.Flags().StringVar(&project, "project", "", "Filter to single project")
-	cmd.Flags().BoolVar(&allProjects, "all-projects", false, "Query across all projects (default if --project not set)")
+	cmd.Flags().BoolVar(&allProjects, "all-projects", false, "Query across all projects (default: project inferred from current working directory)")
 	cmd.Flags().StringVar(&tag, "tag", "", "Filter by session tag")
 	cmd.Flags().IntVar(&limit, "limit", 20, "Result limit")
 	cmd.Flags().IntVar(&offset, "offset", 0, "Result offset")

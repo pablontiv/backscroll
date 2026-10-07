@@ -91,14 +91,13 @@ func runList(ctx context.Context, stdout, stderr io.Writer, cfg *config.Config,
 	}
 	defer func() { retErr = closeIndexDB(db, retErr) }()
 
-	// If v2 grammar flags are provided (input, order, limit, offset), use ListItemsV2
+	// If v2 grammar flags are provided (order, limit, offset), use ListItemsV2.
 	// Otherwise fall back to legacy ListSessions for backward compat
 	var sessions []storage.SessionEntry
 	if order != "" || limit > 0 || offset > 0 {
 		opts := storage.ListOptions{
 			Project:     project,
 			AllProjects: allProjects,
-			Input:       "session",
 			Order:       order,
 			Limit:       limit,
 			Offset:      offset,
