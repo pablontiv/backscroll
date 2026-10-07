@@ -1,7 +1,10 @@
 package sources
 
 import (
+	"bytes"
+	"context"
 	"fmt"
+	"io"
 	"os"
 	"strings"
 )
@@ -85,16 +88,34 @@ func ParseAll(cfg SourceConfig) ([]SourceItem, error) {
 	return items, nil
 }
 
+const sourceReadBufferSize = 32 * 1024
+
 // ParseDocument parses a whole-document source (single item).
 // Extracts frontmatter ID and returns the entire content as one item.
 func ParseDocument(path string, sourceType string) (SourceItem, error) {
-	data, err := os.ReadFile(path)
+	return ParseDocumentContext(context.Background(), path, sourceType)
+}
+
+// ParseDocumentContext is ParseDocument with cancellation support.
+func ParseDocumentContext(ctx context.Context, path string, sourceType string) (SourceItem, error) {
+	data, err := readSourceFile(ctx, path)
 	if err != nil {
 		return SourceItem{}, fmt.Errorf("failed to read file: %w", err)
 	}
-
+	if err := ctx.Err(); err != nil {
+		return SourceItem{}, err
+	}
 	content := string(data)
-	id := extractID(content, sourceType)
+	if err := ctx.Err(); err != nil {
+		return SourceItem{}, err
+	}
+	id, err := extractID(ctx, content, sourceType)
+	if err != nil {
+		return SourceItem{}, err
+	}
+	if err := ctx.Err(); err != nil {
+		return SourceItem{}, err
+	}
 
 	return SourceItem{
 		ID:      id,
@@ -107,111 +128,203 @@ func ParseDocument(path string, sourceType string) (SourceItem, error) {
 // ParseSectioned parses a markdown file split by ## headers (each section = item).
 // If no ## headers are found, returns the entire content as a single item.
 func ParseSectioned(path string, sourceType string) ([]SourceItem, error) {
-	data, err := os.ReadFile(path)
+	return ParseSectionedContext(context.Background(), path, sourceType)
+}
+
+// ParseSectionedContext is ParseSectioned with cancellation support.
+func ParseSectionedContext(ctx context.Context, path string, sourceType string) ([]SourceItem, error) {
+	data, err := readSourceFile(ctx, path)
 	if err != nil {
 		return nil, fmt.Errorf("failed to read file: %w", err)
 	}
-
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 	content := string(data)
-	lines := strings.Split(content, "\n")
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 
-	// Extract frontmatter ID
-	baseID := extractID(content, sourceType)
+	baseID, err := extractID(ctx, content, sourceType)
+	if err != nil {
+		return nil, err
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	return splitSections(ctx, content, path, sourceType, baseID)
+}
 
+func readSourceFile(ctx context.Context, path string) ([]byte, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	file, err := os.Open(path)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = file.Close() }()
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+
+	var content bytes.Buffer
+	buffer := make([]byte, sourceReadBufferSize)
+	for {
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
+		n, readErr := file.Read(buffer)
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
+		if n > 0 {
+			_, _ = content.Write(buffer[:n])
+		}
+		if readErr == io.EOF {
+			return content.Bytes(), nil
+		}
+		if readErr != nil {
+			return nil, readErr
+		}
+	}
+}
+
+func splitSections(ctx context.Context, content, path, sourceType, baseID string) ([]SourceItem, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 	var items []SourceItem
 	var currentTitle string
 	var currentContent strings.Builder
 	sectionCount := 0
 
-	for _, line := range lines {
-		// Check if this line starts a new section with ##
+	appendSection := func() error {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		sectionContent := strings.TrimSpace(currentContent.String())
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		sectionCount++
+		items = append(items, SourceItem{
+			ID:      fmt.Sprintf("%s-%d", baseID, sectionCount),
+			Source:  sourceType,
+			Content: sectionContent,
+			Path:    path,
+		})
+		return ctx.Err()
+	}
+
+	err := visitLines(ctx, content, func(line string) (bool, error) {
 		if strings.HasPrefix(line, "## ") {
-			// Save previous section if any
 			if currentTitle != "" {
-				sectionCount++
-				item := SourceItem{
-					ID:      fmt.Sprintf("%s-%d", baseID, sectionCount),
-					Source:  sourceType,
-					Content: strings.TrimSpace(currentContent.String()),
-					Path:    path,
+				if err := appendSection(); err != nil {
+					return false, err
 				}
-				items = append(items, item)
 				currentContent.Reset()
 			}
-
-			// Start new section
-			currentTitle = strings.TrimPrefix(line, "## ")
-			currentTitle = strings.TrimSpace(currentTitle)
+			currentTitle = strings.TrimSpace(strings.TrimPrefix(line, "## "))
 			currentContent.WriteString(line)
 			currentContent.WriteString("\n")
 		} else if currentTitle != "" {
-			// Add to current section
 			currentContent.WriteString(line)
 			currentContent.WriteString("\n")
 		}
+		return false, nil
+	})
+	if err != nil {
+		return nil, err
 	}
 
-	// Save last section if any
 	if currentTitle != "" {
-		sectionCount++
-		item := SourceItem{
-			ID:      fmt.Sprintf("%s-%d", baseID, sectionCount),
-			Source:  sourceType,
-			Content: strings.TrimSpace(currentContent.String()),
-			Path:    path,
+		if err := appendSection(); err != nil {
+			return nil, err
 		}
-		items = append(items, item)
 	}
 
-	// If no sections were found, return the entire content as one item
 	if len(items) == 0 {
-		items = []SourceItem{
-			{
-				ID:      baseID,
-				Source:  sourceType,
-				Content: strings.TrimSpace(content),
-				Path:    path,
-			},
+		if err := ctx.Err(); err != nil {
+			return nil, err
 		}
+		trimmed := strings.TrimSpace(content)
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
+		items = []SourceItem{{ID: baseID, Source: sourceType, Content: trimmed, Path: path}}
 	}
-
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 	return items, nil
 }
 
 // extractID extracts the ID from the document's frontmatter.
 // Looks for keys: id, name, or generates a default ID based on source type.
-func extractID(content string, sourceType string) string {
-	lines := strings.Split(content, "\n")
-
-	// Look for frontmatter (starts with --- and ends with ---)
+func extractID(ctx context.Context, content string, sourceType string) (string, error) {
 	inFrontmatter := false
-	for _, line := range lines {
+	id := ""
+	found := false
+	err := visitLines(ctx, content, func(line string) (bool, error) {
 		if strings.TrimSpace(line) == "---" {
 			if !inFrontmatter {
 				inFrontmatter = true
-				continue
-			} else {
-				break
+				return false, nil
 			}
+			return true, nil
 		}
-
 		if !inFrontmatter {
-			continue
+			return false, nil
 		}
-
-		// Look for id, name, or other identifying fields
 		if strings.HasPrefix(strings.ToLower(line), "id:") {
 			value := strings.TrimPrefix(line, "id:")
 			value = strings.TrimPrefix(value, "ID:")
-			return strings.TrimSpace(value)
+			id = strings.TrimSpace(value)
+			found = true
+			return true, nil
 		}
 		if strings.HasPrefix(strings.ToLower(line), "name:") {
 			value := strings.TrimPrefix(line, "name:")
 			value = strings.TrimPrefix(value, "Name:")
-			return strings.TrimSpace(value)
+			id = strings.TrimSpace(value)
+			found = true
+			return true, nil
 		}
+		return false, nil
+	})
+	if err != nil {
+		return "", err
 	}
+	if found {
+		return id, nil
+	}
+	return fmt.Sprintf("%s-default", sourceType), nil
+}
 
-	// If no ID found, generate a default one
-	return fmt.Sprintf("%s-default", sourceType)
+func visitLines(ctx context.Context, content string, visit func(line string) (done bool, err error)) error {
+	for start := 0; ; {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		relativeEnd := strings.IndexByte(content[start:], '\n')
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		end := len(content)
+		if relativeEnd >= 0 {
+			end = start + relativeEnd
+		}
+		done, err := visit(content[start:end])
+		if err != nil {
+			return err
+		}
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		if done || relativeEnd < 0 {
+			return nil
+		}
+		start = end + 1
+	}
 }

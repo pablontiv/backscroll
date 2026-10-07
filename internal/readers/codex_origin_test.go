@@ -1,6 +1,7 @@
 package readers
 
 import (
+	"context"
 	"encoding/json"
 	"testing"
 	"time"
@@ -63,7 +64,7 @@ func TestCodexMessageOriginFromNativeEnvelope(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			msg, ok := codexMessage(tt.item, time.Time{}, tt.reasoning)
+			msg, ok := codexMessage(context.Background(), tt.item, time.Time{}, tt.reasoning)
 			if !ok {
 				t.Fatal("message was not captured")
 			}
@@ -81,7 +82,7 @@ func TestCodexMessageOriginPreservesWrapperPolicy(t *testing.T) {
 			Role:    "user",
 			Content: json.RawMessage(`[{"type":"input_text","text":"<heartbeat>generated context</heartbeat>"}]`),
 		}
-		if msg, ok := codexMessage(item, time.Time{}, false); ok {
+		if msg, ok := codexMessage(context.Background(), item, time.Time{}, false); ok {
 			t.Fatalf("wrapper-only message was captured: %+v", msg)
 		}
 	})
@@ -122,7 +123,7 @@ func TestCodexMessageOriginPreservesWrapperPolicy(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			msg, ok := codexMessage(codexItem{Type: "message", Role: tt.role, Content: content}, time.Time{}, false)
+			msg, ok := codexMessage(context.Background(), codexItem{Type: "message", Role: tt.role, Content: content}, time.Time{}, false)
 			if !ok {
 				t.Fatal("message was not captured")
 			}

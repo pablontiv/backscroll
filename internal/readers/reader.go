@@ -3,6 +3,7 @@
 package readers
 
 import (
+	"context"
 	"fmt"
 
 	"github.com/pablontiv/backscroll/internal/input_config"
@@ -14,12 +15,12 @@ type SessionReader interface {
 	// Name returns the format identifier (e.g., "jsonl", "opencode").
 	Name() string
 	// Discover returns the list of session references (paths or IDs) matching the input definition.
-	Discover(def input_config.InputDefinition) ([]string, error)
+	Discover(ctx context.Context, def input_config.InputDefinition) ([]string, error)
 	// Hash returns a stable identifier for the current state of a session reference.
 	// Used for incremental sync deduplication.
-	Hash(sessionRef string) (string, error)
+	Hash(ctx context.Context, sessionRef string) (string, error)
 	// Parse parses a session reference into a ParsedFile.
-	Parse(sessionRef string, def input_config.InputDefinition) (models.ParsedFile, error)
+	Parse(ctx context.Context, sessionRef string, def input_config.InputDefinition) (models.ParsedFile, error)
 }
 
 // Registry maps format names to their SessionReader implementations.

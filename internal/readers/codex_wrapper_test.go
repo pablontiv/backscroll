@@ -1,6 +1,7 @@
 package readers
 
 import (
+	"context"
 	"encoding/json"
 	"strings"
 	"testing"
@@ -50,7 +51,7 @@ func TestCodexWrapperPolicyDoesNotTouchToolOrReasoningText(t *testing.T) {
 		{Type: "custom_tool_call_output", Output: raw},
 		{Type: "reasoning", Summary: json.RawMessage(`[{"type":"summary_text","text":"<heartbeat>searchable evidence</heartbeat>"}]`)},
 	} {
-		msg, ok := codexMessage(item, time.Time{}, true)
+		msg, ok := codexMessage(context.Background(), item, time.Time{}, true)
 		if !ok || msg.Content != text {
 			t.Fatalf("policy leaked into %s: %+v", item.Type, msg)
 		}

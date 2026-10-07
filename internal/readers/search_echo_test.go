@@ -1,6 +1,7 @@
 package readers
 
 import (
+	"context"
 	"encoding/json"
 	"os"
 	"path/filepath"
@@ -48,7 +49,7 @@ func TestClaudeSearchEchoPairingUsesIDsNotOutputShapeOrAdjacency(t *testing.T) {
 	if err := os.WriteFile(path, []byte(data), 0600); err != nil {
 		t.Fatal(err)
 	}
-	parsed, err := (&ClaudeReader{}).Parse(path, input_config.InputDefinition{})
+	parsed, err := (&ClaudeReader{}).Parse(context.Background(), path, input_config.InputDefinition{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -65,7 +66,7 @@ func TestClaudeSearchEchoPairingUsesIDsNotOutputShapeOrAdjacency(t *testing.T) {
 	if err := os.WriteFile(path, []byte(`{"type":"user","uuid":"only-result","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"search","content":"orchard"}]}}`), 0600); err != nil {
 		t.Fatal(err)
 	}
-	parsed, err = (&ClaudeReader{}).Parse(path, input_config.InputDefinition{})
+	parsed, err = (&ClaudeReader{}).Parse(context.Background(), path, input_config.InputDefinition{})
 	if err != nil {
 		t.Fatal(err)
 	}

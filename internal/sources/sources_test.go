@@ -1,10 +1,57 @@
 package sources
 
 import (
+	"bytes"
+	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"testing"
 )
+
+type cancelAfterChecksContext struct {
+	context.Context
+	checks   int
+	cancelAt int
+}
+
+func (c *cancelAfterChecksContext) Err() error {
+	c.checks++
+	if c.checks >= c.cancelAt {
+		return context.Canceled
+	}
+	return nil
+}
+
+func TestParseDocumentContextCancelsDuringChunkedRead(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "large.md")
+	content := bytes.Repeat([]byte("x"), sourceReadBufferSize*3)
+	if err := os.WriteFile(path, content, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	ctx := &cancelAfterChecksContext{Context: context.Background(), cancelAt: 6}
+
+	item, err := ParseDocumentContext(ctx, path, "ke")
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("ParseDocumentContext() error = %v, want context.Canceled", err)
+	}
+	if item != (SourceItem{}) {
+		t.Fatalf("ParseDocumentContext() returned partial item: %+v", item)
+	}
+}
+
+func TestSplitSectionsCancelsDuringTraversalWithoutPartialItems(t *testing.T) {
+	content := "## One\nfirst body\n## Two\nsecond body\n## Three\nthird body\n"
+	ctx := &cancelAfterChecksContext{Context: context.Background(), cancelAt: 12}
+
+	items, err := splitSections(ctx, content, "sections.md", "decision", "decision-id")
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("splitSections() error = %v, want context.Canceled", err)
+	}
+	if items != nil {
+		t.Fatalf("splitSections() returned partial items: %+v", items)
+	}
+}
 
 func TestParseDocument(t *testing.T) {
 	tests := []struct {
@@ -325,7 +372,10 @@ No frontmatter here.`,
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			id := extractID(tt.content, tt.sourceType)
+			id, err := extractID(context.Background(), tt.content, tt.sourceType)
+			if err != nil {
+				t.Fatal(err)
+			}
 			if id != tt.expectedID {
 				t.Errorf("expected %q, got %q", tt.expectedID, id)
 			}

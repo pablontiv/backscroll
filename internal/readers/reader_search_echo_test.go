@@ -1,6 +1,7 @@
 package readers
 
 import (
+	"context"
 	"database/sql"
 	"encoding/json"
 	"os"
@@ -54,7 +55,7 @@ func TestCodexSearchEchoPairingUsesCallIDsNotOutputShapeOrAdjacency(t *testing.T
 		`{"timestamp":"2026-09-01T12:00:07Z","type":"response_item","payload":{"type":"function_call","name":"shell","call_id":"argv","arguments":"{\"command\":[\"bash\",\"-lc\",\"backscroll search orchard\"]}"}}`,
 		`{"timestamp":"2026-09-01T12:00:08Z","type":"response_item","payload":{"type":"custom_tool_call_output","call_id":"argv","output":[{"type":"input_text","text":"result_1_snippet=orchard"}]}}`,
 	}, "\n")+"\n")
-	parsed, err := (&CodexReader{}).Parse(path, input_config.InputDefinition{})
+	parsed, err := (&CodexReader{}).Parse(context.Background(), path, input_config.InputDefinition{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -71,7 +72,7 @@ func TestCodexSearchEchoPairingUsesCallIDsNotOutputShapeOrAdjacency(t *testing.T
 	if err := os.WriteFile(path, []byte(`{"timestamp":"2026-09-01T12:00:09Z","type":"response_item","payload":{"type":"function_call_output","call_id":"search","output":"orchard"}}`+"\n"), 0600); err != nil {
 		t.Fatal(err)
 	}
-	parsed, err = (&CodexReader{}).Parse(path, input_config.InputDefinition{})
+	parsed, err = (&CodexReader{}).Parse(context.Background(), path, input_config.InputDefinition{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -111,7 +112,7 @@ CREATE TABLE part (id TEXT PRIMARY KEY, message_id TEXT NOT NULL, session_id TEX
 	insert("prose", 5000, map[string]any{"type": "text", "text": "backscroll search orchard is documented here"})
 	insert("no-output", 6000, map[string]any{"type": "tool", "tool": "bash", "state": map[string]any{"input": map[string]any{"command": "backscroll search orchard"}}})
 
-	parsed, err := (&OpenCodeReader{}).Parse(dbPath, input_config.InputDefinition{})
+	parsed, err := (&OpenCodeReader{}).Parse(context.Background(), dbPath, input_config.InputDefinition{})
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -1,6 +1,7 @@
 package readers
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -26,7 +27,7 @@ func TestCodexReaderFixture(t *testing.T) {
 	r := &CodexReader{}
 	path := filepath.Join("..", "..", "tests", "fixtures", "codex-rollout-v1.jsonl")
 	def := input_config.InputDefinition{Decode: input_config.DecodeConfig{IndexReasoning: true}}
-	parsed, err := r.Parse(path, def)
+	parsed, err := r.Parse(context.Background(), path, def)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -36,11 +37,11 @@ func TestCodexReaderFixture(t *testing.T) {
 	if parsed.Cwd != "/synthetic/codex-fixture-project" || parsed.Path != path {
 		t.Fatalf("metadata: %+v", parsed)
 	}
-	hash, err := r.Hash(path)
+	hash, err := r.Hash(context.Background(), path)
 	if err != nil || hash != parsed.Hash || len(hash) != 64 {
 		t.Fatalf("hash %q %v", hash, err)
 	}
-	again, err := r.Parse(path, def)
+	again, err := r.Parse(context.Background(), path, def)
 	if err != nil || !reflect.DeepEqual(parsed, again) {
 		t.Fatalf("nondeterministic parse: %v", err)
 	}
@@ -95,7 +96,7 @@ func TestCodexReaderMalformedAndVariantRecords(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			path := codexTestFile(t, fmt.Sprintf(`{"type":"response_item","timestamp":"2026-09-01T12:00:00.123456789Z","payload":%s}`, tc.payload))
-			parsed, err := (&CodexReader{}).Parse(path, input_config.InputDefinition{Decode: input_config.DecodeConfig{IndexReasoning: true}})
+			parsed, err := (&CodexReader{}).Parse(context.Background(), path, input_config.InputDefinition{Decode: input_config.DecodeConfig{IndexReasoning: true}})
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -127,7 +128,7 @@ null
 []
 {"truncated":
 `)
-	parsed, err := (&CodexReader{}).Parse(path, input_config.InputDefinition{})
+	parsed, err := (&CodexReader{}).Parse(context.Background(), path, input_config.InputDefinition{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -138,7 +139,7 @@ null
 
 func TestCodexReaderToolTruncation(t *testing.T) {
 	item := codexItem{Type: "custom_tool_call", Name: "patch", Input: strings.Repeat("界", MaxToolTextLen+1)}
-	msg, ok := codexMessage(item, time.Time{}, false)
+	msg, ok := codexMessage(context.Background(), item, time.Time{}, false)
 	if !ok || len([]rune(msg.Content)) != MaxToolTextLen {
 		t.Fatalf("cap: %d", len([]rune(msg.Content)))
 	}
@@ -147,23 +148,23 @@ func TestCodexReaderToolTruncation(t *testing.T) {
 func TestCodexReaderFileErrorsAndDiscovery(t *testing.T) {
 	r := &CodexReader{}
 	missing := filepath.Join(t.TempDir(), "missing.jsonl")
-	if _, err := r.Parse(missing, input_config.InputDefinition{}); err == nil {
+	if _, err := r.Parse(context.Background(), missing, input_config.InputDefinition{}); err == nil {
 		t.Fatal("missing file accepted")
 	}
-	if _, err := r.Hash(missing); err == nil {
+	if _, err := r.Hash(context.Background(), missing); err == nil {
 		t.Fatal("missing hash accepted")
 	}
-	if _, err := r.Parse(t.TempDir(), input_config.InputDefinition{}); err == nil {
+	if _, err := r.Parse(context.Background(), t.TempDir(), input_config.InputDefinition{}); err == nil {
 		t.Fatal("directory accepted")
 	}
 	path := codexTestFile(t, "")
 	def := input_config.InputDefinition{Discover: input_config.DiscoverConfig{Roots: []string{filepath.Dir(path)}, Include: []string{"**/*.jsonl"}}}
-	files, err := r.Discover(def)
+	files, err := r.Discover(context.Background(), def)
 	if err != nil || len(files) != 1 || files[0] != path {
 		t.Fatalf("discover: %v %v", files, err)
 	}
 	def.Discover.Exclude = []string{"**/*.jsonl"}
-	files, err = r.Discover(def)
+	files, err = r.Discover(context.Background(), def)
 	if err != nil || len(files) != 0 {
 		t.Fatalf("exclude: %v %v", files, err)
 	}
@@ -175,7 +176,7 @@ func FuzzCodexReaderRecord(f *testing.F) {
 		// Exercise the same typed item decoder and selector without filesystem churn.
 		var item codexItem
 		if json.Unmarshal(data, &item) == nil {
-			_, _ = codexMessage(item, time.Time{}, true)
+			_, _ = codexMessage(context.Background(), item, time.Time{}, true)
 		}
 	})
 }

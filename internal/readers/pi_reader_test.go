@@ -1,6 +1,7 @@
 package readers
 
 import (
+	"context"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -28,7 +29,7 @@ func TestPiReader_Name(t *testing.T) {
 
 func TestPiReader_TextAndCwd(t *testing.T) {
 	line := `{"type":"message","timestamp":"2026-05-10T22:19:34.694Z","cwd":"/home/shared/proj","message":{"role":"user","content":"hello pi"}}` + "\n"
-	pf, err := (&PiReader{}).Parse(writePiFixture(t, line), input_config.InputDefinition{
+	pf, err := (&PiReader{}).Parse(context.Background(), writePiFixture(t, line), input_config.InputDefinition{
 		Decode: input_config.DecodeConfig{IndexReasoning: false},
 	})
 	if err != nil {
@@ -48,11 +49,11 @@ func TestPiReader_RecordTypeMatchesLegacyEnvelope(t *testing.T) {
 	pion := `{"recordType":"message","timestamp":"` + timestamp + `","cwd":"/home/shared/proj","message":{"role":"assistant","content":[{"type":"text","text":"pion text token"},{"type":"toolCall","name":"web_search","arguments":{"queries":["pion tool token"]}},{"type":"thinking","text":"pion reasoning token"}]}}` + "\n"
 	def := input_config.InputDefinition{Decode: input_config.DecodeConfig{IndexReasoning: true}}
 
-	legacyFile, err := (&PiReader{}).Parse(writePiFixture(t, legacy), def)
+	legacyFile, err := (&PiReader{}).Parse(context.Background(), writePiFixture(t, legacy), def)
 	if err != nil {
 		t.Fatalf("parse legacy envelope: %v", err)
 	}
-	pionFile, err := (&PiReader{}).Parse(writePiFixture(t, pion), def)
+	pionFile, err := (&PiReader{}).Parse(context.Background(), writePiFixture(t, pion), def)
 	if err != nil {
 		t.Fatalf("parse Pion envelope: %v", err)
 	}
@@ -97,7 +98,7 @@ func TestPiReader_EnvelopePolicy(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			parsed, err := (&PiReader{}).Parse(writePiFixture(t, tt.line+"\n"), input_config.InputDefinition{})
+			parsed, err := (&PiReader{}).Parse(context.Background(), writePiFixture(t, tt.line+"\n"), input_config.InputDefinition{})
 			if err != nil {
 				t.Fatalf("Parse: %v", err)
 			}
@@ -112,7 +113,7 @@ func TestPiReader_RecordTypeSkipsMalformedAndUnknownNeighbors(t *testing.T) {
 	lines := "{not-json}\n" +
 		`{"recordType":"tool_start","data":{"secret":"must not be indexed"}}` + "\n" +
 		`{"recordType":"message","message":{"role":"user","content":"searchable Pion neighbor"}}` + "\n"
-	parsed, err := (&PiReader{}).Parse(writePiFixture(t, lines), input_config.InputDefinition{})
+	parsed, err := (&PiReader{}).Parse(context.Background(), writePiFixture(t, lines), input_config.InputDefinition{})
 	if err != nil {
 		t.Fatalf("Parse: %v", err)
 	}
@@ -123,7 +124,7 @@ func TestPiReader_RecordTypeSkipsMalformedAndUnknownNeighbors(t *testing.T) {
 
 func TestPiReader_CapturesToolCall(t *testing.T) {
 	line := `{"type":"message","timestamp":"2026-05-10T22:19:34.694Z","message":{"role":"assistant","content":[{"type":"text","text":"searching"},{"type":"toolCall","name":"web_search","arguments":{"queries":["pizzqx_query"]}}]}}` + "\n"
-	pf, err := (&PiReader{}).Parse(writePiFixture(t, line), input_config.InputDefinition{
+	pf, err := (&PiReader{}).Parse(context.Background(), writePiFixture(t, line), input_config.InputDefinition{
 		Decode: input_config.DecodeConfig{IndexReasoning: false},
 	})
 	if err != nil {
@@ -149,7 +150,7 @@ func TestPiReader_CapturesToolCall(t *testing.T) {
 func TestPiReader_SkipsNonMessageNonCustomTypes(t *testing.T) {
 	lines := `{"type":"session","timestamp":"2026-05-10T22:19:34.694Z"}` + "\n" +
 		`{"type":"model_change","timestamp":"2026-05-10T22:19:34.694Z"}` + "\n"
-	pf, err := (&PiReader{}).Parse(writePiFixture(t, lines), input_config.InputDefinition{
+	pf, err := (&PiReader{}).Parse(context.Background(), writePiFixture(t, lines), input_config.InputDefinition{
 		Decode: input_config.DecodeConfig{IndexReasoning: false},
 	})
 	if err != nil {
@@ -163,7 +164,7 @@ func TestPiReader_SkipsNonMessageNonCustomTypes(t *testing.T) {
 func TestPiReader_MarksDirectBashSearchCalls(t *testing.T) {
 	line := `{"type":"message","timestamp":"2026-05-10T22:19:34.694Z","message":{"role":"assistant","content":[{"type":"toolCall","name":"bash","arguments":{"command":"backscroll search --text orchard"}},{"type":"toolCall","name":"bash","arguments":{"command":"rg orchard"}}]}}` + "\n" +
 		`{"type":"message","timestamp":"2026-05-10T22:19:35.694Z","message":{"role":"toolResult","content":[{"type":"text","text":"result_0_snippet=orchard"}]}}` + "\n"
-	pf, err := (&PiReader{}).Parse(writePiFixture(t, line), input_config.InputDefinition{})
+	pf, err := (&PiReader{}).Parse(context.Background(), writePiFixture(t, line), input_config.InputDefinition{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -195,7 +196,7 @@ func TestPiReader_MarksDirectBashSearchCalls(t *testing.T) {
 func TestPiReader_CapturesCustomResult(t *testing.T) {
 	lines := `{"type":"message","timestamp":"2026-05-10T22:19:34.694Z","message":{"role":"assistant","content":[{"type":"toolCall","name":"web_search","arguments":{"queries":["q"]}}]}}` + "\n" +
 		`{"type":"custom","customType":"web-search-results","timestamp":"2026-05-10T22:19:44.292Z","data":{"queries":[{"query":"q","answer":"pizzqx_answer_token"}]}}` + "\n"
-	pf, err := (&PiReader{}).Parse(writePiFixture(t, lines), input_config.InputDefinition{
+	pf, err := (&PiReader{}).Parse(context.Background(), writePiFixture(t, lines), input_config.InputDefinition{
 		Decode: input_config.DecodeConfig{IndexReasoning: false},
 	})
 	if err != nil {
@@ -214,7 +215,7 @@ func TestPiReader_CapturesCustomResult(t *testing.T) {
 
 func TestPiReader_SkipsEmptyCustomData(t *testing.T) {
 	line := `{"type":"custom","customType":"x","timestamp":"2026-05-10T22:19:44.292Z","data":{}}` + "\n"
-	pf, err := (&PiReader{}).Parse(writePiFixture(t, line), input_config.InputDefinition{
+	pf, err := (&PiReader{}).Parse(context.Background(), writePiFixture(t, line), input_config.InputDefinition{
 		Decode: input_config.DecodeConfig{IndexReasoning: false},
 	})
 	if err != nil {
@@ -227,7 +228,7 @@ func TestPiReader_SkipsEmptyCustomData(t *testing.T) {
 
 func TestPiReader_CapturesReasoningWhenEnabled(t *testing.T) {
 	line := `{"type":"message","timestamp":"2026-05-10T22:19:34.694Z","message":{"role":"assistant","content":[{"type":"thinking","text":"let me analyze this problem"},{"type":"text","text":"here is the solution"}]}}` + "\n"
-	pf, err := (&PiReader{}).Parse(writePiFixture(t, line), input_config.InputDefinition{
+	pf, err := (&PiReader{}).Parse(context.Background(), writePiFixture(t, line), input_config.InputDefinition{
 		Decode: input_config.DecodeConfig{Format: "pi", IndexReasoning: true},
 	})
 	if err != nil {
@@ -252,7 +253,7 @@ func TestPiReader_CapturesReasoningWhenEnabled(t *testing.T) {
 
 func TestPiReader_SkipsReasoningWhenDisabled(t *testing.T) {
 	line := `{"recordType":"message","timestamp":"2026-05-10T22:19:34.694Z","message":{"role":"assistant","content":[{"type":"thinking","text":"internal reasoning"},{"type":"text","text":"visible text"}]}}` + "\n"
-	pf, err := (&PiReader{}).Parse(writePiFixture(t, line), input_config.InputDefinition{
+	pf, err := (&PiReader{}).Parse(context.Background(), writePiFixture(t, line), input_config.InputDefinition{
 		Decode: input_config.DecodeConfig{Format: "pi", IndexReasoning: false},
 	})
 	if err != nil {
@@ -279,7 +280,7 @@ func TestPiReader_CapturesMessageOrigins(t *testing.T) {
 		`{"recordType":"tool_end","message":{"role":"assistant","content":"unsupported tool end"}}` + "\n" +
 		`{"recordType":"text","message":{"role":"user","content":"unsupported text envelope"}}` + "\n"
 
-	parsed, err := (&PiReader{}).Parse(writePiFixture(t, lines), input_config.InputDefinition{
+	parsed, err := (&PiReader{}).Parse(context.Background(), writePiFixture(t, lines), input_config.InputDefinition{
 		Decode: input_config.DecodeConfig{IndexReasoning: true},
 	})
 	if err != nil {
@@ -312,7 +313,7 @@ func TestPiReader_CapturesMessageOrigins(t *testing.T) {
 
 func TestPiReader_SkipsEmptyReasoning(t *testing.T) {
 	line := `{"type":"message","timestamp":"2026-05-10T22:19:34.694Z","message":{"role":"assistant","content":[{"type":"thinking","text":""},{"type":"text","text":"ok"}]}}` + "\n"
-	pf, err := (&PiReader{}).Parse(writePiFixture(t, line), input_config.InputDefinition{
+	pf, err := (&PiReader{}).Parse(context.Background(), writePiFixture(t, line), input_config.InputDefinition{
 		Decode: input_config.DecodeConfig{Format: "pi", IndexReasoning: true},
 	})
 	if err != nil {

@@ -1,6 +1,7 @@
 package readers
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"strings"
@@ -10,7 +11,6 @@ import (
 	"github.com/pablontiv/backscroll/internal/input_config"
 	"github.com/pablontiv/backscroll/internal/models"
 	"github.com/pablontiv/backscroll/internal/sync"
-	"github.com/pablontiv/picokit/hashfile"
 )
 
 // ClaudeReader implements SessionReader for Claude Code JSONL sessions.
@@ -19,12 +19,12 @@ type ClaudeReader struct{}
 
 func (r *ClaudeReader) Name() string { return "claude" }
 
-func (r *ClaudeReader) Discover(def input_config.InputDefinition) ([]string, error) {
-	return input_config.DiscoverFiles(def.Discover)
+func (r *ClaudeReader) Discover(ctx context.Context, def input_config.InputDefinition) ([]string, error) {
+	return input_config.DiscoverFilesContext(ctx, def.Discover)
 }
 
-func (r *ClaudeReader) Hash(path string) (string, error) {
-	return hashfile.HashFile(path)
+func (r *ClaudeReader) Hash(ctx context.Context, path string) (string, error) {
+	return hashFile(ctx, path)
 }
 
 type claudeRecord struct {
@@ -57,15 +57,15 @@ type claudeBlock struct {
 // tool_use / tool_result block (so each tool call is independently searchable).
 // ClaudeReader parses record-level fields (cwd, type, isMeta, message) directly and
 // does not use the declarative InputDefinition selectors.
-func (r *ClaudeReader) Parse(path string, _ input_config.InputDefinition) (models.ParsedFile, error) {
-	hash, err := hashfile.HashFile(path)
+func (r *ClaudeReader) Parse(ctx context.Context, path string, _ input_config.InputDefinition) (models.ParsedFile, error) {
+	hash, err := hashFile(ctx, path)
 	if err != nil {
 		return models.ParsedFile{}, err
 	}
 
 	var msgs []models.Message
 	var cwd string
-	err = sync.IterateJSONLFile(path, func(_ int, line []byte) error {
+	err = sync.IterateJSONLFileContext(ctx, path, func(_ int, line []byte) error {
 		var rec claudeRecord
 		if err := json.Unmarshal(line, &rec); err != nil {
 			return nil // skip malformed lines
@@ -76,7 +76,11 @@ func (r *ClaudeReader) Parse(path string, _ input_config.InputDefinition) (model
 		if rec.IsMeta || sync.IsNoiseType(rec.Type) || rec.Message == nil || rec.Message.Role == "" {
 			return nil
 		}
-		msgs = append(msgs, extractClaudeMessages(rec)...)
+		extracted, err := extractClaudeMessages(ctx, rec)
+		if err != nil {
+			return err
+		}
+		msgs = append(msgs, extracted...)
 		return nil
 	})
 	if err != nil {
@@ -87,11 +91,17 @@ func (r *ClaudeReader) Parse(path string, _ input_config.InputDefinition) (model
 	// Results usually arrive in a later record; ToolUseID links them.
 	useIdx := make(map[string]int)
 	for i := range msgs {
+		if err := ctx.Err(); err != nil {
+			return models.ParsedFile{}, err
+		}
 		if msgs[i].ToolName != "" && msgs[i].ToolUseID != "" {
 			useIdx[msgs[i].ToolUseID] = i
 		}
 	}
 	for i := range msgs {
+		if err := ctx.Err(); err != nil {
+			return models.ParsedFile{}, err
+		}
 		if msgs[i].ToolName != "" || msgs[i].ToolUseID == "" {
 			continue
 		}
@@ -155,7 +165,10 @@ func blockUUID(recordUUID, kind string, idx int) string {
 	return fmt.Sprintf("%s#%s%d", recordUUID, kind, idx)
 }
 
-func extractClaudeMessages(rec claudeRecord) []models.Message {
+func extractClaudeMessages(ctx context.Context, rec claudeRecord) ([]models.Message, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 	ts, err := time.Parse(time.RFC3339, rec.Timestamp)
 	if err != nil {
 		ts = time.Now()
@@ -169,16 +182,16 @@ func extractClaudeMessages(rec claudeRecord) []models.Message {
 		interrupted := strings.Contains(s, interruptMarker)
 		text := sync.CleanContent(s)
 		if text == "" {
-			return nil
+			return nil, nil
 		}
 		return []models.Message{{Role: role, Origin: origin, Content: text, ContentType: classifyText(text), Timestamp: ts,
-			UUID: rec.UUID, WasInterrupted: interrupted}}
+			UUID: rec.UUID, WasInterrupted: interrupted}}, nil
 	}
 
 	// content as an array of blocks
 	var blocks []claudeBlock
 	if err := json.Unmarshal(rec.Message.Content, &blocks); err != nil {
-		return nil
+		return nil, nil
 	}
 
 	// Track tool names by ToolUseID for pairing with tool_result blocks
@@ -188,6 +201,9 @@ func extractClaudeMessages(rec claudeRecord) []models.Message {
 	var textParts []string
 	interrupted := false
 	for i, b := range blocks {
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
 		switch b.Type {
 		case "text":
 			if strings.Contains(b.Text, interruptMarker) {
@@ -237,7 +253,7 @@ func extractClaudeMessages(rec claudeRecord) []models.Message {
 		out = append([]models.Message{{Role: role, Origin: origin, Content: text, ContentType: classifyText(text), Timestamp: ts,
 			UUID: rec.UUID, WasInterrupted: interrupted}}, out...)
 	}
-	return out
+	return out, nil
 }
 
 func claudeRecordOrigin(recordType, role string) models.MessageOrigin {

@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"fmt"
 	"io"
 	"os"
@@ -256,6 +257,8 @@ func isRacyCleanFile(fileMtime string, lastIndexed string) bool {
 // It is intended to be called before query commands to ensure fresh index state.
 // If sync fails, it returns an error (caller decides whether to warn/ignore).
 func maybeAutoSync(cfg *config.Config, progress io.Writer) (retErr error) {
+	// Startup context propagation is a later phase; preserve current behavior here.
+	ctx := context.Background()
 	diag := diagnosticsEnabled()
 	var startTime time.Time
 	if diag {
@@ -329,7 +332,7 @@ func maybeAutoSync(cfg *config.Config, progress io.Writer) (retErr error) {
 		if diag {
 			discoveryStart = time.Now()
 		}
-		refs, err := reader.Discover(def)
+		refs, err := reader.Discover(ctx, def)
 		if err != nil {
 			return fmt.Errorf("discover input %q: %w", def.ID, err)
 		}
@@ -374,7 +377,7 @@ func maybeAutoSync(cfg *config.Config, progress io.Writer) (retErr error) {
 			hashingStart = time.Now()
 		}
 		if state.hash == "" {
-			state.hash, err = reader.Hash(ref)
+			state.hash, err = reader.Hash(ctx, ref)
 			if err != nil {
 				return fmt.Errorf("hash %s: %w", ref, err)
 			}
@@ -427,7 +430,7 @@ func maybeAutoSync(cfg *config.Config, progress io.Writer) (retErr error) {
 		if diag {
 			parsingStart = time.Now()
 		}
-		pf, err := reader.Parse(ref, def)
+		pf, err := reader.Parse(ctx, ref, def)
 		if err != nil {
 			return fmt.Errorf("parse %s: %w", ref, err)
 		}

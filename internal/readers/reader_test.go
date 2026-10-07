@@ -1,6 +1,7 @@
 package readers
 
 import (
+	"context"
 	"testing"
 
 	"github.com/pablontiv/backscroll/internal/input_config"
@@ -10,11 +11,11 @@ import (
 type mockReader struct{ name string }
 
 func (m *mockReader) Name() string { return m.name }
-func (m *mockReader) Discover(def input_config.InputDefinition) ([]string, error) {
+func (m *mockReader) Discover(context.Context, input_config.InputDefinition) ([]string, error) {
 	return []string{"ref1", "ref2"}, nil
 }
-func (m *mockReader) Hash(ref string) (string, error) { return "hash-" + ref, nil }
-func (m *mockReader) Parse(ref string, _ input_config.InputDefinition) (models.ParsedFile, error) {
+func (m *mockReader) Hash(_ context.Context, ref string) (string, error) { return "hash-" + ref, nil }
+func (m *mockReader) Parse(_ context.Context, ref string, _ input_config.InputDefinition) (models.ParsedFile, error) {
 	return models.ParsedFile{Path: ref}, nil
 }
 
@@ -87,17 +88,17 @@ func TestMockReaderInterface(t *testing.T) {
 	var _ SessionReader = &mockReader{}
 
 	m := &mockReader{name: "test"}
-	refs, err := m.Discover(input_config.InputDefinition{})
+	refs, err := m.Discover(context.Background(), input_config.InputDefinition{})
 	if err != nil || len(refs) != 2 {
 		t.Errorf("Discover: err=%v refs=%v", err, refs)
 	}
 
-	hash, err := m.Hash("ref1")
+	hash, err := m.Hash(context.Background(), "ref1")
 	if err != nil || hash != "hash-ref1" {
 		t.Errorf("Hash: err=%v hash=%q", err, hash)
 	}
 
-	pf, err := m.Parse("ref1", input_config.InputDefinition{})
+	pf, err := m.Parse(context.Background(), "ref1", input_config.InputDefinition{})
 	if err != nil || pf.Path != "ref1" {
 		t.Errorf("Parse: err=%v pf=%v", err, pf)
 	}

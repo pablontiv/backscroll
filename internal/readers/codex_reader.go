@@ -1,6 +1,7 @@
 package readers
 
 import (
+	"context"
 	"encoding/json"
 	"strings"
 	"time"
@@ -9,7 +10,6 @@ import (
 	"github.com/pablontiv/backscroll/internal/input_config"
 	"github.com/pablontiv/backscroll/internal/models"
 	"github.com/pablontiv/backscroll/internal/sync"
-	"github.com/pablontiv/picokit/hashfile"
 )
 
 // CodexReader reads Codex CLI rollout JSONL. Only response_item records are
@@ -19,11 +19,13 @@ type CodexReader struct{}
 
 func (*CodexReader) Name() string { return "codex" }
 
-func (*CodexReader) Discover(def input_config.InputDefinition) ([]string, error) {
-	return input_config.DiscoverFiles(def.Discover)
+func (*CodexReader) Discover(ctx context.Context, def input_config.InputDefinition) ([]string, error) {
+	return input_config.DiscoverFilesContext(ctx, def.Discover)
 }
 
-func (*CodexReader) Hash(path string) (string, error) { return hashfile.HashFile(path) }
+func (*CodexReader) Hash(ctx context.Context, path string) (string, error) {
+	return hashFile(ctx, path)
+}
 
 type codexRecord struct {
 	Type      string          `json:"type"`
@@ -55,14 +57,14 @@ type codexCall struct {
 // Missing or invalid response timestamps are skipped instead of assigning now,
 // keeping re-sync deterministic. Like Pi/OpenCode, records use the existing
 // UUID-less per-file sync path; Codex item IDs are not universally present.
-func (*CodexReader) Parse(path string, def input_config.InputDefinition) (models.ParsedFile, error) {
-	hash, err := hashfile.HashFile(path)
+func (*CodexReader) Parse(ctx context.Context, path string, def input_config.InputDefinition) (models.ParsedFile, error) {
+	hash, err := hashFile(ctx, path)
 	if err != nil {
 		return models.ParsedFile{}, err
 	}
 	result := models.ParsedFile{Path: path, Hash: hash}
 	var calls []codexCall
-	err = sync.IterateJSONLFile(path, func(_ int, line []byte) error {
+	err = sync.IterateJSONLFileContext(ctx, path, func(_ int, line []byte) error {
 		var rec codexRecord
 		if json.Unmarshal(line, &rec) != nil {
 			return nil
@@ -84,9 +86,12 @@ func (*CodexReader) Parse(path string, def input_config.InputDefinition) (models
 			if json.Unmarshal(rec.Payload, &item) != nil {
 				return nil
 			}
-			if msg, ok := codexMessage(item, ts, def.Decode.IndexReasoning); ok {
+			if msg, ok := codexMessage(ctx, item, ts, def.Decode.IndexReasoning); ok {
 				result.Records = append(result.Records, msg)
 				calls = append(calls, codexCallOf(item))
+			}
+			if err := ctx.Err(); err != nil {
+				return err
 			}
 		}
 		return nil
@@ -100,11 +105,17 @@ func (*CodexReader) Parse(path string, def input_config.InputDefinition) (models
 	// stays unmarked.
 	useIdx := make(map[string]int)
 	for i, call := range calls {
+		if err := ctx.Err(); err != nil {
+			return models.ParsedFile{}, err
+		}
 		if call.isCall && call.callID != "" {
 			useIdx[call.callID] = i
 		}
 	}
 	for i, call := range calls {
+		if err := ctx.Err(); err != nil {
+			return models.ParsedFile{}, err
+		}
 		if call.isCall || call.callID == "" {
 			continue
 		}
@@ -132,7 +143,10 @@ func isCodexDirectSearchCall(tool, arguments string) bool {
 	return directsearch.IsCodexDirectSearchCall(tool, arguments)
 }
 
-func codexMessage(item codexItem, ts time.Time, reasoning bool) (models.Message, bool) {
+func codexMessage(ctx context.Context, item codexItem, ts time.Time, reasoning bool) (models.Message, bool) {
+	if ctx.Err() != nil {
+		return models.Message{}, false
+	}
 	msg := models.Message{Timestamp: ts}
 	switch item.Type {
 	case "message":
@@ -141,9 +155,12 @@ func codexMessage(item codexItem, ts time.Time, reasoning bool) (models.Message,
 		}
 		msg.Role = item.Role
 		msg.Origin = messageOriginForRole(item.Role)
-		parts := codexTextParts(item.Content, "input_text", "output_text")
+		parts := codexTextParts(ctx, item.Content, "input_text", "output_text")
 		if item.Role == "user" {
 			for i, text := range parts {
+				if ctx.Err() != nil {
+					return msg, false
+				}
 				parts[i] = stripCodexInjectedWrappers(text)
 			}
 		}
@@ -168,7 +185,7 @@ func codexMessage(item codexItem, ts time.Time, reasoning bool) (models.Message,
 	case "function_call_output", "custom_tool_call_output":
 		var text string
 		if json.Unmarshal(item.Output, &text) != nil {
-			text = codexTextBlocks(item.Output, "input_text", "output_text")
+			text = codexTextBlocks(ctx, item.Output, "input_text", "output_text")
 		}
 		// Never serialize unknown output objects or image/audio payloads into FTS.
 		raw, _ := json.Marshal(text)
@@ -180,10 +197,13 @@ func codexMessage(item codexItem, ts time.Time, reasoning bool) (models.Message,
 		}
 		msg.Role, msg.Origin, msg.ContentType = "reasoning", models.OriginAssistant, "reasoning"
 		msg.Content = sync.CleanContent(strings.Join([]string{
-			codexTextBlocks(item.Summary, "summary_text"),
-			codexTextBlocks(item.Content, "reasoning_text", "text"),
+			codexTextBlocks(ctx, item.Summary, "summary_text"),
+			codexTextBlocks(ctx, item.Content, "reasoning_text", "text"),
 		}, " "))
 	default:
+		return msg, false
+	}
+	if ctx.Err() != nil {
 		return msg, false
 	}
 	return msg, strings.TrimSpace(msg.Content) != ""
@@ -191,17 +211,20 @@ func codexMessage(item codexItem, ts time.Time, reasoning bool) (models.Message,
 
 // codexTextBlocks selects only explicit text types, excluding arbitrary JSON
 // and multimodal data. A malformed block does not hide valid sibling blocks.
-func codexTextBlocks(raw json.RawMessage, types ...string) string {
-	return strings.Join(codexTextParts(raw, types...), "\n")
+func codexTextBlocks(ctx context.Context, raw json.RawMessage, types ...string) string {
+	return strings.Join(codexTextParts(ctx, raw, types...), "\n")
 }
 
-func codexTextParts(raw json.RawMessage, types ...string) []string {
+func codexTextParts(ctx context.Context, raw json.RawMessage, types ...string) []string {
 	var blocks []json.RawMessage
 	if json.Unmarshal(raw, &blocks) != nil {
 		return nil
 	}
 	var parts []string
 	for _, rawBlock := range blocks {
+		if ctx.Err() != nil {
+			return nil
+		}
 		var block struct {
 			Type string `json:"type"`
 			Text string `json:"text"`

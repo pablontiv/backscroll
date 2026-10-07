@@ -1,6 +1,7 @@
 package readers
 
 import (
+	"context"
 	"database/sql"
 	"encoding/json"
 	"fmt"
@@ -19,23 +20,32 @@ type OpenCodeReader struct{}
 func (r *OpenCodeReader) Name() string { return "opencode" }
 
 // Discover returns paths to OpenCode database files matching the definition's discover config.
-func (r *OpenCodeReader) Discover(def input_config.InputDefinition) ([]string, error) {
-	return input_config.DiscoverFiles(def.Discover)
+func (r *OpenCodeReader) Discover(ctx context.Context, def input_config.InputDefinition) ([]string, error) {
+	return input_config.DiscoverFilesContext(ctx, def.Discover)
 }
 
 // Hash returns a stable watermark for the database based on MAX(time_updated) of messages.
 // If the database is empty or inaccessible, it returns "empty" and no error.
-func (r *OpenCodeReader) Hash(dbPath string) (string, error) {
+func (r *OpenCodeReader) Hash(ctx context.Context, dbPath string) (string, error) {
+	if err := ctx.Err(); err != nil {
+		return "", err
+	}
 	db, err := openReadOnly(dbPath)
 	if err != nil {
 		return "", fmt.Errorf("opencode hash open %s: %w", dbPath, err)
 	}
 	defer func() { _ = db.Close() }()
+	if err := ctx.Err(); err != nil {
+		return "", err
+	}
 
 	var maxUpdated sql.NullInt64
-	row := db.QueryRow(`SELECT MAX(time_updated) FROM message`)
+	row := db.QueryRowContext(ctx, `SELECT MAX(time_updated) FROM message`)
 	if err := row.Scan(&maxUpdated); err != nil {
 		return "", fmt.Errorf("opencode hash query %s: %w", dbPath, err)
+	}
+	if err := ctx.Err(); err != nil {
+		return "", err
 	}
 	if !maxUpdated.Valid {
 		return "empty", nil
@@ -64,8 +74,8 @@ type toolPartState struct {
 
 // Parse reads all messages from the OpenCode database and returns them as a ParsedFile.
 // Parts of type "text" (with ignored != true) and "tool" (with non-empty state.input/state.output) are indexed; all other part types are skipped.
-func (r *OpenCodeReader) Parse(dbPath string, _ input_config.InputDefinition) (models.ParsedFile, error) {
-	hash, err := r.Hash(dbPath)
+func (r *OpenCodeReader) Parse(ctx context.Context, dbPath string, _ input_config.InputDefinition) (models.ParsedFile, error) {
+	hash, err := r.Hash(ctx, dbPath)
 	if err != nil {
 		return models.ParsedFile{}, err
 	}
@@ -75,8 +85,11 @@ func (r *OpenCodeReader) Parse(dbPath string, _ input_config.InputDefinition) (m
 		return models.ParsedFile{}, fmt.Errorf("opencode parse open %s: %w", dbPath, err)
 	}
 	defer func() { _ = db.Close() }()
+	if err := ctx.Err(); err != nil {
+		return models.ParsedFile{}, err
+	}
 
-	rows, err := db.Query(`
+	rows, err := db.QueryContext(ctx, `
 		SELECT m.id, m.session_id, m.data, m.time_created, p.data
 		FROM message m
 		JOIN part p ON p.message_id = m.id
@@ -96,7 +109,10 @@ func (r *OpenCodeReader) Parse(dbPath string, _ input_config.InputDefinition) (m
 		toolMsgs     []models.Message
 	)
 
-	flush := func() {
+	flush := func() error {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
 		if len(textParts) > 0 {
 			msgs = append(msgs, models.Message{
 				Role:        normalizeOpenCodeRole(currentRole),
@@ -109,9 +125,19 @@ func (r *OpenCodeReader) Parse(dbPath string, _ input_config.InputDefinition) (m
 		msgs = append(msgs, toolMsgs...)
 		textParts = nil
 		toolMsgs = nil
+		return nil
 	}
 
-	for rows.Next() {
+	for {
+		if err := ctx.Err(); err != nil {
+			return models.ParsedFile{}, err
+		}
+		if !rows.Next() {
+			break
+		}
+		if err := ctx.Err(); err != nil {
+			return models.ParsedFile{}, err
+		}
 		var (
 			msgID       string
 			sessionID   string
@@ -122,6 +148,9 @@ func (r *OpenCodeReader) Parse(dbPath string, _ input_config.InputDefinition) (m
 		if err := rows.Scan(&msgID, &sessionID, &msgData, &timeCreated, &partData); err != nil {
 			continue
 		}
+		if err := ctx.Err(); err != nil {
+			return models.ParsedFile{}, err
+		}
 
 		var pd partInfoData
 		if err := json.Unmarshal([]byte(partData), &pd); err != nil {
@@ -129,7 +158,9 @@ func (r *OpenCodeReader) Parse(dbPath string, _ input_config.InputDefinition) (m
 		}
 
 		if msgID != currentMsgID {
-			flush()
+			if err := flush(); err != nil {
+				return models.ParsedFile{}, err
+			}
 			currentMsgID = msgID
 			var md msgInfoData
 			if err := json.Unmarshal([]byte(msgData), &md); err == nil {
@@ -166,7 +197,9 @@ func (r *OpenCodeReader) Parse(dbPath string, _ input_config.InputDefinition) (m
 			}
 		}
 	}
-	flush()
+	if err := flush(); err != nil {
+		return models.ParsedFile{}, err
+	}
 
 	if err := rows.Err(); err != nil {
 		return models.ParsedFile{}, fmt.Errorf("opencode parse rows %s: %w", dbPath, err)
