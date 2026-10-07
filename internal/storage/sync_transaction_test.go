@@ -2,6 +2,7 @@ package storage
 
 import (
 	"context"
+	"database/sql"
 	"errors"
 	"sync"
 	"testing"
@@ -113,6 +114,45 @@ func TestSyncTransactionGateCancellationKeepsStableErrors(t *testing.T) {
 	}
 	if !errors.Is(err, rollbackFailure) {
 		t.Fatalf("commit error = %v, want rollback failure identity", err)
+	}
+}
+
+func TestSyncTransactionGateCancellationNormalizesTxDone(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	tx := &fakeSyncTransaction{rollbackErr: sql.ErrTxDone}
+	gate := newSyncTransactionGate(ctx, tx)
+	cancel()
+	<-gate.callbackDone
+
+	if err := gate.rollback(); err != nil {
+		t.Fatalf("rollback error = %v, want nil", err)
+	}
+	if err := gate.cancellationError(); !errors.Is(err, context.Canceled) || errors.Is(err, sql.ErrTxDone) {
+		t.Fatalf("cancellation error = %v, want only context.Canceled", err)
+	}
+	if commits, rollbacks := tx.counts(); commits != 0 || rollbacks != 1 {
+		t.Fatalf("finalizer calls = commits %d, rollbacks %d; want 0, 1", commits, rollbacks)
+	}
+}
+
+func TestSyncTransactionGateWithoutCancellationPreservesTxDone(t *testing.T) {
+	tx := &fakeSyncTransaction{rollbackErr: sql.ErrTxDone}
+	gate := newSyncTransactionGate(context.Background(), tx)
+
+	err := gate.rollback()
+	if !errors.Is(err, sql.ErrTxDone) {
+		t.Fatalf("rollback error = %v, want sql.ErrTxDone", err)
+	}
+}
+
+func TestSyncTransactionGateRollbackPreservesDistinctError(t *testing.T) {
+	rollbackFailure := errors.New("distinct rollback failure")
+	tx := &fakeSyncTransaction{rollbackErr: rollbackFailure}
+	gate := newSyncTransactionGate(context.Background(), tx)
+
+	err := gate.rollback()
+	if !errors.Is(err, rollbackFailure) {
+		t.Fatalf("rollback error = %v, want distinct rollback failure", err)
 	}
 }
 

@@ -7,10 +7,12 @@ import (
 	"fmt"
 	"reflect"
 	"sort"
+	"strings"
 	"sync"
 	"testing"
 
 	"modernc.org/sqlite"
+	sqlite3 "modernc.org/sqlite/lib"
 )
 
 const cancelSyncFunction = "backscroll_test_cancel_sync_context"
@@ -117,6 +119,107 @@ func TestSyncFilesContextCancellationDuringBatchRollsBackEverything(t *testing.T
 		"dynamic_stopwords",
 	} {
 		assertTableCount(t, db, table, 0)
+	}
+}
+
+func TestSyncTransactionGateNormalizesSQLiteAutomaticCancellationRollback(t *testing.T) {
+	db, cleanup := newTestDB(t)
+	defer cleanup()
+
+	if _, err := db.db.Exec(`CREATE TABLE cancellation_rollback_probe (value INTEGER NOT NULL)`); err != nil {
+		t.Fatalf("create rollback probe: %v", err)
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	setSyncCancellation(t, cancel)
+	tx, err := db.db.BeginTx(context.WithoutCancel(ctx), nil)
+	if err != nil {
+		t.Fatalf("begin transaction: %v", err)
+	}
+	defer func() { _ = tx.Rollback() }()
+	gate := newSyncTransactionGate(ctx, tx)
+
+	// Hold the gate until ExecContext returns. The SQLite interrupt therefore
+	// completes its automatic rollback before the gate calls Rollback.
+	gate.mu.Lock()
+	_, writeErr := tx.ExecContext(ctx, fmt.Sprintf(`
+		WITH RECURSIVE seq(x) AS (
+			VALUES(1)
+			UNION ALL
+			SELECT x + 1 FROM seq WHERE x < 100000
+		)
+		INSERT INTO cancellation_rollback_probe(value)
+		SELECT CASE WHEN x = 1000 THEN %s() ELSE x END FROM seq
+	`, cancelSyncFunction))
+	ctxErr := ctx.Err()
+	if ctxErr != nil {
+		<-gate.callbackStarted
+	}
+	gate.mu.Unlock()
+	if ctxErr != context.Canceled {
+		t.Fatalf("context error = %v, want context.Canceled; write error = %v", ctxErr, writeErr)
+	}
+	if !errors.Is(writeErr, context.Canceled) {
+		t.Fatalf("write error = %v, want context.Canceled", writeErr)
+	}
+	var writeSQLiteErr *sqlite.Error
+	if errors.As(writeErr, &writeSQLiteErr) && writeSQLiteErr.Code() != sqlite3.SQLITE_INTERRUPT {
+		t.Fatalf("write SQLite error code = %d, want SQLITE_INTERRUPT", writeSQLiteErr.Code())
+	}
+	<-gate.callbackDone
+
+	gate.mu.Lock()
+	rawRollbackErr := gate.rollbackErr
+	gate.mu.Unlock()
+	var sqliteErr *sqlite.Error
+	if !errors.As(rawRollbackErr, &sqliteErr) {
+		t.Fatalf("raw rollback error = %T %v, want *sqlite.Error", rawRollbackErr, rawRollbackErr)
+	}
+	const completedRollbackMessage = "SQL logic error: cannot rollback - no transaction is active (1)"
+	if sqliteErr.Code() != sqlite3.SQLITE_ERROR || sqliteErr.Error() != completedRollbackMessage {
+		t.Fatalf("raw rollback error = code %d, %q; want SQLITE_ERROR, %q", sqliteErr.Code(), sqliteErr.Error(), completedRollbackMessage)
+	}
+	if rollbackErr := gate.rollback(); rollbackErr != nil {
+		t.Fatalf("normalized gate rollback = %v, want nil", rollbackErr)
+	}
+
+	finalErr := writeErr
+	if cancelErr := gate.cancellationBeforeCommit(); cancelErr != nil && !errors.Is(finalErr, cancelErr) {
+		finalErr = errors.Join(cancelErr, finalErr)
+	}
+	if !errors.Is(finalErr, context.Canceled) {
+		t.Fatalf("final error = %v, want context.Canceled", finalErr)
+	}
+	if strings.Contains(finalErr.Error(), "rollback transaction") {
+		t.Fatalf("final error contains benign rollback failure: %v", finalErr)
+	}
+
+	if rows := tableCount(t, db, "cancellation_rollback_probe"); rows != 0 {
+		t.Fatalf("interrupt path left %d rows; want canceled write, completed rollback, and zero rows", rows)
+	}
+}
+
+func TestSyncTransactionGateWithoutCancellationPreservesSQLiteCompletedRollback(t *testing.T) {
+	db, cleanup := newTestDB(t)
+	defer cleanup()
+
+	tx, err := db.db.BeginTx(context.Background(), nil)
+	if err != nil {
+		t.Fatalf("begin transaction: %v", err)
+	}
+	if _, err := tx.Exec("ROLLBACK"); err != nil {
+		t.Fatalf("complete transaction with SQL rollback: %v", err)
+	}
+	gate := newSyncTransactionGate(context.Background(), tx)
+
+	err = gate.rollback()
+	var sqliteErr *sqlite.Error
+	if !errors.As(err, &sqliteErr) {
+		t.Fatalf("rollback error = %T %v, want *sqlite.Error", err, err)
+	}
+	const completedRollbackMessage = "SQL logic error: cannot rollback - no transaction is active (1)"
+	if sqliteErr.Code() != sqlite3.SQLITE_ERROR || sqliteErr.Error() != completedRollbackMessage {
+		t.Fatalf("rollback error = code %d, %q; want SQLITE_ERROR, %q", sqliteErr.Code(), sqliteErr.Error(), completedRollbackMessage)
 	}
 }
 
