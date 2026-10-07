@@ -2,9 +2,13 @@ package storage
 
 import (
 	"context"
+	"database/sql"
 	"errors"
 	"fmt"
 	"sync"
+
+	"modernc.org/sqlite"
+	sqlite3 "modernc.org/sqlite/lib"
 )
 
 type syncTransactionFinalizer interface {
@@ -146,15 +150,32 @@ func (g *syncTransactionGate) rollback() error {
 		<-g.callbackDone
 	}
 	g.mu.Lock()
-	err := g.rollbackErr
+	err := normalizeSyncRollbackError(g.rollbackErr)
 	g.mu.Unlock()
+	return err
+}
+
+func completedSyncRollbackError(err error) bool {
+	if errors.Is(err, sql.ErrTxDone) {
+		return true
+	}
+	var sqliteErr *sqlite.Error
+	return errors.As(err, &sqliteErr) &&
+		sqliteErr.Code() == sqlite3.SQLITE_ERROR &&
+		sqliteErr.Error() == "SQL logic error: cannot rollback - no transaction is active (1)"
+}
+
+func normalizeSyncRollbackError(err error) error {
+	if err == nil || completedSyncRollbackError(err) {
+		return nil
+	}
 	return err
 }
 
 func (g *syncTransactionGate) cancellationError() error {
 	g.mu.Lock()
 	ctxErr := g.ctx.Err()
-	rollbackErr := g.rollbackErr
+	rollbackErr := normalizeSyncRollbackError(g.rollbackErr)
 	g.mu.Unlock()
 	if ctxErr == nil {
 		ctxErr = context.Canceled
