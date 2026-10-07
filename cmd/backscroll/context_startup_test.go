@@ -212,7 +212,8 @@ func TestInvalidRootContextDoesNotCreateDatabaseOrStartupSidecar(t *testing.T) {
 		{name: "empty path", args: []string{"context", "--source-path=", "--ordinal", "1"}},
 		{name: "invalid before", args: []string{"context", "--uuid", "u", "--before", "-1"}},
 		{name: "invalid after", args: []string{"context", "--uuid", "u", "--after", "51"}},
-		{name: "invalid token budget", args: []string{"context", "--uuid", "u", "--max-tokens", "63"}},
+		{name: "token budget below minimum", args: []string{"context", "--uuid", "u", "--max-tokens", "63"}},
+		{name: "token budget above maximum", args: []string{"context", "--uuid", "u", "--max-tokens", "16385"}},
 		{name: "conflicting formats", args: []string{"context", "--uuid", "u", "--json", "--robot"}},
 	}
 

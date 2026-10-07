@@ -66,7 +66,7 @@ protected. All scope filters remain fixed; no OR or semantic expansion is used.`
 		Args: func(cmd *cobra.Command, args []string) error {
 			return validateCommandBeforeStartup(cmd, args, cobra.MaximumNArgs(1), func() error {
 				query := searchQuery(text, args)
-				_, _, err := validateAndParseSearchRequest(query, fields, contentType, after, before, relax)
+				_, _, err := validateAndParseSearchRequest(query, fields, contentType, after, before, limit, offset, relax)
 				if err != nil {
 					return err
 				}
@@ -119,7 +119,7 @@ func searchQuery(text string, args []string) string {
 	return text
 }
 
-func validateAndParseSearchRequest(query, fields, contentType, after, before string, relax bool) (*time.Time, *time.Time, error) {
+func validateAndParseSearchRequest(query, fields, contentType, after, before string, limit, offset int, relax bool) (*time.Time, *time.Time, error) {
 	request := services.SearchRequest{Query: query}
 	if err := services.ValidateSearchRequest(request); err != nil {
 		return nil, nil, err
@@ -151,6 +151,8 @@ func validateAndParseSearchRequest(query, fields, contentType, after, before str
 
 	request.Options.After = afterTime
 	request.Options.Before = beforeTime
+	request.Options.Limit = limit
+	request.Options.Offset = offset
 	request.Relax = relax
 	if err := services.ValidateSearchRequest(request); err != nil {
 		return nil, nil, err
@@ -166,7 +168,7 @@ func runSearch(ctx context.Context, stdout, stderr io.Writer, cfg *config.Config
 	fields string, maxTokens int,
 	lexicalOnly bool, similarityThreshold float64, relax bool) (retErr error) {
 
-	afterTime, beforeTime, err := validateAndParseSearchRequest(query, fields, contentType, after, before, relax)
+	afterTime, beforeTime, err := validateAndParseSearchRequest(query, fields, contentType, after, before, limit, offset, relax)
 	if err != nil {
 		return err
 	}

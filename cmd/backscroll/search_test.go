@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -11,38 +12,155 @@ import (
 	picokitoutput "github.com/pablontiv/picokit/output"
 
 	"github.com/pablontiv/backscroll/internal/models"
-	"github.com/pablontiv/backscroll/internal/services"
 )
 
-func TestSearchValidationMatchesServices(t *testing.T) {
+func TestSearchValidationGoldenErrorsAndOrder(t *testing.T) {
 	tests := []struct {
 		name        string
 		query       string
+		fields      string
 		contentType string
+		after       string
+		before      string
+		limit       int
+		offset      int
 		relax       bool
+		want        string
 	}{
-		{name: "missing query"},
-		{name: "invalid content type", query: "needle", contentType: "audio"},
-		{name: "invalid relaxation query", query: `"unclosed`, relax: true},
-		{name: "valid", query: "needle", contentType: "text"},
+		{
+			name:   "missing query wins",
+			fields: "invalid",
+			limit:  -1,
+			want:   "search query required (use --text <query> or positional argument)",
+		},
+		{
+			name:        "fields win",
+			query:       "needle",
+			fields:      "invalid",
+			contentType: "audio",
+			limit:       -1,
+			want:        "invalid --fields value \"invalid\": must be minimal or full",
+		},
+		{
+			name:        "content type wins",
+			query:       "needle",
+			fields:      "minimal",
+			contentType: "audio",
+			after:       "bad",
+			limit:       -1,
+			want:        "invalid --content-type \"audio\"; must be one of: text, code, tool, reasoning",
+		},
+		{
+			name:   "after date wins",
+			query:  "needle",
+			fields: "minimal",
+			after:  "bad",
+			limit:  -1,
+			want:   "parse --after date: parsing time \"bad\" as \"2006-01-02\": cannot parse \"bad\" as \"2006\"",
+		},
+		{
+			name:   "before date wins",
+			query:  "needle",
+			fields: "minimal",
+			before: "bad",
+			limit:  -1,
+			want:   "parse --before date: parsing time \"bad\" as \"2006-01-02\": cannot parse \"bad\" as \"2006\"",
+		},
+		{
+			name:   "negative limit wins",
+			query:  `"unclosed`,
+			fields: "minimal",
+			limit:  -1,
+			offset: -1,
+			relax:  true,
+			want:   "--limit must be between 0 and 300",
+		},
+		{
+			name:   "limit over maximum",
+			query:  "needle",
+			fields: "minimal",
+			limit:  301,
+			want:   "--limit must be between 0 and 300",
+		},
+		{
+			name:   "negative offset wins",
+			query:  `"unclosed`,
+			fields: "minimal",
+			limit:  20,
+			offset: -1,
+			relax:  true,
+			want:   "--offset must be >= 0",
+		},
+		{
+			name:   "relaxation syntax",
+			query:  `"unclosed`,
+			fields: "minimal",
+			limit:  20,
+			relax:  true,
+			want:   "invalid --relax query: quoted phrases must be closed and whitespace-delimited",
+		},
+		{
+			name:   "zero limit keeps internal default",
+			query:  "needle",
+			fields: "minimal",
+		},
+		{
+			name:   "maximum limit",
+			query:  "needle",
+			fields: "full",
+			limit:  300,
+		},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			_, _, cliErr := validateAndParseSearchRequest(test.query, "minimal", test.contentType, "", "", test.relax)
-			serviceErr := services.ValidateSearchRequest(services.SearchRequest{
-				Query: test.query,
-				Options: models.SearchOptions{
-					ContentType: test.contentType,
-				},
-				Relax: test.relax,
-			})
-			if (cliErr == nil) != (serviceErr == nil) {
-				t.Fatalf("CLI error = %v, service error = %v", cliErr, serviceErr)
-			}
-			if cliErr != nil && cliErr.Error() != serviceErr.Error() {
-				t.Fatalf("CLI error = %q, service error = %q", cliErr, serviceErr)
+			_, _, err := validateAndParseSearchRequest(
+				test.query, test.fields, test.contentType, test.after, test.before,
+				test.limit, test.offset, test.relax,
+			)
+			assertCLIValidationError(t, err, test.want)
+		})
+	}
+}
+
+func TestSearchInvalidBoundsDoNotCreateDatabaseOrStartupSidecar(t *testing.T) {
+	tests := []struct {
+		name string
+		args []string
+		want string
+	}{
+		{name: "negative limit", args: []string{"search", "needle", "--all-projects", "--limit", "-1"}, want: "--limit must be between 0 and 300"},
+		{name: "limit over maximum", args: []string{"search", "needle", "--all-projects", "--limit", "301"}, want: "--limit must be between 0 and 300"},
+		{name: "negative offset", args: []string{"search", "needle", "--all-projects", "--offset", "-1"}, want: "--offset must be >= 0"},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			testEnv(t)
+			dbPath := filepath.Join(t.TempDir(), "must-not-exist.db")
+			t.Setenv("BACKSCROLL_DATABASE_PATH", dbPath)
+			_, _, err := runCmd(test.args...)
+			assertCLIValidationError(t, err, test.want)
+			for _, path := range []string{dbPath, dbPath + ".startup-sync.lock"} {
+				if _, err := os.Lstat(path); !os.IsNotExist(err) {
+					t.Fatalf("invalid search created %s: stat error=%v", path, err)
+				}
 			}
 		})
+	}
+}
+
+func assertCLIValidationError(t *testing.T, err error, want string) {
+	t.Helper()
+	if want == "" {
+		if err != nil {
+			t.Fatalf("error = %q, want nil", err)
+		}
+		return
+	}
+	if err == nil {
+		t.Fatalf("error = nil, want %q", want)
+	}
+	if err.Error() != want {
+		t.Fatalf("error = %q, want %q", err, want)
 	}
 }
 

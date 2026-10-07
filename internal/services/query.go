@@ -9,7 +9,18 @@ import (
 	"github.com/pablontiv/backscroll/internal/storage"
 )
 
-const maxContextWindow = 50
+const (
+	maxSearchLimit = 300
+
+	maxContextWindow = 50
+
+	// DefaultContextMaxTokens is the current context payload default.
+	DefaultContextMaxTokens = 2000
+	// MinContextMaxTokens is the smallest accepted context payload budget.
+	MinContextMaxTokens = 64
+	// MaxContextMaxTokens is the largest accepted context payload budget.
+	MaxContextMaxTokens = 16384
+)
 
 // QueryService coordinates read-only queries against the perennial index.
 type QueryService struct {
@@ -46,15 +57,27 @@ func ValidateSearchRequest(request SearchRequest) error {
 		return fmt.Errorf("invalid --content-type %q; must be one of: text, code, tool, reasoning", request.Options.ContentType)
 	}
 
+	// Limit 0 keeps the storage layer's historical internal default of 100.
+	// The CLI supplies its separate historical default of 20.
+	if request.Options.Limit < 0 || request.Options.Limit > maxSearchLimit {
+		return fmt.Errorf("--limit must be between 0 and %d", maxSearchLimit)
+	}
+	if request.Options.Offset < 0 {
+		return fmt.Errorf("--offset must be >= 0")
+	}
+
 	if request.Relax {
 		return storage.ValidateRelaxationQuery(request.Query)
 	}
 	return nil
 }
 
-// ValidateExplicitSearchScope requires one project or all projects.
-// Remote consumers use this check in addition to ValidateSearchRequest.
+// ValidateExplicitSearchScope validates the base request and then requires one project scope.
+// Remote consumers use this composed validator. The CLI keeps project inference before service use.
 func ValidateExplicitSearchScope(request SearchRequest) error {
+	if err := ValidateSearchRequest(request); err != nil {
+		return err
+	}
 	hasProject := request.Options.Project != ""
 	if hasProject == request.Options.AllProjects {
 		return fmt.Errorf("provide exactly one project scope: project or all_projects=true")
@@ -92,6 +115,7 @@ type ContextRequest struct {
 	Ordinal    *int64
 	Before     int
 	After      int
+	MaxTokens  int
 }
 
 // ContextResponse contains the anchor-relative indexed record window.
@@ -117,6 +141,9 @@ func ValidateContextRequest(request ContextRequest) error {
 	}
 	if request.After < 0 || request.After > maxContextWindow {
 		return fmt.Errorf("--after must be between 0 and %d", maxContextWindow)
+	}
+	if request.MaxTokens < MinContextMaxTokens || request.MaxTokens > MaxContextMaxTokens {
+		return fmt.Errorf("--max-tokens must be between %d and %d", MinContextMaxTokens, MaxContextMaxTokens)
 	}
 	return nil
 }

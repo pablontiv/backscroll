@@ -21,9 +21,9 @@ import (
 const (
 	contextDefaultWindow    = 5
 	contextMaxTextRunes     = 4000
-	contextDefaultMaxTokens = 2000
-	contextMinMaxTokens     = 64
-	contextMaxMaxTokens     = 16384
+	contextDefaultMaxTokens = services.DefaultContextMaxTokens
+	contextMinMaxTokens     = services.MinContextMaxTokens
+	contextMaxMaxTokens     = services.MaxContextMaxTokens
 )
 
 type contextCommandOptions struct {
@@ -123,9 +123,6 @@ func validateContextRequest(opts contextCommandOptions) error {
 	if err := services.ValidateContextRequest(contextServiceRequest(opts)); err != nil {
 		return err
 	}
-	if opts.maxTokens < contextMinMaxTokens || opts.maxTokens > contextMaxMaxTokens {
-		return fmt.Errorf("--max-tokens must be between %d and %d", contextMinMaxTokens, contextMaxMaxTokens)
-	}
 	if opts.jsonFormat && opts.robotFormat {
 		return fmt.Errorf("--json and --robot are mutually exclusive")
 	}
@@ -133,7 +130,7 @@ func validateContextRequest(opts contextCommandOptions) error {
 }
 
 func contextServiceRequest(opts contextCommandOptions) services.ContextRequest {
-	request := services.ContextRequest{Before: opts.before, After: opts.after}
+	request := services.ContextRequest{Before: opts.before, After: opts.after, MaxTokens: opts.maxTokens}
 	if opts.uuidSet {
 		request.UUID = &opts.uuid
 	}
@@ -180,13 +177,13 @@ func runContextCommand(ctx context.Context, stdout, stderr io.Writer, cfg *confi
 	} else if opts.robotFormat {
 		format = contextRobotFormat
 	}
-	payload, successfulPayloadFits, err := contextSuccessfulPayloadWithinBudget(response.Records, format, opts.maxTokens)
+	payload, successfulPayloadFits, err := contextSuccessfulPayloadWithinBudget(response.Records, format, request.MaxTokens)
 	if err != nil {
 		return fmt.Errorf("format context records: %w", err)
 	}
 	if !successfulPayloadFits {
 		return writeContextDiagnostic(stdout, stderr, "context_budget_too_small",
-			fmt.Sprintf("--max-tokens %d cannot fit the anchor and required metadata", opts.maxTokens), opts)
+			fmt.Sprintf("--max-tokens %d cannot fit the anchor and required metadata", request.MaxTokens), opts)
 	}
 	if _, err := stdout.Write(payload); err != nil {
 		return fmt.Errorf("write context records: %w", err)
