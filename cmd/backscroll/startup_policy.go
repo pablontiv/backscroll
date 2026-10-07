@@ -106,14 +106,12 @@ func (r startupResult) release(retErr error) error {
 
 type startupContextKey struct{}
 
-var startupSync = maybeAutoSyncContext
-
 func startupResultFrom(cmd *cobra.Command) startupResult {
 	result, _ := cmd.Context().Value(startupContextKey{}).(startupResult)
 	return result
 }
 
-func defaultStartupPolicy(ctx context.Context, progress io.Writer, class startupCommandClass) startupResult {
+func (c *startupCoordinator) defaultStartupPolicy(ctx context.Context, progress io.Writer, class startupCommandClass) startupResult {
 	if err := ctx.Err(); err != nil {
 		return startupResult{Failure: &startupFailure{Stage: startupStageInputDir, Cause: err, Diagnostic: compat.Diagnostic{Code: compat.CodeMigrationFailed, Summary: err.Error()}}}
 	}
@@ -142,7 +140,7 @@ func defaultStartupPolicy(ctx context.Context, progress io.Writer, class startup
 	if err := ctx.Err(); err != nil {
 		return startupResult{Config: cfg, Failure: &startupFailure{Stage: startupStageActiveManifest, Cause: err, Diagnostic: compat.Diagnostic{Code: compat.CodeMigrationFailed, Summary: err.Error()}}}
 	}
-	return coordinateStartup(ctx, cfg, progress, class)
+	return c.coordinate(ctx, cfg, progress, class)
 }
 
 func validateCommandBeforeStartup(cmd *cobra.Command, args []string, positional cobra.PositionalArgs, semantic func() error) error {
@@ -168,7 +166,11 @@ func validateRequiredFlagsAndGroups(cmd *cobra.Command) error {
 }
 
 func buildRootCmd(stdout, stderr io.Writer) *cobra.Command {
-	return buildRootCmdWithStartup(stdout, stderr, defaultStartupPolicy)
+	return buildRootCmdWithCoordinator(stdout, stderr, newStartupCoordinator())
+}
+
+func buildRootCmdWithCoordinator(stdout, stderr io.Writer, coordinator *startupCoordinator) *cobra.Command {
+	return buildRootCmdWithStartup(stdout, stderr, coordinator.defaultStartupPolicy)
 }
 
 func buildRootCmdWithStartup(stdout, stderr io.Writer, policy startupPolicyFunc) *cobra.Command {

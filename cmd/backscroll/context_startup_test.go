@@ -150,23 +150,23 @@ func TestRootContextEmitsCommandDiagnosticsInEveryFormat(t *testing.T) {
 }
 
 func TestRootContextBusyFollowerUsesCommittedSnapshot(t *testing.T) {
-	restoreStartupCoordinatorGlobals(t)
+	coordinator := newStartupCoordinator()
 	cfg := newContextTestIndex(t)
-	originalPrepare := startupPrepareIndex
+	originalPrepare := coordinator.prepareIndex
 	prepareCalls := 0
-	startupTryAcquire = func(string) (startupLease, bool, error) { return nil, false, nil }
-	startupAcquire = func(context.Context, string, time.Duration) (startupLease, error) {
+	coordinator.tryAcquire = func(string) (startupLease, bool, error) { return nil, false, nil }
+	coordinator.acquire = func(context.Context, string, time.Duration) (startupLease, error) {
 		t.Fatal("snapshot reader must not wait for the startup lock")
 		return nil, errors.New("unexpected startup lock wait")
 	}
-	startupPrepareIndex = func(ctx context.Context, gotCfg *config.Config, class indexCommandClass) (*storage.Database, *compat.Diagnostic, error) {
+	coordinator.prepareIndex = func(ctx context.Context, gotCfg *config.Config, class indexCommandClass) (*storage.Database, *compat.Diagnostic, error) {
 		prepareCalls++
 		if class != indexDataRead {
 			t.Fatalf("follower prepare class=%q want %q", class, indexDataRead)
 		}
 		return originalPrepare(ctx, gotCfg, class)
 	}
-	startupSync = func(context.Context, *config.Config, io.Writer) error {
+	coordinator.sync = func(context.Context, *config.Config, io.Writer) error {
 		t.Fatal("busy snapshot follower must not synchronize")
 		return nil
 	}
@@ -175,7 +175,7 @@ func TestRootContextBusyFollowerUsesCommittedSnapshot(t *testing.T) {
 	startupCalls := 0
 	root := buildRootCmdWithStartup(&stdout, &stderr, func(ctx context.Context, progress io.Writer, class startupCommandClass) startupResult {
 		startupCalls++
-		return coordinateStartup(ctx, cfg, progress, class)
+		return coordinator.coordinate(ctx, cfg, progress, class)
 	})
 	root.SetArgs([]string{"context", "--uuid", "anchor", "--before", "0", "--after", "0", "--max-tokens", "16384", "--json"})
 

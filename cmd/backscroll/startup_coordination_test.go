@@ -14,31 +14,59 @@ import (
 	"github.com/pablontiv/backscroll/internal/storage"
 )
 
-func restoreStartupCoordinatorGlobals(t *testing.T) {
-	t.Helper()
-	originalTryAcquire := startupTryAcquire
-	originalAcquire := startupAcquire
-	originalMutationWait := startupMutationWait
-	originalPrepare := startupPrepareIndex
-	originalSync := startupSync
-	t.Cleanup(func() {
-		startupTryAcquire = originalTryAcquire
-		startupAcquire = originalAcquire
-		startupMutationWait = originalMutationWait
-		startupPrepareIndex = originalPrepare
-		startupSync = originalSync
-	})
+func TestStartupCoordinatorsIsolateDependencies(t *testing.T) {
+	t.Parallel()
+
+	for _, name := range []string{"first", "second"} {
+		name := name
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			lease := &fakeStartupLease{}
+			syncCalls := 0
+			coordinator := &startupCoordinator{
+				mutationWait: defaultStartupMutationWait,
+				tryAcquire: func(path string) (startupLease, bool, error) {
+					if !strings.Contains(path, name) {
+						t.Fatalf("%s coordinator received another coordinator's path %q", name, path)
+					}
+					return lease, true, nil
+				},
+				acquire: func(context.Context, string, time.Duration) (startupLease, error) {
+					t.Fatal("immediate owner unexpectedly waited for lock")
+					return nil, nil
+				},
+				prepareIndex: func(context.Context, *config.Config, indexCommandClass) (*storage.Database, *compat.Diagnostic, error) {
+					return nil, nil, nil
+				},
+				sync: func(_ context.Context, cfg *config.Config, _ io.Writer) error {
+					if !strings.Contains(cfg.DatabasePath, name) {
+						t.Fatalf("%s sync received another coordinator's config %q", name, cfg.DatabasePath)
+					}
+					syncCalls++
+					return nil
+				},
+			}
+
+			result := coordinator.coordinate(context.Background(), &config.Config{DatabasePath: filepath.Join(t.TempDir(), name+".db")}, io.Discard, startupSnapshotRead)
+			if result.Failure != nil {
+				t.Fatalf("startup failed: %v", result.Failure)
+			}
+			if syncCalls != 1 || lease.releases != 1 {
+				t.Fatalf("sync calls=%d releases=%d want 1 each", syncCalls, lease.releases)
+			}
+		})
+	}
 }
 
 func TestCoordinateStartupImmediateOwnerSnapshotSyncsAndReleasesBeforeResult(t *testing.T) {
-	restoreStartupCoordinatorGlobals(t)
+	coordinator := newStartupCoordinator()
 	lease := &fakeStartupLease{}
 	syncCalls := 0
-	startupTryAcquire = func(string) (startupLease, bool, error) { return lease, true, nil }
-	startupPrepareIndex = func(context.Context, *config.Config, indexCommandClass) (*storage.Database, *compat.Diagnostic, error) {
+	coordinator.tryAcquire = func(string) (startupLease, bool, error) { return lease, true, nil }
+	coordinator.prepareIndex = func(context.Context, *config.Config, indexCommandClass) (*storage.Database, *compat.Diagnostic, error) {
 		return nil, nil, nil
 	}
-	startupSync = func(context.Context, *config.Config, io.Writer) error {
+	coordinator.sync = func(context.Context, *config.Config, io.Writer) error {
 		syncCalls++
 		if lease.releases != 0 {
 			t.Fatalf("lease released before sync")
@@ -46,7 +74,7 @@ func TestCoordinateStartupImmediateOwnerSnapshotSyncsAndReleasesBeforeResult(t *
 		return nil
 	}
 
-	result := coordinateStartup(context.Background(), &config.Config{DatabasePath: filepath.Join(t.TempDir(), "index.db")}, io.Discard, startupSnapshotRead)
+	result := coordinator.coordinate(context.Background(), &config.Config{DatabasePath: filepath.Join(t.TempDir(), "index.db")}, io.Discard, startupSnapshotRead)
 	if result.Failure != nil {
 		t.Fatalf("startup failed: %+v", result.Failure)
 	}
@@ -62,16 +90,16 @@ func TestCoordinateStartupImmediateOwnerSnapshotSyncsAndReleasesBeforeResult(t *
 }
 
 func TestCoordinateStartupImmediateOwnerMutationSyncsAndRetainsLease(t *testing.T) {
-	restoreStartupCoordinatorGlobals(t)
+	coordinator := newStartupCoordinator()
 	lease := &fakeStartupLease{}
 	syncCalls := 0
-	startupTryAcquire = func(string) (startupLease, bool, error) { return lease, true, nil }
-	startupPrepareIndex = func(context.Context, *config.Config, indexCommandClass) (*storage.Database, *compat.Diagnostic, error) {
+	coordinator.tryAcquire = func(string) (startupLease, bool, error) { return lease, true, nil }
+	coordinator.prepareIndex = func(context.Context, *config.Config, indexCommandClass) (*storage.Database, *compat.Diagnostic, error) {
 		return nil, nil, nil
 	}
-	startupSync = func(context.Context, *config.Config, io.Writer) error { syncCalls++; return nil }
+	coordinator.sync = func(context.Context, *config.Config, io.Writer) error { syncCalls++; return nil }
 
-	result := coordinateStartup(context.Background(), &config.Config{DatabasePath: filepath.Join(t.TempDir(), "index.db")}, io.Discard, startupMutation)
+	result := coordinator.coordinate(context.Background(), &config.Config{DatabasePath: filepath.Join(t.TempDir(), "index.db")}, io.Discard, startupMutation)
 	if result.Failure != nil {
 		t.Fatalf("startup failed: %+v", result.Failure)
 	}
@@ -87,20 +115,20 @@ func TestCoordinateStartupImmediateOwnerMutationSyncsAndRetainsLease(t *testing.
 }
 
 func TestCoordinateStartupImmediateRemediationRetainsLeaseWithoutPrepareOrSync(t *testing.T) {
-	restoreStartupCoordinatorGlobals(t)
+	coordinator := newStartupCoordinator()
 	lease := &fakeStartupLease{}
-	startupTryAcquire = func(string) (startupLease, bool, error) { return lease, true, nil }
-	startupPrepareIndex = func(context.Context, *config.Config, indexCommandClass) (*storage.Database, *compat.Diagnostic, error) {
+	coordinator.tryAcquire = func(string) (startupLease, bool, error) { return lease, true, nil }
+	coordinator.prepareIndex = func(context.Context, *config.Config, indexCommandClass) (*storage.Database, *compat.Diagnostic, error) {
 		t.Fatal("remediation must not prepare the index")
 		return nil, nil, nil
 	}
-	startupSync = func(context.Context, *config.Config, io.Writer) error {
+	coordinator.sync = func(context.Context, *config.Config, io.Writer) error {
 		t.Fatal("remediation must not run pre-handler sync")
 		return nil
 	}
 
 	cfg := &config.Config{DatabasePath: filepath.Join(t.TempDir(), "index.db")}
-	result := coordinateStartup(context.Background(), cfg, io.Discard, startupRemediation)
+	result := coordinator.coordinate(context.Background(), cfg, io.Discard, startupRemediation)
 	if result.Failure != nil {
 		t.Fatalf("failure=%+v", result.Failure)
 	}
@@ -113,14 +141,14 @@ func TestCoordinateStartupImmediateRemediationRetainsLeaseWithoutPrepareOrSync(t
 }
 
 func TestCoordinateStartupBusySnapshotUsesCompatibleReadOnlySnapshot(t *testing.T) {
-	restoreStartupCoordinatorGlobals(t)
+	coordinator := newStartupCoordinator()
 	dbPath := seedCompatibleStartupDB(t)
 	cfg := &config.Config{DatabasePath: dbPath}
 	syncCalls := 0
-	startupTryAcquire = func(string) (startupLease, bool, error) { return nil, false, nil }
-	startupSync = func(context.Context, *config.Config, io.Writer) error { syncCalls++; return nil }
+	coordinator.tryAcquire = func(string) (startupLease, bool, error) { return nil, false, nil }
+	coordinator.sync = func(context.Context, *config.Config, io.Writer) error { syncCalls++; return nil }
 
-	result := coordinateStartup(context.Background(), cfg, io.Discard, startupSnapshotRead)
+	result := coordinator.coordinate(context.Background(), cfg, io.Discard, startupSnapshotRead)
 	if result.Failure != nil {
 		t.Fatalf("busy snapshot failed: %+v", result.Failure)
 	}
@@ -139,15 +167,15 @@ func TestCoordinateStartupBusySnapshotUsesCompatibleReadOnlySnapshot(t *testing.
 }
 
 func TestCoordinateStartupBusyMetadataSkipsReadPreparationWhenDatabaseMissing(t *testing.T) {
-	restoreStartupCoordinatorGlobals(t)
+	coordinator := newStartupCoordinator()
 	prepareCalls := 0
-	startupTryAcquire = func(string) (startupLease, bool, error) { return nil, false, nil }
-	startupPrepareIndex = func(context.Context, *config.Config, indexCommandClass) (*storage.Database, *compat.Diagnostic, error) {
+	coordinator.tryAcquire = func(string) (startupLease, bool, error) { return nil, false, nil }
+	coordinator.prepareIndex = func(context.Context, *config.Config, indexCommandClass) (*storage.Database, *compat.Diagnostic, error) {
 		prepareCalls++
 		return nil, nil, nil
 	}
 
-	result := coordinateStartup(context.Background(), &config.Config{DatabasePath: filepath.Join(t.TempDir(), "missing.db")}, io.Discard, startupMetadataRead)
+	result := coordinator.coordinate(context.Background(), &config.Config{DatabasePath: filepath.Join(t.TempDir(), "missing.db")}, io.Discard, startupMetadataRead)
 	if result.Failure != nil {
 		t.Fatalf("busy metadata failed: %+v", result.Failure)
 	}
@@ -160,11 +188,11 @@ func TestCoordinateStartupBusyMetadataSkipsReadPreparationWhenDatabaseMissing(t 
 }
 
 func TestCoordinateStartupBusyMutationAcquiresWithinWaitAndBecomesOwner(t *testing.T) {
-	restoreStartupCoordinatorGlobals(t)
+	coordinator := newStartupCoordinator()
 	lease := &fakeStartupLease{}
 	syncCalls := 0
-	startupTryAcquire = func(string) (startupLease, bool, error) { return nil, false, nil }
-	startupAcquire = func(ctx context.Context, path string, delay time.Duration) (startupLease, error) {
+	coordinator.tryAcquire = func(string) (startupLease, bool, error) { return nil, false, nil }
+	coordinator.acquire = func(ctx context.Context, path string, delay time.Duration) (startupLease, error) {
 		if delay != startupLockRetry {
 			t.Fatalf("retry delay=%v want %v", delay, startupLockRetry)
 		}
@@ -173,12 +201,12 @@ func TestCoordinateStartupBusyMutationAcquiresWithinWaitAndBecomesOwner(t *testi
 		}
 		return lease, nil
 	}
-	startupPrepareIndex = func(context.Context, *config.Config, indexCommandClass) (*storage.Database, *compat.Diagnostic, error) {
+	coordinator.prepareIndex = func(context.Context, *config.Config, indexCommandClass) (*storage.Database, *compat.Diagnostic, error) {
 		return nil, nil, nil
 	}
-	startupSync = func(context.Context, *config.Config, io.Writer) error { syncCalls++; return nil }
+	coordinator.sync = func(context.Context, *config.Config, io.Writer) error { syncCalls++; return nil }
 
-	result := coordinateStartup(context.Background(), &config.Config{DatabasePath: filepath.Join(t.TempDir(), "index.db")}, io.Discard, startupMutation)
+	result := coordinator.coordinate(context.Background(), &config.Config{DatabasePath: filepath.Join(t.TempDir(), "index.db")}, io.Discard, startupMutation)
 	if result.Failure != nil {
 		t.Fatalf("startup failed: %+v", result.Failure)
 	}
@@ -191,10 +219,10 @@ func TestCoordinateStartupBusyMutationAcquiresWithinWaitAndBecomesOwner(t *testi
 }
 
 func TestCoordinateStartupBusyRemediationAcquiresAndBypassesPrepareSync(t *testing.T) {
-	restoreStartupCoordinatorGlobals(t)
+	coordinator := newStartupCoordinator()
 	lease := &fakeStartupLease{}
-	startupTryAcquire = func(string) (startupLease, bool, error) { return nil, false, nil }
-	startupAcquire = func(ctx context.Context, _ string, delay time.Duration) (startupLease, error) {
+	coordinator.tryAcquire = func(string) (startupLease, bool, error) { return nil, false, nil }
+	coordinator.acquire = func(ctx context.Context, _ string, delay time.Duration) (startupLease, error) {
 		if delay != startupLockRetry {
 			t.Fatalf("delay=%v", delay)
 		}
@@ -203,16 +231,16 @@ func TestCoordinateStartupBusyRemediationAcquiresAndBypassesPrepareSync(t *testi
 		}
 		return lease, nil
 	}
-	startupPrepareIndex = func(context.Context, *config.Config, indexCommandClass) (*storage.Database, *compat.Diagnostic, error) {
+	coordinator.prepareIndex = func(context.Context, *config.Config, indexCommandClass) (*storage.Database, *compat.Diagnostic, error) {
 		t.Fatal("remediation must not prepare")
 		return nil, nil, nil
 	}
-	startupSync = func(context.Context, *config.Config, io.Writer) error {
+	coordinator.sync = func(context.Context, *config.Config, io.Writer) error {
 		t.Fatal("remediation must not sync")
 		return nil
 	}
 
-	result := coordinateStartup(context.Background(), &config.Config{DatabasePath: filepath.Join(t.TempDir(), "index.db")}, io.Discard, startupRemediation)
+	result := coordinator.coordinate(context.Background(), &config.Config{DatabasePath: filepath.Join(t.TempDir(), "index.db")}, io.Discard, startupRemediation)
 	if result.Failure != nil || result.Lease != lease {
 		t.Fatalf("result=%+v", result)
 	}
@@ -224,23 +252,23 @@ func TestCoordinateStartupBusyRemediationAcquiresAndBypassesPrepareSync(t *testi
 func TestCoordinateStartupBusyMutationDeadlineReturnsSyncInProgressWithoutContinuation(t *testing.T) {
 	for _, class := range []startupCommandClass{startupMutation, startupRemediation} {
 		t.Run(string(class), func(t *testing.T) {
-			restoreStartupCoordinatorGlobals(t)
-			startupMutationWait = time.Millisecond
-			startupTryAcquire = func(string) (startupLease, bool, error) { return nil, false, nil }
-			startupAcquire = func(ctx context.Context, _ string, _ time.Duration) (startupLease, error) {
+			coordinator := newStartupCoordinator()
+			coordinator.mutationWait = 0
+			coordinator.tryAcquire = func(string) (startupLease, bool, error) { return nil, false, nil }
+			coordinator.acquire = func(ctx context.Context, _ string, _ time.Duration) (startupLease, error) {
 				<-ctx.Done()
 				return nil, ctx.Err()
 			}
-			startupPrepareIndex = func(context.Context, *config.Config, indexCommandClass) (*storage.Database, *compat.Diagnostic, error) {
+			coordinator.prepareIndex = func(context.Context, *config.Config, indexCommandClass) (*storage.Database, *compat.Diagnostic, error) {
 				t.Fatal("prepare after timeout")
 				return nil, nil, nil
 			}
-			startupSync = func(context.Context, *config.Config, io.Writer) error {
+			coordinator.sync = func(context.Context, *config.Config, io.Writer) error {
 				t.Fatal("sync after timeout")
 				return nil
 			}
 
-			result := coordinateStartup(context.Background(), &config.Config{DatabasePath: filepath.Join(t.TempDir(), "index.db")}, io.Discard, class)
+			result := coordinator.coordinate(context.Background(), &config.Config{DatabasePath: filepath.Join(t.TempDir(), "index.db")}, io.Discard, class)
 			failure := result.startupFailure()
 			if failure == nil || failure.Stage != startupStageSyncLock || failure.Diagnostic.Code != compat.CodeSyncInProgress || !strings.Contains(failure.Diagnostic.Summary, "retry the command") {
 				t.Fatalf("failure=%+v", failure)
@@ -253,11 +281,11 @@ func TestCoordinateStartupBusyMutationDeadlineReturnsSyncInProgressWithoutContin
 }
 
 func TestCoordinateStartupLockIOErrorIsSyncLockFailureNotContention(t *testing.T) {
-	restoreStartupCoordinatorGlobals(t)
+	coordinator := newStartupCoordinator()
 	lockErr := errors.New("lock sidecar I/O failed")
-	startupTryAcquire = func(string) (startupLease, bool, error) { return nil, false, lockErr }
+	coordinator.tryAcquire = func(string) (startupLease, bool, error) { return nil, false, lockErr }
 
-	result := coordinateStartup(context.Background(), &config.Config{DatabasePath: filepath.Join(t.TempDir(), "index.db")}, io.Discard, startupSnapshotRead)
+	result := coordinator.coordinate(context.Background(), &config.Config{DatabasePath: filepath.Join(t.TempDir(), "index.db")}, io.Discard, startupSnapshotRead)
 	failure := result.startupFailure()
 	if failure == nil {
 		t.Fatal("lock I/O error unexpectedly succeeded")
@@ -286,20 +314,20 @@ func TestCoordinateStartupOwnerFailureLeaseRetentionByCommandClass(t *testing.T)
 		{name: "mutation_sync_failure_retains", class: startupMutation, wantRetained: true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			restoreStartupCoordinatorGlobals(t)
+			coordinator := newStartupCoordinator()
 			lease := &fakeStartupLease{}
-			startupTryAcquire = func(string) (startupLease, bool, error) { return lease, true, nil }
+			coordinator.tryAcquire = func(string) (startupLease, bool, error) { return lease, true, nil }
 			prepareErr := errors.New("prepare failed")
 			syncErr := errors.New("sync failed")
-			startupPrepareIndex = func(context.Context, *config.Config, indexCommandClass) (*storage.Database, *compat.Diagnostic, error) {
+			coordinator.prepareIndex = func(context.Context, *config.Config, indexCommandClass) (*storage.Database, *compat.Diagnostic, error) {
 				if tc.failPrepare {
 					return nil, nil, prepareErr
 				}
 				return nil, nil, nil
 			}
-			startupSync = func(context.Context, *config.Config, io.Writer) error { return syncErr }
+			coordinator.sync = func(context.Context, *config.Config, io.Writer) error { return syncErr }
 
-			result := coordinateStartup(context.Background(), &config.Config{DatabasePath: filepath.Join(t.TempDir(), "index.db")}, io.Discard, tc.class)
+			result := coordinator.coordinate(context.Background(), &config.Config{DatabasePath: filepath.Join(t.TempDir(), "index.db")}, io.Discard, tc.class)
 			failure := result.startupFailure()
 			if failure == nil || !failure.Recoverable {
 				t.Fatalf("failure=%+v want recoverable startup failure", failure)

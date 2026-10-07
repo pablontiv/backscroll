@@ -423,14 +423,13 @@ func TestDefaultStartupPolicyCallsSyncExactlyOnce(t *testing.T) {
 	dbPath := filepath.Join(t.TempDir(), "index.db")
 	setIndexPolicyEnv(t, dbPath, t.TempDir())
 	calls := 0
-	originalSync := startupSync
-	startupSync = func(context.Context, *config.Config, io.Writer) error {
+	coordinator := newStartupCoordinator()
+	coordinator.sync = func(context.Context, *config.Config, io.Writer) error {
 		calls++
 		return nil
 	}
-	t.Cleanup(func() { startupSync = originalSync })
 
-	result := defaultStartupPolicy(context.Background(), io.Discard, startupMutation)
+	result := coordinator.defaultStartupPolicy(context.Background(), io.Discard, startupMutation)
 	if result.Failure != nil {
 		t.Fatalf("startup result=%+v", result)
 	}
@@ -494,15 +493,14 @@ func TestDefaultStartupPolicyNonrecoverableStages(t *testing.T) {
 		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			originalSync := startupSync
-			startupSync = func(context.Context, *config.Config, io.Writer) error {
+			coordinator := newStartupCoordinator()
+			coordinator.sync = func(context.Context, *config.Config, io.Writer) error {
 				t.Fatal("startup sync should not run after nonrecoverable startup stage")
 				return nil
 			}
-			t.Cleanup(func() { startupSync = originalSync })
 			tc.setup(t)
 
-			result := defaultStartupPolicy(context.Background(), io.Discard, startupMutation)
+			result := coordinator.defaultStartupPolicy(context.Background(), io.Discard, startupMutation)
 			failure := result.startupFailure()
 			if failure == nil {
 				t.Fatal("default startup unexpectedly succeeded")
@@ -562,16 +560,16 @@ func TestStartupWarningsAlwaysRenderToStderr(t *testing.T) {
 func TestReadOwnerLeaseReleasedBeforeHandler(t *testing.T) {
 	dbPath := filepath.Join(t.TempDir(), "index.db")
 	setIndexPolicyEnv(t, dbPath, t.TempDir())
-	restoreStartupCoordinatorGlobals(t)
+	coordinator := newStartupCoordinator()
 	lease := &fakeStartupLease{}
-	startupTryAcquire = func(string) (startupLease, bool, error) { return lease, true, nil }
-	startupPrepareIndex = func(context.Context, *config.Config, indexCommandClass) (*storage.Database, *compat.Diagnostic, error) {
+	coordinator.tryAcquire = func(string) (startupLease, bool, error) { return lease, true, nil }
+	coordinator.prepareIndex = func(context.Context, *config.Config, indexCommandClass) (*storage.Database, *compat.Diagnostic, error) {
 		return nil, nil, nil
 	}
-	startupSync = func(context.Context, *config.Config, io.Writer) error { return nil }
+	coordinator.sync = func(context.Context, *config.Config, io.Writer) error { return nil }
 
 	var stdout, stderr bytes.Buffer
-	root := buildRootCmdWithStartup(&stdout, &stderr, defaultStartupPolicy)
+	root := buildRootCmdWithCoordinator(&stdout, &stderr, coordinator)
 	replaceRootCommandRunE(t, root, "search", func(cmd *cobra.Command, args []string) error {
 		if lease.releases != 1 {
 			t.Fatalf("handler saw lease releases=%d want 1", lease.releases)
