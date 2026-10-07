@@ -6,8 +6,10 @@ import (
 	"errors"
 	"fmt"
 	"io/fs"
+	"net/url"
 	"os"
 	"path/filepath"
+	"strings"
 
 	_ "modernc.org/sqlite"
 
@@ -64,7 +66,12 @@ func OpenContext(ctx context.Context, path string) (*Database, error) {
 
 func openContextWithCreationDeps(ctx context.Context, path string, deps databaseCreationDeps) (*Database, error) {
 	db, created, err := createDatabaseExclusively(ctx, path, deps)
-	if err != nil || created {
+	if created {
+		// Publication is the point of no return. Errors after it describe durable
+		// validation or cleanup failures, not cancellation of the caller's work.
+		return db, err
+	}
+	if err != nil {
 		return db, contextIdentityError(ctx, err)
 	}
 
@@ -93,23 +100,6 @@ func createDatabaseExclusively(ctx context.Context, path string, deps databaseCr
 	}
 
 	directory := filepath.Dir(canonicalPath)
-	published := false
-	defer func() {
-		if err == nil || !published {
-			return
-		}
-		if db != nil {
-			err = errors.Join(err, db.Close())
-			db = nil
-		}
-		if cleanupErr := cleanupCreationFiles(canonicalPath); cleanupErr != nil {
-			err = errors.Join(err, fmt.Errorf("cleanup failed database publication: %w", cleanupErr))
-		}
-		if syncErr := fsyncDirectory(directory); syncErr != nil {
-			err = errors.Join(err, syncErr)
-		}
-	}()
-
 	temp, err := os.CreateTemp(directory, "."+filepath.Base(canonicalPath)+".create-*")
 	if err != nil {
 		return nil, false, fmt.Errorf("create private database file for %s: %w", canonicalPath, err)
@@ -154,7 +144,10 @@ func createDatabaseExclusively(ctx context.Context, path string, deps databaseCr
 		}
 		return nil, false, fmt.Errorf("publish database without clobbering %s: %w", canonicalPath, err)
 	}
-	published = true
+	// The canonical link is now owned by all openers and must never be removed
+	// by this creation attempt. Finish durable publication and reopen using a
+	// context detached from caller cancellation.
+	finishCtx := context.WithoutCancel(ctx)
 	if err := fsyncDirectory(directory); err != nil {
 		return nil, true, err
 	}
@@ -168,8 +161,16 @@ func createDatabaseExclusively(ctx context.Context, path string, deps databaseCr
 
 	// Reopen through the canonical name so the returned connection never depends
 	// on the private construction link and uses the ordinary WAL configuration.
-	db, err = deps.openCanonical(ctx, canonicalPath)
-	return db, true, contextIdentityError(ctx, err)
+	db, err = deps.openCanonical(finishCtx, canonicalPath)
+	if err != nil {
+		return db, true, fmt.Errorf("reopen published database %s: %w", canonicalPath, err)
+	}
+	if err := compat.VerifyCurrentShape(finishCtx, db.DB()); err != nil {
+		closeErr := db.Close()
+		db = nil
+		return nil, true, errors.Join(fmt.Errorf("verify published database %s: %w", canonicalPath, err), closeErr)
+	}
+	return db, true, nil
 }
 
 func createDatabaseWithOpen(ctx context.Context, path string, open func(context.Context, string) (*Database, error), migrations []migrationApplier) (*Database, error) {
@@ -237,12 +238,16 @@ func openWriteConnectionWithPragmasContext(ctx context.Context, path string, mig
 	if err != nil {
 		return nil, err
 	}
-	// modernc.org/sqlite honors the `_pragma=name(value)` DSN syntax; the mattn-style
-	// `_name=value` form is silently ignored (leaving rollback journal mode + no busy timeout).
-	dsn := fmt.Sprintf("%s?_pragma=journal_mode(%s)&_pragma=synchronous(%s)&_pragma=busy_timeout(5000)", canonicalPath, journalMode, synchronous)
-	if migrationImmediate {
-		dsn += "&_txlock=immediate"
+	// mode=rw prevents an existing canonical database that disappears during
+	// open from being silently replaced by a new empty database.
+	query := url.Values{
+		"mode":    {"rw"},
+		"_pragma": {fmt.Sprintf("journal_mode(%s)", journalMode), fmt.Sprintf("synchronous(%s)", synchronous), "busy_timeout(5000)"},
 	}
+	if migrationImmediate {
+		query.Set("_txlock", "immediate")
+	}
+	dsn := sqliteFileDSN(canonicalPath, query)
 	db, err := sql.Open("sqlite", dsn)
 	if err != nil {
 		return nil, fmt.Errorf("opening database %s: %w", canonicalPath, err)
@@ -357,7 +362,10 @@ func openReadOnlyContext(ctx context.Context, path string) (*Database, error) {
 
 	// Journal mode is persisted in the DB file (set by the write connection); a read-only
 	// connection only needs the busy timeout so queries wait out a concurrent writer's lock.
-	db, err := sql.Open("sqlite", "file:"+canonicalPath+"?mode=ro&_pragma=busy_timeout(5000)")
+	db, err := sql.Open("sqlite", sqliteFileDSN(canonicalPath, url.Values{
+		"mode":    {"ro"},
+		"_pragma": {"busy_timeout(5000)"},
+	}))
 	if err != nil {
 		return nil, fmt.Errorf("opening readonly database %s: %w", canonicalPath, err)
 	}
@@ -396,7 +404,11 @@ func openImmutableReadOnlyContext(ctx context.Context, path string) (*Database, 
 		return nil, fmt.Errorf("stat WAL sidecar %s: %w", walPath, err)
 	}
 
-	db, err := sql.Open("sqlite", "file:"+canonicalPath+"?mode=ro&immutable=1&_pragma=busy_timeout(5000)")
+	db, err := sql.Open("sqlite", sqliteFileDSN(canonicalPath, url.Values{
+		"mode":      {"ro"},
+		"immutable": {"1"},
+		"_pragma":   {"busy_timeout(5000)"},
+	}))
 	if err != nil {
 		return nil, fmt.Errorf("opening immutable readonly database %s: %w", canonicalPath, err)
 	}
@@ -405,6 +417,15 @@ func openImmutableReadOnlyContext(ctx context.Context, path string) (*Database, 
 		return nil, contextIdentityError(ctx, fmt.Errorf("ping immutable readonly database %s: %w", canonicalPath, err))
 	}
 	return &Database{db: db, path: canonicalPath}, nil
+}
+
+func sqliteFileDSN(path string, query url.Values) string {
+	slashed := filepath.ToSlash(path)
+	if filepath.VolumeName(path) != "" && !strings.HasPrefix(slashed, "/") {
+		slashed = "/" + slashed
+	}
+	u := url.URL{Scheme: "file", Path: slashed, RawQuery: query.Encode()}
+	return u.String()
 }
 
 func canonicalizeDBPath(path string) (string, error) {
