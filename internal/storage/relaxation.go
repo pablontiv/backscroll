@@ -1,6 +1,7 @@
 package storage
 
 import (
+	"context"
 	"fmt"
 	"sort"
 	"strings"
@@ -107,6 +108,14 @@ func recallExpression(terms []recallTerm, table string) string {
 // Stemming/prefix expansion is already supplied by FTS; scope widening is never
 // permitted. Only lowest-IDF term dropping is applicable after a zero-row stage.
 func (d *Database) SearchRelaxed(query string, opts models.SearchOptions) ([]SearchResult, []string, error) {
+	return d.SearchRelaxedContext(context.Background(), query, opts)
+}
+
+// SearchRelaxedContext is SearchRelaxed with cancellation propagated through every stage.
+func (d *Database) SearchRelaxedContext(ctx context.Context, query string, opts models.SearchOptions) ([]SearchResult, []string, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, nil, err
+	}
 	terms, err := parseRecallTerms(query)
 	if err != nil {
 		return nil, nil, err
@@ -119,9 +128,12 @@ func (d *Database) SearchRelaxed(query string, opts models.SearchOptions) ([]Sea
 			break
 		}
 	}
-	results, exists, err := d.recallStage(terms, opts, strictQuery)
-	if err != nil || exists {
-		return results, stages, err
+	results, exists, err := d.recallStageContext(ctx, terms, opts, strictQuery)
+	if err != nil {
+		return nil, stages, err
+	}
+	if exists {
+		return results, stages, nil
 	}
 
 	// For a fixed corpus, IDF is monotone decreasing in document frequency.
@@ -141,7 +153,7 @@ func (d *Database) SearchRelaxed(query string, opts models.SearchOptions) ([]Sea
 		return results, stages, nil
 	}
 	for i := range candidates {
-		docs, err := d.recallFrequency(terms[candidates[i].index], opts.ContentType)
+		docs, err := d.recallFrequencyContext(ctx, terms[candidates[i].index], opts.ContentType)
 		if err != nil {
 			return nil, stages, err
 		}
@@ -161,7 +173,7 @@ func (d *Database) SearchRelaxed(query string, opts models.SearchOptions) ([]Sea
 			}
 		}
 		stages = append(stages, fmt.Sprintf("drop-terms/%d", len(dropped)))
-		results, exists, err = d.recallStage(remaining, opts, "")
+		results, exists, err = d.recallStageContext(ctx, remaining, opts, "")
 		if err != nil {
 			return nil, stages, err
 		}
@@ -173,28 +185,38 @@ func (d *Database) SearchRelaxed(query string, opts models.SearchOptions) ([]Sea
 			return results, stages, nil
 		}
 	}
+	if err := ctx.Err(); err != nil {
+		return nil, stages, err
+	}
 	return results, stages, nil
 }
 
-func (d *Database) recallStage(terms []recallTerm, opts models.SearchOptions, strictQuery string) ([]SearchResult, bool, error) {
+func (d *Database) recallStageContext(ctx context.Context, terms []recallTerm, opts models.SearchOptions, strictQuery string) ([]SearchResult, bool, error) {
 	search := func(table string, page models.SearchOptions) ([]SearchResult, error) {
 		if strictQuery != "" {
-			return d.searchTable(table, strictQuery, page)
+			return d.searchTableContext(ctx, table, strictQuery, page)
 		}
-		return d.searchTableQuery(table, recallExpression(terms, table), page)
+		return d.searchTableQueryContext(ctx, table, recallExpression(terms, table), page)
 	}
-	results, err := searchTables(opts, search)
+	results, err := searchTables(ctx, opts, search)
 	if err != nil || len(results) > 0 || opts.Offset <= 0 {
 		return results, len(results) > 0, err
 	}
 	// An exhausted page is not a zero-result query. Check before pagination;
 	// do not widen a successful earlier stage to fill a later empty page.
 	opts.Offset, opts.Limit = 0, 1
-	first, err := searchTables(opts, search)
-	return results, len(first) > 0, err
+	first, err := searchTables(ctx, opts, search)
+	if err != nil {
+		return nil, false, err
+	}
+	return results, len(first) > 0, nil
 }
 
 func (d *Database) recallFrequency(term recallTerm, contentType string) (int, error) {
+	return d.recallFrequencyContext(context.Background(), term, contentType)
+}
+
+func (d *Database) recallFrequencyContext(ctx context.Context, term recallTerm, contentType string) (int, error) {
 	tables := []string{"messages_fts"}
 	if contentType == "tool" {
 		tables = []string{"tool_fts"}
@@ -212,14 +234,17 @@ func (d *Database) recallFrequency(term recallTerm, contentType string) (int, er
 	// IDF documents. Unfiltered recall excludes them from both pages and DF.
 	if contentType != "" {
 		var count int
-		err := d.db.QueryRow("SELECT COUNT(*) FROM ("+matched+")", args...).Scan(&count)
+		err := d.db.QueryRowContext(ctx, "SELECT COUNT(*) FROM ("+matched+")", args...).Scan(&count)
 		if err != nil {
 			return 0, fmt.Errorf("measure relaxation term frequency: %w", err)
+		}
+		if err := ctx.Err(); err != nil {
+			return 0, err
 		}
 		return count, nil
 	}
 	var count int
-	err := d.db.QueryRow(
+	err := d.db.QueryRowContext(ctx,
 		"SELECT COUNT(*) FROM ("+matched+") matched JOIN search_items si ON si.id = matched.rowid WHERE NOT ("+directSearchEchoSQL("si")+")",
 		args...,
 	).Scan(&count)
@@ -232,7 +257,7 @@ func (d *Database) recallFrequency(term recallTerm, contentType string) (int, er
 	// prefilter plus the strict Go chokepoint, so unfiltered IDF counts the
 	// exact row set the page exclusion keeps — for all three shapes (bash,
 	// exec_command, shell), not just the shell wrapper.
-	echoRows, err := d.db.Query(
+	echoRows, err := d.db.QueryContext(ctx,
 		"SELECT si.text FROM ("+matched+") matched JOIN search_items si ON si.id = matched.rowid WHERE "+searchEchoZeroPrefilterSQL("si"),
 		args...,
 	)
@@ -251,6 +276,9 @@ func (d *Database) recallFrequency(term recallTerm, contentType string) (int, er
 	}
 	if err := echoRows.Err(); err != nil {
 		return 0, fmt.Errorf("measure relaxation term frequency: %w", err)
+	}
+	if err := ctx.Err(); err != nil {
+		return 0, err
 	}
 	return count, nil
 }

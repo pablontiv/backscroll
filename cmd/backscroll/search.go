@@ -214,9 +214,9 @@ func runSearch(ctx context.Context, stdout, stderr io.Writer, cfg *config.Config
 	var results []storage.SearchResult
 	var stages []string
 	if relax {
-		results, stages, err = db.SearchRelaxed(query, opts)
+		results, stages, err = db.SearchRelaxedContext(ctx, query, opts)
 	} else {
-		results, err = db.HybridSearch(query, opts)
+		results, err = db.HybridSearchContext(ctx, query, opts)
 	}
 	if err != nil {
 		return fmt.Errorf("search: %w", err)

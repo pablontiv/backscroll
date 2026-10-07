@@ -54,7 +54,7 @@ func runStatus(ctx context.Context, stdout, stderr io.Writer, cfg *config.Config
 	}
 	defer func() { retErr = closeIndexDB(db, retErr) }()
 
-	stats, err := db.GetStats()
+	stats, err := db.GetStatsContext(ctx)
 	if err != nil {
 		return fmt.Errorf("get stats: %w", err)
 	}

@@ -3,6 +3,7 @@ package storage
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
 	"sort"
 	"strings"
@@ -27,33 +28,41 @@ type Stats struct {
 
 // GetStats returns indexing statistics.
 func (d *Database) GetStats() (Stats, error) {
+	return d.GetStatsContext(context.Background())
+}
+
+// GetStatsContext is GetStats with cancellation propagated to every database query.
+func (d *Database) GetStatsContext(ctx context.Context) (Stats, error) {
 	var stats Stats
+	if err := ctx.Err(); err != nil {
+		return Stats{}, err
+	}
 
 	// Get total files
-	err := d.db.QueryRow(`
+	err := d.db.QueryRowContext(ctx, `
 		SELECT COUNT(*)
 		FROM indexed_files
 		WHERE hash <> ?
 	`, recoveredSourceHash).Scan(&stats.TotalFiles)
 	if err != nil {
-		return stats, fmt.Errorf("count files: %w", err)
+		return Stats{}, fmt.Errorf("count files: %w", err)
 	}
 
 	// Get total messages
-	err = d.db.QueryRow("SELECT COUNT(*) FROM search_items WHERE source = 'session'").Scan(&stats.TotalMessages)
+	err = d.db.QueryRowContext(ctx, "SELECT COUNT(*) FROM search_items WHERE source = 'session'").Scan(&stats.TotalMessages)
 	if err != nil {
-		return stats, fmt.Errorf("count messages: %w", err)
+		return Stats{}, fmt.Errorf("count messages: %w", err)
 	}
 
 	// Get last indexed time (most recent timestamp)
 	var lastIndexed sql.NullString
-	err = d.db.QueryRow(`
+	err = d.db.QueryRowContext(ctx, `
 		SELECT MAX(last_indexed)
 		FROM indexed_files
 		WHERE hash <> ?
 	`, recoveredSourceHash).Scan(&lastIndexed)
 	if err != nil && err != sql.ErrNoRows {
-		return stats, fmt.Errorf("get last indexed: %w", err)
+		return Stats{}, fmt.Errorf("get last indexed: %w", err)
 	}
 
 	if lastIndexed.Valid {
@@ -67,13 +76,40 @@ func (d *Database) GetStats() (Stats, error) {
 		}
 	}
 
-	// Get chunk and embedding counts (V2 tables — present after migration)
-	_ = d.db.QueryRow("SELECT COUNT(*) FROM chunks").Scan(&stats.TotalChunks)
-	_ = d.db.QueryRow("SELECT COUNT(*) FROM embedding_metadata").Scan(&stats.TotalEmbeddings)
+	// Get chunk and embedding counts (V2 tables — present after migration).
+	// Preserve compatibility by ignoring ordinary errors from these optional counts,
+	// but never suppress cancellation.
+	if err := d.db.QueryRowContext(ctx, "SELECT COUNT(*) FROM chunks").Scan(&stats.TotalChunks); err != nil {
+		if cancellation := optionalStatsQueryCancellation(ctx, err); cancellation != nil {
+			return Stats{}, cancellation
+		}
+	}
+	if err := d.db.QueryRowContext(ctx, "SELECT COUNT(*) FROM embedding_metadata").Scan(&stats.TotalEmbeddings); err != nil {
+		if cancellation := optionalStatsQueryCancellation(ctx, err); cancellation != nil {
+			return Stats{}, cancellation
+		}
+	}
 	// V3: chunks with embedding vector blob
-	_ = d.db.QueryRow("SELECT COUNT(*) FROM chunks WHERE embedding IS NOT NULL").Scan(&stats.TotalVectors)
+	if err := d.db.QueryRowContext(ctx, "SELECT COUNT(*) FROM chunks WHERE embedding IS NOT NULL").Scan(&stats.TotalVectors); err != nil {
+		if cancellation := optionalStatsQueryCancellation(ctx, err); cancellation != nil {
+			return Stats{}, cancellation
+		}
+	}
+	if err := ctx.Err(); err != nil {
+		return Stats{}, err
+	}
 
 	return stats, nil
+}
+
+func optionalStatsQueryCancellation(ctx context.Context, err error) error {
+	if ctxErr := ctx.Err(); ctxErr != nil {
+		return ctxErr
+	}
+	if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+		return err
+	}
+	return nil
 }
 
 // TopicEntry represents a single topic with its document frequency.

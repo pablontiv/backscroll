@@ -2,6 +2,7 @@ package storage
 
 import (
 	"context"
+	"errors"
 	"strconv"
 
 	"github.com/pablontiv/backscroll/internal/embedding"
@@ -21,52 +22,69 @@ func (d *Database) SetEmbeddingProvider(p embedding.EmbeddingProvider) {
 //   - no vector embeddings exist in the database
 //   - the provider fails to embed the query
 func (d *Database) HybridSearch(query string, opts models.SearchOptions) ([]SearchResult, error) {
-	bm25Results, err := d.Search(query, opts)
+	return d.HybridSearchContext(context.Background(), query, opts)
+}
+
+// HybridSearchContext is HybridSearch with cancellation propagated through the lexical,
+// provider, and vector paths. Cancellation never falls back to lexical results.
+func (d *Database) HybridSearchContext(ctx context.Context, query string, opts models.SearchOptions) ([]SearchResult, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	bm25Results, err := d.SearchContext(ctx, query, opts)
 	if err != nil {
 		return nil, err
 	}
 
-	// Skip vector path when explicitly requested or no provider configured
+	// Skip vector path when explicitly requested or no provider configured.
 	if opts.LexicalOnly || d.embeddingProvider == nil {
-		return bm25Results, nil
+		return lexicalFallback(ctx, bm25Results)
 	}
 
-	// Check if any vectors are stored
-	vectorCount, err := d.GetVectorCount()
-	if err != nil || vectorCount == 0 {
-		return bm25Results, nil
-	}
-
-	// Embed the query
-	queryVec, err := d.embeddingProvider.Embed(context.Background(), query)
+	// Check if any vectors are stored.
+	vectorCount, err := d.getVectorCountContext(ctx)
 	if err != nil {
-		// Provider unavailable (e.g. ONNX stub) — fall back to BM25
-		return bm25Results, nil
+		if cancellation := contextCancellation(ctx, err); cancellation != nil {
+			return nil, cancellation
+		}
+		return lexicalFallback(ctx, bm25Results)
+	}
+	if vectorCount == 0 {
+		return lexicalFallback(ctx, bm25Results)
 	}
 
-	// Vector search: fetch more candidates than limit for RRF fusion
+	// Embed the query.
+	queryVec, err := d.embeddingProvider.Embed(ctx, query)
+	if err != nil {
+		if cancellation := contextCancellation(ctx, err); cancellation != nil {
+			return nil, cancellation
+		}
+		// Provider unavailable (e.g. ONNX stub) — fall back to BM25.
+		return lexicalFallback(ctx, bm25Results)
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+
+	// Vector search: fetch more candidates than limit for RRF fusion.
 	topK := opts.Limit * 2
 	if topK <= 0 {
 		topK = 200
 	}
-	vecResults, err := d.VectorSearch(queryVec, topK)
+	vecResults, err := d.vectorSearchContext(ctx, queryVec, topK)
 	if err != nil {
-		return bm25Results, nil
-	}
-
-	// Apply similarity threshold
-	if opts.SimilarityThreshold > 0 {
-		filtered := vecResults[:0]
-		for _, vr := range vecResults {
-			if vr.Similarity >= opts.SimilarityThreshold {
-				filtered = append(filtered, vr)
-			}
+		if cancellation := contextCancellation(ctx, err); cancellation != nil {
+			return nil, cancellation
 		}
-		vecResults = filtered
+		return lexicalFallback(ctx, bm25Results)
 	}
 
+	vecResults, err = filterVectorResultsContext(ctx, vecResults, opts.SimilarityThreshold)
+	if err != nil {
+		return nil, err
+	}
 	if len(vecResults) == 0 {
-		return bm25Results, nil
+		return lexicalFallback(ctx, bm25Results)
 	}
 
 	// Convert to RRF ranking lists
@@ -106,8 +124,57 @@ func (d *Database) HybridSearch(query string, opts models.SearchOptions) ([]Sear
 	if opts.Limit > 0 && len(final) > opts.Limit {
 		final = final[:opts.Limit]
 	}
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 
 	return final, nil
+}
+
+func lexicalFallback(ctx context.Context, results []SearchResult) ([]SearchResult, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	return results, nil
+}
+
+func filterVectorResultsContext(ctx context.Context, results []VectorResult, threshold float64) ([]VectorResult, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	if threshold <= 0 {
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
+		return results, nil
+	}
+
+	filtered := make([]VectorResult, 0, len(results))
+	for _, result := range results {
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
+		if result.Similarity >= threshold {
+			filtered = append(filtered, result)
+		}
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	return filtered, nil
+}
+
+func contextCancellation(ctx context.Context, err error) error {
+	if ctxErr := ctx.Err(); ctxErr != nil {
+		return ctxErr
+	}
+	if errors.Is(err, context.Canceled) {
+		return context.Canceled
+	}
+	if errors.Is(err, context.DeadlineExceeded) {
+		return context.DeadlineExceeded
+	}
+	return nil
 }
 
 // HasEmbeddingProvider returns true if an embedding provider has been set.
