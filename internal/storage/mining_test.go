@@ -1,6 +1,7 @@
 package storage
 
 import (
+	"context"
 	"path/filepath"
 	"testing"
 
@@ -77,7 +78,7 @@ func TestMineTemplatesForFileSyncsSkipsInputSerializations(t *testing.T) {
 	}
 
 	// Mine templates from the mix
-	err = db.mineTemplatesForFile(tx, IndexedFile{
+	err = db.mineTemplatesForFile(context.Background(), tx, IndexedFile{
 		SourcePath: "/test/s.jsonl",
 		Messages:   msgs,
 	}, miner)

@@ -1,6 +1,7 @@
 package storage
 
 import (
+	"context"
 	"database/sql"
 	"fmt"
 	"strings"
@@ -116,7 +117,7 @@ func shouldMineToolLine(contentType, text string, isError bool) bool {
 // mineTemplatesForFile discovers templates from messages with is_error=true
 // and writes message_templates + template_matches rows inside the tx.
 // Deterministic: same input → same templates + signatures.
-func (d *Database) mineTemplatesForFile(tx *sql.Tx, file IndexedFile, miner *templates.Miner) error {
+func (d *Database) mineTemplatesForFile(ctx context.Context, tx *sql.Tx, file IndexedFile, miner *templates.Miner) error {
 	// Collect error-bearing messages by tool_name.
 	type errorLine struct {
 		toolName string
@@ -127,6 +128,9 @@ func (d *Database) mineTemplatesForFile(tx *sql.Tx, file IndexedFile, miner *tem
 	var errorLines []errorLine
 
 	for _, msg := range file.Messages {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
 		if !shouldMineToolLine(msg.ContentType, msg.Text, msg.IsError != nil && *msg.IsError) {
 			continue
 		}
@@ -140,6 +144,9 @@ func (d *Database) mineTemplatesForFile(tx *sql.Tx, file IndexedFile, miner *tem
 		}
 		relevantLines := templates.ExtractErrorLines(toolName, msg.Text)
 		for _, line := range relevantLines {
+			if err := ctx.Err(); err != nil {
+				return err
+			}
 			errorLines = append(errorLines, errorLine{
 				toolName: toolName,
 				text:     line,
@@ -152,6 +159,9 @@ func (d *Database) mineTemplatesForFile(tx *sql.Tx, file IndexedFile, miner *tem
 	// Mine templates and record matches.
 	templateMap := make(map[string]*templateRecord)
 	for _, errLine := range errorLines {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
 		tmpl := miner.ProcessLine(errLine.text)
 		if tmpl.Signature == "" {
 			continue
@@ -177,8 +187,11 @@ func (d *Database) mineTemplatesForFile(tx *sql.Tx, file IndexedFile, miner *tem
 	// Write templates and matches to database (inside same tx).
 	// Occurrence_count is derived at query time from template_matches; just insert idempotently.
 	for _, rec := range templateMap {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
 		// INSERT OR IGNORE ensures idempotency across re-syncs
-		_, err := tx.Exec(`
+		_, err := tx.ExecContext(ctx, `
 			INSERT OR IGNORE INTO message_templates (signature, normalization_version, template_text, occurrence_count, first_seen, last_seen)
 			VALUES (?, ?, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
 		`, rec.signature, rec.normalizationVersion, rec.text, 1)
@@ -188,14 +201,17 @@ func (d *Database) mineTemplatesForFile(tx *sql.Tx, file IndexedFile, miner *tem
 
 		// Get template ID (will succeed since we just inserted or it already existed)
 		var tmplID int64
-		err = tx.QueryRow(`SELECT id FROM message_templates WHERE signature = ?`, rec.signature).Scan(&tmplID)
+		err = tx.QueryRowContext(ctx, `SELECT id FROM message_templates WHERE signature = ?`, rec.signature).Scan(&tmplID)
 		if err != nil {
 			return fmt.Errorf("query template id: %w", err)
 		}
 
 		// Insert matches (UNIQUE constraint prevents duplicates across re-syncs)
 		for _, m := range rec.matches {
-			_, err := tx.Exec(`
+			if err := ctx.Err(); err != nil {
+				return err
+			}
+			_, err := tx.ExecContext(ctx, `
 				INSERT OR IGNORE INTO template_matches (template_id, item_uuid, source_path, ordinal)
 				VALUES (?, ?, ?, ?)
 			`, tmplID, m.uuid, m.sourcePath, m.ordinal)

@@ -1,6 +1,7 @@
 package storage
 
 import (
+	"context"
 	"database/sql"
 	"fmt"
 
@@ -12,9 +13,12 @@ type storedPathIdentity struct {
 	uuidRows  int
 }
 
-func inspectStoredPathIdentity(tx *sql.Tx, sourcePath string) (storedPathIdentity, error) {
+func inspectStoredPathIdentity(ctx context.Context, tx *sql.Tx, sourcePath string) (storedPathIdentity, error) {
+	if err := ctx.Err(); err != nil {
+		return storedPathIdentity{}, err
+	}
 	var state storedPathIdentity
-	if err := tx.QueryRow(`
+	if err := tx.QueryRowContext(ctx, `
 		SELECT COUNT(*), COUNT(uuid)
 		FROM search_items
 		WHERE source_path = ?
@@ -35,14 +39,17 @@ func (s storedPathIdentity) pureLegacy() bool {
 // closePerennialProvenance closes replay backlogs without replacing perennial
 // identity or payload. It runs inside SyncFiles' transaction so a later
 // conflict or write error rolls every closure back with the rest of the batch.
-func closePerennialProvenance(tx *sql.Tx, sourcePath string, messages []IndexedMessage) error {
-	if err := closeSearchEchoProvenance(tx, sourcePath, messages); err != nil {
+func closePerennialProvenance(ctx context.Context, tx *sql.Tx, sourcePath string, messages []IndexedMessage) error {
+	if err := closeSearchEchoProvenance(ctx, tx, sourcePath, messages); err != nil {
+		return err
+	}
+	if err := ctx.Err(); err != nil {
 		return err
 	}
 
 	// Origin is monotonic evidence. An omitted row may be advanced to the
 	// current parser epoch, but known actor proof must never be rewritten.
-	if _, err := tx.Exec(`
+	if _, err := tx.ExecContext(ctx, `
 		UPDATE search_items
 		SET origin_version = ?
 		WHERE source_path = ?
@@ -53,7 +60,7 @@ func closePerennialProvenance(tx *sql.Tx, sourcePath string, messages []IndexedM
 	return nil
 }
 
-func closeSearchEchoProvenance(tx *sql.Tx, sourcePath string, messages []IndexedMessage) error {
+func closeSearchEchoProvenance(ctx context.Context, tx *sql.Tx, sourcePath string, messages []IndexedMessage) error {
 	type appliedEvidence struct {
 		uuid        string
 		text        string
@@ -61,6 +68,9 @@ func closeSearchEchoProvenance(tx *sql.Tx, sourcePath string, messages []Indexed
 	}
 	emittedEvidence := make(map[appliedEvidence]struct{}, len(messages))
 	for _, message := range messages {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
 		if message.UUID != "" {
 			emittedEvidence[appliedEvidence{
 				uuid:        message.UUID,
@@ -76,7 +86,7 @@ func closeSearchEchoProvenance(tx *sql.Tx, sourcePath string, messages []Indexed
 	// match the retained row, which is the same boundary used by SyncFiles when
 	// applying parser evidence. A UUID replay whose payload drifted did not
 	// classify the retained payload, so closure must classify that stored text.
-	rows, err := tx.Query(`
+	rows, err := tx.QueryContext(ctx, `
 		SELECT id, uuid, text, content_type
 		FROM search_items
 		WHERE source_path = ?
@@ -87,6 +97,10 @@ func closeSearchEchoProvenance(tx *sql.Tx, sourcePath string, messages []Indexed
 
 	var directCallIDs []int64
 	for rows.Next() {
+		if err := ctx.Err(); err != nil {
+			_ = rows.Close()
+			return err
+		}
 		var id int64
 		var uuid sql.NullString
 		var text, contentType string
@@ -116,7 +130,10 @@ func closeSearchEchoProvenance(tx *sql.Tx, sourcePath string, messages []Indexed
 	}
 
 	for _, id := range directCallIDs {
-		if _, err := tx.Exec(`
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		if _, err := tx.ExecContext(ctx, `
 			UPDATE search_items
 			SET search_echo = 1
 			WHERE id = ? AND COALESCE(search_echo, 0) = 0
@@ -127,7 +144,10 @@ func closeSearchEchoProvenance(tx *sql.Tx, sourcePath string, messages []Indexed
 
 	// Positive evidence is never touched. Once recognizable candidates have
 	// been promoted, every remaining unknown row can leave the replay queue.
-	if _, err := tx.Exec(`
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if _, err := tx.ExecContext(ctx, `
 		UPDATE search_items
 		SET search_echo = 0
 		WHERE source_path = ? AND search_echo IS NULL

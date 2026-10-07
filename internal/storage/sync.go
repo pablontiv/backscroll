@@ -1,6 +1,7 @@
 package storage
 
 import (
+	"context"
 	"database/sql"
 	"fmt"
 	"time"
@@ -52,10 +53,16 @@ type IndexedFile struct {
 // batch before any file is mutated. It returns the identities already retained
 // by their incoming source path so perennial replays can preserve those rows
 // without relying on INSERT conflict handling.
-func validateSyncUUIDs(tx *sql.Tx, files []IndexedFile) (map[string]bool, error) {
+func validateSyncUUIDs(ctx context.Context, tx *sql.Tx, files []IndexedFile) (map[string]bool, error) {
 	seen := make(map[string]string)
 	for _, file := range files {
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
 		for _, message := range file.Messages {
+			if err := ctx.Err(); err != nil {
+				return nil, err
+			}
 			if message.UUID == "" {
 				continue
 			}
@@ -68,8 +75,11 @@ func validateSyncUUIDs(tx *sql.Tx, files []IndexedFile) (map[string]bool, error)
 
 	existing := make(map[string]bool, len(seen))
 	for uuid, sourcePath := range seen {
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
 		var owner string
-		err := tx.QueryRow(`SELECT source_path FROM search_items WHERE uuid = ?`, uuid).Scan(&owner)
+		err := tx.QueryRowContext(ctx, `SELECT source_path FROM search_items WHERE uuid = ?`, uuid).Scan(&owner)
 		switch {
 		case err == sql.ErrNoRows:
 		case err != nil:
@@ -81,7 +91,7 @@ func validateSyncUUIDs(tx *sql.Tx, files []IndexedFile) (map[string]bool, error)
 		}
 
 		var eventOwner string
-		err = tx.QueryRow(`SELECT source_path FROM tool_events WHERE message_uuid = ? LIMIT 1`, uuid).Scan(&eventOwner)
+		err = tx.QueryRowContext(ctx, `SELECT source_path FROM tool_events WHERE message_uuid = ? LIMIT 1`, uuid).Scan(&eventOwner)
 		switch {
 		case err == sql.ErrNoRows:
 		case err != nil:
@@ -93,26 +103,38 @@ func validateSyncUUIDs(tx *sql.Tx, files []IndexedFile) (map[string]bool, error)
 	return existing, nil
 }
 
-// SyncFiles syncs a batch of files into the database.
-// It uses a transaction to atomically insert all records.
-// For each file, it deletes old records and inserts new ones.
+// SyncFiles syncs a batch of files into the database without cancellation.
+// It is retained for compatibility with existing callers.
 func (d *Database) SyncFiles(files []IndexedFile) error {
+	return d.SyncFilesContext(context.Background(), files)
+}
+
+// SyncFilesContext syncs a batch of files into the database. All records and
+// derived stopwords are updated in one transaction, so cancellation or any
+// error leaves no partial rows or file metadata from the call.
+func (d *Database) SyncFilesContext(ctx context.Context, files []IndexedFile) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	if len(files) == 0 {
 		return nil
 	}
 
-	tx, err := d.db.Begin()
+	tx, err := d.db.BeginTx(ctx, nil)
 	if err != nil {
 		return fmt.Errorf("begin transaction: %w", err)
 	}
 	defer func() { _ = tx.Rollback() }()
 
-	existingUUIDs, err := validateSyncUUIDs(tx, files)
+	existingUUIDs, err := validateSyncUUIDs(ctx, tx, files)
 	if err != nil {
 		return fmt.Errorf("validate sync UUIDs: %w", err)
 	}
 
 	for _, file := range files {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
 		// A non-empty session parse in which every message carries a UUID starts
 		// the perennial path. Once the database has stored identity for a path,
 		// that stored fact remains authoritative even when a later parse is empty
@@ -120,6 +142,9 @@ func (d *Database) SyncFiles(files []IndexedFile) error {
 		isSession := file.Source == "session"
 		allCurrentHaveUUIDs := true
 		for _, m := range file.Messages {
+			if err := ctx.Err(); err != nil {
+				return err
+			}
 			if m.UUID == "" {
 				allCurrentHaveUUIDs = false
 				break
@@ -129,7 +154,7 @@ func (d *Database) SyncFiles(files []IndexedFile) error {
 
 		storedIdentity := storedPathIdentity{}
 		if isSession {
-			storedIdentity, err = inspectStoredPathIdentity(tx, file.SourcePath)
+			storedIdentity, err = inspectStoredPathIdentity(ctx, tx, file.SourcePath)
 			if err != nil {
 				return fmt.Errorf("check perennial status for %s: %w", file.SourcePath, err)
 			}
@@ -144,20 +169,20 @@ func (d *Database) SyncFiles(files []IndexedFile) error {
 		legacyTransition := perennial && storedIdentity.pureLegacy() && completeUUIDParse
 
 		if !perennial {
-			if _, err := tx.Exec("DELETE FROM template_matches WHERE source_path = ?", file.SourcePath); err != nil {
+			if _, err := tx.ExecContext(ctx, "DELETE FROM template_matches WHERE source_path = ?", file.SourcePath); err != nil {
 				return fmt.Errorf("delete old template_matches for %s: %w", file.SourcePath, err)
 			}
-			if _, err := tx.Exec("DELETE FROM search_items WHERE source_path = ?", file.SourcePath); err != nil {
+			if _, err := tx.ExecContext(ctx, "DELETE FROM search_items WHERE source_path = ?", file.SourcePath); err != nil {
 				return fmt.Errorf("delete old search_items for %s: %w", file.SourcePath, err)
 			}
-			if _, err := tx.Exec("DELETE FROM tool_events WHERE source_path = ?", file.SourcePath); err != nil {
+			if _, err := tx.ExecContext(ctx, "DELETE FROM tool_events WHERE source_path = ?", file.SourcePath); err != nil {
 				return fmt.Errorf("delete old tool_events for %s: %w", file.SourcePath, err)
 			}
 		} else if legacyTransition {
-			if _, err := tx.Exec("DELETE FROM search_items WHERE source_path = ? AND uuid IS NULL", file.SourcePath); err != nil {
+			if _, err := tx.ExecContext(ctx, "DELETE FROM search_items WHERE source_path = ? AND uuid IS NULL", file.SourcePath); err != nil {
 				return fmt.Errorf("delete legacy rows for %s: %w", file.SourcePath, err)
 			}
-			if _, err := tx.Exec("DELETE FROM tool_events WHERE source_path = ? AND message_uuid IS NULL", file.SourcePath); err != nil {
+			if _, err := tx.ExecContext(ctx, "DELETE FROM tool_events WHERE source_path = ? AND message_uuid IS NULL", file.SourcePath); err != nil {
 				return fmt.Errorf("delete legacy tool_events for %s: %w", file.SourcePath, err)
 			}
 		}
@@ -170,13 +195,16 @@ func (d *Database) SyncFiles(files []IndexedFile) error {
 		// For perennial files, skip messages without UUIDs (flap guard: don't
 		// introduce uuid-less rows into a perennial file).
 		for _, msg := range file.Messages {
+			if err := ctx.Err(); err != nil {
+				return err
+			}
 			// Skip uuid-less messages if file is perennial
 			if perennial && msg.UUID == "" {
 				continue
 			}
 
 			origin := normalizedOrigin(msg.Origin)
-			if err := rejectConflictingOrigin(tx, msg.UUID, origin); err != nil {
+			if err := rejectConflictingOrigin(ctx, tx, msg.UUID, origin); err != nil {
 				return fmt.Errorf("validate message origin for %s: %w", file.SourcePath, err)
 			}
 
@@ -189,7 +217,7 @@ func (d *Database) SyncFiles(files []IndexedFile) error {
 				isErrVal = *msg.IsError
 			}
 			if !perennial || msg.UUID == "" || !existingUUIDs[msg.UUID] {
-				_, err := tx.Exec(`
+				_, err := tx.ExecContext(ctx, `
 					INSERT INTO search_items
 					(source, source_path, ordinal, role, origin, text, timestamp, uuid, project, content_type, extraction_version, was_interrupted, search_echo, origin_version)
 					VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
@@ -219,13 +247,13 @@ func (d *Database) SyncFiles(files []IndexedFile) error {
 			// a later paired result may also supply positive evidence. Never erase
 			// previously proven linkage when a partial source no longer has the call.
 			if perennial {
-				if _, err := tx.Exec(`UPDATE search_items SET search_echo = ?
+				if _, err := tx.ExecContext(ctx, `UPDATE search_items SET search_echo = ?
 					WHERE source_path = ? AND uuid = ? AND text = ? AND content_type = ?
 					AND (search_echo IS NULL OR (search_echo = 0 AND ? = 1))`,
 					msg.SearchEcho, file.SourcePath, msg.UUID, msg.Text, msg.ContentType, msg.SearchEcho); err != nil {
 					return fmt.Errorf("update search echo provenance for %s: %w", file.SourcePath, err)
 				}
-				if err := enrichOrigin(tx, msg.UUID, origin); err != nil {
+				if err := enrichOrigin(ctx, tx, msg.UUID, origin); err != nil {
 					return fmt.Errorf("update message origin provenance for %s: %w", file.SourcePath, err)
 				}
 			}
@@ -239,7 +267,7 @@ func (d *Database) SyncFiles(files []IndexedFile) error {
 				if exitCode != nil {
 					exitCodeVal = *exitCode
 				}
-				if _, err := tx.Exec(`
+				if _, err := tx.ExecContext(ctx, `
 					INSERT OR IGNORE INTO tool_events
 					(message_uuid, source_path, ordinal, tool_name, command_head, is_error, exit_code, extraction_version)
 					VALUES (?, ?, ?, ?, ?, ?, ?, ?)
@@ -253,7 +281,7 @@ func (d *Database) SyncFiles(files []IndexedFile) error {
 		// sync mutation. Closure advances epochs and resolves echo unknowns, but
 		// never rewrites actor proof, payload, identity, or positive echo evidence.
 		if perennial {
-			if err := closePerennialProvenance(tx, file.SourcePath, file.Messages); err != nil {
+			if err := closePerennialProvenance(ctx, tx, file.SourcePath, file.Messages); err != nil {
 				return fmt.Errorf("close provenance backlog for %s: %w", file.SourcePath, err)
 			}
 		}
@@ -261,13 +289,16 @@ func (d *Database) SyncFiles(files []IndexedFile) error {
 		// If this is a session (source == "session"), upsert session_tags
 		if file.Source == "session" {
 			// Delete old tags for this source_path
-			if _, err := tx.Exec("DELETE FROM session_tags WHERE source_path = ?", file.SourcePath); err != nil {
+			if _, err := tx.ExecContext(ctx, "DELETE FROM session_tags WHERE source_path = ?", file.SourcePath); err != nil {
 				return fmt.Errorf("delete old session_tags for %s: %w", file.SourcePath, err)
 			}
 
 			// Insert new tags
 			for _, tag := range file.Tags {
-				_, err := tx.Exec(`
+				if err := ctx.Err(); err != nil {
+					return err
+				}
+				_, err := tx.ExecContext(ctx, `
 					INSERT INTO session_tags (source_path, tag)
 					VALUES (?, ?)
 				`,
@@ -281,7 +312,7 @@ func (d *Database) SyncFiles(files []IndexedFile) error {
 		}
 
 		// Insert or replace in indexed_files
-		_, err = tx.Exec(`
+		_, err = tx.ExecContext(ctx, `
 			INSERT OR REPLACE INTO indexed_files (path, hash, last_indexed, file_size, file_mtime)
 			VALUES (?, ?, CURRENT_TIMESTAMP, ?, ?)
 		`,
@@ -296,14 +327,14 @@ func (d *Database) SyncFiles(files []IndexedFile) error {
 
 		// Mine templates from error-bearing tool outputs (inside same tx).
 		miner := templates.NewMiner()
-		if err := d.mineTemplatesForFile(tx, file, miner); err != nil {
+		if err := d.mineTemplatesForFile(ctx, tx, file, miner); err != nil {
 			return fmt.Errorf("mine templates for %s: %w", file.SourcePath, err)
 		}
 
 		// F3: Run detectors and write correction_signals
 		if file.Source == "session" && !perennial {
 			// Delete old corrections for non-perennial files
-			if _, err := tx.Exec("DELETE FROM correction_signals WHERE source_path = ?", file.SourcePath); err != nil {
+			if _, err := tx.ExecContext(ctx, "DELETE FROM correction_signals WHERE source_path = ?", file.SourcePath); err != nil {
 				return fmt.Errorf("delete old corrections for %s: %w", file.SourcePath, err)
 			}
 		}
@@ -311,6 +342,9 @@ func (d *Database) SyncFiles(files []IndexedFile) error {
 		// Convert IndexedMessage to models.Message for detector input
 		detectionMsgs := make([]models.Message, len(file.Messages))
 		for i, im := range file.Messages {
+			if err := ctx.Err(); err != nil {
+				return err
+			}
 			detectionMsgs[i] = models.Message{
 				Role:           im.Role,
 				Origin:         normalizedOrigin(im.Origin),
@@ -330,7 +364,7 @@ func (d *Database) SyncFiles(files []IndexedFile) error {
 		// a detector fix would stop producing NEW bad candidates while the old ones
 		// kept topping the census. Signals at the current version are left alone, so
 		// re-syncing an up-to-date file is still a no-op.
-		if _, err := tx.Exec(`
+		if _, err := tx.ExecContext(ctx, `
 			DELETE FROM correction_signals
 			WHERE source_path = ? AND (extraction_version IS NULL OR extraction_version < ?)
 		`, file.SourcePath, CurrentExtractionVersion); err != nil {
@@ -340,9 +374,18 @@ func (d *Database) SyncFiles(files []IndexedFile) error {
 		// Run detectors with prose-only filter: lexicon, rephrase, denial on
 		// content_type='text'|'code' + role='user'; interrupt on all user messages.
 		detections := corrections.RunDetectorsFiltered(detectionMsgs)
+		if err := ctx.Err(); err != nil {
+			return err
+		}
 		for ordinal, dets := range detections {
+			if err := ctx.Err(); err != nil {
+				return err
+			}
 			for _, det := range dets {
-				_, err := tx.Exec(`
+				if err := ctx.Err(); err != nil {
+					return err
+				}
+				_, err := tx.ExecContext(ctx, `
 					INSERT OR IGNORE INTO correction_signals
 					(item_uuid, source_path, ordinal, detector, confidence, extraction_version)
 					VALUES (?, ?, ?, ?, ?, ?)
@@ -354,54 +397,89 @@ func (d *Database) SyncFiles(files []IndexedFile) error {
 		}
 	}
 
+	// Refresh dynamic stopwords before commit so a refresh failure or
+	// cancellation rolls back the complete synchronization batch.
+	if err := refreshStopwordsContext(ctx, tx); err != nil {
+		return fmt.Errorf("refresh stopwords: %w", err)
+	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	if err := tx.Commit(); err != nil {
 		return fmt.Errorf("commit transaction: %w", err)
-	}
-
-	// Refresh dynamic stopwords (load top stopwords from messages_vocab)
-	if err := d.refreshStopwords(); err != nil {
-		return fmt.Errorf("refresh stopwords: %w", err)
 	}
 
 	return nil
 }
 
 // refreshStopwords updates the dynamic_stopwords table with frequently occurring terms.
-// It loads the top 1000 terms from the FTS5 vocab and inserts them.
-// This helps the search sanitizer filter common words.
+// It is retained for focused callers; SyncFilesContext uses the same helper in its
+// existing transaction so the refresh and synchronized records commit atomically.
 func (d *Database) refreshStopwords() error {
-	// Clear existing stopwords
-	if _, err := d.db.Exec("DELETE FROM dynamic_stopwords"); err != nil {
+	ctx := context.Background()
+	tx, err := d.db.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("begin stopword transaction: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }()
+	if err := refreshStopwordsContext(ctx, tx); err != nil {
+		return err
+	}
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("commit stopword transaction: %w", err)
+	}
+	return nil
+}
+
+// refreshStopwordsContext loads the top 1000 terms from the FTS5 vocabulary
+// and replaces dynamic_stopwords inside tx.
+func refreshStopwordsContext(ctx context.Context, tx *sql.Tx) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if _, err := tx.ExecContext(ctx, "DELETE FROM dynamic_stopwords"); err != nil {
 		return fmt.Errorf("clear stopwords: %w", err)
 	}
 
-	// Load top 1000 terms from messages_vocab
-	rows, err := d.db.Query(`
+	rows, err := tx.QueryContext(ctx, `
 		SELECT term FROM messages_vocab
 		ORDER BY doc DESC
 		LIMIT 1000
 	`)
 	if err != nil {
-		// If messages_vocab doesn't exist yet or is empty, just return
+		// Preserve the legacy behavior for an unavailable vocabulary, but never
+		// turn cancellation into success.
+		if ctxErr := ctx.Err(); ctxErr != nil {
+			return ctxErr
+		}
 		return nil
 	}
 	defer func() { _ = rows.Close() }()
 
 	var stopwords []string
 	for rows.Next() {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
 		var term string
 		if err := rows.Scan(&term); err != nil {
 			continue
 		}
 		stopwords = append(stopwords, term)
 	}
-	// Close rows before issuing INSERT; SetMaxOpenConns(1) would deadlock if
-	// we held the rows cursor open while acquiring a second connection.
+	if err := rows.Err(); err != nil {
+		if ctxErr := ctx.Err(); ctxErr != nil {
+			return ctxErr
+		}
+		// Preserve legacy refresh behavior for non-cancellation row errors.
+	}
 	_ = rows.Close()
 
-	// Insert stopwords
 	for _, term := range stopwords {
-		if _, err := d.db.Exec("INSERT OR IGNORE INTO dynamic_stopwords (term) VALUES (?)", term); err != nil {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		if _, err := tx.ExecContext(ctx, "INSERT OR IGNORE INTO dynamic_stopwords (term) VALUES (?)", term); err != nil {
 			return fmt.Errorf("insert stopword: %w", err)
 		}
 	}
