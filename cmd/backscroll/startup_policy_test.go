@@ -274,7 +274,7 @@ func TestSuccessfulStartupPostInstallSyncFailureOmitsTypedNilStartupFailure(t *t
 	t.Cleanup(func() { recoverExecute = originalExecute })
 
 	originalPostInstallSync := recoverPostInstallSync
-	recoverPostInstallSync = func(*config.Config, io.Writer) error { return syncErr }
+	recoverPostInstallSync = func(context.Context, *config.Config, io.Writer) error { return syncErr }
 	t.Cleanup(func() { recoverPostInstallSync = originalPostInstallSync })
 
 	var stdout bytes.Buffer
@@ -424,7 +424,7 @@ func TestDefaultStartupPolicyCallsSyncExactlyOnce(t *testing.T) {
 	setIndexPolicyEnv(t, dbPath, t.TempDir())
 	calls := 0
 	originalSync := startupSync
-	startupSync = func(*config.Config, io.Writer) error {
+	startupSync = func(context.Context, *config.Config, io.Writer) error {
 		calls++
 		return nil
 	}
@@ -495,7 +495,7 @@ func TestDefaultStartupPolicyNonrecoverableStages(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			originalSync := startupSync
-			startupSync = func(*config.Config, io.Writer) error {
+			startupSync = func(context.Context, *config.Config, io.Writer) error {
 				t.Fatal("startup sync should not run after nonrecoverable startup stage")
 				return nil
 			}
@@ -568,7 +568,7 @@ func TestReadOwnerLeaseReleasedBeforeHandler(t *testing.T) {
 	startupPrepareIndex = func(context.Context, *config.Config, indexCommandClass) (*storage.Database, *compat.Diagnostic, error) {
 		return nil, nil, nil
 	}
-	startupSync = func(*config.Config, io.Writer) error { return nil }
+	startupSync = func(context.Context, *config.Config, io.Writer) error { return nil }
 
 	var stdout, stderr bytes.Buffer
 	root := buildRootCmdWithStartup(&stdout, &stderr, defaultStartupPolicy)

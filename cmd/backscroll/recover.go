@@ -11,7 +11,7 @@ import (
 )
 
 var recoverExecute = recovery.Execute
-var recoverPostInstallSync = maybeAutoSync
+var recoverPostInstallSync = maybeAutoSyncContext
 
 func newRecoverCmd(stdout, stderr io.Writer) *cobra.Command {
 	var from string
@@ -52,7 +52,7 @@ func newRecoverCmd(stdout, stderr io.Writer) *cobra.Command {
 				return fmt.Errorf("recovery failed: %w", err)
 			}
 			if !dryRun {
-				if err := recoverPostInstallSync(cfg, stderr); err != nil {
+				if err := recoverPostInstallSync(cmd.Context(), cfg, stderr); err != nil {
 					installedPath := report.ActivePath
 					if installedPath == "" {
 						installedPath = cfg.DatabasePath

@@ -95,6 +95,8 @@ func TestRecoverExecuteReceivesCommandContext(t *testing.T) {
 
 func TestRecoverPostInstallSyncBeforeReport(t *testing.T) {
 	cfg := &config.Config{DatabasePath: filepath.Join(t.TempDir(), "active.db")}
+	type recoverContextKey struct{}
+	ctx := context.WithValue(context.Background(), recoverContextKey{}, "post-install")
 	events := []string{}
 	stdout := &firstWriteMarker{events: &events}
 	var stderr bytes.Buffer
@@ -110,8 +112,11 @@ func TestRecoverPostInstallSyncBeforeReport(t *testing.T) {
 	t.Cleanup(func() { recoverExecute = originalExecute })
 
 	originalPostInstallSync := recoverPostInstallSync
-	recoverPostInstallSync = func(got *config.Config, progress io.Writer) error {
+	recoverPostInstallSync = func(gotCtx context.Context, got *config.Config, progress io.Writer) error {
 		events = append(events, "sync")
+		if gotCtx.Value(recoverContextKey{}) != "post-install" {
+			t.Fatalf("post-install sync did not receive command context")
+		}
 		if got != cfg {
 			t.Fatalf("post-install sync config pointer = %p, want %p", got, cfg)
 		}
@@ -125,6 +130,7 @@ func TestRecoverPostInstallSyncBeforeReport(t *testing.T) {
 	root := buildRootCmdWithStartup(stdout, &stderr, func(context.Context, io.Writer, startupCommandClass) startupResult {
 		return startupResult{Config: cfg}
 	})
+	root.SetContext(ctx)
 	root.SetArgs([]string{"recover", "--from", "stranded.db"})
 	if err := root.Execute(); err != nil {
 		t.Fatalf("recover returned error: %v", err)
@@ -148,7 +154,7 @@ func TestRecoverDryRunSkipsPostInstallSync(t *testing.T) {
 
 	syncCalled := false
 	originalPostInstallSync := recoverPostInstallSync
-	recoverPostInstallSync = func(*config.Config, io.Writer) error {
+	recoverPostInstallSync = func(context.Context, *config.Config, io.Writer) error {
 		syncCalled = true
 		return nil
 	}
@@ -180,7 +186,7 @@ func TestRecoverPostInstallSyncFailurePreservesSyncCause(t *testing.T) {
 	t.Cleanup(func() { recoverExecute = originalExecute })
 
 	originalPostInstallSync := recoverPostInstallSync
-	recoverPostInstallSync = func(*config.Config, io.Writer) error {
+	recoverPostInstallSync = func(context.Context, *config.Config, io.Writer) error {
 		return syncErr
 	}
 	t.Cleanup(func() { recoverPostInstallSync = originalPostInstallSync })

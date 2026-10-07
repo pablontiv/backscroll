@@ -39,12 +39,23 @@ func contentHashesEqual(readerName, persistedHash, observedHash string) bool {
 }
 
 var (
-	maybeAutoSyncOpen               = storage.Open
+	maybeAutoSyncOpen = func(ctx context.Context, path string) (*storage.Database, error) {
+		db, diag, err := storage.OpenCompatible(ctx, path)
+		if diag != nil {
+			if db != nil {
+				_ = db.Close()
+			}
+			return nil, fmt.Errorf("%s: %s", diag.Code, diag.Summary)
+		}
+		return db, err
+	}
 	maybeAutoSyncActiveInputs       = input_config.ActiveInputs
 	maybeAutoSyncLoadGlobalRegistry = projects.LoadGlobalRegistry
 	maybeAutoSyncNewRegistry        = newDefaultAutoSyncRegistry
-	maybeAutoSyncSyncFiles          = func(db *storage.Database, files []storage.IndexedFile) error { return db.SyncFiles(files) }
-	maybeAutoSyncGetFileMetadata    = getFileMetadata // for testability
+	maybeAutoSyncSyncFiles          = func(ctx context.Context, db *storage.Database, files []storage.IndexedFile) error {
+		return db.SyncFilesContext(ctx, files)
+	}
+	maybeAutoSyncGetFileMetadata = getFileMetadata // for testability
 )
 
 // startupPhaseTiming holds measurements for startup phases that occur before maybeAutoSync.
@@ -253,12 +264,17 @@ func isRacyCleanFile(fileMtime string, lastIndexed string) bool {
 	return fileMt.After(indexTime.Add(-time.Duration(racyMarginSeconds) * time.Second))
 }
 
-// maybeAutoSync performs an incremental sync operation if the database exists.
-// It is intended to be called before query commands to ensure fresh index state.
-// If sync fails, it returns an error (caller decides whether to warn/ignore).
-func maybeAutoSync(cfg *config.Config, progress io.Writer) (retErr error) {
-	// Startup context propagation is a later phase; preserve current behavior here.
-	ctx := context.Background()
+// maybeAutoSync preserves the legacy non-cancellable entry point.
+func maybeAutoSync(cfg *config.Config, progress io.Writer) error {
+	return maybeAutoSyncContext(context.Background(), cfg, progress)
+}
+
+// maybeAutoSyncContext performs an incremental sync operation with cancellation
+// propagated through reader and storage work.
+func maybeAutoSyncContext(ctx context.Context, cfg *config.Config, progress io.Writer) (retErr error) {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	diag := diagnosticsEnabled()
 	var startTime time.Time
 	if diag {
@@ -267,33 +283,36 @@ func maybeAutoSync(cfg *config.Config, progress io.Writer) (retErr error) {
 
 	// Open database for reading to check if it exists
 	// (this will auto-create if missing)
-	db, err := maybeAutoSyncOpen(cfg.DatabasePath)
+	db, err := maybeAutoSyncOpen(ctx, cfg.DatabasePath)
 	if err != nil {
 		return fmt.Errorf("open database: %w", err)
 	}
 	defer func() { retErr = closeIndexDB(db, retErr) }()
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 
 	// Get existing file metadata for prefiltering
-	existingMetadata, err := db.GetFileMetadata()
+	existingMetadata, err := db.GetFileMetadataContext(ctx)
 	if err != nil {
 		return fmt.Errorf("get file metadata: %w", err)
 	}
 
 	// Load every durable parser-backed maintenance queue. Selection happens only
 	// after natural new/modified work has been classified.
-	stalePaths, err := db.StalePaths(storage.CurrentExtractionVersion)
+	stalePaths, err := db.StalePathsContext(ctx, storage.CurrentExtractionVersion)
 	if err != nil {
 		return fmt.Errorf("discover stale paths: %w", err)
 	}
-	emptyPaths, err := db.EmptyIndexedPaths()
+	emptyPaths, err := db.EmptyIndexedPathsContext(ctx)
 	if err != nil {
 		return fmt.Errorf("discover empty indexed paths: %w", err)
 	}
-	echoPaths, err := db.PendingSearchEchoPaths()
+	echoPaths, err := db.PendingSearchEchoPathsContext(ctx)
 	if err != nil {
 		return fmt.Errorf("discover pending search echo paths: %w", err)
 	}
-	originPaths, err := db.PendingOriginPaths(storage.CurrentOriginVersion, len(existingMetadata))
+	originPaths, err := db.PendingOriginPathsContext(ctx, storage.CurrentOriginVersion, len(existingMetadata))
 	if err != nil {
 		return fmt.Errorf("discover pending message origins: %w", err)
 	}
@@ -307,9 +326,15 @@ func maybeAutoSync(cfg *config.Config, progress io.Writer) (retErr error) {
 	if err != nil {
 		return fmt.Errorf("resolve inputs: %w", err)
 	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 
 	// Load project registry
 	registry := maybeAutoSyncLoadGlobalRegistry()
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 
 	// Track diagnostics
 	var discoveryTime, metadataTime, hashingTime, parsingTime time.Duration
@@ -320,6 +345,9 @@ func maybeAutoSync(cfg *config.Config, progress io.Writer) (retErr error) {
 	// This makes hashing, parsing, and replay selection global rather than input-local.
 	var claims []discoveredPathClaim
 	for _, def := range defs {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
 		if def.Source == "" {
 			def.Source = "session"
 		}
@@ -336,10 +364,16 @@ func maybeAutoSync(cfg *config.Config, progress io.Writer) (retErr error) {
 		if err != nil {
 			return fmt.Errorf("discover input %q: %w", def.ID, err)
 		}
+		if err := ctx.Err(); err != nil {
+			return err
+		}
 		if diag {
 			discoveryTime += time.Since(discoveryStart)
 		}
 		for _, ref := range refs {
+			if err := ctx.Err(); err != nil {
+				return err
+			}
 			claims = append(claims, discoveredPathClaim{path: ref, def: def, reader: reader})
 		}
 	}
@@ -352,6 +386,9 @@ func maybeAutoSync(cfg *config.Config, progress io.Writer) (retErr error) {
 	// files are natural parses and therefore never spend the maintenance cap.
 	states := make(map[string]*syncPathState, len(uniqueClaims))
 	for _, claim := range uniqueClaims {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
 		ref, reader := claim.path, claim.reader
 		existingMeta, exists := existingMetadata[ref]
 		state := &syncPathState{claim: claim, existingMeta: existingMeta, exists: exists}
@@ -368,6 +405,9 @@ func maybeAutoSync(cfg *config.Config, progress io.Writer) (retErr error) {
 				state.hash = existingMeta.Hash
 			}
 		}
+		if err := ctx.Err(); err != nil {
+			return err
+		}
 		if diag {
 			metadataTime += time.Since(metadataStart)
 		}
@@ -380,6 +420,9 @@ func maybeAutoSync(cfg *config.Config, progress io.Writer) (retErr error) {
 			state.hash, err = reader.Hash(ctx, ref)
 			if err != nil {
 				return fmt.Errorf("hash %s: %w", ref, err)
+			}
+			if err := ctx.Err(); err != nil {
+				return err
 			}
 			if diag {
 				filesHashed++
@@ -410,6 +453,9 @@ func maybeAutoSync(cfg *config.Config, progress io.Writer) (retErr error) {
 	var indexedFiles []storage.IndexedFile
 	staleReplaysDone, emptyPiReplaysDone := 0, 0
 	for _, claim := range uniqueClaims {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
 		ref, def, reader := claim.path, claim.def, claim.reader
 		state := states[ref]
 		reason, replaySelected := replaySet[ref]
@@ -434,6 +480,9 @@ func maybeAutoSync(cfg *config.Config, progress io.Writer) (retErr error) {
 		if err != nil {
 			return fmt.Errorf("parse %s: %w", ref, err)
 		}
+		if err := ctx.Err(); err != nil {
+			return err
+		}
 		if diag {
 			parsingTime += time.Since(parsingStart)
 		}
@@ -444,10 +493,16 @@ func maybeAutoSync(cfg *config.Config, progress io.Writer) (retErr error) {
 			identPath = ref
 		}
 		ident := projects.Identify(identPath, registry)
+		if err := ctx.Err(); err != nil {
+			return err
+		}
 
 		var sessionTags tagging.Accumulator
 		var indexedMsgs []storage.IndexedMessage
 		for ordinal, msg := range pf.Records {
+			if err := ctx.Err(); err != nil {
+				return err
+			}
 			sessionTags.Add(msg.Content)
 			indexedMsgs = append(indexedMsgs, storage.IndexedMessage{
 				Ordinal:           ordinal,
@@ -468,6 +523,9 @@ func maybeAutoSync(cfg *config.Config, progress io.Writer) (retErr error) {
 		}
 
 		fileSize, fileMtime, _ := maybeAutoSyncGetFileMetadata(ref)
+		if err := ctx.Err(); err != nil {
+			return err
+		}
 		indexedHash := pf.Hash
 		if reader.Name() == "pi" && len(pf.Records) == 0 {
 			// Mark a zero-row parse with the Pi parser epoch. Old unmarked hashes
@@ -496,8 +554,11 @@ func maybeAutoSync(cfg *config.Config, progress io.Writer) (retErr error) {
 
 	// Sync all files
 	if len(indexedFiles) > 0 {
-		if err := maybeAutoSyncSyncFiles(db, indexedFiles); err != nil {
+		if err := maybeAutoSyncSyncFiles(ctx, db, indexedFiles); err != nil {
 			return fmt.Errorf("sync files: %w", err)
+		}
+		if err := ctx.Err(); err != nil {
+			return err
 		}
 	}
 
@@ -506,7 +567,7 @@ func maybeAutoSync(cfg *config.Config, progress io.Writer) (retErr error) {
 	miner := templates.NewMiner()
 	const staleTemplateCap = 200
 	const currentNormalizationVersion = 2
-	staleTemplatePaths, err := db.StaleTemplatePaths(currentNormalizationVersion)
+	staleTemplatePaths, err := db.StaleTemplatePathsContext(ctx, currentNormalizationVersion)
 	if err != nil {
 		return fmt.Errorf("discover stale templates: %w", err)
 	} else if len(staleTemplatePaths) > 0 {
@@ -516,12 +577,15 @@ func maybeAutoSync(cfg *config.Config, progress io.Writer) (retErr error) {
 		}
 
 		for _, sourcePath := range staleTemplatePaths {
-			msgs, err := db.LoadMessagesForPath(sourcePath)
+			if err := ctx.Err(); err != nil {
+				return err
+			}
+			msgs, err := db.LoadMessagesForPathContext(ctx, sourcePath)
 			if err != nil {
 				return fmt.Errorf("load messages for stale template path %s: %w", sourcePath, err)
 			}
 
-			deletedCount, err := db.BackfillTemplatesForFile(miner, sourcePath, msgs)
+			deletedCount, err := db.BackfillTemplatesForFileContext(ctx, miner, sourcePath, msgs)
 			if err != nil {
 				return fmt.Errorf("re-mine templates for %s: %w", sourcePath, err)
 			}
@@ -536,8 +600,12 @@ func maybeAutoSync(cfg *config.Config, progress io.Writer) (retErr error) {
 	// row remains: SyncFiles skips it (not on disk) and BackfillDerived skips it (not
 	// absent from indexed_files), so without this a detector fix never reaches it.
 	// Bounded per run and convergent — see RederiveSupersededCorrections.
-	if _, err := db.RederiveSupersededCorrections(staleTemplateCap); err != nil {
+	if _, err := db.RederiveSupersededCorrectionsContext(ctx, staleTemplateCap); err != nil {
 		return fmt.Errorf("re-derive superseded correction signals: %w", err)
+	}
+
+	if err := ctx.Err(); err != nil {
+		return err
 	}
 
 	if diag {

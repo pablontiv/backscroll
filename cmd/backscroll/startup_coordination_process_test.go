@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -40,7 +41,7 @@ func TestStartupCoordinationHelperProcess(t *testing.T) {
 		startupMutationWait = parsed
 	}
 
-	startupSync = func(*config.Config, io.Writer) error {
+	startupSync = func(context.Context, *config.Config, io.Writer) error {
 		if counter == "" {
 			return fmt.Errorf("BACKSCROLL_SYNC_COUNTER is required when startup sync runs")
 		}

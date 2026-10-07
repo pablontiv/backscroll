@@ -38,7 +38,7 @@ func TestCoordinateStartupImmediateOwnerSnapshotSyncsAndReleasesBeforeResult(t *
 	startupPrepareIndex = func(context.Context, *config.Config, indexCommandClass) (*storage.Database, *compat.Diagnostic, error) {
 		return nil, nil, nil
 	}
-	startupSync = func(*config.Config, io.Writer) error {
+	startupSync = func(context.Context, *config.Config, io.Writer) error {
 		syncCalls++
 		if lease.releases != 0 {
 			t.Fatalf("lease released before sync")
@@ -69,7 +69,7 @@ func TestCoordinateStartupImmediateOwnerMutationSyncsAndRetainsLease(t *testing.
 	startupPrepareIndex = func(context.Context, *config.Config, indexCommandClass) (*storage.Database, *compat.Diagnostic, error) {
 		return nil, nil, nil
 	}
-	startupSync = func(*config.Config, io.Writer) error { syncCalls++; return nil }
+	startupSync = func(context.Context, *config.Config, io.Writer) error { syncCalls++; return nil }
 
 	result := coordinateStartup(context.Background(), &config.Config{DatabasePath: filepath.Join(t.TempDir(), "index.db")}, io.Discard, startupMutation)
 	if result.Failure != nil {
@@ -94,7 +94,7 @@ func TestCoordinateStartupImmediateRemediationRetainsLeaseWithoutPrepareOrSync(t
 		t.Fatal("remediation must not prepare the index")
 		return nil, nil, nil
 	}
-	startupSync = func(*config.Config, io.Writer) error {
+	startupSync = func(context.Context, *config.Config, io.Writer) error {
 		t.Fatal("remediation must not run pre-handler sync")
 		return nil
 	}
@@ -118,7 +118,7 @@ func TestCoordinateStartupBusySnapshotUsesCompatibleReadOnlySnapshot(t *testing.
 	cfg := &config.Config{DatabasePath: dbPath}
 	syncCalls := 0
 	startupTryAcquire = func(string) (startupLease, bool, error) { return nil, false, nil }
-	startupSync = func(*config.Config, io.Writer) error { syncCalls++; return nil }
+	startupSync = func(context.Context, *config.Config, io.Writer) error { syncCalls++; return nil }
 
 	result := coordinateStartup(context.Background(), cfg, io.Discard, startupSnapshotRead)
 	if result.Failure != nil {
@@ -176,7 +176,7 @@ func TestCoordinateStartupBusyMutationAcquiresWithinWaitAndBecomesOwner(t *testi
 	startupPrepareIndex = func(context.Context, *config.Config, indexCommandClass) (*storage.Database, *compat.Diagnostic, error) {
 		return nil, nil, nil
 	}
-	startupSync = func(*config.Config, io.Writer) error { syncCalls++; return nil }
+	startupSync = func(context.Context, *config.Config, io.Writer) error { syncCalls++; return nil }
 
 	result := coordinateStartup(context.Background(), &config.Config{DatabasePath: filepath.Join(t.TempDir(), "index.db")}, io.Discard, startupMutation)
 	if result.Failure != nil {
@@ -207,7 +207,7 @@ func TestCoordinateStartupBusyRemediationAcquiresAndBypassesPrepareSync(t *testi
 		t.Fatal("remediation must not prepare")
 		return nil, nil, nil
 	}
-	startupSync = func(*config.Config, io.Writer) error {
+	startupSync = func(context.Context, *config.Config, io.Writer) error {
 		t.Fatal("remediation must not sync")
 		return nil
 	}
@@ -235,7 +235,7 @@ func TestCoordinateStartupBusyMutationDeadlineReturnsSyncInProgressWithoutContin
 				t.Fatal("prepare after timeout")
 				return nil, nil, nil
 			}
-			startupSync = func(*config.Config, io.Writer) error {
+			startupSync = func(context.Context, *config.Config, io.Writer) error {
 				t.Fatal("sync after timeout")
 				return nil
 			}
@@ -297,7 +297,7 @@ func TestCoordinateStartupOwnerFailureLeaseRetentionByCommandClass(t *testing.T)
 				}
 				return nil, nil, nil
 			}
-			startupSync = func(*config.Config, io.Writer) error { return syncErr }
+			startupSync = func(context.Context, *config.Config, io.Writer) error { return syncErr }
 
 			result := coordinateStartup(context.Background(), &config.Config{DatabasePath: filepath.Join(t.TempDir(), "index.db")}, io.Discard, tc.class)
 			failure := result.startupFailure()

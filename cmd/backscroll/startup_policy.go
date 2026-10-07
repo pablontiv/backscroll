@@ -106,7 +106,7 @@ func (r startupResult) release(retErr error) error {
 
 type startupContextKey struct{}
 
-var startupSync = maybeAutoSync
+var startupSync = maybeAutoSyncContext
 
 func startupResultFrom(cmd *cobra.Command) startupResult {
 	result, _ := cmd.Context().Value(startupContextKey{}).(startupResult)
@@ -114,6 +114,9 @@ func startupResultFrom(cmd *cobra.Command) startupResult {
 }
 
 func defaultStartupPolicy(ctx context.Context, progress io.Writer, class startupCommandClass) startupResult {
+	if err := ctx.Err(); err != nil {
+		return startupResult{Failure: &startupFailure{Stage: startupStageInputDir, Cause: err, Diagnostic: compat.Diagnostic{Code: compat.CodeMigrationFailed, Summary: err.Error()}}}
+	}
 	inputsDir, err := input_config.InputsDir()
 	if err != nil {
 		cause := fmt.Errorf("resolve inputs directory: %w", err)
@@ -135,6 +138,9 @@ func defaultStartupPolicy(ctx context.Context, progress io.Writer, class startup
 	if _, _, err := input_config.ActiveInputs(cfg.SessionDirs); err != nil {
 		cause := fmt.Errorf("validate active inputs: %w", err)
 		return startupResult{Config: cfg, Failure: &startupFailure{Stage: startupStageActiveManifest, Cause: cause, Diagnostic: compat.Diagnostic{Code: compat.CodeMigrationFailed, Summary: cause.Error()}}}
+	}
+	if err := ctx.Err(); err != nil {
+		return startupResult{Config: cfg, Failure: &startupFailure{Stage: startupStageActiveManifest, Cause: err, Diagnostic: compat.Diagnostic{Code: compat.CodeMigrationFailed, Summary: err.Error()}}}
 	}
 	return coordinateStartup(ctx, cfg, progress, class)
 }
