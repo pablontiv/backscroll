@@ -27,30 +27,61 @@ var (
 		return snapshotDatabase(ctx, path, plan)
 	}
 	openCompatibleApplyMigrationPlan = applyMigrationPlanLocked
-	initializeNewDatabaseSchema      = func(db *Database) error { return db.setupNewDatabaseSchema() }
 )
+
+type databaseCreationDeps struct {
+	openPrivate   func(context.Context, string) (*Database, error)
+	openCanonical func(context.Context, string) (*Database, error)
+	migrations    []migrationApplier
+	link          func(string, string) error
+}
+
+func defaultDatabaseCreationDeps() databaseCreationDeps {
+	return databaseCreationDeps{
+		openPrivate:   openPrivateCreationWithoutSetupContext,
+		openCanonical: openWithoutSetupContext,
+		migrations:    newDatabaseMigrations(),
+		link:          os.Link,
+	}
+}
 
 var ErrImmutableReadOnlyWALUnsafe = errors.New("non-empty WAL makes immutable read-only content unsafe")
 
 // Open opens or creates a SQLite database at the given path with FTS5 and WAL mode enabled.
 // Existing databases always pass through compatibility inspection and backed-up migration.
 func Open(path string) (*Database, error) {
-	db, created, err := createDatabaseExclusively(path)
+	return OpenContext(context.Background(), path)
+}
+
+// OpenContext is Open with cancellation propagated through connection setup,
+// private schema construction, publication, and existing-database migration.
+func OpenContext(ctx context.Context, path string) (*Database, error) {
+	if ctx == nil {
+		return nil, errors.New("open database: nil context")
+	}
+	return openContextWithCreationDeps(ctx, path, defaultDatabaseCreationDeps())
+}
+
+func openContextWithCreationDeps(ctx context.Context, path string, deps databaseCreationDeps) (*Database, error) {
+	db, created, err := createDatabaseExclusively(ctx, path, deps)
 	if err != nil || created {
-		return db, err
+		return db, contextIdentityError(ctx, err)
 	}
 
-	db, diag, openErr := OpenCompatible(context.Background(), path)
+	db, diag, openErr := OpenCompatible(ctx, path)
 	if diag != nil {
 		if db != nil {
 			_ = db.Close()
 		}
 		return nil, fmt.Errorf("%s: %s", diag.Code, diag.Summary)
 	}
-	return db, openErr
+	return db, contextIdentityError(ctx, openErr)
 }
 
-func createDatabaseExclusively(path string) (db *Database, created bool, err error) {
+func createDatabaseExclusively(ctx context.Context, path string, deps databaseCreationDeps) (db *Database, created bool, err error) {
+	if err := ctx.Err(); err != nil {
+		return nil, false, err
+	}
 	canonicalPath, err := canonicalizeDBPath(path)
 	if err != nil {
 		return nil, false, err
@@ -62,6 +93,23 @@ func createDatabaseExclusively(path string) (db *Database, created bool, err err
 	}
 
 	directory := filepath.Dir(canonicalPath)
+	published := false
+	defer func() {
+		if err == nil || !published {
+			return
+		}
+		if db != nil {
+			err = errors.Join(err, db.Close())
+			db = nil
+		}
+		if cleanupErr := cleanupCreationFiles(canonicalPath); cleanupErr != nil {
+			err = errors.Join(err, fmt.Errorf("cleanup failed database publication: %w", cleanupErr))
+		}
+		if syncErr := fsyncDirectory(directory); syncErr != nil {
+			err = errors.Join(err, syncErr)
+		}
+	}()
+
 	temp, err := os.CreateTemp(directory, "."+filepath.Base(canonicalPath)+".create-*")
 	if err != nil {
 		return nil, false, fmt.Errorf("create private database file for %s: %w", canonicalPath, err)
@@ -79,7 +127,7 @@ func createDatabaseExclusively(path string) (db *Database, created bool, err err
 		return nil, false, fmt.Errorf("close private database file %s: %w", tempPath, err)
 	}
 
-	candidate, err := createDatabaseWithOpen(tempPath, openPrivateCreationWithoutSetup)
+	candidate, err := createDatabaseWithOpen(ctx, tempPath, deps.openPrivate, deps.migrations)
 	if err != nil {
 		return nil, false, fmt.Errorf("initialize private database for %s: %w", canonicalPath, err)
 	}
@@ -93,7 +141,10 @@ func createDatabaseExclusively(path string) (db *Database, created bool, err err
 		return nil, false, err
 	}
 
-	if err := os.Link(tempPath, canonicalPath); err != nil {
+	if err := ctx.Err(); err != nil {
+		return nil, false, err
+	}
+	if err := deps.link(tempPath, canonicalPath); err != nil {
 		if errors.Is(err, fs.ErrExist) {
 			if cleanupErr := cleanupCreationFiles(tempPath); cleanupErr != nil {
 				return nil, false, cleanupErr
@@ -103,6 +154,7 @@ func createDatabaseExclusively(path string) (db *Database, created bool, err err
 		}
 		return nil, false, fmt.Errorf("publish database without clobbering %s: %w", canonicalPath, err)
 	}
+	published = true
 	if err := fsyncDirectory(directory); err != nil {
 		return nil, true, err
 	}
@@ -116,24 +168,27 @@ func createDatabaseExclusively(path string) (db *Database, created bool, err err
 
 	// Reopen through the canonical name so the returned connection never depends
 	// on the private construction link and uses the ordinary WAL configuration.
-	db, err = openWithoutSetup(canonicalPath)
-	return db, true, err
+	db, err = deps.openCanonical(ctx, canonicalPath)
+	return db, true, contextIdentityError(ctx, err)
 }
 
-func createDatabase(path string) (*Database, error) {
-	return createDatabaseWithOpen(path, openWithoutSetup)
-}
-
-func createDatabaseWithOpen(path string, open func(string) (*Database, error)) (*Database, error) {
-	d, err := open(path)
+func createDatabaseWithOpen(ctx context.Context, path string, open func(context.Context, string) (*Database, error), migrations []migrationApplier) (*Database, error) {
+	d, err := open(ctx, path)
 	if err != nil {
-		return nil, err
+		return nil, contextIdentityError(ctx, err)
 	}
-	if err := initializeNewDatabaseSchema(d); err != nil {
-		_ = d.Close()
-		return nil, err
+	if err := d.setupNewDatabaseSchema(ctx, migrations); err != nil {
+		closeErr := d.Close()
+		return nil, errors.Join(contextIdentityError(ctx, err), closeErr)
 	}
 	return d, nil
+}
+
+func contextIdentityError(ctx context.Context, err error) error {
+	if err == nil || ctx == nil || ctx.Err() == nil || errors.Is(err, ctx.Err()) {
+		return err
+	}
+	return errors.Join(err, ctx.Err())
 }
 
 func cleanupCreationFiles(path string) error {
@@ -158,22 +213,26 @@ func ensureCreationHasNoSidecars(path string) error {
 }
 
 func openWithoutSetup(path string) (*Database, error) {
-	return openWriteConnection(path, false)
+	return openWithoutSetupContext(context.Background(), path)
 }
 
-func openPrivateCreationWithoutSetup(path string) (*Database, error) {
-	return openWriteConnectionWithPragmas(path, false, "DELETE", "FULL")
+func openWithoutSetupContext(ctx context.Context, path string) (*Database, error) {
+	return openWriteConnectionContext(ctx, path, false)
 }
 
-func openMigrationWithoutSetup(path string) (*Database, error) {
-	return openWriteConnection(path, true)
+func openPrivateCreationWithoutSetupContext(ctx context.Context, path string) (*Database, error) {
+	return openWriteConnectionWithPragmasContext(ctx, path, false, "DELETE", "FULL")
 }
 
-func openWriteConnection(path string, migrationImmediate bool) (*Database, error) {
-	return openWriteConnectionWithPragmas(path, migrationImmediate, "WAL", "NORMAL")
+func openMigrationWithoutSetupContext(ctx context.Context, path string) (*Database, error) {
+	return openWriteConnectionContext(ctx, path, true)
 }
 
-func openWriteConnectionWithPragmas(path string, migrationImmediate bool, journalMode, synchronous string) (*Database, error) {
+func openWriteConnectionContext(ctx context.Context, path string, migrationImmediate bool) (*Database, error) {
+	return openWriteConnectionWithPragmasContext(ctx, path, migrationImmediate, "WAL", "NORMAL")
+}
+
+func openWriteConnectionWithPragmasContext(ctx context.Context, path string, migrationImmediate bool, journalMode, synchronous string) (*Database, error) {
 	canonicalPath, err := canonicalizeDBPath(path)
 	if err != nil {
 		return nil, err
@@ -189,31 +248,34 @@ func openWriteConnectionWithPragmas(path string, migrationImmediate bool, journa
 		return nil, fmt.Errorf("opening database %s: %w", canonicalPath, err)
 	}
 
-	// Test the connection
-	if err := db.Ping(); err != nil {
+	// Test the connection using the caller's cancellation scope.
+	if err := db.PingContext(ctx); err != nil {
 		_ = db.Close()
-		return nil, fmt.Errorf("ping database %s: %w", canonicalPath, err)
+		return nil, contextIdentityError(ctx, fmt.Errorf("ping database %s: %w", canonicalPath, err))
 	}
 
-	// Enable FK enforcement (required for ON DELETE CASCADE in V2 schema)
-	if _, err := db.Exec("PRAGMA foreign_keys = ON"); err != nil {
+	// Enable FK enforcement (required for ON DELETE CASCADE in V2 schema).
+	if _, err := db.ExecContext(ctx, "PRAGMA foreign_keys = ON"); err != nil {
 		_ = db.Close()
-		return nil, fmt.Errorf("enable foreign keys: %w", err)
+		return nil, contextIdentityError(ctx, fmt.Errorf("enable foreign keys: %w", err))
 	}
 
 	return &Database{db: db, path: canonicalPath}, nil
 }
 
 func OpenCompatible(ctx context.Context, path string) (*Database, *compat.Diagnostic, error) {
-	inspect, err := OpenReadOnly(path)
+	if ctx == nil {
+		return nil, nil, errors.New("open compatible database: nil context")
+	}
+	inspect, err := openReadOnlyContext(ctx, path)
 	if errors.Is(err, fs.ErrNotExist) {
-		db, created, createErr := createDatabaseExclusively(path)
+		db, created, createErr := createDatabaseExclusively(ctx, path, defaultDatabaseCreationDeps())
 		if createErr != nil || created {
 			return db, nil, createErr
 		}
 		// Another opener won the exclusive creation race. Treat its path as an
 		// existing database and inspect it rather than setting up over it.
-		inspect, err = OpenReadOnly(path)
+		inspect, err = openReadOnlyContext(ctx, path)
 	}
 	if err != nil {
 		return nil, nil, err
@@ -228,11 +290,11 @@ func OpenCompatible(ctx context.Context, path string) (*Database, *compat.Diagno
 		return nil, nil, closeErr
 	}
 	if len(plan.Steps) == 0 {
-		db, openErr := openWithoutSetup(canonicalPath)
+		db, openErr := openWithoutSetupContext(ctx, canonicalPath)
 		return db, nil, openErr
 	}
 
-	migrationDB, err := openMigrationWithoutSetup(canonicalPath)
+	migrationDB, err := openMigrationWithoutSetupContext(ctx, canonicalPath)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -266,7 +328,7 @@ func OpenCompatible(ctx context.Context, path string) (*Database, *compat.Diagno
 	}
 	migrationClosed = true
 
-	db, err := openWithoutSetup(canonicalPath)
+	db, err := openWithoutSetupContext(ctx, canonicalPath)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -280,6 +342,10 @@ func OpenCompatible(ctx context.Context, path string) (*Database, *compat.Diagno
 // OpenReadOnly opens an existing SQLite database in read-only mode.
 // Fails fast if the database file does not exist.
 func OpenReadOnly(path string) (*Database, error) {
+	return openReadOnlyContext(context.Background(), path)
+}
+
+func openReadOnlyContext(ctx context.Context, path string) (*Database, error) {
 	// Fail fast if DB file doesn't exist
 	if _, err := os.Stat(path); os.IsNotExist(err) {
 		return nil, fmt.Errorf("backscroll database not found: %s: %w", path, fs.ErrNotExist)
@@ -296,10 +362,10 @@ func OpenReadOnly(path string) (*Database, error) {
 		return nil, fmt.Errorf("opening readonly database %s: %w", canonicalPath, err)
 	}
 
-	// Test the connection
-	if err := db.Ping(); err != nil {
+	// Test the connection using the caller's cancellation scope.
+	if err := db.PingContext(ctx); err != nil {
 		_ = db.Close()
-		return nil, fmt.Errorf("ping readonly database %s: %w", canonicalPath, err)
+		return nil, contextIdentityError(ctx, fmt.Errorf("ping readonly database %s: %w", canonicalPath, err))
 	}
 
 	return &Database{db: db, path: canonicalPath}, nil
@@ -310,6 +376,10 @@ func OpenReadOnly(path string) (*Database, error) {
 // immutable view can miss committed frames that are not checkpointed into the
 // main database file.
 func OpenImmutableReadOnly(path string) (*Database, error) {
+	return openImmutableReadOnlyContext(context.Background(), path)
+}
+
+func openImmutableReadOnlyContext(ctx context.Context, path string) (*Database, error) {
 	if _, err := os.Stat(path); os.IsNotExist(err) {
 		return nil, fmt.Errorf("backscroll database not found: %s: %w", path, fs.ErrNotExist)
 	}
@@ -330,9 +400,9 @@ func OpenImmutableReadOnly(path string) (*Database, error) {
 	if err != nil {
 		return nil, fmt.Errorf("opening immutable readonly database %s: %w", canonicalPath, err)
 	}
-	if err := db.Ping(); err != nil {
+	if err := db.PingContext(ctx); err != nil {
 		_ = db.Close()
-		return nil, fmt.Errorf("ping immutable readonly database %s: %w", canonicalPath, err)
+		return nil, contextIdentityError(ctx, fmt.Errorf("ping immutable readonly database %s: %w", canonicalPath, err))
 	}
 	return &Database{db: db, path: canonicalPath}, nil
 }

@@ -1,212 +1,64 @@
 package storage
 
-import "fmt"
+import (
+	"context"
+	"database/sql"
+	"errors"
+	"fmt"
 
-// setupNewDatabaseSchema initializes a newly and exclusively created database.
-// Existing databases must migrate through OpenCompatible so a backup is created.
-func (d *Database) setupNewDatabaseSchema() error {
-	// Create the schema_migrations table if it doesn't exist
-	if _, err := d.db.Exec(`
-		CREATE TABLE IF NOT EXISTS schema_migrations (
-			version INTEGER PRIMARY KEY,
-			name TEXT NOT NULL,
-			applied_on TEXT NOT NULL,
-			checksum TEXT NOT NULL
-		)
-	`); err != nil {
-		return fmt.Errorf("create schema_migrations table: %w", err)
+	"github.com/pablontiv/backscroll/internal/compat"
+)
+
+const createSchemaMigrationsSQL = `
+CREATE TABLE schema_migrations (
+	version INTEGER PRIMARY KEY,
+	name TEXT NOT NULL,
+	applied_on TEXT NOT NULL,
+	checksum TEXT NOT NULL
+)`
+
+// newDatabaseMigrations returns a new slice for each creation attempt so tests
+// can inject an operation-local failure without mutating process-wide seams.
+func newDatabaseMigrations() []migrationApplier {
+	return []migrationApplier{
+		applyV1, applyV2, applyV3, applyV4,
+		applyV5, applyV6, applyV7, applyV8,
+		applyV9, applyV10, applyV11, applyV12,
+		applyV13, applyV14, applyV15, applyV16,
 	}
+}
 
-	// Check if version 1 is already applied
-	var count int
-	err := d.db.QueryRow("SELECT COUNT(*) FROM schema_migrations WHERE version = 1").Scan(&count)
+// setupNewDatabaseSchema initializes a private, newly created database. All
+// schema objects and migration records from V1 through V16 are committed as a
+// single unit. Existing databases still migrate through OpenCompatible.
+func (d *Database) setupNewDatabaseSchema(ctx context.Context, migrations []migrationApplier) (err error) {
+	tx, err := d.db.BeginTx(ctx, nil)
 	if err != nil {
-		return fmt.Errorf("check migration version: %w", err)
+		return contextIdentityError(ctx, fmt.Errorf("begin new database schema transaction: %w", err))
 	}
+	defer func() {
+		if err == nil {
+			return
+		}
+		if rollbackErr := tx.Rollback(); rollbackErr != nil && !errors.Is(rollbackErr, sql.ErrTxDone) && !errors.Is(rollbackErr, context.Canceled) {
+			err = errors.Join(err, fmt.Errorf("rollback new database schema transaction: %w", rollbackErr))
+		}
+	}()
 
-	if count == 0 {
-		// Version 1 not applied, so apply it
-		if err := d.applyV1Migration(); err != nil {
-			return err
+	if _, err := tx.ExecContext(ctx, createSchemaMigrationsSQL); err != nil {
+		return contextIdentityError(ctx, fmt.Errorf("create schema_migrations table: %w", err))
+	}
+	for index, apply := range migrations {
+		if err := apply(ctx, tx, compat.SchemaShape{}); err != nil {
+			return contextIdentityError(ctx, fmt.Errorf("apply new database migration V%d: %w", index+1, err))
 		}
 	}
-
-	// Check if version 2 is already applied
-	err = d.db.QueryRow("SELECT COUNT(*) FROM schema_migrations WHERE version = 2").Scan(&count)
-	if err != nil {
-		return fmt.Errorf("check migration version 2: %w", err)
+	if err := compat.VerifyCurrentShape(ctx, tx); err != nil {
+		return contextIdentityError(ctx, fmt.Errorf("verify new database schema before commit: %w", err))
 	}
-
-	if count == 0 {
-		if err := d.applyV2Migration(); err != nil {
-			return err
-		}
+	if err := tx.Commit(); err != nil {
+		return contextIdentityError(ctx, fmt.Errorf("commit new database schema: %w", err))
 	}
-
-	// Check if version 3 is already applied
-	err = d.db.QueryRow("SELECT COUNT(*) FROM schema_migrations WHERE version = 3").Scan(&count)
-	if err != nil {
-		return fmt.Errorf("check migration version 3: %w", err)
-	}
-
-	if count == 0 {
-		if err := d.applyV3Migration(); err != nil {
-			return err
-		}
-	}
-
-	// Check if version 4 is already applied
-	err = d.db.QueryRow("SELECT COUNT(*) FROM schema_migrations WHERE version = 4").Scan(&count)
-	if err != nil {
-		return fmt.Errorf("check migration version 4: %w", err)
-	}
-
-	if count == 0 {
-		if err := d.applyV4Migration(); err != nil {
-			return err
-		}
-	}
-
-	// Check if version 5 is already applied
-	err = d.db.QueryRow("SELECT COUNT(*) FROM schema_migrations WHERE version = 5").Scan(&count)
-	if err != nil {
-		return fmt.Errorf("check migration version 5: %w", err)
-	}
-
-	if count == 0 {
-		if err := d.applyV5Migration(); err != nil {
-			return err
-		}
-	}
-
-	// Check if version 6 is already applied
-	err = d.db.QueryRow("SELECT COUNT(*) FROM schema_migrations WHERE version = 6").Scan(&count)
-	if err != nil {
-		return fmt.Errorf("check migration version 6: %w", err)
-	}
-
-	if count == 0 {
-		if err := d.applyV6Migration(); err != nil {
-			return err
-		}
-	}
-
-	// Check if version 7 is already applied
-	err = d.db.QueryRow("SELECT COUNT(*) FROM schema_migrations WHERE version = 7").Scan(&count)
-	if err != nil {
-		return fmt.Errorf("check migration version 7: %w", err)
-	}
-
-	if count == 0 {
-		if err := d.applyV7Migration(); err != nil {
-			return err
-		}
-	}
-
-	// Check if version 8 is already applied
-	err = d.db.QueryRow("SELECT COUNT(*) FROM schema_migrations WHERE version = 8").Scan(&count)
-	if err != nil {
-		return fmt.Errorf("check migration version 8: %w", err)
-	}
-
-	if count == 0 {
-		if err := d.applyV8Migration(); err != nil {
-			return err
-		}
-	}
-
-	// Check if version 9 is already applied
-	err = d.db.QueryRow("SELECT COUNT(*) FROM schema_migrations WHERE version = 9").Scan(&count)
-	if err != nil {
-		return fmt.Errorf("check migration version 9: %w", err)
-	}
-
-	if count == 0 {
-		if err := d.applyV9Migration(); err != nil {
-			return err
-		}
-	}
-
-	// Check if version 10 is already applied
-	err = d.db.QueryRow("SELECT COUNT(*) FROM schema_migrations WHERE version = 10").Scan(&count)
-	if err != nil {
-		return fmt.Errorf("check migration version 10: %w", err)
-	}
-
-	if count == 0 {
-		if err := d.applyV10Migration(); err != nil {
-			return err
-		}
-	}
-
-	// Check if version 11 is already applied
-	err = d.db.QueryRow("SELECT COUNT(*) FROM schema_migrations WHERE version = 11").Scan(&count)
-	if err != nil {
-		return fmt.Errorf("check migration version 11: %w", err)
-	}
-
-	if count == 0 {
-		if err := d.applyV11Migration(); err != nil {
-			return err
-		}
-	}
-
-	// Check if version 12 is already applied
-	err = d.db.QueryRow("SELECT COUNT(*) FROM schema_migrations WHERE version = 12").Scan(&count)
-	if err != nil {
-		return fmt.Errorf("check migration version 12: %w", err)
-	}
-
-	if count == 0 {
-		if err := d.applyV12Migration(); err != nil {
-			return err
-		}
-	}
-
-	// Check if version 13 is already applied
-	err = d.db.QueryRow("SELECT COUNT(*) FROM schema_migrations WHERE version = 13").Scan(&count)
-	if err != nil {
-		return fmt.Errorf("check migration version 13: %w", err)
-	}
-
-	if count == 0 {
-		if err := d.applyV13Migration(); err != nil {
-			return err
-		}
-	}
-
-	// Check if version 14 is already applied
-	err = d.db.QueryRow("SELECT COUNT(*) FROM schema_migrations WHERE version = 14").Scan(&count)
-	if err != nil {
-		return fmt.Errorf("check migration version 14: %w", err)
-	}
-
-	if count == 0 {
-		if err := d.applyV14Migration(); err != nil {
-			return err
-		}
-	}
-
-	err = d.db.QueryRow("SELECT COUNT(*) FROM schema_migrations WHERE version = 15").Scan(&count)
-	if err != nil {
-		return fmt.Errorf("check migration version 15: %w", err)
-	}
-	if count == 0 {
-		if err := d.applySingleMigration(applyV15); err != nil {
-			return err
-		}
-	}
-
-	err = d.db.QueryRow("SELECT COUNT(*) FROM schema_migrations WHERE version = 16").Scan(&count)
-	if err != nil {
-		return fmt.Errorf("check migration version 16: %w", err)
-	}
-	if count == 0 {
-		if err := d.applySingleMigration(applyV16); err != nil {
-			return err
-		}
-	}
-
 	return nil
 }
 

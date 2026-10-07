@@ -58,6 +58,16 @@ func recoveryDestinationError(path string, cause, cleanupErr error) error {
 // bytes read-only and verifies them again. The returned path is safe to expose
 // only after that independent verification succeeds.
 func CreateRecoveryDestination(ctx context.Context, dir string, plan compat.RecoveryPlan) (path string, err error) {
+	return createRecoveryDestinationWithDeps(ctx, dir, plan, defaultDatabaseCreationDeps())
+}
+
+func createRecoveryDestinationWithDeps(ctx context.Context, dir string, plan compat.RecoveryPlan, creationDeps databaseCreationDeps) (path string, err error) {
+	if ctx == nil {
+		return "", errors.New("create recovery destination: nil context")
+	}
+	if err := ctx.Err(); err != nil {
+		return "", err
+	}
 	if plan.Records == nil {
 		return "", fmt.Errorf("recovery plan is inapplicable or contains diagnostics")
 	}
@@ -99,7 +109,7 @@ func CreateRecoveryDestination(ctx context.Context, dir string, plan compat.Reco
 
 	// The private path was allocated above and is known to be a new empty file.
 	// Use the creation-only helper rather than the public existing-database path.
-	db, err := createDatabase(path)
+	db, err := createDatabaseWithOpen(ctx, path, creationDeps.openCanonical, creationDeps.migrations)
 	if err != nil {
 		return "", fmt.Errorf("initialize fresh recovery destination: %w", err)
 	}
@@ -189,7 +199,7 @@ func VerifyRecoveryDestination(ctx context.Context, path string, plan compat.Rec
 	if plan.Records == nil {
 		return fmt.Errorf("recovery plan is inapplicable or contains diagnostics")
 	}
-	db, err := OpenImmutableReadOnly(path)
+	db, err := openImmutableReadOnlyContext(ctx, path)
 	if err != nil {
 		return fmt.Errorf("open recovery destination immutable read-only: %w", err)
 	}
