@@ -1037,7 +1037,13 @@ func (d *Database) LoadToolSequences(opts LoadSequencesOpts) ([]sequences.Sequen
 // rows. It starts from indexed_files because row-backed stale queries cannot see
 // files whose prior parser produced no messages.
 func (d *Database) EmptyIndexedPaths() ([]string, error) {
-	rows, err := d.db.Query(`
+	return d.EmptyIndexedPathsContext(context.Background())
+}
+
+// EmptyIndexedPathsContext is EmptyIndexedPaths with cancellation propagated
+// through the query and row iteration.
+func (d *Database) EmptyIndexedPathsContext(ctx context.Context) ([]string, error) {
+	paths, err := d.queryPathsContext(ctx, `
 		SELECT indexed_files.path
 		FROM indexed_files
 		LEFT JOIN search_items ON search_items.source_path = indexed_files.path
@@ -1048,19 +1054,6 @@ func (d *Database) EmptyIndexedPaths() ([]string, error) {
 	if err != nil {
 		return nil, fmt.Errorf("query empty indexed paths: %w", err)
 	}
-	defer func() { _ = rows.Close() }()
-
-	var paths []string
-	for rows.Next() {
-		var path string
-		if err := rows.Scan(&path); err != nil {
-			return nil, fmt.Errorf("scan empty indexed path: %w", err)
-		}
-		paths = append(paths, path)
-	}
-	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("iterate empty indexed paths: %w", err)
-	}
 	return paths, nil
 }
 
@@ -1068,11 +1061,20 @@ func (d *Database) EmptyIndexedPaths() ([]string, error) {
 // historical rows have not been read at currentVersion by an origin-aware
 // parser. It never derives origin from stored role or text.
 func (d *Database) PendingOriginPaths(currentVersion, limit int) ([]string, error) {
+	return d.PendingOriginPathsContext(context.Background(), currentVersion, limit)
+}
+
+// PendingOriginPathsContext is PendingOriginPaths with cancellation propagated
+// through the query and row iteration.
+func (d *Database) PendingOriginPathsContext(ctx context.Context, currentVersion, limit int) ([]string, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 	if limit <= 0 {
 		return nil, nil
 	}
 
-	rows, err := d.db.Query(`
+	paths, err := d.queryPathsContext(ctx, `
 		SELECT DISTINCT search_items.source_path
 		FROM search_items
 		JOIN indexed_files ON search_items.source_path = indexed_files.path
@@ -1084,19 +1086,6 @@ func (d *Database) PendingOriginPaths(currentVersion, limit int) ([]string, erro
 	if err != nil {
 		return nil, fmt.Errorf("query pending origin paths: %w", err)
 	}
-	defer func() { _ = rows.Close() }()
-
-	var paths []string
-	for rows.Next() {
-		var path string
-		if err := rows.Scan(&path); err != nil {
-			return nil, fmt.Errorf("scan pending origin path: %w", err)
-		}
-		paths = append(paths, path)
-	}
-	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("iterate pending origin paths: %w", err)
-	}
 	return paths, nil
 }
 
@@ -1105,7 +1094,13 @@ func (d *Database) PendingOriginPaths(currentVersion, limit int) ([]string, erro
 // Rows are ordered by last_indexed ASC (FIFO draining). Only surviving source
 // files can supply pairing evidence; expired outputs are never guessed from text.
 func (d *Database) StalePaths(currentVersion int) ([]string, error) {
-	return d.stalePaths(currentVersion, false)
+	return d.StalePathsContext(context.Background(), currentVersion)
+}
+
+// StalePathsContext is StalePaths with cancellation propagated through all
+// discovery queries and row iteration.
+func (d *Database) StalePathsContext(ctx context.Context, currentVersion int) ([]string, error) {
+	return d.stalePathsContext(ctx, currentVersion, false)
 }
 
 // PendingSearchEchoPaths distinguishes the v15 backlog from older extraction
@@ -1123,10 +1118,19 @@ func (d *Database) StalePaths(currentVersion int) ([]string, error) {
 // JSON escaping on top — so no SQL-side shape matching exists to drift out of
 // sync.
 func (d *Database) PendingSearchEchoPaths() ([]string, error) {
-	return d.stalePaths(0, true)
+	return d.PendingSearchEchoPathsContext(context.Background())
 }
 
-func (d *Database) stalePaths(currentVersion int, echoOnly bool) ([]string, error) {
+// PendingSearchEchoPathsContext is PendingSearchEchoPaths with cancellation
+// propagated through discovery and strict echo filtering.
+func (d *Database) PendingSearchEchoPathsContext(ctx context.Context) ([]string, error) {
+	return d.stalePathsContext(ctx, 0, true)
+}
+
+func (d *Database) stalePathsContext(ctx context.Context, currentVersion int, echoOnly bool) ([]string, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 	query := `
 		SELECT DISTINCT search_items.source_path
 		FROM search_items
@@ -1146,7 +1150,7 @@ func (d *Database) stalePaths(currentVersion int, echoOnly bool) ([]string, erro
 		ORDER BY indexed_files.last_indexed ASC, search_items.source_path ASC
 	`
 
-	rows, err := d.db.Query(query, !echoOnly, currentVersion)
+	rows, err := d.db.QueryContext(ctx, query, !echoOnly, currentVersion)
 	if err != nil {
 		return nil, fmt.Errorf("query stale paths: %w", err)
 	}
@@ -1154,6 +1158,9 @@ func (d *Database) stalePaths(currentVersion int, echoOnly bool) ([]string, erro
 
 	var paths []string
 	for rows.Next() {
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
 		var path string
 		if err := rows.Scan(&path); err != nil {
 			return nil, fmt.Errorf("scan stale path: %w", err)
@@ -1161,12 +1168,15 @@ func (d *Database) stalePaths(currentVersion int, echoOnly bool) ([]string, erro
 		paths = append(paths, path)
 	}
 
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 	if err := rows.Err(); err != nil {
 		return nil, fmt.Errorf("iterate stale paths: %w", err)
 	}
 
 	if echoOnly {
-		filtered, err := d.filterEchoZeroPaths(paths)
+		filtered, err := d.filterEchoZeroPathsContext(ctx, paths)
 		if err != nil {
 			return nil, err
 		}
@@ -1181,15 +1191,21 @@ func (d *Database) stalePaths(currentVersion int, echoOnly bool) ([]string, erro
 // a v15 NULL search_echo row (those are always kept), or at least one
 // echo-zero row that directsearch.IsSerializedDirectSearchCall accepts — for
 // any of the three stored shapes (bash, exec_command, shell).
-func (d *Database) filterEchoZeroPaths(paths []string) ([]string, error) {
+func (d *Database) filterEchoZeroPathsContext(ctx context.Context, paths []string) ([]string, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 	if len(paths) == 0 {
 		return paths, nil
 	}
 	keep := make(map[string]bool, len(paths))
 	for _, path := range paths {
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
 		// Reason 1: v15 NULL search_echo backlog — always keep.
 		var nullHit int
-		err := d.db.QueryRow(`
+		err := d.db.QueryRowContext(ctx, `
 			SELECT 1 FROM search_items
 			WHERE source_path = ? AND search_echo IS NULL
 			LIMIT 1
@@ -1203,7 +1219,7 @@ func (d *Database) filterEchoZeroPaths(paths []string) ([]string, error) {
 		}
 		// Reason 2: echo-zero serialized candidate. Apply the strict
 		// chokepoint predicate — keep the path if ANY row matches.
-		rows, err := d.db.Query(`
+		rows, err := d.db.QueryContext(ctx, `
 			SELECT text FROM search_items
 			WHERE source_path = ?
 			  AND `+searchEchoZeroPrefilterSQL("search_items")+`
@@ -1213,6 +1229,10 @@ func (d *Database) filterEchoZeroPaths(paths []string) ([]string, error) {
 		}
 		matched := false
 		for rows.Next() {
+			if err := ctx.Err(); err != nil {
+				_ = rows.Close()
+				return nil, err
+			}
 			var text string
 			if err := rows.Scan(&text); err != nil {
 				_ = rows.Close()
@@ -1224,6 +1244,9 @@ func (d *Database) filterEchoZeroPaths(paths []string) ([]string, error) {
 			}
 		}
 		_ = rows.Close()
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
 		if err := rows.Err(); err != nil {
 			return nil, fmt.Errorf("iterate echo-zero rows for %s: %w", path, err)
 		}
@@ -1233,6 +1256,9 @@ func (d *Database) filterEchoZeroPaths(paths []string) ([]string, error) {
 	}
 	out := make([]string, 0, len(keep))
 	for _, p := range paths {
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
 		if keep[p] {
 			out = append(out, p)
 		}

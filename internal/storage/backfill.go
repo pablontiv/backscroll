@@ -1,6 +1,7 @@
 package storage
 
 import (
+	"context"
 	"database/sql"
 	"fmt"
 	"strings"
@@ -193,6 +194,13 @@ func (d *Database) BackfillDerived(opts BackfillDerivedOpts) error {
 // Input serializations (toolName detected by ParseToolFromSerialized) are always skipped.
 // Returns count of unique templates inserted.
 func (d *Database) backfillTemplatesForFile(tx *sql.Tx, sourcePath string, messages []IndexedMessage, miner *templates.Miner) (int, error) {
+	return d.backfillTemplatesForFileContext(context.Background(), tx, sourcePath, messages, miner)
+}
+
+func (d *Database) backfillTemplatesForFileContext(ctx context.Context, tx *sql.Tx, sourcePath string, messages []IndexedMessage, miner *templates.Miner) (int, error) {
+	if err := ctx.Err(); err != nil {
+		return 0, err
+	}
 	type errorLine struct {
 		toolName string
 		text     string
@@ -203,7 +211,7 @@ func (d *Database) backfillTemplatesForFile(tx *sql.Tx, sourcePath string, messa
 
 	// Pre-load tool_events with is_error=1 for this file to avoid per-message queries.
 	errorEventOrdinals := make(map[int]bool)
-	errRows, err := tx.Query(`
+	errRows, err := tx.QueryContext(ctx, `
 		SELECT DISTINCT ordinal FROM tool_events
 		WHERE source_path = ? AND is_error = 1
 	`, sourcePath)
@@ -212,11 +220,17 @@ func (d *Database) backfillTemplatesForFile(tx *sql.Tx, sourcePath string, messa
 	}
 	defer errRows.Close()
 	for errRows.Next() {
+		if err := ctx.Err(); err != nil {
+			return 0, err
+		}
 		var ordinal int
 		if err := errRows.Scan(&ordinal); err != nil {
 			return 0, fmt.Errorf("scan ordinal: %w", err)
 		}
 		errorEventOrdinals[ordinal] = true
+	}
+	if err := ctx.Err(); err != nil {
+		return 0, err
 	}
 	if err := errRows.Err(); err != nil {
 		return 0, err
@@ -224,6 +238,9 @@ func (d *Database) backfillTemplatesForFile(tx *sql.Tx, sourcePath string, messa
 
 	// Collect tool message text: only rows that are error-bearing.
 	for _, msg := range messages {
+		if err := ctx.Err(); err != nil {
+			return 0, err
+		}
 		// Backfill reads stored text, so it recovers the error signal from an
 		// "error: " prefix or a tool_events row rather than from a struct field.
 		// That determination is all that differs from sync; the selection itself
@@ -242,6 +259,9 @@ func (d *Database) backfillTemplatesForFile(tx *sql.Tx, sourcePath string, messa
 			relevantLines = []string{msg.Text}
 		}
 		for _, line := range relevantLines {
+			if err := ctx.Err(); err != nil {
+				return 0, err
+			}
 			errorLines = append(errorLines, errorLine{
 				toolName: "Unknown", // lossy: tool_name not available
 				text:     line,
@@ -254,6 +274,9 @@ func (d *Database) backfillTemplatesForFile(tx *sql.Tx, sourcePath string, messa
 	// Mine templates and record matches (unchanged from original).
 	templateMap := make(map[string]*templateRecord)
 	for _, errLine := range errorLines {
+		if err := ctx.Err(); err != nil {
+			return 0, err
+		}
 		tmpl := miner.ProcessLine(errLine.text)
 		if tmpl.Signature == "" {
 			continue
@@ -278,7 +301,10 @@ func (d *Database) backfillTemplatesForFile(tx *sql.Tx, sourcePath string, messa
 
 	// Write templates and matches to database.
 	for _, rec := range templateMap {
-		_, err := tx.Exec(`
+		if err := ctx.Err(); err != nil {
+			return 0, err
+		}
+		_, err := tx.ExecContext(ctx, `
 			INSERT OR IGNORE INTO message_templates (signature, normalization_version, template_text, occurrence_count, first_seen, last_seen)
 			VALUES (?, ?, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
 		`, rec.signature, rec.normalizationVersion, rec.text, 1)
@@ -288,7 +314,7 @@ func (d *Database) backfillTemplatesForFile(tx *sql.Tx, sourcePath string, messa
 
 		// Upsert: if template exists with lower normalization_version, update to current version.
 		// This handles the case where a v1 template is being re-mined under v2 heuristics.
-		_, err = tx.Exec(`
+		_, err = tx.ExecContext(ctx, `
 			UPDATE message_templates
 			SET normalization_version = ?
 			WHERE signature = ? AND normalization_version < ?
@@ -298,13 +324,16 @@ func (d *Database) backfillTemplatesForFile(tx *sql.Tx, sourcePath string, messa
 		}
 
 		var tmplID int64
-		err = tx.QueryRow(`SELECT id FROM message_templates WHERE signature = ?`, rec.signature).Scan(&tmplID)
+		err = tx.QueryRowContext(ctx, `SELECT id FROM message_templates WHERE signature = ?`, rec.signature).Scan(&tmplID)
 		if err != nil {
 			return 0, fmt.Errorf("query template id: %w", err)
 		}
 
 		for _, m := range rec.matches {
-			_, err := tx.Exec(`
+			if err := ctx.Err(); err != nil {
+				return 0, err
+			}
+			_, err := tx.ExecContext(ctx, `
 				INSERT OR IGNORE INTO template_matches (template_id, item_uuid, source_path, ordinal)
 				VALUES (?, ?, ?, ?)
 			`, tmplID, m.uuid, m.sourcePath, m.ordinal)
@@ -316,7 +345,10 @@ func (d *Database) backfillTemplatesForFile(tx *sql.Tx, sourcePath string, messa
 
 	// Delete templates that were not re-mined (stuck templates with old version).
 	// First, delete all matches on this path for old-version templates.
-	result1, err := tx.Exec(`
+	if err := ctx.Err(); err != nil {
+		return 0, err
+	}
+	result1, err := tx.ExecContext(ctx, `
 		DELETE FROM template_matches
 		WHERE source_path = ?
 		AND template_id IN (
@@ -331,7 +363,10 @@ func (d *Database) backfillTemplatesForFile(tx *sql.Tx, sourcePath string, messa
 
 	// Then, delete any orphaned templates (those with no matches anywhere).
 	var deletedCount int
-	result, err := tx.Exec(`
+	if err := ctx.Err(); err != nil {
+		return 0, err
+	}
+	result, err := tx.ExecContext(ctx, `
 		DELETE FROM message_templates
 		WHERE normalization_version < ?
 		AND id NOT IN (
@@ -353,9 +388,19 @@ func (d *Database) backfillTemplatesForFile(tx *sql.Tx, sourcePath string, messa
 // backfillCorrectionsForFile detects corrections in prose user messages.
 // Returns count of correction_signals inserted.
 func (d *Database) backfillCorrectionsForFile(tx *sql.Tx, sourcePath string, messages []IndexedMessage) (int, error) {
+	return d.backfillCorrectionsForFileContext(context.Background(), tx, sourcePath, messages)
+}
+
+func (d *Database) backfillCorrectionsForFileContext(ctx context.Context, tx *sql.Tx, sourcePath string, messages []IndexedMessage) (int, error) {
+	if err := ctx.Err(); err != nil {
+		return 0, err
+	}
 	// Convert to models.Message for detector input (with content-type filter)
 	detectionMsgs := make([]models.Message, len(messages))
 	for i, m := range messages {
+		if err := ctx.Err(); err != nil {
+			return 0, err
+		}
 		detectionMsgs[i] = models.Message{
 			Role:           m.Role,
 			Content:        m.Text,
@@ -369,15 +414,18 @@ func (d *Database) backfillCorrectionsForFile(tx *sql.Tx, sourcePath string, mes
 	// from disk, so SyncFiles will never run for them again — this is their only route
 	// to a detector fix. Without it a false positive recorded under older rules would
 	// be permanent for exactly the sessions the perennial store exists to preserve.
-	if _, err := tx.Exec(`
+	if _, err := tx.ExecContext(ctx, `
 		DELETE FROM correction_signals
 		WHERE source_path = ? AND (extraction_version IS NULL OR extraction_version < ?)
 	`, sourcePath, CurrentExtractionVersion); err != nil {
 		return 0, fmt.Errorf("clear superseded correction_signals: %w", err)
 	}
 
-	// Run detectors with prose filter
-	detections := backfillDetectCorrections(detectionMsgs)
+	// Run detectors with prose filter.
+	detections, err := corrections.RunDetectorsFilteredContext(ctx, detectionMsgs)
+	if err != nil {
+		return 0, err
+	}
 
 	// Insert signals (idempotent). Stamped with the current extraction version, not
 	// the lossy 0 marker: the detector read the same stored prose either way, so the
@@ -385,8 +433,14 @@ func (d *Database) backfillCorrectionsForFile(tx *sql.Tx, sourcePath string, mes
 	// path re-derived under today's rules is no longer discovered as stale.
 	count := 0
 	for ordinal, dets := range detections {
+		if err := ctx.Err(); err != nil {
+			return 0, err
+		}
 		for _, det := range dets {
-			_, err := tx.Exec(`
+			if err := ctx.Err(); err != nil {
+				return 0, err
+			}
+			_, err := tx.ExecContext(ctx, `
 				INSERT OR IGNORE INTO correction_signals
 				(item_uuid, source_path, ordinal, detector, confidence, extraction_version)
 				VALUES (?, ?, ?, ?, ?, ?)
@@ -442,7 +496,13 @@ func (d *Database) backfillToolEventsForFile(tx *sql.Tx, sourcePath string, mess
 // than currentVersion. Results are ordered by ascending source_path (deterministic).
 // Used to discover which files need re-mining under newer template heuristics.
 func (d *Database) StaleTemplatePaths(currentVersion int) ([]string, error) {
-	paths, err := d.queryPaths(`
+	return d.StaleTemplatePathsContext(context.Background(), currentVersion)
+}
+
+// StaleTemplatePathsContext is StaleTemplatePaths with cancellation propagated
+// through the query and row iteration.
+func (d *Database) StaleTemplatePathsContext(ctx context.Context, currentVersion int) ([]string, error) {
+	paths, err := d.queryPathsContext(ctx, `
 		SELECT DISTINCT tm.source_path
 		FROM template_matches tm
 		JOIN message_templates mt ON tm.template_id = mt.id
@@ -458,10 +518,19 @@ func (d *Database) StaleTemplatePaths(currentVersion int) ([]string, error) {
 // LoadMessagesForPath loads all IndexedMessage rows from search_items for a given source path,
 // ordered by ordinal. Used by incremental template re-mining in sync_helpers.go.
 func (d *Database) LoadMessagesForPath(sourcePath string) ([]IndexedMessage, error) {
+	return d.LoadMessagesForPathContext(context.Background(), sourcePath)
+}
+
+// LoadMessagesForPathContext is LoadMessagesForPath with cancellation propagated
+// through the query and row iteration.
+func (d *Database) LoadMessagesForPathContext(ctx context.Context, sourcePath string) ([]IndexedMessage, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 	// uuid, timestamp and extraction_version are the nullable columns here, and legacy
 	// and Pi/OpenCode rows do carry NULLs in them; a plain Scan fails on those and
 	// would abort the whole caller. Same reason AggregateCorrections coalesces uuid.
-	rows, err := d.db.Query(`
+	rows, err := d.db.QueryContext(ctx, `
 		SELECT
 			ordinal,
 			COALESCE(uuid, ''),
@@ -482,6 +551,9 @@ func (d *Database) LoadMessagesForPath(sourcePath string) ([]IndexedMessage, err
 
 	var msgs []IndexedMessage
 	for rows.Next() {
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
 		var msg IndexedMessage
 		var wasInterrupted *int
 		if err := rows.Scan(
@@ -495,6 +567,9 @@ func (d *Database) LoadMessagesForPath(sourcePath string) ([]IndexedMessage, err
 		}
 		msgs = append(msgs, msg)
 	}
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 	return msgs, rows.Err()
 }
 
@@ -504,20 +579,37 @@ func (d *Database) LoadMessagesForPath(sourcePath string) ([]IndexedMessage, err
 // (obtained from LoadMessagesForPath or StaleTemplatePaths).
 // Returns count of deleted stuck templates (those with old normalization_version not reproduced in re-mining).
 func (d *Database) BackfillTemplatesForFile(miner *templates.Miner, sourcePath string, msgs []IndexedMessage) (int, error) {
-	tx, err := d.db.Begin()
+	return d.BackfillTemplatesForFileContext(context.Background(), miner, sourcePath, msgs)
+}
+
+// BackfillTemplatesForFileContext is BackfillTemplatesForFile with cancellation
+// propagated through its per-path transaction. Cancellation rolls back this path.
+func (d *Database) BackfillTemplatesForFileContext(ctx context.Context, miner *templates.Miner, sourcePath string, msgs []IndexedMessage) (int, error) {
+	if err := ctx.Err(); err != nil {
+		return 0, err
+	}
+	tx, err := d.db.BeginTx(ctx, nil)
 	if err != nil {
 		return 0, fmt.Errorf("begin transaction: %w", err)
 	}
 	defer func() { _ = tx.Rollback() }()
 
-	// Re-mine templates using internal backfillTemplatesForFile
-	// This handles all cases including empty messages (which allows stuck template deletion)
-	deletedCount, err := d.backfillTemplatesForFile(tx, sourcePath, msgs, miner)
+	// Re-mine templates using internal backfillTemplatesForFileContext.
+	// This handles all cases including empty messages (which allows stuck template deletion).
+	deletedCount, err := d.backfillTemplatesForFileContext(ctx, tx, sourcePath, msgs, miner)
 	if err != nil {
+		if ctxErr := ctx.Err(); ctxErr != nil {
+			return 0, ctxErr
+		}
 		return 0, err
 	}
-
+	if err := ctx.Err(); err != nil {
+		return 0, err
+	}
 	if err := tx.Commit(); err != nil {
+		if ctxErr := ctx.Err(); ctxErr != nil {
+			return 0, ctxErr
+		}
 		return 0, err
 	}
 	return deletedCount, nil
@@ -545,7 +637,18 @@ func backfillDetectCorrections(msgs []models.Message) map[int][]corrections.Dete
 // to no signals at all has no stale rows left to match. limit bounds the work per run;
 // remaining paths drain on later runs in deterministic path order.
 func (d *Database) RederiveSupersededCorrections(limit int) (int, error) {
-	paths, err := d.queryPaths(`
+	return d.RederiveSupersededCorrectionsContext(context.Background(), limit)
+}
+
+// RederiveSupersededCorrectionsContext is RederiveSupersededCorrections with
+// cancellation propagated through discovery and each per-path transaction.
+// A canceled active path is rolled back and processing stops immediately; paths
+// committed earlier remain committed under the existing convergence semantics.
+func (d *Database) RederiveSupersededCorrectionsContext(ctx context.Context, limit int) (int, error) {
+	if err := ctx.Err(); err != nil {
+		return 0, err
+	}
+	paths, err := d.queryPathsContext(ctx, `
 		SELECT DISTINCT source_path FROM correction_signals
 		WHERE extraction_version IS NULL OR extraction_version < ?
 		ORDER BY source_path
@@ -561,14 +664,11 @@ func (d *Database) RederiveSupersededCorrections(limit int) (int, error) {
 	// One transaction PER PATH, not one for the batch. Re-deriving a path deletes its
 	// superseded signals before writing the new ones, so that pair must be atomic —
 	// but only per path, since paths are independent and partial batch progress is
-	// both harmless and convergent. A shared batch transaction would be worse than
-	// useless here: a path failing midway would leave its DELETE staged, and skipping
-	// to the next path would still commit that DELETE at the end, wiping the signals
-	// of the very path the loop claims to have skipped.
+	// both harmless and convergent. Cancellation therefore preserves earlier commits,
+	// rolls back the active path, and stops before any later path begins.
 	//
-	// A path that fails is skipped rather than aborting the run. Discovery order is
-	// deterministic, so failing fast would park the same path at the head of every
-	// run and nothing behind it would ever be re-derived.
+	// Ordinary path failures are skipped rather than aborting the run. Discovery order
+	// is deterministic, so failing fast would park the same path at the head forever.
 	processed := 0
 	var firstErr error
 	recordErr := func(err error) {
@@ -577,21 +677,40 @@ func (d *Database) RederiveSupersededCorrections(limit int) (int, error) {
 		}
 	}
 	for _, sourcePath := range paths {
-		msgs, err := d.LoadMessagesForPath(sourcePath)
+		if err := ctx.Err(); err != nil {
+			return processed, err
+		}
+		msgs, err := d.LoadMessagesForPathContext(ctx, sourcePath)
 		if err != nil {
+			if ctxErr := ctx.Err(); ctxErr != nil {
+				return processed, ctxErr
+			}
 			recordErr(fmt.Errorf("load messages for %s: %w", sourcePath, err))
 			continue
 		}
-		tx, err := d.db.Begin()
+		tx, err := d.db.BeginTx(ctx, nil)
 		if err != nil {
+			if ctxErr := ctx.Err(); ctxErr != nil {
+				return processed, ctxErr
+			}
 			return processed, fmt.Errorf("begin transaction for %s: %w", sourcePath, err)
 		}
-		if _, err := d.backfillCorrectionsForFile(tx, sourcePath, msgs); err != nil {
+		if _, err := d.backfillCorrectionsForFileContext(ctx, tx, sourcePath, msgs); err != nil {
 			_ = tx.Rollback()
+			if ctxErr := ctx.Err(); ctxErr != nil {
+				return processed, ctxErr
+			}
 			recordErr(fmt.Errorf("re-derive corrections for %s: %w", sourcePath, err))
 			continue
 		}
+		if err := ctx.Err(); err != nil {
+			_ = tx.Rollback()
+			return processed, err
+		}
 		if err := tx.Commit(); err != nil {
+			if ctxErr := ctx.Err(); ctxErr != nil {
+				return processed, ctxErr
+			}
 			recordErr(fmt.Errorf("commit re-derivation for %s: %w", sourcePath, err))
 			continue
 		}
@@ -600,11 +719,13 @@ func (d *Database) RederiveSupersededCorrections(limit int) (int, error) {
 	return processed, firstErr
 }
 
-// queryPaths runs a query returning a single source_path column and collects it.
-// Shared by the stale-template and superseded-correction discovery queries, which
-// otherwise repeat the same scan-and-close boilerplate.
-func (d *Database) queryPaths(query string, args ...any) ([]string, error) {
-	rows, err := d.db.Query(query, args...)
+// queryPathsContext runs a query returning one source_path column and collects
+// it while propagating cancellation through query execution and row iteration.
+func (d *Database) queryPathsContext(ctx context.Context, query string, args ...any) ([]string, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	rows, err := d.db.QueryContext(ctx, query, args...)
 	if err != nil {
 		return nil, err
 	}
@@ -612,11 +733,17 @@ func (d *Database) queryPaths(query string, args ...any) ([]string, error) {
 
 	var paths []string
 	for rows.Next() {
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
 		var p string
 		if err := rows.Scan(&p); err != nil {
 			return nil, fmt.Errorf("scan path: %w", err)
 		}
 		paths = append(paths, p)
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, err
 	}
 	return paths, rows.Err()
 }
