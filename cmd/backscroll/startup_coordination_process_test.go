@@ -33,15 +33,16 @@ func TestStartupCoordinationHelperProcess(t *testing.T) {
 	ready := os.Getenv("BACKSCROLL_SYNC_READY")
 	release := os.Getenv("BACKSCROLL_SYNC_RELEASE")
 	block := os.Getenv("BACKSCROLL_SYNC_BLOCK") == "1"
+	coordinator := newStartupCoordinator()
 	if wait := os.Getenv("BACKSCROLL_MUTATION_WAIT"); wait != "" {
 		parsed, err := time.ParseDuration(wait)
 		if err != nil {
 			t.Fatal(err)
 		}
-		startupMutationWait = parsed
+		coordinator.mutationWait = parsed
 	}
 
-	startupSync = func(context.Context, *config.Config, io.Writer) error {
+	coordinator.sync = func(context.Context, *config.Config, io.Writer) error {
 		if counter == "" {
 			return fmt.Errorf("BACKSCROLL_SYNC_COUNTER is required when startup sync runs")
 		}
@@ -88,7 +89,7 @@ func TestStartupCoordinationHelperProcess(t *testing.T) {
 	if err := json.Unmarshal([]byte(argvJSON), &argv); err != nil {
 		t.Fatal(err)
 	}
-	root := buildRootCmd(os.Stdout, os.Stderr)
+	root := buildRootCmdWithCoordinator(os.Stdout, os.Stderr, coordinator)
 	root.SetArgs(argv)
 	if err := root.Execute(); err != nil {
 		fmt.Fprintln(os.Stderr, err)

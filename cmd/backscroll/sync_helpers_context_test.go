@@ -362,13 +362,13 @@ func TestCanceledMutationReleasesRetainedLeaseExactlyOnce(t *testing.T) {
 func TestOwnedStartupPreservesSuccessfulProgressBytes(t *testing.T) {
 	type startupSyncContextKey struct{}
 	ctx := context.WithValue(context.Background(), startupSyncContextKey{}, "startup-sync")
-	restoreStartupCoordinatorGlobals(t)
+	coordinator := newStartupCoordinator()
 	lease := &fakeStartupLease{}
-	startupTryAcquire = func(string) (startupLease, bool, error) { return lease, true, nil }
-	startupPrepareIndex = func(context.Context, *config.Config, indexCommandClass) (*storage.Database, *compat.Diagnostic, error) {
+	coordinator.tryAcquire = func(string) (startupLease, bool, error) { return lease, true, nil }
+	coordinator.prepareIndex = func(context.Context, *config.Config, indexCommandClass) (*storage.Database, *compat.Diagnostic, error) {
 		return nil, nil, nil
 	}
-	startupSync = func(gotCtx context.Context, _ *config.Config, progress io.Writer) error {
+	coordinator.sync = func(gotCtx context.Context, _ *config.Config, progress io.Writer) error {
 		if gotCtx.Value(startupSyncContextKey{}) != "startup-sync" {
 			t.Fatal("startup sync did not receive coordinator context")
 		}
@@ -377,7 +377,7 @@ func TestOwnedStartupPreservesSuccessfulProgressBytes(t *testing.T) {
 	}
 
 	var progress bytes.Buffer
-	result := coordinateStartup(ctx, &config.Config{DatabasePath: filepath.Join(t.TempDir(), "index.db")}, &progress, startupSnapshotRead)
+	result := coordinator.coordinate(ctx, &config.Config{DatabasePath: filepath.Join(t.TempDir(), "index.db")}, &progress, startupSnapshotRead)
 	if result.Failure != nil {
 		t.Fatalf("failure=%v", result.Failure)
 	}
