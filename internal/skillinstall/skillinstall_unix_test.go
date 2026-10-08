@@ -78,6 +78,168 @@ func TestUnixPrivateFileAndLockValidation(t *testing.T) {
 	}
 }
 
+func TestPinnedDirectoryOperations(t *testing.T) {
+	if _, err := openPinnedDir("relative"); err == nil {
+		t.Fatal("openPinnedDir accepted a relative path")
+	}
+	if _, err := openPinnedDir(filepath.Join(t.TempDir(), "missing")); err == nil {
+		t.Fatal("openPinnedDir accepted a missing path")
+	}
+	directoryPath, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	directory, err := openPinnedDir(directoryPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer directory.close()
+	if err := directory.stablePath(); err != nil {
+		t.Fatal(err)
+	}
+	if err := directory.sync(); err != nil {
+		t.Fatal(err)
+	}
+	if got, err := directory.snapshot("absent"); err != nil || got.Kind != "absent" {
+		t.Fatalf("absent snapshot = %#v, error = %v", got, err)
+	}
+	longTarget := strings.Repeat("x", 200)
+	if err := directory.symlink(longTarget, "link"); err != nil {
+		t.Fatal(err)
+	}
+	if got, err := directory.snapshot("link"); err != nil || got.Kind != "link" || got.Target != longTarget {
+		t.Fatalf("link snapshot = %#v, error = %v", got, err)
+	}
+	if err := directory.remove("link"); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(directoryPath, "file"), []byte("data"), 0o640); err != nil {
+		t.Fatal(err)
+	}
+	if got, err := directory.snapshot("file"); err != nil || got.Kind != "file" || got.Mode != 0o640 {
+		t.Fatalf("file snapshot = %#v, error = %v", got, err)
+	}
+	if err := os.Mkdir(filepath.Join(directoryPath, "tree"), 0o750); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(directoryPath, "tree", "child"), []byte("child"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if got, err := directory.snapshot("tree"); err != nil || got.Kind != "directory" || got.Entries["child"].Kind != "file" {
+		t.Fatalf("directory snapshot = %#v, error = %v", got, err)
+	}
+	for _, name := range []string{"", ".", "..", "path/child"} {
+		if _, err := directory.snapshot(name); err == nil {
+			t.Fatalf("snapshot accepted %q", name)
+		}
+		if err := directory.symlink("target", name); err == nil {
+			t.Fatalf("symlink accepted %q", name)
+		}
+		if err := directory.remove(name); err == nil {
+			t.Fatalf("remove accepted %q", name)
+		}
+	}
+	if err := directory.close(); err != nil {
+		t.Fatal(err)
+	}
+	if err := directory.close(); err != nil {
+		t.Fatal(err)
+	}
+	if err := (*pinnedDir)(nil).close(); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestApplyPinsDestinationParentDuringReplacement(t *testing.T) {
+	home := testHome(t)
+	installer := testInstaller(t, home, dependencies{syncDir: syncDirectory})
+	seedUnknown(t, installer)
+	plan, err := installer.Plan()
+	if err != nil {
+		t.Fatal(err)
+	}
+	target := plan.Targets[0].Path
+	parent := filepath.Dir(target)
+	held := parent + "-held"
+	outside := filepath.Join(home, "outside")
+	if err := os.Mkdir(outside, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	injected := false
+	installer.deps.beforeExchange = func(_, right string) error {
+		if injected || right != target {
+			return nil
+		}
+		injected = true
+		if err := os.Rename(parent, held); err != nil {
+			return err
+		}
+		return os.Symlink(outside, parent)
+	}
+
+	_, err = installer.Apply(plan.Approval)
+	if err == nil || !strings.Contains(err.Error(), "pinned directory path changed") {
+		t.Fatalf("Apply parent race error = %v", err)
+	}
+	if got := mustRead(t, filepath.Join(held, "backscroll", "local-note")); got != "operator data" {
+		t.Fatalf("Apply parent race changed the preimage: %q", got)
+	}
+	entries, err := os.ReadDir(outside)
+	if err != nil || len(entries) != 0 {
+		t.Fatalf("Apply parent race changed outside directory: entries=%v error=%v", entries, err)
+	}
+}
+
+func TestRestorePinsDestinationParentDuringReplacement(t *testing.T) {
+	home := testHome(t)
+	installer := testInstaller(t, home, dependencies{syncDir: syncDirectory})
+	seedUnknown(t, installer)
+	plan, err := installer.Plan()
+	if err != nil {
+		t.Fatal(err)
+	}
+	result, err := installer.Apply(plan.Approval)
+	if err != nil {
+		t.Fatal(err)
+	}
+	value, _, err := readReceipt(result.Receipt)
+	if err != nil {
+		t.Fatal(err)
+	}
+	target := plan.Targets[0].Path
+	parent := filepath.Dir(target)
+	held := parent + "-held"
+	outside := filepath.Join(home, "outside")
+	if err := os.Mkdir(outside, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	injected := false
+	deps := dependencies{syncDir: syncDirectory}
+	deps.beforeExchange = func(_, right string) error {
+		if injected || right != target {
+			return nil
+		}
+		injected = true
+		if err := os.Rename(parent, held); err != nil {
+			return err
+		}
+		return os.Symlink(outside, parent)
+	}
+
+	_, err = restoreRows(filepath.Dir(result.Receipt), value, deps)
+	if err == nil || !strings.Contains(err.Error(), "pinned directory path changed") {
+		t.Fatalf("Restore parent race error = %v", err)
+	}
+	assertLinkTarget(t, filepath.Join(held, "backscroll"), plan.Source.Path)
+	if got := mustRead(t, filepath.Join(filepath.Dir(result.Receipt), "backup-0", "local-note")); got != "operator data" {
+		t.Fatalf("Restore parent race changed the backup: %q", got)
+	}
+	entries, err := os.ReadDir(outside)
+	if err != nil || len(entries) != 0 {
+		t.Fatalf("Restore parent race changed outside directory: entries=%v error=%v", entries, err)
+	}
+}
+
 func TestPlanRejectsUnsafeFilesystemObjectsAndLayouts(t *testing.T) {
 	t.Run("symlinked destination ancestor", func(t *testing.T) {
 		home := testHome(t)
@@ -88,7 +250,7 @@ func TestPlanRejectsUnsafeFilesystemObjectsAndLayouts(t *testing.T) {
 		if err := os.Symlink(outside, filepath.Join(home, ".agents")); err != nil {
 			t.Fatal(err)
 		}
-		installer := testInstaller(t, home, dependencies{exchange: exchangePaths, moveNoReplace: moveNoReplace, syncDir: syncDirectory})
+		installer := testInstaller(t, home, dependencies{syncDir: syncDirectory})
 		if _, err := installer.Plan(); err == nil || !strings.Contains(err.Error(), "unsafe ancestor") {
 			t.Fatalf("Plan symlink ancestor error = %v", err)
 		}
@@ -111,7 +273,7 @@ func TestPlanRejectsUnsafeFilesystemObjectsAndLayouts(t *testing.T) {
 		if err := os.Symlink(outside, state); err != nil {
 			t.Fatal(err)
 		}
-		installer := testInstaller(t, home, dependencies{exchange: exchangePaths, moveNoReplace: moveNoReplace, syncDir: syncDirectory})
+		installer := testInstaller(t, home, dependencies{syncDir: syncDirectory})
 		if _, err := installer.Apply(""); err == nil {
 			t.Fatal("Apply accepted a symlinked state directory")
 		}
@@ -137,7 +299,7 @@ func TestPlanRejectsUnsafeFilesystemObjectsAndLayouts(t *testing.T) {
 
 	t.Run("hard-linked file", func(t *testing.T) {
 		home := testHome(t)
-		installer := testInstaller(t, home, dependencies{exchange: exchangePaths, moveNoReplace: moveNoReplace, syncDir: syncDirectory})
+		installer := testInstaller(t, home, dependencies{syncDir: syncDirectory})
 		target := targetPaths(installer.home, installer.configHome)[0]
 		if err := os.MkdirAll(filepath.Dir(target), 0o700); err != nil {
 			t.Fatal(err)
@@ -155,7 +317,7 @@ func TestPlanRejectsUnsafeFilesystemObjectsAndLayouts(t *testing.T) {
 
 	t.Run("special file", func(t *testing.T) {
 		home := testHome(t)
-		installer := testInstaller(t, home, dependencies{exchange: exchangePaths, moveNoReplace: moveNoReplace, syncDir: syncDirectory})
+		installer := testInstaller(t, home, dependencies{syncDir: syncDirectory})
 		target := targetPaths(installer.home, installer.configHome)[0]
 		if err := os.MkdirAll(filepath.Dir(target), 0o700); err != nil {
 			t.Fatal(err)

@@ -38,7 +38,7 @@ func TestOfficialShimMatchesRepositoryTree(t *testing.T) {
 
 func TestInstallSuccessAndIdempotence(t *testing.T) {
 	home := testHome(t)
-	installer := testInstaller(t, home, dependencies{exchange: exchangePaths, moveNoReplace: moveNoReplace, syncDir: syncDirectory})
+	installer := testInstaller(t, home, dependencies{syncDir: syncDirectory})
 
 	plan, err := installer.Plan()
 	if err != nil {
@@ -91,7 +91,7 @@ func TestInstallSuccessAndIdempotence(t *testing.T) {
 
 func TestUnknownContentNeedsApprovalAndRestores(t *testing.T) {
 	home := testHome(t)
-	installer := testInstaller(t, home, dependencies{exchange: exchangePaths, moveNoReplace: moveNoReplace, syncDir: syncDirectory})
+	installer := testInstaller(t, home, dependencies{syncDir: syncDirectory})
 	seedUnknown(t, installer)
 	plan, err := installer.Plan()
 	if err != nil {
@@ -141,16 +141,114 @@ func TestUnknownContentNeedsApprovalAndRestores(t *testing.T) {
 	}
 }
 
+func TestApplyRejectsObjectChangedAfterValidation(t *testing.T) {
+	home := testHome(t)
+	installer := testInstaller(t, home, dependencies{syncDir: syncDirectory})
+	seedUnknown(t, installer)
+	plan, err := installer.Plan()
+	if err != nil {
+		t.Fatal(err)
+	}
+	target := plan.Targets[0].Path
+	approved := target + ".approved"
+	injected := false
+	installer.deps.beforeExchange = func(_, right string) error {
+		if injected || right != target {
+			return nil
+		}
+		injected = true
+		if err := os.Rename(target, approved); err != nil {
+			return err
+		}
+		return os.WriteFile(target, []byte("concurrent work"), 0o600)
+	}
+
+	_, err = installer.Apply(plan.Approval)
+	if err == nil || !strings.Contains(err.Error(), "destination changed during atomic installation") {
+		t.Fatalf("Apply race error = %v", err)
+	}
+	if !strings.Contains(err.Error(), "receipt:") || !strings.Contains(err.Error(), "restore_approval:") {
+		t.Fatalf("Apply rollback error omits recovery credentials: %v", err)
+	}
+	if got := mustRead(t, target); got != "concurrent work" {
+		t.Fatalf("Apply race changed concurrent work: %q", got)
+	}
+	if got := mustRead(t, filepath.Join(approved, "local-note")); got != "operator data" {
+		t.Fatalf("Apply race lost approved preimage: %q", got)
+	}
+}
+
+func TestRestoreRejectsObjectChangedAfterValidation(t *testing.T) {
+	home := testHome(t)
+	installer := testInstaller(t, home, dependencies{syncDir: syncDirectory})
+	seedUnknown(t, installer)
+	plan, err := installer.Plan()
+	if err != nil {
+		t.Fatal(err)
+	}
+	result, err := installer.Apply(plan.Approval)
+	if err != nil {
+		t.Fatal(err)
+	}
+	value, _, err := readReceipt(result.Receipt)
+	if err != nil {
+		t.Fatal(err)
+	}
+	targets := targetPaths(installer.home, installer.configHome)
+	injected := false
+	deps := dependencies{}
+	deps.syncDir = func(path string) error {
+		if !injected && path == filepath.Dir(targets[0]) {
+			injected = true
+			if err := os.Remove(targets[1]); err != nil {
+				return err
+			}
+			if err := os.WriteFile(targets[1], []byte("concurrent work"), 0o600); err != nil {
+				return err
+			}
+		}
+		return syncDirectory(path)
+	}
+
+	_, err = restoreRows(filepath.Dir(result.Receipt), value, deps)
+	if err == nil || !strings.Contains(err.Error(), "concurrent destination change") {
+		t.Fatalf("Restore race error = %v", err)
+	}
+	if got := mustRead(t, targets[1]); got != "concurrent work" {
+		t.Fatalf("Restore race changed concurrent work: %q", got)
+	}
+	if got := mustRead(t, filepath.Join(filepath.Dir(result.Receipt), "backup-1", "local-note")); got != "operator data" {
+		t.Fatalf("Restore race changed the backup: %q", got)
+	}
+}
+
+func TestPythonV1LiteralFixture(t *testing.T) {
+	path := filepath.Join("testdata", "python-v1-receipt.json")
+	value, approval, err := readReceipt(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if value.Version != 1 || value.Plan.Version != 1 || value.Run != "37bb4c83751f4c7a8886290c38d34a79" {
+		t.Fatalf("Python v1 fixture identity = %+v", value)
+	}
+	if approval != "82520cefa00d2fd71e6eb91c7a414101cb2cb39c598b610cf39863d035e65195" {
+		t.Fatalf("Python v1 fixture restore approval = %s", approval)
+	}
+	if value.Plan.Approval != "0c085da8bed41b13e2581fa17c5b082c2e8ffefde50890cef892a4f85bc0fc9f" {
+		t.Fatalf("Python v1 fixture plan approval = %s", value.Plan.Approval)
+	}
+}
+
 func TestPartialFailureRestoresAllDestinations(t *testing.T) {
 	home := testHome(t)
 	calls := 0
-	deps := dependencies{moveNoReplace: moveNoReplace, syncDir: syncDirectory}
-	deps.exchange = func(left, right string) error {
+	deps := dependencies{syncDir: syncDirectory}
+	deps.beforeExchange = func(left, right string) error {
 		calls++
 		if calls == 2 {
 			return errors.New("injected second destination failure")
 		}
-		return exchangePaths(left, right)
+		return nil
 	}
 	installer := testInstaller(t, home, deps)
 	seedUnknown(t, installer)
@@ -180,7 +278,7 @@ func TestPartialFailureRestoresAllDestinations(t *testing.T) {
 
 func TestRestoreRejectsManipulatedReceipt(t *testing.T) {
 	home := testHome(t)
-	installer := testInstaller(t, home, dependencies{exchange: exchangePaths, moveNoReplace: moveNoReplace, syncDir: syncDirectory})
+	installer := testInstaller(t, home, dependencies{syncDir: syncDirectory})
 	result, err := installer.Apply("")
 	if err != nil {
 		t.Fatal(err)
@@ -218,7 +316,7 @@ func TestRestoreRejectsManipulatedReceipt(t *testing.T) {
 
 func TestRestoreCleansPreparedAtomicReplacement(t *testing.T) {
 	home := testHome(t)
-	installer := testInstaller(t, home, dependencies{exchange: exchangePaths, moveNoReplace: moveNoReplace, syncDir: syncDirectory})
+	installer := testInstaller(t, home, dependencies{syncDir: syncDirectory})
 	plan, err := installer.Plan()
 	if err != nil {
 		t.Fatal(err)
@@ -348,7 +446,7 @@ func TestRestoreAcceptsPythonV1Receipt(t *testing.T) {
 
 func TestFileAndBrokenLinkRestoreExactPreimages(t *testing.T) {
 	home := testHome(t)
-	installer := testInstaller(t, home, dependencies{exchange: exchangePaths, moveNoReplace: moveNoReplace, syncDir: syncDirectory})
+	installer := testInstaller(t, home, dependencies{syncDir: syncDirectory})
 	targets := targetPaths(installer.home, installer.configHome)
 	for _, target := range targets[:2] {
 		if err := os.MkdirAll(filepath.Dir(target), 0o700); err != nil {
@@ -391,7 +489,7 @@ func TestFileAndBrokenLinkRestoreExactPreimages(t *testing.T) {
 
 func TestRestoreRefusesDestinationAndBackupDrift(t *testing.T) {
 	home := testHome(t)
-	installer := testInstaller(t, home, dependencies{exchange: exchangePaths, moveNoReplace: moveNoReplace, syncDir: syncDirectory})
+	installer := testInstaller(t, home, dependencies{syncDir: syncDirectory})
 	seedUnknown(t, installer)
 	plan, err := installer.Plan()
 	if err != nil {
@@ -432,7 +530,7 @@ func TestRestoreRefusesDestinationAndBackupDrift(t *testing.T) {
 
 func TestReceiptAndJournalRemainAppendOnly(t *testing.T) {
 	home := testHome(t)
-	installer := testInstaller(t, home, dependencies{exchange: exchangePaths, moveNoReplace: moveNoReplace, syncDir: syncDirectory})
+	installer := testInstaller(t, home, dependencies{syncDir: syncDirectory})
 	result, err := installer.Apply("")
 	if err != nil {
 		t.Fatal(err)
@@ -476,7 +574,7 @@ func TestReceiptAndJournalRemainAppendOnly(t *testing.T) {
 
 func TestManagedPreviousVersionUpdatesWithoutApproval(t *testing.T) {
 	home := testHome(t)
-	old := testInstaller(t, home, dependencies{exchange: exchangePaths, moveNoReplace: moveNoReplace, syncDir: syncDirectory})
+	old := testInstaller(t, home, dependencies{syncDir: syncDirectory})
 	oldDigest, err := digestValue(old.desired)
 	if err != nil {
 		t.Fatal(err)
@@ -523,7 +621,7 @@ func TestManagedPreviousVersionUpdatesWithoutApproval(t *testing.T) {
 
 func TestConcurrentInstallerLockIsRejected(t *testing.T) {
 	home := testHome(t)
-	installer := testInstaller(t, home, dependencies{exchange: exchangePaths, moveNoReplace: moveNoReplace, syncDir: syncDirectory})
+	installer := testInstaller(t, home, dependencies{syncDir: syncDirectory})
 	lock, err := acquireLock(installer.state)
 	if err != nil {
 		t.Fatal(err)
@@ -537,7 +635,7 @@ func TestConcurrentInstallerLockIsRejected(t *testing.T) {
 func TestFilesystemPreflightRunsBeforeReceiptOrDestinationMutation(t *testing.T) {
 	home := testHome(t)
 	deps := dependencies{
-		exchange: exchangePaths, moveNoReplace: moveNoReplace, syncDir: syncDirectory,
+		syncDir:        syncDirectory,
 		sameFilesystem: func(string, string) error { return errors.New("injected cross-filesystem target") },
 	}
 	installer := testInstaller(t, home, deps)
@@ -629,7 +727,7 @@ func TestInstallerInputValidation(t *testing.T) {
 
 func TestReceiptValidationRejectsInvalidShapes(t *testing.T) {
 	home := testHome(t)
-	installer := testInstaller(t, home, dependencies{exchange: exchangePaths, moveNoReplace: moveNoReplace, syncDir: syncDirectory})
+	installer := testInstaller(t, home, dependencies{syncDir: syncDirectory})
 	plan, err := installer.Plan()
 	if err != nil {
 		t.Fatal(err)
@@ -774,7 +872,7 @@ func TestRestoreAcceptsPythonV1UninstallReceipt(t *testing.T) {
 
 func TestRestoreRejectsConcurrentLockAndInsecureJournal(t *testing.T) {
 	home := testHome(t)
-	installer := testInstaller(t, home, dependencies{exchange: exchangePaths, moveNoReplace: moveNoReplace, syncDir: syncDirectory})
+	installer := testInstaller(t, home, dependencies{syncDir: syncDirectory})
 	result, err := installer.Apply("")
 	if err != nil {
 		t.Fatal(err)
@@ -803,7 +901,7 @@ func TestRestoreRejectsConcurrentLockAndInsecureJournal(t *testing.T) {
 
 func TestManagedTargetRecognitionRejectsUnownedShapes(t *testing.T) {
 	home := testHome(t)
-	installer := testInstaller(t, home, dependencies{exchange: exchangePaths, moveNoReplace: moveNoReplace, syncDir: syncDirectory})
+	installer := testInstaller(t, home, dependencies{syncDir: syncDirectory})
 	digest := strings.Repeat("a", 64)
 	managed := filepath.Join(home, managedPath, digest, "backscroll")
 	cases := []Snapshot{
@@ -894,13 +992,13 @@ func TestTargetPublicationFailuresRollback(t *testing.T) {
 	t.Run("absent destination publish", func(t *testing.T) {
 		home := testHome(t)
 		moves := 0
-		deps := dependencies{exchange: exchangePaths, syncDir: syncDirectory}
-		deps.moveNoReplace = func(oldPath, newPath string) error {
+		deps := dependencies{syncDir: syncDirectory}
+		deps.beforeMove = func(oldPath, newPath string) error {
 			moves++
 			if moves == 2 {
 				return errors.New("injected destination publish failure")
 			}
-			return moveNoReplace(oldPath, newPath)
+			return nil
 		}
 		installer := testInstaller(t, home, deps)
 		if _, err := installer.Apply(""); err == nil || !strings.Contains(err.Error(), "destination publish failure") {
@@ -916,13 +1014,13 @@ func TestTargetPublicationFailuresRollback(t *testing.T) {
 	t.Run("backup publish", func(t *testing.T) {
 		home := testHome(t)
 		moves := 0
-		deps := dependencies{exchange: exchangePaths, syncDir: syncDirectory}
-		deps.moveNoReplace = func(oldPath, newPath string) error {
+		deps := dependencies{syncDir: syncDirectory}
+		deps.beforeMove = func(oldPath, newPath string) error {
 			moves++
 			if moves == 2 {
 				return errors.New("injected backup publish failure")
 			}
-			return moveNoReplace(oldPath, newPath)
+			return nil
 		}
 		installer := testInstaller(t, home, deps)
 		seedUnknown(t, installer)
@@ -942,7 +1040,7 @@ func TestTargetPublicationFailuresRollback(t *testing.T) {
 
 	t.Run("replacement sync", func(t *testing.T) {
 		home := testHome(t)
-		installer := testInstaller(t, home, dependencies{exchange: exchangePaths, moveNoReplace: moveNoReplace, syncDir: syncDirectory})
+		installer := testInstaller(t, home, dependencies{syncDir: syncDirectory})
 		firstParent := filepath.Dir(targetPaths(installer.home, installer.configHome)[0])
 		failed := false
 		installer.deps.syncDir = func(path string) error {
@@ -1000,7 +1098,7 @@ func TestSerializationAndPrivateStateErrors(t *testing.T) {
 
 func TestPlanRejectsChangedManagedTree(t *testing.T) {
 	home := testHome(t)
-	installer := testInstaller(t, home, dependencies{exchange: exchangePaths, moveNoReplace: moveNoReplace, syncDir: syncDirectory})
+	installer := testInstaller(t, home, dependencies{syncDir: syncDirectory})
 	plan, err := installer.Plan()
 	if err != nil {
 		t.Fatal(err)
@@ -1016,27 +1114,208 @@ func TestPlanRejectsChangedManagedTree(t *testing.T) {
 	}
 }
 
-func TestDurabilityFailuresReturnErrorsAndRollback(t *testing.T) {
-	for _, failAt := range []int{1, 2, 3, 6, 7, 8, 9} {
-		t.Run(fmt.Sprintf("sync-%d", failAt), func(t *testing.T) {
-			home := testHome(t)
-			calls := 0
-			deps := dependencies{exchange: exchangePaths, moveNoReplace: moveNoReplace}
-			deps.syncDir = func(path string) error {
+func TestApplyChecksEveryDurabilitySync(t *testing.T) {
+	countCalls := func(kind string) int {
+		home := testHome(t)
+		calls := 0
+		deps := dependencies{}
+		deps.syncDir = func(path string) error {
+			if kind == "directory" {
 				calls++
-				if calls == failAt {
-					return fmt.Errorf("injected fsync failure %d", failAt)
+			}
+			return syncDirectory(path)
+		}
+		deps.syncFile = func(file *os.File) error {
+			if kind == "file" {
+				calls++
+			}
+			return syncFile(file)
+		}
+		installer := testInstaller(t, home, deps)
+		if _, err := installer.Apply(""); err != nil {
+			t.Fatal(err)
+		}
+		return calls
+	}
+	for _, kind := range []string{"file", "directory"} {
+		total := countCalls(kind)
+		if total == 0 {
+			t.Fatalf("Apply performed no %s fsync", kind)
+		}
+		for failAt := 1; failAt <= total; failAt++ {
+			t.Run(fmt.Sprintf("%s-%d", kind, failAt), func(t *testing.T) {
+				home := testHome(t)
+				calls := 0
+				deps := dependencies{}
+				deps.syncDir = func(path string) error {
+					if kind == "directory" {
+						calls++
+						if calls == failAt {
+							return fmt.Errorf("injected directory fsync failure %d", failAt)
+						}
+					}
+					return syncDirectory(path)
+				}
+				deps.syncFile = func(file *os.File) error {
+					if kind == "file" {
+						calls++
+						if calls == failAt {
+							return fmt.Errorf("injected file fsync failure %d", failAt)
+						}
+					}
+					return syncFile(file)
+				}
+				installer := testInstaller(t, home, deps)
+				if _, err := installer.Apply(""); err == nil || !strings.Contains(err.Error(), "injected "+kind+" fsync failure") {
+					t.Fatalf("Apply error = %v", err)
+				}
+				for _, target := range targetPaths(installer.home, installer.configHome) {
+					if _, err := os.Lstat(target); !os.IsNotExist(err) {
+						t.Fatalf("%s fsync failure %d changed %s: %v", kind, failAt, target, err)
+					}
+				}
+			})
+		}
+	}
+}
+
+func TestRollbackFsyncFailureReportsRecoveryCredentials(t *testing.T) {
+	home := testHome(t)
+	deps := dependencies{}
+	rollback := false
+	exchanges := 0
+	deps.beforeExchange = func(string, string) error {
+		exchanges++
+		if exchanges == 2 {
+			rollback = true
+			return errors.New("injected apply failure")
+		}
+		return nil
+	}
+	deps.syncDir = func(path string) error {
+		if rollback {
+			rollback = false
+			return errors.New("injected rollback directory fsync failure")
+		}
+		return syncDirectory(path)
+	}
+	installer := testInstaller(t, home, deps)
+	seedUnknown(t, installer)
+	plan, err := installer.Plan()
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = installer.Apply(plan.Approval)
+	if err == nil || !strings.Contains(err.Error(), "injected rollback directory fsync failure") {
+		t.Fatalf("Apply rollback error = %v", err)
+	}
+	if !strings.Contains(err.Error(), "receipt:") || !strings.Contains(err.Error(), "restore_approval:") {
+		t.Fatalf("Apply rollback error omits recovery credentials: %v", err)
+	}
+}
+
+func TestRollbackJournalFsyncFailureReturnsError(t *testing.T) {
+	home := testHome(t)
+	deps := dependencies{}
+	rollback := false
+	exchanges := 0
+	deps.beforeExchange = func(string, string) error {
+		exchanges++
+		if exchanges == 2 {
+			rollback = true
+			return errors.New("injected apply failure")
+		}
+		return nil
+	}
+	deps.syncFile = func(file *os.File) error {
+		if rollback {
+			rollback = false
+			return errors.New("injected rollback journal fsync failure")
+		}
+		return syncFile(file)
+	}
+	installer := testInstaller(t, home, deps)
+	seedUnknown(t, installer)
+	plan, err := installer.Plan()
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = installer.Apply(plan.Approval)
+	if err == nil || !strings.Contains(err.Error(), "injected rollback journal fsync failure") {
+		t.Fatalf("Apply rollback journal error = %v", err)
+	}
+	for _, target := range targetPaths(installer.home, installer.configHome) {
+		if got := mustRead(t, filepath.Join(target, "local-note")); got != "operator data" {
+			t.Fatalf("Rollback journal failure changed %s", target)
+		}
+	}
+}
+
+func TestRestoreChecksEveryDurabilitySync(t *testing.T) {
+	setup := func(t *testing.T) (string, ApplyResult) {
+		home := testHome(t)
+		installer := testInstaller(t, home, dependencies{})
+		seedUnknown(t, installer)
+		plan, err := installer.Plan()
+		if err != nil {
+			t.Fatal(err)
+		}
+		result, err := installer.Apply(plan.Approval)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return home, result
+	}
+	for _, kind := range []string{"file", "directory"} {
+		t.Run(kind, func(t *testing.T) {
+			home, result := setup(t)
+			calls := 0
+			deps := dependencies{}
+			deps.syncDir = func(path string) error {
+				if kind == "directory" {
+					calls++
 				}
 				return syncDirectory(path)
 			}
-			installer := testInstaller(t, home, deps)
-			if _, err := installer.Apply(""); err == nil || !strings.Contains(err.Error(), "injected fsync failure") {
-				t.Fatalf("Apply error = %v", err)
-			}
-			for _, target := range targetPaths(installer.home, installer.configHome) {
-				if _, err := os.Lstat(target); !os.IsNotExist(err) {
-					t.Fatalf("fsync failure %d changed %s: %v", failAt, target, err)
+			deps.syncFile = func(file *os.File) error {
+				if kind == "file" {
+					calls++
 				}
+				return syncFile(file)
+			}
+			if _, err := restoreWithDependencies(home, result.Receipt, result.RestoreApproval, deps); err != nil {
+				t.Fatal(err)
+			}
+			if calls == 0 {
+				t.Fatalf("Restore performed no %s fsync", kind)
+			}
+			for failAt := 1; failAt <= calls; failAt++ {
+				t.Run(fmt.Sprintf("%d", failAt), func(t *testing.T) {
+					home, result := setup(t)
+					current := 0
+					deps := dependencies{}
+					deps.syncDir = func(path string) error {
+						if kind == "directory" {
+							current++
+							if current == failAt {
+								return fmt.Errorf("injected restore directory fsync failure %d", failAt)
+							}
+						}
+						return syncDirectory(path)
+					}
+					deps.syncFile = func(file *os.File) error {
+						if kind == "file" {
+							current++
+							if current == failAt {
+								return fmt.Errorf("injected restore file fsync failure %d", failAt)
+							}
+						}
+						return syncFile(file)
+					}
+					if _, err := restoreWithDependencies(home, result.Receipt, result.RestoreApproval, deps); err == nil || !strings.Contains(err.Error(), "injected restore "+kind+" fsync failure") {
+						t.Fatalf("Restore error = %v", err)
+					}
+				})
 			}
 		})
 	}
@@ -1065,8 +1344,7 @@ func TestWriteShimTreeRejectsConflictingOrExistingPaths(t *testing.T) {
 func TestManagedPublishFailureLeavesDestinationsUntouched(t *testing.T) {
 	home := testHome(t)
 	deps := dependencies{
-		exchange: exchangePaths,
-		moveNoReplace: func(string, string) error {
+		beforeMove: func(string, string) error {
 			return errors.New("injected managed publish failure")
 		},
 		syncDir: syncDirectory,
@@ -1090,13 +1368,13 @@ func TestInterruptedInstallCanRestore(t *testing.T) {
 	if os.Getenv("BACKSCROLL_SKILL_CRASH_HELPER") == "1" {
 		home := os.Getenv("BACKSCROLL_SKILL_CRASH_HOME")
 		calls := 0
-		deps := dependencies{moveNoReplace: moveNoReplace, syncDir: syncDirectory}
-		deps.exchange = func(left, right string) error {
+		deps := dependencies{syncDir: syncDirectory}
+		deps.beforeExchange = func(left, right string) error {
 			calls++
 			if calls == 2 {
 				os.Exit(71)
 			}
-			return exchangePaths(left, right)
+			return nil
 		}
 		installer := testInstaller(t, home, deps)
 		_, _ = installer.Apply(os.Getenv("BACKSCROLL_SKILL_CRASH_APPROVAL"))
@@ -1104,7 +1382,7 @@ func TestInterruptedInstallCanRestore(t *testing.T) {
 	}
 
 	home := testHome(t)
-	installer := testInstaller(t, home, dependencies{exchange: exchangePaths, moveNoReplace: moveNoReplace, syncDir: syncDirectory})
+	installer := testInstaller(t, home, dependencies{syncDir: syncDirectory})
 	seedUnknown(t, installer)
 	plan, err := installer.Plan()
 	if err != nil {

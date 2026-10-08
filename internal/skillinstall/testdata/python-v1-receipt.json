@@ -1,0 +1,40 @@
+{
+  "version": 1,
+  "plan": {
+    "version": 1,
+    "action": "install",
+    "home": "/private/tmp/backscroll-python-v1-fixture-home",
+    "config_home": "/private/tmp/backscroll-python-v1-fixture-home/.config",
+    "source": {
+      "root": "/Users/Shared/harness/backscroll",
+      "path": "/Users/Shared/harness/backscroll/.claude/skills/backscroll",
+      "commit": "4bd287809b28c5c45951b179f62c700d5f53a568",
+      "tree_sha256": "31bfde257c04ffc5c1e3aea871c59c8467244ceb3c0d0bd4b953810db82cdaa3"
+    },
+    "targets": [
+      {
+        "path": "/private/tmp/backscroll-python-v1-fixture-home/.claude/skills/backscroll",
+        "before": {
+          "kind": "absent"
+        },
+        "change": true
+      },
+      {
+        "path": "/private/tmp/backscroll-python-v1-fixture-home/.agents/skills/backscroll",
+        "before": {
+          "kind": "absent"
+        },
+        "change": true
+      },
+      {
+        "path": "/private/tmp/backscroll-python-v1-fixture-home/.config/opencode/skills/backscroll",
+        "before": {
+          "kind": "absent"
+        },
+        "change": true
+      }
+    ],
+    "approval": "0c085da8bed41b13e2581fa17c5b082c2e8ffefde50890cef892a4f85bc0fc9f"
+  },
+  "run": "37bb4c83751f4c7a8886290c38d34a79"
+}

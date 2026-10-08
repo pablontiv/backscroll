@@ -25,11 +25,11 @@ func openAppendNoFollow(string, os.FileMode) (*os.File, error) {
 	return nil, errors.New("skill installation is supported only on macOS and Linux")
 }
 
-func exchangePaths(string, string) error {
+func exchangePinned(*pinnedDir, string, *pinnedDir, string) error {
 	return errors.New("skill installation is supported only on macOS and Linux")
 }
 
-func moveNoReplace(string, string) error {
+func moveNoReplacePinned(*pinnedDir, string, *pinnedDir, string) error {
 	return errors.New("skill installation is supported only on macOS and Linux")
 }
 

@@ -4,10 +4,10 @@ package skillinstall
 
 import "golang.org/x/sys/unix"
 
-func exchangePaths(left, right string) error {
-	return unix.Renameat2(unix.AT_FDCWD, left, unix.AT_FDCWD, right, unix.RENAME_EXCHANGE)
+func exchangePinned(left *pinnedDir, leftName string, right *pinnedDir, rightName string) error {
+	return unix.Renameat2(left.fd, leftName, right.fd, rightName, unix.RENAME_EXCHANGE)
 }
 
-func moveNoReplace(oldPath, newPath string) error {
-	return unix.Renameat2(unix.AT_FDCWD, oldPath, unix.AT_FDCWD, newPath, unix.RENAME_NOREPLACE)
+func moveNoReplacePinned(oldDirectory *pinnedDir, oldName string, newDirectory *pinnedDir, newName string) error {
+	return unix.Renameat2(oldDirectory.fd, oldName, newDirectory.fd, newName, unix.RENAME_NOREPLACE)
 }

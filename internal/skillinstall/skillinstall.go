@@ -144,9 +144,10 @@ type receipt struct {
 }
 
 type dependencies struct {
-	exchange       func(string, string) error
-	moveNoReplace  func(string, string) error
+	beforeExchange func(string, string) error
+	beforeMove     func(string, string) error
 	syncDir        func(string) error
+	syncFile       func(*os.File) error
 	sameFilesystem func(string, string) error
 }
 
@@ -163,15 +164,13 @@ type Installer struct {
 // New validates an installation request. It does not modify the filesystem.
 func New(options Options) (*Installer, error) {
 	return newInstaller(options, dependencies{
-		exchange: exchangePaths, moveNoReplace: moveNoReplace,
-		syncDir: syncDirectory, sameFilesystem: sameFilesystemWithMissing,
+		syncDir: syncDirectory, syncFile: syncFile,
+		sameFilesystem: sameFilesystemWithMissing,
 	})
 }
 
 func newInstaller(options Options, deps dependencies) (*Installer, error) {
-	if deps.sameFilesystem == nil {
-		deps.sameFilesystem = sameFilesystemWithMissing
-	}
+	deps = normalizeDependencies(deps)
 	home, err := canonicalHome(options.Home)
 	if err != nil {
 		return nil, err
@@ -296,7 +295,7 @@ func (i *Installer) Apply(approval string) (result ApplyResult, err error) {
 	}
 	receiptValue := receipt{Version: 2, Plan: plan, Run: runName}
 	receiptPath := filepath.Join(run, "receipt.json")
-	if err := writeJSONExclusive(receiptPath, receiptValue); err != nil {
+	if err := writeJSONExclusive(receiptPath, receiptValue, i.deps.syncFile); err != nil {
 		return ApplyResult{}, err
 	}
 	if err := i.deps.syncDir(run); err != nil {
@@ -309,15 +308,18 @@ func (i *Installer) Apply(approval string) (result ApplyResult, err error) {
 	if err != nil {
 		return ApplyResult{}, err
 	}
-	if err := appendEvent(run, map[string]any{"event": "prepared", "restore_approval": restoreApproval}); err != nil {
+	if err := appendEvent(run, map[string]any{"event": "prepared", "restore_approval": restoreApproval}, i.deps); err != nil {
 		return ApplyResult{}, err
 	}
 
 	rollback := func(cause error) error {
-		_ = appendEvent(run, map[string]any{"event": "failed", "receipt": receiptPath})
+		journalErr := appendEvent(run, map[string]any{"event": "failed", "receipt": receiptPath}, i.deps)
 		_, restoreErr := restoreRows(run, receiptValue, i.deps)
 		if restoreErr != nil {
-			return errors.Join(cause, fmt.Errorf("automatic restore failed: %w", restoreErr))
+			return errors.Join(cause, journalErr, fmt.Errorf("automatic restore failed; receipt: %s; restore_approval: %s: %w", receiptPath, restoreApproval, restoreErr))
+		}
+		if journalErr != nil {
+			return errors.Join(cause, fmt.Errorf("record rollback failure: %w", journalErr))
 		}
 		return cause
 	}
@@ -342,7 +344,7 @@ func (i *Installer) Apply(approval string) (result ApplyResult, err error) {
 		}
 		return ApplyResult{}, rollback(err)
 	}
-	if err := appendEvent(run, map[string]any{"event": "complete", "changed": changed}); err != nil {
+	if err := appendEvent(run, map[string]any{"event": "complete", "changed": changed}, i.deps); err != nil {
 		return ApplyResult{}, rollback(err)
 	}
 	return ApplyResult{Changed: changed, Receipt: receiptPath, RestoreApproval: restoreApproval}, nil
@@ -350,6 +352,14 @@ func (i *Installer) Apply(approval string) (result ApplyResult, err error) {
 
 // Restore restores one validated Go v2 or Python v1 receipt.
 func Restore(home, receiptPath, approval string) (result RestoreResult, err error) {
+	return restoreWithDependencies(home, receiptPath, approval, dependencies{
+		syncDir: syncDirectory, syncFile: syncFile,
+		sameFilesystem: sameFilesystemWithMissing,
+	})
+}
+
+func restoreWithDependencies(home, receiptPath, approval string, deps dependencies) (result RestoreResult, err error) {
+	deps = normalizeDependencies(deps)
 	canonical, err := canonicalHome(home)
 	if err != nil {
 		return RestoreResult{}, err
@@ -390,15 +400,11 @@ func Restore(home, receiptPath, approval string) (result RestoreResult, err erro
 	if err := validateReceipt(receiptValue, canonical, path); err != nil {
 		return RestoreResult{}, err
 	}
-	deps := dependencies{
-		exchange: exchangePaths, moveNoReplace: moveNoReplace,
-		syncDir: syncDirectory, sameFilesystem: sameFilesystemWithMissing,
-	}
 	count, err := restoreRows(filepath.Dir(path), receiptValue, deps)
 	if err != nil {
 		return RestoreResult{}, err
 	}
-	if err := appendEvent(filepath.Dir(path), map[string]any{"event": "restore-complete", "restored": count}); err != nil {
+	if err := appendEvent(filepath.Dir(path), map[string]any{"event": "restore-complete", "restored": count}, deps); err != nil {
 		return RestoreResult{}, err
 	}
 	return RestoreResult{Restored: count, Receipt: path}, nil
@@ -428,14 +434,24 @@ func (i *Installer) ensureManaged(run, managed string) error {
 		return err
 	}
 	staging := filepath.Join(parent, ".backscroll-"+filepath.Base(run))
-	if err := writeShimTree(staging, i.shim); err != nil {
+	if err := writeShimTree(staging, i.shim, i.deps); err != nil {
 		return err
 	}
 	defer func() { _ = removeImmutableTree(staging) }()
 	if err := i.deps.syncDir(parent); err != nil {
 		return err
 	}
-	if err := i.deps.moveNoReplace(staging, managed); err != nil {
+	parentDirectory, err := openPinnedDir(parent)
+	if err != nil {
+		return err
+	}
+	defer parentDirectory.close()
+	if i.deps.beforeMove != nil {
+		if err := i.deps.beforeMove(staging, managed); err != nil {
+			return fmt.Errorf("publish managed shim: %w", err)
+		}
+	}
+	if err := moveNoReplacePinned(parentDirectory, filepath.Base(staging), parentDirectory, filepath.Base(managed)); err != nil {
 		return fmt.Errorf("publish managed shim: %w", err)
 	}
 	if err := i.deps.syncDir(parent); err != nil {
@@ -445,73 +461,130 @@ func (i *Installer) ensureManaged(run, managed string) error {
 }
 
 func (i *Installer) installTarget(run, runName string, index int, row Target, managed string) error {
-	if err := safeParents(row.Path); err != nil {
+	parentPath := filepath.Dir(row.Path)
+	if err := os.MkdirAll(parentPath, 0o700); err != nil {
+		return fmt.Errorf("create destination parent: %w", err)
+	}
+	parent, err := openPinnedDir(parentPath)
+	if err != nil {
 		return err
 	}
-	current, err := snapshot(row.Path)
+	defer parent.close()
+	targetName := filepath.Base(row.Path)
+	current, err := parent.snapshot(targetName)
 	if err != nil {
 		return err
 	}
 	if !reflect.DeepEqual(current, row.Before) {
 		return fmt.Errorf("destination changed during installation: %s", row.Path)
 	}
-	parent := filepath.Dir(row.Path)
-	if err := os.MkdirAll(parent, 0o700); err != nil {
-		return fmt.Errorf("create destination parent: %w", err)
-	}
-	if err := safeParents(row.Path); err != nil {
+	if err := appendEvent(run, map[string]any{"event": "install-intent", "path": row.Path}, i.deps); err != nil {
 		return err
 	}
-	if err := appendEvent(run, map[string]any{"event": "install-intent", "path": row.Path}); err != nil {
+	tempPath := swapPath(row.Path, runName, index)
+	tempName := filepath.Base(tempPath)
+	tempSnapshot, err := parent.snapshot(tempName)
+	if err != nil {
 		return err
 	}
-	temp := swapPath(row.Path, runName, index)
-	if _, err := os.Lstat(temp); !os.IsNotExist(err) {
-		if err == nil {
-			return fmt.Errorf("temporary replacement already exists: %s", temp)
-		}
-		return err
+	if tempSnapshot.Kind != "absent" {
+		return fmt.Errorf("temporary replacement already exists: %s", tempPath)
 	}
-	if err := os.Symlink(managed, temp); err != nil {
+	if err := parent.symlink(managed, tempName); err != nil {
 		return fmt.Errorf("create replacement link: %w", err)
 	}
-	if err := i.deps.syncDir(parent); err != nil {
-		_ = os.Remove(temp)
+	removeTemp := true
+	defer func() {
+		if removeTemp {
+			_ = parent.remove(tempName)
+		}
+	}()
+	if err := i.deps.syncDir(parentPath); err != nil {
 		return err
 	}
 	if row.Before.Kind == "absent" {
-		if err := i.deps.moveNoReplace(temp, row.Path); err != nil {
-			_ = os.Remove(temp)
+		if i.deps.beforeMove != nil {
+			if err := i.deps.beforeMove(tempPath, row.Path); err != nil {
+				return fmt.Errorf("install destination: %w", err)
+			}
+		}
+		if err := moveNoReplacePinned(parent, tempName, parent, targetName); err != nil {
 			return fmt.Errorf("install destination: %w", err)
 		}
+		removeTemp = false
+		if err := parent.stablePath(); err != nil {
+			undoErr := moveNoReplacePinned(parent, targetName, parent, tempName)
+			if undoErr == nil {
+				removeTemp = true
+			}
+			return errors.Join(err, undoErr)
+		}
 	} else {
-		if err := i.deps.exchange(temp, row.Path); err != nil {
-			_ = os.Remove(temp)
+		if i.deps.beforeExchange != nil {
+			if err := i.deps.beforeExchange(tempPath, row.Path); err != nil {
+				return fmt.Errorf("atomically replace destination: %w", err)
+			}
+		}
+		if err := exchangePinned(parent, tempName, parent, targetName); err != nil {
 			return fmt.Errorf("atomically replace destination: %w", err)
 		}
-		if err := i.deps.syncDir(parent); err != nil {
+		displaced, err := parent.snapshot(tempName)
+		if err != nil {
 			return err
 		}
-		backup := filepath.Join(run, fmt.Sprintf("backup-%d", index))
-		if err := i.deps.moveNoReplace(temp, backup); err != nil {
+		stabilityErr := parent.stablePath()
+		if stabilityErr != nil || !reflect.DeepEqual(displaced, row.Before) {
+			undoErr := exchangePinned(parent, tempName, parent, targetName)
+			if undoErr == nil {
+				replacement, snapshotErr := parent.snapshot(tempName)
+				if snapshotErr != nil {
+					undoErr = snapshotErr
+				} else if !reflect.DeepEqual(replacement, Snapshot{Kind: "link", Target: managed}) {
+					undoErr = errors.New("replacement changed while undoing installation")
+				}
+			}
+			if undoErr != nil {
+				return errors.Join(fmt.Errorf("destination changed during atomic installation: %s", row.Path), stabilityErr, fmt.Errorf("undo atomic installation: %w", undoErr))
+			}
+			return errors.Join(fmt.Errorf("destination changed during atomic installation: %s", row.Path), stabilityErr)
+		}
+		if err := i.deps.syncDir(parentPath); err != nil {
+			return err
+		}
+		runDirectory, err := openPinnedDir(run)
+		if err != nil {
+			return err
+		}
+		defer runDirectory.close()
+		backupName := fmt.Sprintf("backup-%d", index)
+		backupPath := filepath.Join(run, backupName)
+		if i.deps.beforeMove != nil {
+			if err := i.deps.beforeMove(tempPath, backupPath); err != nil {
+				return fmt.Errorf("move destination preimage to backup: %w", err)
+			}
+		}
+		if err := moveNoReplacePinned(parent, tempName, runDirectory, backupName); err != nil {
 			return fmt.Errorf("move destination preimage to backup: %w", err)
 		}
+		removeTemp = false
 		if err := i.deps.syncDir(run); err != nil {
 			return err
 		}
 	}
-	if err := i.deps.syncDir(parent); err != nil {
+	if err := i.deps.syncDir(parentPath); err != nil {
 		return err
 	}
-	return appendEvent(run, map[string]any{"event": "installed", "path": row.Path})
+	return appendEvent(run, map[string]any{"event": "installed", "path": row.Path}, i.deps)
 }
 
 func restoreRows(run string, value receipt, deps dependencies) (int, error) {
+	deps = normalizeDependencies(deps)
 	after := Snapshot{Kind: "absent"}
 	if value.Plan.Action == "install" {
 		after = Snapshot{Kind: "link", Target: value.Plan.Source.Path}
 	}
 	type pendingRow struct {
+		index       int
 		target      string
 		saved       string
 		before      Snapshot
@@ -548,7 +621,7 @@ func restoreRows(run string, value receipt, deps dependencies) (int, error) {
 				continue
 			}
 			if reflect.DeepEqual(tempSnapshot, after) {
-				pending = append(pending, pendingRow{target: row.Path, saved: temp, before: row.Before, cleanupOnly: true})
+				pending = append(pending, pendingRow{index: index, target: row.Path, saved: temp, before: row.Before, cleanupOnly: true})
 				continue
 			}
 		}
@@ -570,49 +643,112 @@ func restoreRows(run string, value receipt, deps dependencies) (int, error) {
 				return 0, fmt.Errorf("restore refuses changed destination or backup: %s", row.Path)
 			}
 		}
-		pending = append(pending, pendingRow{target: row.Path, saved: saved, before: row.Before})
+		pending = append(pending, pendingRow{index: index, target: row.Path, saved: saved, before: row.Before})
 	}
+
+	runDirectory, err := openPinnedDir(run)
+	if err != nil {
+		return 0, err
+	}
+	defer runDirectory.close()
 	for _, row := range pending {
-		if err := appendEvent(run, map[string]any{"event": "restore-intent", "path": row.target}); err != nil {
+		if err := appendEvent(run, map[string]any{"event": "restore-intent", "path": row.target}, deps); err != nil {
 			return 0, err
 		}
-		if row.cleanupOnly {
-			if err := os.Remove(row.saved); err != nil {
-				return 0, fmt.Errorf("remove unused replacement: %w", err)
-			}
-			if err := deps.syncDir(filepath.Dir(row.target)); err != nil {
-				return 0, err
-			}
-			if err := appendEvent(run, map[string]any{"event": "restored", "path": row.target}); err != nil {
-				return 0, err
-			}
-			continue
-		}
-		current, err := snapshot(row.target)
+		parentPath := filepath.Dir(row.target)
+		parent, err := openPinnedDir(parentPath)
 		if err != nil {
 			return 0, err
 		}
-		if current.Kind != "absent" {
-			if err := os.Remove(row.target); err != nil {
-				return 0, fmt.Errorf("remove installed destination: %w", err)
+		targetName := filepath.Base(row.target)
+		if row.cleanupOnly {
+			err = removeValidatedPostimage(parent, filepath.Base(row.saved), runDirectory, fmt.Sprintf("postimage-%d", row.index), after)
+		} else if row.before.Kind == "absent" {
+			current, snapshotErr := parent.snapshot(targetName)
+			if snapshotErr != nil {
+				err = snapshotErr
+			} else if current.Kind != "absent" {
+				err = removeValidatedPostimage(parent, targetName, runDirectory, fmt.Sprintf("postimage-%d", row.index), after)
+			}
+		} else {
+			savedDirectory := runDirectory
+			if filepath.Dir(row.saved) != run {
+				savedDirectory, err = openPinnedDir(filepath.Dir(row.saved))
+				if err != nil {
+					_ = parent.close()
+					return 0, err
+				}
+				defer savedDirectory.close()
+			}
+			current, snapshotErr := parent.snapshot(targetName)
+			if snapshotErr != nil {
+				err = snapshotErr
+			} else if current.Kind == "absent" {
+				if deps.beforeMove != nil {
+					err = deps.beforeMove(row.saved, row.target)
+				}
+				if err == nil {
+					err = moveNoReplacePinned(savedDirectory, filepath.Base(row.saved), parent, targetName)
+				}
+				if err == nil {
+					restored, restoredErr := parent.snapshot(targetName)
+					stabilityErr := errors.Join(parent.stablePath(), savedDirectory.stablePath())
+					if restoredErr != nil || stabilityErr != nil || !reflect.DeepEqual(restored, row.before) {
+						undoErr := moveNoReplacePinned(parent, targetName, savedDirectory, filepath.Base(row.saved))
+						err = errors.Join(errors.New("destination changed during atomic restore"), restoredErr, stabilityErr, undoErr)
+					}
+				}
+			} else {
+				if deps.beforeExchange != nil {
+					err = deps.beforeExchange(row.saved, row.target)
+				}
+				if err == nil {
+					err = exchangePinned(savedDirectory, filepath.Base(row.saved), parent, targetName)
+				}
+				if err == nil {
+					displaced, displacedErr := savedDirectory.snapshot(filepath.Base(row.saved))
+					restored, restoredErr := parent.snapshot(targetName)
+					stabilityErr := errors.Join(parent.stablePath(), savedDirectory.stablePath())
+					if displacedErr != nil || restoredErr != nil || stabilityErr != nil || !reflect.DeepEqual(displaced, after) || !reflect.DeepEqual(restored, row.before) {
+						undoErr := exchangePinned(savedDirectory, filepath.Base(row.saved), parent, targetName)
+						err = errors.Join(errors.New("destination changed during atomic restore"), displacedErr, restoredErr, stabilityErr, undoErr)
+					} else {
+						err = removeValidatedPostimage(savedDirectory, filepath.Base(row.saved), runDirectory, fmt.Sprintf("postimage-%d", row.index), after)
+					}
+				}
 			}
 		}
-		if row.before.Kind != "absent" {
-			if err := deps.moveNoReplace(row.saved, row.target); err != nil {
-				return 0, fmt.Errorf("restore destination: %w", err)
-			}
+		closeErr := parent.close()
+		if err = errors.Join(err, closeErr); err != nil {
+			return 0, fmt.Errorf("restore refuses concurrent destination change at %s: %w", row.target, err)
 		}
-		if err := deps.syncDir(filepath.Dir(row.target)); err != nil {
+		if err := deps.syncDir(parentPath); err != nil {
 			return 0, err
 		}
 		if err := deps.syncDir(run); err != nil {
 			return 0, err
 		}
-		if err := appendEvent(run, map[string]any{"event": "restored", "path": row.target}); err != nil {
+		if err := appendEvent(run, map[string]any{"event": "restored", "path": row.target}, deps); err != nil {
 			return 0, err
 		}
 	}
 	return len(pending), nil
+}
+
+func removeValidatedPostimage(source *pinnedDir, sourceName string, run *pinnedDir, quarantineName string, after Snapshot) error {
+	if err := moveNoReplacePinned(source, sourceName, run, quarantineName); err != nil {
+		return err
+	}
+	captured, err := run.snapshot(quarantineName)
+	stabilityErr := errors.Join(source.stablePath(), run.stablePath())
+	if err == nil && stabilityErr == nil && reflect.DeepEqual(captured, after) {
+		return run.remove(quarantineName)
+	}
+	undoErr := moveNoReplacePinned(run, quarantineName, source, sourceName)
+	if err == nil && stabilityErr == nil {
+		err = errors.New("moved object does not match the validated postimage")
+	}
+	return errors.Join(err, stabilityErr, undoErr)
 }
 
 func validateReceipt(value receipt, home, path string) error {
@@ -923,7 +1059,11 @@ func validateShim(input map[string][]byte) (map[string][]byte, error) {
 	return result, nil
 }
 
-func writeShimTree(root string, shim map[string][]byte) error {
+func writeShimTree(root string, shim map[string][]byte, injected ...dependencies) error {
+	deps := normalizeDependencies(dependencies{})
+	if len(injected) > 0 {
+		deps = normalizeDependencies(injected[0])
+	}
 	if err := os.Mkdir(root, 0o700); err != nil {
 		return fmt.Errorf("create managed shim staging directory: %w", err)
 	}
@@ -946,7 +1086,7 @@ func writeShimTree(root string, shim map[string][]byte) error {
 			writeErr = file.Chmod(0o444)
 		}
 		if writeErr == nil {
-			writeErr = file.Sync()
+			writeErr = deps.syncFile(file)
 		}
 		closeErr := file.Close()
 		if err := errors.Join(writeErr, closeErr); err != nil {
@@ -971,7 +1111,7 @@ func writeShimTree(root string, shim map[string][]byte) error {
 		if err := os.Chmod(dir, 0o555); err != nil {
 			return err
 		}
-		if err := syncDirectory(dir); err != nil {
+		if err := deps.syncDir(dir); err != nil {
 			return err
 		}
 	}
@@ -988,7 +1128,11 @@ func removeImmutableTree(root string) error {
 	return os.RemoveAll(root)
 }
 
-func writeJSONExclusive(path string, value any) error {
+func writeJSONExclusive(path string, value any, injected ...func(*os.File) error) error {
+	sync := syncFile
+	if len(injected) > 0 && injected[0] != nil {
+		sync = injected[0]
+	}
 	file, err := openExclusiveNoFollow(path, 0o600)
 	if err != nil {
 		return fmt.Errorf("create receipt: %w", err)
@@ -997,12 +1141,16 @@ func writeJSONExclusive(path string, value any) error {
 	encoder.SetIndent("", "  ")
 	writeErr := encoder.Encode(value)
 	if writeErr == nil {
-		writeErr = file.Sync()
+		writeErr = sync(file)
 	}
 	return errors.Join(writeErr, file.Close())
 }
 
-func appendEvent(run string, event any) error {
+func appendEvent(run string, event any, injected ...dependencies) error {
+	deps := normalizeDependencies(dependencies{})
+	if len(injected) > 0 {
+		deps = normalizeDependencies(injected[0])
+	}
 	path := filepath.Join(run, "events.jsonl")
 	file, err := openAppendNoFollow(path, 0o600)
 	if err != nil {
@@ -1013,7 +1161,7 @@ func appendEvent(run string, event any) error {
 		_, err = file.Write(append(data, '\n'))
 	}
 	if err == nil {
-		err = file.Sync()
+		err = deps.syncFile(file)
 	}
 	return errors.Join(err, file.Close())
 }
@@ -1220,6 +1368,19 @@ func (i *Installer) isManagedTarget(before Snapshot) (bool, error) {
 	return digest == parts[0], nil
 }
 
+func normalizeDependencies(deps dependencies) dependencies {
+	if deps.syncDir == nil {
+		deps.syncDir = syncDirectory
+	}
+	if deps.syncFile == nil {
+		deps.syncFile = syncFile
+	}
+	if deps.sameFilesystem == nil {
+		deps.sameFilesystem = sameFilesystemWithMissing
+	}
+	return deps
+}
+
 func countChanges(targets []Target) int {
 	count := 0
 	for _, target := range targets {
@@ -1232,6 +1393,10 @@ func countChanges(targets []Target) int {
 
 func swapPath(target, run string, index int) string {
 	return filepath.Join(filepath.Dir(target), fmt.Sprintf(".backscroll-skill-%s-%d", run, index))
+}
+
+func syncFile(file *os.File) error {
+	return file.Sync()
 }
 
 func syncDirectory(path string) error {
