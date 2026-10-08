@@ -8,9 +8,11 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"path/filepath"
 	"strings"
 	"time"
 
+	"github.com/google/uuid"
 	"github.com/pablontiv/backscroll/internal/input_config"
 	"github.com/pablontiv/backscroll/internal/models"
 	_ "modernc.org/sqlite"
@@ -21,7 +23,7 @@ import (
 type OpenCodeReader struct{}
 
 func (r *OpenCodeReader) Name() string           { return "opencode" }
-func (r *OpenCodeReader) IngestionEpoch() uint64 { return 1 }
+func (r *OpenCodeReader) IngestionEpoch() uint64 { return 2 }
 
 // Discover returns paths to OpenCode database files matching the definition's discover config.
 func (r *OpenCodeReader) Discover(ctx context.Context, def input_config.InputDefinition) ([]string, error) {
@@ -56,11 +58,20 @@ func (r *OpenCodeReader) Hash(ctx context.Context, dbPath string) (string, error
 // to hash them. Both table scans share the transaction's SQLite snapshot.
 func openCodeSnapshotHash(ctx context.Context, tx *sql.Tx) (string, error) {
 	h := sha256.New()
+	h.Write([]byte("opencode-native-sessions-v1"))
 	var size [8]byte
-	for _, query := range []string{
+	queries := []string{
 		`SELECT id, session_id, time_created, time_updated, data FROM message ORDER BY id`,
 		`SELECT id, message_id, session_id, time_created, time_updated, data FROM part ORDER BY id`,
-	} {
+	}
+	hasSession, err := openCodeHasSession(ctx, tx)
+	if err != nil {
+		return "", err
+	}
+	if hasSession {
+		queries = append(queries, `SELECT id, directory FROM session ORDER BY id`)
+	}
+	for _, query := range queries {
 		rows, err := tx.QueryContext(ctx, query)
 		if err != nil {
 			return "", fmt.Errorf("opencode hash query: %w", err)
@@ -150,23 +161,47 @@ func parseOpenCodeSnapshot(ctx context.Context, tx *sql.Tx, dbPath string) (mode
 	if err != nil {
 		return models.ParsedFile{}, err
 	}
-	rows, err := tx.QueryContext(ctx, `
-		SELECT m.id, m.session_id, m.data, m.time_created, p.data
-		FROM message m JOIN part p ON p.message_id = m.id
-		ORDER BY m.time_created ASC, m.id ASC, p.id ASC
-	`)
+	hasSession, err := openCodeHasSession(ctx, tx)
+	if err != nil {
+		return models.ParsedFile{}, err
+	}
+	// Validate relationships before joining: an inner join alone would silently
+	// discard orphan parts and make malformed exports look complete.
+	var invalid bool
+	if err := tx.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM part p LEFT JOIN message m ON m.id=p.message_id WHERE m.id IS NULL OR p.session_id IS NULL OR p.session_id<>m.session_id)`).Scan(&invalid); err != nil {
+		return models.ParsedFile{}, err
+	}
+	if invalid {
+		return models.ParsedFile{}, fmt.Errorf("invalid OpenCode message/part relationship")
+	}
+	if hasSession {
+		if err := tx.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM message m LEFT JOIN session s ON s.id=m.session_id WHERE s.id IS NULL)`).Scan(&invalid); err != nil {
+			return models.ParsedFile{}, err
+		}
+		if invalid {
+			return models.ParsedFile{}, fmt.Errorf("OpenCode message has no native session metadata")
+		}
+	}
+	directory, join, sessionColumn := "NULL", "", "NULL"
+	if hasSession {
+		directory = "s.directory"
+		sessionColumn = "s.id"
+		join = " LEFT JOIN session s ON s.id=m.session_id"
+	}
+	rows, err := tx.QueryContext(ctx, `SELECT m.id, m.session_id, m.data, m.time_created, p.data, p.id, p.session_id, `+directory+`,`+sessionColumn+` FROM message m JOIN part p ON p.message_id=m.id`+join+` ORDER BY m.time_created ASC,m.id ASC,p.id ASC`)
 	if err != nil {
 		return models.ParsedFile{}, fmt.Errorf("opencode parse query %s: %w", dbPath, err)
 	}
 	defer rows.Close()
 
 	var (
-		msgs         []models.Message
-		currentMsgID string
-		currentRole  string
-		currentTime  int64
-		textParts    []string
-		toolMsgs     []models.Message
+		msgs                       []models.Message
+		currentMsgID               string
+		currentRole                string
+		currentTime                int64
+		currentSession, currentCwd string
+		textParts                  []string
+		toolMsgs                   []models.Message
 	)
 
 	flush := func() error {
@@ -175,6 +210,8 @@ func parseOpenCodeSnapshot(ctx context.Context, tx *sql.Tx, dbPath string) (mode
 		}
 		if len(textParts) > 0 {
 			msgs = append(msgs, models.Message{
+				UUID:      openCodeUUID("message", currentMsgID),
+				SessionID: currentSession, Cwd: currentCwd,
 				Role:        normalizeOpenCodeRole(currentRole),
 				Origin:      openCodeOriginForRole(currentRole),
 				Content:     strings.Join(textParts, "\n"),
@@ -199,19 +236,31 @@ func parseOpenCodeSnapshot(ctx context.Context, tx *sql.Tx, dbPath string) (mode
 			return models.ParsedFile{}, err
 		}
 		var (
-			msgID       string
-			sessionID   string
-			msgData     sql.RawBytes
-			timeCreated int64
-			partData    sql.RawBytes
+			msgID               string
+			sessionID           string
+			msgData             sql.RawBytes
+			timeCreated         int64
+			partData            sql.RawBytes
+			partID, partSession string
+			cwd                 sql.NullString
+			nativeSession       sql.NullString
 		)
-		if err := rows.Scan(&msgID, &sessionID, &msgData, &timeCreated, &partData); err != nil {
+		if err := rows.Scan(&msgID, &sessionID, &msgData, &timeCreated, &partData, &partID, &partSession, &cwd, &nativeSession); err != nil {
 			return models.ParsedFile{}, err
 		}
 		if err := ctx.Err(); err != nil {
 			return models.ParsedFile{}, err
 		}
 
+		if hasSession && !nativeSession.Valid {
+			return models.ParsedFile{}, fmt.Errorf("OpenCode message has no native session metadata")
+		}
+		if !validOpenCodeID(msgID) || !validOpenCodeID(partID) || !validOpenCodeID(sessionID) || partSession != sessionID {
+			return models.ParsedFile{}, fmt.Errorf("invalid OpenCode native identity or session relationship")
+		}
+		if cwd.Valid && cwd.String != "" && (!filepath.IsAbs(cwd.String) || strings.IndexByte(cwd.String, 0) >= 0) {
+			return models.ParsedFile{}, fmt.Errorf("invalid OpenCode native directory")
+		}
 		var pd partInfoData
 		if err := json.Unmarshal(partData, &pd); err != nil {
 			continue
@@ -222,6 +271,7 @@ func parseOpenCodeSnapshot(ctx context.Context, tx *sql.Tx, dbPath string) (mode
 				return models.ParsedFile{}, err
 			}
 			currentMsgID = msgID
+			currentSession, currentCwd = sessionID, cwd.String
 			var md msgInfoData
 			if err := json.Unmarshal(msgData, &md); err == nil {
 				currentRole = md.Role
@@ -250,10 +300,10 @@ func parseOpenCodeSnapshot(ctx context.Context, tx *sql.Tx, dbPath string) (mode
 			// Backscroll search marks both rows by identity; no adjacency guess.
 			echo := isDirectSearchInput(pd.Tool, pd.State.Input)
 			if in := SerializeToolInput(pd.Tool, pd.State.Input); strings.TrimSpace(in) != "" {
-				toolMsgs = append(toolMsgs, models.Message{Role: role, Origin: origin, Content: in, ContentType: "tool", Timestamp: ts, SearchEcho: echo})
+				toolMsgs = append(toolMsgs, models.Message{UUID: openCodeUUID("part-input", msgID, partID), SessionID: sessionID, Cwd: cwd.String, ToolName: pd.Tool, CommandHead: commandHead(pd.State.Input), Role: role, Origin: origin, Content: in, ContentType: "tool", Timestamp: ts, SearchEcho: echo})
 			}
 			if out := SerializeToolOutput(pd.State.Output); strings.TrimSpace(out) != "" {
-				toolMsgs = append(toolMsgs, models.Message{Role: role, Origin: models.OriginAutomation, Content: out, ContentType: "tool", Timestamp: ts, SearchEcho: echo})
+				toolMsgs = append(toolMsgs, models.Message{UUID: openCodeUUID("part-output", msgID, partID), SessionID: sessionID, Cwd: cwd.String, Role: role, Origin: models.OriginAutomation, Content: out, ContentType: "tool", Timestamp: ts, SearchEcho: echo})
 			}
 		}
 	}
@@ -300,4 +350,31 @@ func normalizeOpenCodeRole(role string) string {
 	default:
 		return role
 	}
+}
+
+// Inspect capability once per snapshot, preserving supported message/part-only exports.
+func openCodeHasSession(ctx context.Context, tx *sql.Tx) (bool, error) {
+	var count int
+	err := tx.QueryRowContext(ctx, `SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='session'`).Scan(&count)
+	return count != 0, err
+}
+
+// Length-safe structured tuple encoding makes identity independent of content,
+// timestamps, source capability path, and parser ordinals.
+func openCodeUUID(kind string, ids ...string) string {
+	suffix := ""
+	switch kind {
+	case "part-input":
+		kind = "part"
+		suffix = "#t0"
+	case "part-output":
+		kind = "part"
+		suffix = "#r0"
+	}
+	data, _ := json.Marshal(append([]string{"backscroll/opencode", kind}, ids...))
+	return uuid.NewSHA1(uuid.NameSpaceURL, data).String() + suffix
+}
+
+func validOpenCodeID(id string) bool {
+	return id != "" && strings.TrimSpace(id) == id && strings.IndexByte(id, 0) < 0
 }

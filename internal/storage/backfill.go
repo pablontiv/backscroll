@@ -152,7 +152,7 @@ func (d *Database) backfillDerivedBatch(ctx context.Context, batch []derivedBack
 			return 0, 0, 0, err
 		}
 		msgRows, err := tx.QueryContext(ctx, `
-			SELECT ordinal, role, text, uuid, content_type, was_interrupted
+			SELECT ordinal, role, text, uuid, content_type, was_interrupted, COALESCE(session_id,''), origin
 			FROM search_items WHERE source_path = ? ORDER BY ordinal ASC
 		`, file.SourcePath)
 		if err != nil {
@@ -167,7 +167,7 @@ func (d *Database) backfillDerivedBatch(ctx context.Context, batch []derivedBack
 			var message IndexedMessage
 			var uuid sql.NullString
 			var wasInterrupted sql.NullInt64
-			if err := msgRows.Scan(&message.Ordinal, &message.Role, &message.Text, &uuid, &message.ContentType, &wasInterrupted); err != nil {
+			if err := msgRows.Scan(&message.Ordinal, &message.Role, &message.Text, &uuid, &message.ContentType, &wasInterrupted, &message.SessionID, &message.Origin); err != nil {
 				_ = msgRows.Close()
 				return 0, 0, 0, fmt.Errorf("scan message for %s: %w", file.SourcePath, err)
 			}
@@ -346,20 +346,6 @@ func (d *Database) backfillCorrectionsForFileContext(ctx context.Context, tx *sq
 	if err := ctx.Err(); err != nil {
 		return 0, err
 	}
-	// Convert to models.Message for detector input (with content-type filter)
-	detectionMsgs := make([]models.Message, len(messages))
-	for i, m := range messages {
-		if err := ctx.Err(); err != nil {
-			return 0, err
-		}
-		detectionMsgs[i] = models.Message{
-			Role:           m.Role,
-			Content:        m.Text,
-			ContentType:    m.ContentType,
-			UUID:           m.UUID,
-			WasInterrupted: m.WasInterrupted,
-		}
-	}
 
 	// Drop signals from superseded detector epochs first. These sessions have expired
 	// from disk, so SyncFiles will never run for them again — this is their only route
@@ -373,7 +359,7 @@ func (d *Database) backfillCorrectionsForFileContext(ctx context.Context, tx *sq
 	}
 
 	// Run detectors with prose filter.
-	detections, err := corrections.RunDetectorsFilteredContext(ctx, detectionMsgs)
+	detections, err := detectSessionCorrections(ctx, messages)
 	if err != nil {
 		return 0, err
 	}
@@ -501,7 +487,7 @@ func (d *Database) LoadMessagesForPathContext(ctx context.Context, sourcePath st
 			COALESCE(timestamp, ''),
 			content_type,
 			COALESCE(extraction_version, 0),
-			was_interrupted
+			was_interrupted, COALESCE(session_id,''), origin
 		FROM search_items
 		WHERE source_path = ?
 		ORDER BY ordinal ASC
@@ -520,7 +506,7 @@ func (d *Database) LoadMessagesForPathContext(ctx context.Context, sourcePath st
 		var wasInterrupted *int
 		if err := rows.Scan(
 			&msg.Ordinal, &msg.UUID, &msg.Role, &msg.Text, &msg.Timestamp,
-			&msg.ContentType, &msg.ExtractionVersion, &wasInterrupted,
+			&msg.ContentType, &msg.ExtractionVersion, &wasInterrupted, &msg.SessionID, &msg.Origin,
 		); err != nil {
 			return nil, err
 		}

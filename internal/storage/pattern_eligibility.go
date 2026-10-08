@@ -24,7 +24,7 @@ func patternEligibility(project, tag, after, before string) (string, []interface
 		args = append(args, project)
 	}
 	if tag != "" {
-		query += ` AND EXISTS (SELECT 1 FROM session_tags st WHERE st.source_path = si.source_path AND st.tag = ?)`
+		query += ` AND EXISTS (SELECT 1 FROM scoped_session_tags st WHERE st.source_path = si.source_path AND st.session_id IS si.session_id AND st.tag = ?)`
 		args = append(args, tag)
 	}
 	if after != "" {
@@ -44,7 +44,7 @@ func patternEligibility(project, tag, after, before string) (string, []interface
 func eligibleToolEvents(project, tag, after, before string) (string, []interface{}) {
 	filter, args := patternEligibility(project, tag, after, before)
 	return `WITH eligible_tool_events AS (
- SELECT te.*, si.timestamp,
+ SELECT te.*, si.timestamp, COALESCE(si.session_id, '') AS session_identity,
  COALESCE(si.source_path, te.source_path) AS session_path,
  COALESCE(si.ordinal, te.ordinal) AS session_ordinal
  FROM tool_events te

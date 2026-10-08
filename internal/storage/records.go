@@ -34,6 +34,8 @@ type ContextRecordQuery struct {
 
 // ContextRecord is an indexed record in an anchor-relative window.
 type ContextRecord struct {
+	SessionID   string
+	Project     string
 	UUID        *string
 	SourcePath  string
 	Ordinal     int64
@@ -95,22 +97,22 @@ func (d *Database) QueryContextRecords(ctx context.Context, q ContextRecordQuery
 	rows, err := tx.QueryContext(ctx, `
 		WITH ordered AS (
 			SELECT id, uuid, source_path, ordinal, role, origin, timestamp,
-			       content_type, source, text,
+			       content_type, source, text, session_id, project,
 			       ROW_NUMBER() OVER (ORDER BY ordinal ASC, id ASC) AS row_position
 			FROM search_items
-			WHERE source_path = ?
+			WHERE source_path = ? AND session_id IS ?
 		), anchor_position AS (
 			SELECT row_position FROM ordered WHERE id = ?
 		)
 		SELECT ordered.uuid, ordered.source_path, ordered.ordinal, ordered.role,
 		       ordered.origin, ordered.timestamp, ordered.content_type,
-		       ordered.source, ordered.text, ordered.id = ?
+		       ordered.source, ordered.text, ordered.id = ?,COALESCE(ordered.session_id,''),COALESCE(ordered.project,'')
 		FROM ordered
 		CROSS JOIN anchor_position
 		WHERE ordered.row_position BETWEEN anchor_position.row_position - ?
 		                               AND anchor_position.row_position + ?
 		ORDER BY ordered.ordinal ASC, ordered.id ASC
-	`, anchor.sourcePath, anchor.id, anchor.id, q.Before, q.After)
+	`, anchor.sourcePath, anchor.sessionID, anchor.id, anchor.id, q.Before, q.After)
 	if err != nil {
 		return nil, fmt.Errorf("query context record window: %w", err)
 	}
@@ -124,7 +126,7 @@ func (d *Database) QueryContextRecords(ctx context.Context, q ContextRecordQuery
 		if err := rows.Scan(
 			&uuid, &record.SourcePath, &record.Ordinal, &record.Role,
 			&record.Origin, &timestamp, &record.ContentType,
-			&record.Source, &record.Text, &isAnchor,
+			&record.Source, &record.Text, &isAnchor, &record.SessionID, &record.Project,
 		); err != nil {
 			return nil, fmt.Errorf("scan context record: %w", err)
 		}
@@ -154,16 +156,17 @@ type contextRecordAnchor struct {
 	sourcePath string
 	ordinal    int64
 	uuid       sql.NullString
+	sessionID  *string
 }
 
 func resolveContextRecordAnchor(ctx context.Context, tx *sql.Tx, q ContextRecordQuery) (contextRecordAnchor, error) {
 	var query string
 	var args []any
 	if q.UUID != nil {
-		query = `SELECT id, source_path, ordinal, uuid FROM search_items WHERE uuid = ? ORDER BY id ASC LIMIT 2`
+		query = `SELECT id, source_path, ordinal, uuid, session_id FROM search_items WHERE uuid = ? ORDER BY id ASC LIMIT 2`
 		args = []any{*q.UUID}
 	} else {
-		query = `SELECT id, source_path, ordinal, uuid FROM search_items WHERE source_path = ? AND ordinal = ? ORDER BY id ASC LIMIT 2`
+		query = `SELECT id, source_path, ordinal, uuid, session_id FROM search_items WHERE source_path = ? AND ordinal = ? ORDER BY id ASC LIMIT 2`
 		args = []any{*q.SourcePath, *q.Ordinal}
 	}
 
@@ -176,7 +179,7 @@ func resolveContextRecordAnchor(ctx context.Context, tx *sql.Tx, q ContextRecord
 	matches := make([]contextRecordAnchor, 0, 2)
 	for rows.Next() {
 		var match contextRecordAnchor
-		if err := rows.Scan(&match.id, &match.sourcePath, &match.ordinal, &match.uuid); err != nil {
+		if err := rows.Scan(&match.id, &match.sourcePath, &match.ordinal, &match.uuid, &match.sessionID); err != nil {
 			return contextRecordAnchor{}, fmt.Errorf("scan context record anchor: %w", err)
 		}
 		matches = append(matches, match)
@@ -233,7 +236,7 @@ type IndexedRecordQuery struct {
 // ordered by source_path and ordinal.
 func (d *Database) QueryIndexedRecords(q IndexedRecordQuery) ([]models.IndexedRecord, error) {
 	baseQuery := `
-		SELECT source, source_path, ordinal, role, origin, text, project, uuid, timestamp, content_type
+		SELECT source, source_path, ordinal, role, origin, text, project, uuid, timestamp, content_type,COALESCE(session_id,'')
 		FROM search_items`
 
 	var whereClauses []string
@@ -285,7 +288,7 @@ func (d *Database) QueryIndexedRecords(q IndexedRecordQuery) ([]models.IndexedRe
 		var project, uuid, timestamp sql.NullString
 		if err := rows.Scan(
 			&r.Source, &r.SourcePath, &r.Ordinal, &r.Role, &r.Origin, &r.Text,
-			&project, &uuid, &timestamp, &r.ContentType,
+			&project, &uuid, &timestamp, &r.ContentType, &r.SessionID,
 		); err != nil {
 			return nil, fmt.Errorf("scan record: %w", err)
 		}

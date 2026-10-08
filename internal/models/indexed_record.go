@@ -2,6 +2,7 @@ package models
 
 // IndexedRecord represents a single canonical record from search_items.
 type IndexedRecord struct {
+	SessionID       string `json:",omitempty"`
 	Source          string
 	SourcePath      string
 	Ordinal         int64

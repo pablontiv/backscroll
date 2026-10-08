@@ -241,6 +241,7 @@ func runSearch(ctx context.Context, stdout, stderr io.Writer, cfg *config.Config
 			minimal := make([]minimalSearchResult, len(results))
 			for i, r := range results {
 				minimal[i] = minimalSearchResult{
+					SessionID:    r.SessionID,
 					SourcePath:   r.SourcePath,
 					UUID:         normalizedSearchUUID(r.UUID),
 					Ordinal:      r.Ordinal,
@@ -375,6 +376,9 @@ func searchRobotResultLines(result storage.SearchResult, index int, fields strin
 }
 
 func searchRobotProvenance(lines []string, result storage.SearchResult, index int) []string {
+	if result.SessionID != "" {
+		lines = append(lines, fmt.Sprintf("result_%d_session_id=%s", index, escapeRobotValue(result.SessionID)))
+	}
 	if result.MatchStage == "" {
 		return lines
 	}
@@ -409,6 +413,7 @@ func flattenRobotGroups(groups [][]string) []string {
 // minimalSearchResult is the reduced JSON payload emitted by --fields=minimal,
 // preserving the v0 fields and adding exact context selectors.
 type minimalSearchResult struct {
+	SessionID    string    `json:"session_id,omitempty"`
 	SourcePath   string    `json:"source_path"`
 	UUID         *string   `json:"uuid"`
 	Ordinal      int       `json:"ordinal"`
@@ -424,6 +429,7 @@ func searchModelResults(results []storage.SearchResult) []models.SearchResult {
 	var modelResults []models.SearchResult
 	for i, result := range results {
 		modelResults = append(modelResults, models.SearchResult{
+			SessionID:    result.SessionID,
 			Source:       result.Source,
 			Role:         result.Role,
 			UUID:         normalizedSearchUUID(result.UUID),

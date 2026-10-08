@@ -544,12 +544,40 @@ validated configuration without opening the database. Use
 ### OpenCode incremental snapshot token
 
 OpenCode uses a deterministic SHA-256 token over length-framed native `message`
-and `part` rows ordered by their primary IDs, including payloads and membership.
-Both table scans share one SQLite read transaction, so committed WAL changes are
+and `part` rows ordered by their primary IDs, including payloads and membership,
+and native `session.id`/`session.directory` metadata when the session table is present.
+All table scans share one SQLite read transaction, so committed WAL changes are
 visible without relying on main-file size, modification time, or
 `MAX(message.time_updated)`. `Parse` computes its returned token and reads its
 records inside that same snapshot; a concurrent later commit is detected on the
 next startup rather than attached to older parsed records. Equal-timestamp
 additions, deletions, and part-only edits therefore invalidate the token, while
-an unchanged native snapshot hashes identically. This does not change session
-identity or the existing UUID-less per-file reload behavior.
+an unchanged native snapshot hashes identically. OpenCode reader epoch 2 queues pre-native exports through the shared, bounded 200-path ingestion-fingerprint replay.
+
+### OpenCode native session identity
+
+A single SQLite capability remains one `source_path`; it can contain many native
+sessions. Each indexed record carries the structured `message.session_id` and,
+when available, the joined `session.directory`. A present directory is used for
+project-registry identification. When native cwd is absent, project proof remains
+unknown; the database location supplies no native project attribution. Missing rows in a present
+session table, empty identities, contradictory message/part session IDs, and
+relative or NUL-bearing directories fail the parse conservatively. Message/part-only
+exports remain supported without inventing native cwd.
+
+Text identity is a deterministic UUIDv5 over a namespace-qualified native message
+ID. Tool identity is a deterministic UUIDv5 over native message and part IDs, with
+fixed `#t0` input and `#r0` output suffixes. Neither payload, source path, parser
+position, nor timestamp participates. Identified OpenCode records therefore use
+perennial append/reconciliation: insertion and reordering preserve anchors;
+mutation never replaces retained payload or proven session/project ownership.
+
+Migration V20 adds nullable `search_items.session_id` and provider-neutral
+`session_identity_tags`, because the prior schema had no native-session column
+and path-only tags cannot distinguish sibling sessions. Historical NULL session
+identities retain source-path sequence/context behavior and legacy path tags.
+Proven native sessions use only identity-scoped tags. Search/list/context expose
+native session identity, context windows stay within the anchor session, and
+sequence grouping uses native identity within each source capability. Recovery
+retains/enriches matching session proof, rejects contradictory proof, and derives
+identity-scoped tags from retained records without consulting expired sources.

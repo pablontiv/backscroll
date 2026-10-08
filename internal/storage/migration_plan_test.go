@@ -69,7 +69,7 @@ func TestEveryCatalogFixtureReachesCurrentSemanticHead(t *testing.T) {
 		"v4.sql", "v5-with-source-metadata.sql", "v5-without-source-metadata.sql",
 		"v6.sql", "v7.sql", "v8.sql", "v9.sql", "v10.sql", "v11.sql", "v12.sql",
 		"v13.sql", "v13-legacy-existing-schema-migrations.sql",
-		"v13-legacy-alter-built.sql", "v13-development-alter-built.sql", "v14.sql", "v15.sql", "v16.sql", "v17.sql", "v18.sql", "v19.sql",
+		"v13-legacy-alter-built.sql", "v13-development-alter-built.sql", "v14.sql", "v15.sql", "v16.sql", "v17.sql", "v18.sql", "v19.sql", "v20.sql",
 	}
 	for _, name := range required {
 		if !seen[name] {
@@ -926,6 +926,7 @@ func TestLockedMigrationPlanFromEmptySchemaCreatesCurrentShape(t *testing.T) {
 		{Version: 17, Name: "V17 project attribution evidence"},
 		{Version: 18, Name: "V18 ingestion semantics fingerprint"},
 		{Version: 19, Name: "V19 native tool call identity"},
+		{Version: 20, Name: "V20 native session identity"},
 	}
 	if err := applyMigrationPlanForTest(ctx, db, plan); err != nil {
 		t.Fatalf("apply full plan: %v", err)
@@ -2142,6 +2143,7 @@ func authoritativeCurrentMigrationRows() []storageMigrationRow {
 		{Version: 17, Name: "V17 project attribution evidence", Checksum: "f29dc8d36c05df4ccba1e63f709b919d032b03a94ab95e282ce8449050cb9c86"},
 		{Version: 18, Name: "V18 ingestion semantics fingerprint", Checksum: "979fffaf1ca510d1213df712d0d43fef57aca88c4da3b77f4115fe27f35e0b72"},
 		{Version: 19, Name: "V19 native tool call identity", Checksum: "b4272408f1d908ec5cce6f18b87af6b9ada909c337455d2da1c651e6e4f2efea"},
+		{Version: 20, Name: "V20 native session identity", Checksum: "441a23ed3bc6d1ca9366e54ee011ca1a33f0e2e8c1fee1dbdeefba844ffa57aa"},
 	}
 }
 

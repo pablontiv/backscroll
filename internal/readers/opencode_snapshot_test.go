@@ -17,7 +17,7 @@ func TestOpenCodeSnapshotMutations(t *testing.T) {
 		"message timestamp":     `UPDATE message SET time_created=time_created+1 WHERE id='msg-1'`,
 		"message payload":       `UPDATE message SET data='{"role":"assistant"}' WHERE id='msg-1'`,
 		"equal max addition":    `INSERT INTO message SELECT 'added', session_id,time_created,time_updated,data FROM message WHERE id='msg-4'; INSERT INTO part SELECT 'added-part','added',session_id,time_created,time_updated,'{"type":"text","text":"added"}' FROM part LIMIT 1`,
-		"message deletion":      `DELETE FROM message WHERE id='msg-1'`,
+		"message deletion":      `DELETE FROM part WHERE message_id='msg-1'; DELETE FROM message WHERE id='msg-1'`,
 		"part deletion":         `DELETE FROM part WHERE id='p-1-1'`,
 		"part addition":         `INSERT INTO part SELECT 'new-part',message_id,session_id,time_created,time_updated,'{"type":"text","text":"added part"}' FROM part WHERE id='p-1-1'`,
 	}
@@ -66,6 +66,9 @@ func TestOpenCodeWALSnapshotConsistency(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer writer.Close()
+	if _, err = writer.Exec(`CREATE TABLE session(id TEXT PRIMARY KEY,directory TEXT); INSERT INTO session VALUES('sess-1','/projects/original')`); err != nil {
+		t.Fatal(err)
+	}
 	if _, err = writer.Exec("PRAGMA journal_mode=WAL; PRAGMA wal_autocheckpoint=0"); err != nil {
 		t.Fatal(err)
 	}
@@ -88,7 +91,7 @@ func TestOpenCodeWALSnapshotConsistency(t *testing.T) {
 		t.Fatal(err)
 	}
 	// Commit while the reader holds an older snapshot; no checkpoint is possible.
-	if _, err = writer.Exec(`UPDATE part SET data='{"type":"text","text":"committed WAL payload"}' WHERE id='p-1-1'`); err != nil {
+	if _, err = writer.Exec(`UPDATE part SET data='{"type":"text","text":"committed WAL payload"}' WHERE id='p-1-1'; UPDATE session SET directory='/projects/committed'`); err != nil {
 		t.Fatal(err)
 	}
 	mainAfter, err := os.ReadFile(path)
@@ -105,14 +108,14 @@ func TestOpenCodeWALSnapshotConsistency(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if old.Hash != before || old.Records[0].Content != "hello from user" {
+	if old.Hash != before || old.Records[0].Content != "hello from user" || old.Records[0].Cwd != "/projects/original" {
 		t.Fatalf("mixed snapshot: %+v", old)
 	}
 	fresh, err := (&OpenCodeReader{}).Parse(context.Background(), path, input_config.InputDefinition{})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if fresh.Hash == before || fresh.Records[0].Content != "committed WAL payload" {
+	if fresh.Hash == before || fresh.Records[0].Content != "committed WAL payload" || fresh.Records[0].Cwd != "/projects/committed" {
 		t.Fatalf("missing WAL commit: %+v", fresh)
 	}
 	token, err := (&OpenCodeReader{}).Hash(context.Background(), path)

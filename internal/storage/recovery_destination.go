@@ -14,6 +14,7 @@ import (
 
 	"github.com/pablontiv/backscroll/internal/compat"
 	"github.com/pablontiv/backscroll/internal/models"
+	"github.com/pablontiv/backscroll/internal/tagging"
 )
 
 var recoveryFTSTokenRE = regexp.MustCompile(`[A-Za-z0-9_]{3,}`)
@@ -140,6 +141,9 @@ func createRecoveryDestinationWithDeps(ctx context.Context, dir string, plan com
 			return "", fmt.Errorf("insert recovery record %d: %w", i, err)
 		}
 	}
+	if err := insertRecoverySessionTags(ctx, tx, plan); err != nil {
+		return "", err
+	}
 	if err := insertRecoveryDestinationAccounting(ctx, tx, plan); err != nil {
 		return "", fmt.Errorf("insert recovery source accounting: %w", err)
 	}
@@ -195,6 +199,32 @@ func removeEmptyRecoveryDestinationSidecars(path string) error {
 	return errors.Join(errs...)
 }
 
+func insertRecoverySessionTags(ctx context.Context, tx *sql.Tx, plan compat.RecoveryPlan) error {
+	type key struct{ path, session string }
+	accumulators := make(map[key]*tagging.Accumulator)
+	for _, planned := range plan.Records {
+		r := planned.Record
+		if r.Source != "session" || r.SessionID == "" {
+			continue
+		}
+		k := key{r.SourcePath, r.SessionID}
+		a := accumulators[k]
+		if a == nil {
+			a = &tagging.Accumulator{}
+			accumulators[k] = a
+		}
+		a.Add(r.Text)
+	}
+	for k, a := range accumulators {
+		for _, tag := range a.Tags() {
+			if _, err := tx.ExecContext(ctx, `INSERT INTO session_identity_tags(source_path,session_id,tag) VALUES(?,?,?)`, k.path, k.session, tag); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
 func VerifyRecoveryDestination(ctx context.Context, path string, plan compat.RecoveryPlan) (err error) {
 	if plan.Records == nil {
 		return fmt.Errorf("recovery plan is inapplicable or contains diagnostics")
@@ -231,11 +261,11 @@ func insertRecoveryDestinationRecord(ctx context.Context, tx *sql.Tx, r models.I
 	_, err = tx.ExecContext(ctx, `
 		INSERT INTO search_items
 			(source, source_path, ordinal, role, origin, text, timestamp, uuid, project,
-			 content_type, extraction_version, was_interrupted, search_echo, origin_version, project_evidence)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, NULL, ?, ?, ?)
+			 content_type, extraction_version, was_interrupted, search_echo, origin_version, project_evidence, session_id)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, NULL, ?, ?, ?, ?)
 	`, r.Source, r.SourcePath, r.Ordinal, r.Role, origin, r.Text,
 		recoveryDestinationNullableString(r.Timestamp), recoveryDestinationUUIDValue(r.UUID),
-		recoveryDestinationNullableString(r.Project), r.ContentType, r.SearchEcho, originVersion, projectProof)
+		recoveryDestinationNullableString(r.Project), r.ContentType, r.SearchEcho, originVersion, projectProof, nullableSessionID(r.SessionID))
 	if err != nil {
 		return fmt.Errorf("insert search_items: %w", err)
 	}
@@ -414,19 +444,22 @@ func verifyRecoveryDestinationOrigins(ctx context.Context, q compat.Queryer, pla
 
 		var gotOrigin models.MessageOrigin
 		var gotVersion sql.NullInt64
-		var gotProof string
+		var gotProof, gotSession string
 		if record.UUID != nil && *record.UUID != "" {
 			err = q.QueryRowContext(ctx, `
-				SELECT origin, origin_version, COALESCE(project_evidence, '') FROM search_items WHERE uuid = ?
-			`, *record.UUID).Scan(&gotOrigin, &gotVersion, &gotProof)
+				SELECT origin, origin_version, COALESCE(project_evidence, ''),COALESCE(session_id,'') FROM search_items WHERE uuid = ?
+			`, *record.UUID).Scan(&gotOrigin, &gotVersion, &gotProof, &gotSession)
 		} else {
 			err = q.QueryRowContext(ctx, `
-				SELECT origin, origin_version, COALESCE(project_evidence, '') FROM search_items
+				SELECT origin, origin_version, COALESCE(project_evidence, ''),COALESCE(session_id,'') FROM search_items
 				WHERE source_path = ? AND ordinal = ? AND COALESCE(uuid, '') = ''
-			`, record.SourcePath, record.Ordinal).Scan(&gotOrigin, &gotVersion, &gotProof)
+			`, record.SourcePath, record.Ordinal).Scan(&gotOrigin, &gotVersion, &gotProof, &gotSession)
 		}
 		if err != nil {
 			return fmt.Errorf("read destination origin for record %d: %w", i, err)
+		}
+		if gotSession != record.SessionID {
+			return fmt.Errorf("destination session identity mismatch for record %d", i)
 		}
 		if gotProof != record.ProjectEvidence {
 			return fmt.Errorf("destination project_evidence for record %d = %q, want %q", i, gotProof, record.ProjectEvidence)

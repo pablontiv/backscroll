@@ -34,6 +34,9 @@ type ParsedFile struct {
 
 // Message represents a message in a session.
 type Message struct {
+	SessionID string // native structured session identity; empty uses file-level defaults
+	Cwd       string // native structured working directory; never inferred from text
+
 	Role        string
 	Origin      MessageOrigin
 	Content     string
