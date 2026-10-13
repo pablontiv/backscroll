@@ -986,7 +986,12 @@ func (d *Database) UpsertAnnotationWithOrdinal(itemUUID, sourcePath string, supp
 	defer func() { _ = tx.Rollback() }()
 	anchor, err := resolveContextRecordAnchor(context.Background(), tx, q)
 	if err != nil {
-		return err
+		// Keep annotation diagnostics at its public resolution boundary while
+		// preserving shared context error identity through wrapping.
+		if itemUUID != "" {
+			return fmt.Errorf("resolve uuid %q: %w", itemUUID, err)
+		}
+		return fmt.Errorf("resolve source_path %q ordinal %d: %w", sourcePath, ordinal, err)
 	}
 	if itemUUID != "" && ((sourcePath != "" && sourcePath != anchor.sourcePath) || (ordinal >= 0 && int64(ordinal) != anchor.ordinal)) {
 		return fmt.Errorf("uuid and path/ordinal refer to different messages: uuid=%q resolved to (%q,%d), caller provided (%q,%d)", itemUUID, anchor.sourcePath, anchor.ordinal, sourcePath, ordinal)
