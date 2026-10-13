@@ -323,3 +323,121 @@ func TestOMPReasoningTogglePreservesPerennialToolCoordinates(t *testing.T) {
 		}
 	}
 }
+
+// Native OMP calls retain their project/tag coordinates after reasoning
+// changes. Filtered pattern consumers must not join them to a displaced row.
+func TestOMPFilteredPatternConsumersAfterReasoningChange(t *testing.T) {
+	_, source, _ := installOMPFixture(t, true)
+	const header = `{"type":"session","version":3,"id":"filters","cwd":"/workspace/omp-fixture-project","timestamp":"2026-09-01T12:00:00Z"}` + "\n"
+	const entries = `{"type":"message","id":"a","timestamp":"2026-09-01T12:00:01Z","message":{"role":"assistant","content":[{"type":"thinking","thinking":"filterreason"},{"type":"toolCall","id":"a","name":"bash","arguments":{"command":"go test filterfirst"}}]}}
+{"type":"message","id":"ar","timestamp":"2026-09-01T12:00:02Z","message":{"role":"toolResult","toolCallId":"a","toolName":"bash","isError":true,"details":{"exitCode":7},"content":[{"type":"text","text":"error: filterfailure 7"}]}}
+{"type":"message","id":"b","timestamp":"2026-09-01T12:00:03Z","message":{"role":"assistant","content":[{"type":"toolCall","id":"b","name":"bash","arguments":{"command":"make filtersecond"}}]}}
+{"type":"message","id":"br","timestamp":"2026-09-01T12:00:04Z","message":{"role":"toolResult","toolCallId":"b","toolName":"bash","isError":true,"details":{"exitCode":9},"content":[{"type":"text","text":"error: filterfailure 9"}]}}
+`
+	writeFile(t, source, header+entries)
+	if rows := ompRecall(t, "filterfirst", "--content-type", "tool"); len(rows) != 1 {
+		t.Fatalf("initial call: %+v", rows)
+	}
+	manifestPath := filepath.Join(os.Getenv("BACKSCROLL_CONFIG_DIR"), "backscroll", "inputs", "omp.inputs.toml")
+	manifest, err := os.ReadFile(manifestPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	writeFile(t, manifestPath, strings.ReplaceAll(string(manifest), "index_reasoning = true", "index_reasoning = false"))
+	writeFile(t, source, header+entries+`{"type":"message","id":"u","timestamp":"2026-09-01T12:00:05Z","message":{"role":"user","attribution":"user","content":"run tests"}}`+"\n")
+	for _, kind := range []string{"commands", "failures"} {
+		for _, trend := range []bool{false, true} {
+			args := []string{"patterns", "--kind", kind, "--project", "omp-fixture-project", "--tag", "testing", "--limit", "1", "--offset", "1", "--json"}
+			if trend {
+				args = append(args, "--trend")
+			}
+			out, stderr, err := runCmd(args...)
+			if err != nil {
+				t.Fatalf("%s trend=%t: %v %s", kind, trend, err, stderr)
+			}
+			// Ties are deterministic: go precedes make and exit 7 precedes exit 9.
+			marker := `"command_head":"make"`
+			if kind == "failures" {
+				marker = `"exit_code":9`
+			}
+			if !strings.Contains(out, marker) {
+				t.Fatalf("filtered page lost appended call: %s", out)
+			}
+			for _, format := range []string{"--json", "--robot", ""} {
+				emptyArgs := []string{"patterns", "--kind", kind, "--project", "missing-project", "--trend"}
+				if format != "" {
+					emptyArgs = append(emptyArgs, format)
+				}
+				empty, stderr, err := runCmd(emptyArgs...)
+				if err != nil {
+					t.Fatalf("empty trend: %v %s", err, stderr)
+				}
+				if strings.Contains(empty, "filter") || strings.Contains(empty, "make") {
+					t.Fatalf("project filter leaked: %s", empty)
+				}
+				if format == "--json" && !strings.Contains(empty, `"trends":[]`) {
+					t.Fatalf("empty trend contract: %s", empty)
+				}
+				if format == "" && !strings.Contains(empty, "No patterns found") {
+					t.Fatalf("empty text contract: %s", empty)
+				}
+			}
+		}
+	}
+	// Template pagination past the end is empty rather than out-of-range or
+	// leaking templates from a different project.
+	out, stderr, err := runCmd("patterns", "--kind", "templates", "--project", "omp-fixture-project", "--min-support", "1", "--offset", "100", "--json")
+	if err != nil {
+		t.Fatalf("template page: %v %s", err, stderr)
+	}
+	var payload struct {
+		Count    int   `json:"count"`
+		Patterns []any `json:"patterns"`
+	}
+	if err := json.Unmarshal([]byte(out), &payload); err != nil {
+		t.Fatal(err)
+	}
+	if payload.Count != 0 || len(payload.Patterns) != 0 {
+		t.Fatalf("template page: %s", out)
+	}
+}
+
+// Human and robot trends must publish actual native calls, including missing
+// exit proof, instead of accidentally routing non-JSON output to empty pages.
+func TestOMPNonJSONTrendOutputRetainsSignals(t *testing.T) {
+	_, source, _ := installOMPFixture(t, false)
+	writeFile(t, source, `{"type":"session","version":3,"id":"trend","cwd":"/workspace/omp-fixture-project","timestamp":"2026-09-01T12:00:00Z"}
+{"type":"message","id":"a","timestamp":"2026-09-01T12:00:01Z","message":{"role":"assistant","content":[{"type":"toolCall","id":"a","name":"bash","arguments":{"command":"go test trendprobe"}}]}}
+{"type":"message","id":"ar","timestamp":"2026-09-01T12:00:02Z","message":{"role":"toolResult","toolCallId":"a","toolName":"bash","isError":true,"details":{"exitCode":7},"content":[{"type":"text","text":"error: trendprobe"}]}}
+{"type":"message","id":"b","timestamp":"2026-09-01T12:00:03Z","message":{"role":"assistant","content":[{"type":"toolCall","id":"b","name":"bash","arguments":{"command":"make trendprobe"}}]}}
+{"type":"message","id":"br","timestamp":"2026-09-01T12:00:04Z","message":{"role":"toolResult","toolCallId":"b","toolName":"bash","isError":true,"content":[{"type":"text","text":"error: trendprobe"}]}}
+`)
+	for _, kind := range []string{"commands", "failures"} {
+		for _, format := range []string{"", "--robot"} {
+			args := []string{"patterns", "--kind", kind, "--project", "omp-fixture-project", "--trend"}
+			if format != "" {
+				args = append(args, format)
+			}
+			out, stderr, err := runCmd(args...)
+			if err != nil {
+				t.Fatalf("%s %s: %v %s", kind, format, err, stderr)
+			}
+			want := []string{"2026-W35"}
+			if kind == "commands" {
+				want = append(want, "go", "make")
+			} else if format == "--robot" {
+				want = append(want, "exit_code=7", "exit_code=?", "coverage=1/2")
+			} else {
+				want = append(want, "exit_code=7", "exit_code=?", "1 occurrences")
+			}
+			for _, marker := range want {
+				if !strings.Contains(out, marker) {
+					t.Fatalf("%s %s lost %q: %s", kind, format, marker, out)
+				}
+			}
+			if strings.Contains(out, "No patterns found") {
+				t.Fatalf("nonempty native trend reported empty: %s", out)
+			}
+		}
+	}
+}
