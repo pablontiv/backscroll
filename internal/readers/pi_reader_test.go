@@ -21,6 +21,27 @@ func writePiFixture(t *testing.T, lines string) string {
 	return p
 }
 
+func TestPiReaderUnknownTimestampIsDeterministic(t *testing.T) {
+	for _, timestamp := range []string{"", "not-a-time"} {
+		line := `{"type":"message","timestamp":"` + timestamp + `","message":{"role":"user","content":"unknown time"}}` + "\n"
+		path := writePiFixture(t, line)
+		first, err := (&PiReader{}).Parse(context.Background(), path, input_config.InputDefinition{})
+		if err != nil {
+			t.Fatal(err)
+		}
+		second, err := (&PiReader{}).Parse(context.Background(), path, input_config.InputDefinition{})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(first.Records) != 1 || len(second.Records) != 1 {
+			t.Fatalf("records = %+v / %+v", first.Records, second.Records)
+		}
+		if !first.Records[0].Timestamp.IsZero() || first.Records[0].Timestamp != second.Records[0].Timestamp {
+			t.Fatalf("timestamp = %s / %s, want stable unknown", first.Records[0].Timestamp, second.Records[0].Timestamp)
+		}
+	}
+}
+
 func TestPiReader_Name(t *testing.T) {
 	if (&PiReader{}).Name() != "pi" {
 		t.Error("Name != pi")

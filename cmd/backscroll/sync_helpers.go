@@ -702,13 +702,17 @@ func (s *startupSyncService) syncWithProgress(ctx context.Context, cfg *config.C
 				return err
 			}
 			sessionTags.Add(msg.Content)
+			timestamp := ""
+			if !msg.Timestamp.IsZero() {
+				timestamp = msg.Timestamp.Format("2006-01-02T15:04:05Z07:00")
+			}
 			indexedMsgs = append(indexedMsgs, storage.IndexedMessage{
 				Ordinal:           ordinal,
 				Role:              msg.Role,
 				Origin:            msg.Origin,
 				Text:              msg.Content,
 				UUID:              msg.UUID,
-				Timestamp:         msg.Timestamp.Format("2006-01-02T15:04:05Z07:00"),
+				Timestamp:         timestamp,
 				ContentType:       msg.ContentType,
 				ToolName:          msg.ToolName,
 				CommandHead:       msg.CommandHead,

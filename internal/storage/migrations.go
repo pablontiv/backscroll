@@ -25,6 +25,7 @@ func newDatabaseMigrations() []migrationApplier {
 		applyV5, applyV6, applyV7, applyV8,
 		applyV9, applyV10, applyV11, applyV12,
 		applyV13, applyV14, applyV15, applyV16,
+		applyV17,
 	}
 }
 

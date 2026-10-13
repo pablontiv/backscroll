@@ -132,7 +132,7 @@ func piDiscriminator(raw json.RawMessage) (string, bool) {
 func piTimestamp(s string) time.Time {
 	ts, err := time.Parse(time.RFC3339, s)
 	if err != nil {
-		return time.Now()
+		return time.Time{}
 	}
 	return ts
 }

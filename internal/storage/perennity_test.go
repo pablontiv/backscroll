@@ -1,6 +1,7 @@
 package storage
 
 import (
+	"database/sql"
 	"path/filepath"
 	"testing"
 )
@@ -48,6 +49,42 @@ func TestGrowingSessionKeepsStableIDs(t *testing.T) {
 	}
 	if n != 2 {
 		t.Errorf("want 2 rows after growth, got %d", n)
+	}
+}
+
+func TestUnknownTimestampPersistsAsNullWithoutReplacingProvenTime(t *testing.T) {
+	db, err := Open(filepath.Join(t.TempDir(), "test.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = db.Close() }()
+
+	proven := IndexedMessage{Ordinal: 0, Role: "user", Text: "known", UUID: "u1",
+		Timestamp: "2026-01-01T00:00:00Z", ContentType: "text", ExtractionVersion: 1}
+	if err := db.SyncFiles(sessionFile("h1", []IndexedMessage{proven})); err != nil {
+		t.Fatal(err)
+	}
+
+	unknownReplay := proven
+	unknownReplay.Timestamp = ""
+	unknownNew := IndexedMessage{Ordinal: 1, Role: "assistant", Text: "unknown", UUID: "u2",
+		ContentType: "text", ExtractionVersion: 1}
+	if err := db.SyncFiles(sessionFile("h2", []IndexedMessage{unknownReplay, unknownNew})); err != nil {
+		t.Fatal(err)
+	}
+
+	var retained, unknown sql.NullString
+	if err := db.db.QueryRow("SELECT timestamp FROM search_items WHERE uuid = ?", "u1").Scan(&retained); err != nil {
+		t.Fatal(err)
+	}
+	if !retained.Valid || retained.String != proven.Timestamp {
+		t.Fatalf("proven timestamp replaced: %+v", retained)
+	}
+	if err := db.db.QueryRow("SELECT timestamp FROM search_items WHERE uuid = ?", "u2").Scan(&unknown); err != nil {
+		t.Fatal(err)
+	}
+	if unknown.Valid {
+		t.Fatalf("unknown timestamp persisted as %q, want NULL", unknown.String)
 	}
 }
 

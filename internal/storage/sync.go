@@ -309,6 +309,10 @@ func (d *Database) SyncFilesContext(ctx context.Context, files []IndexedFile) (r
 			if msg.IsError != nil {
 				isErrVal = *msg.IsError
 			}
+			var timestampVal interface{}
+			if msg.Timestamp != "" {
+				timestampVal = msg.Timestamp
+			}
 			if !perennial || msg.UUID == "" || !existingUUIDs[msg.UUID] {
 				_, err := tx.ExecContext(ctx, `
 					INSERT INTO search_items
@@ -321,7 +325,7 @@ func (d *Database) SyncFilesContext(ctx context.Context, files []IndexedFile) (r
 					msg.Role,
 					origin,
 					msg.Text,
-					msg.Timestamp,
+					timestampVal,
 					uuidVal,
 					file.Project,
 					msg.ContentType,

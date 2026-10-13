@@ -528,6 +528,7 @@ var migrationPlanDispatch = map[compat.MigrationStep]migrationApplier{
 	{Version: 14, Name: "V14 file metadata prefilter"}:                                   applyV14,
 	{Version: 15, Name: "V15 search echo provenance"}:                                    applyV15,
 	{Version: 16, Name: "V16 parser-backed message origin"}:                              applyV16,
+	{Version: 17, Name: "V17 project attribution evidence"}:                              applyV17,
 }
 
 func planStartsFromEmptySchema(plan compat.MigrationPlan) bool {
