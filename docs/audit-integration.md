@@ -16,6 +16,16 @@ backscroll status --json
 backscroll validate --json
 ```
 
+After startup, validation reads the persistent index without repairing it. It
+compares posting-backed FTS document membership against canonical `search_items`
+routing: text/code/reasoning in `messages_fts`, tools in `tool_fts`. Empty or
+tokenizer-ineligible text (including tools shorter than three characters) does
+not require postings. SQLite tokenization and comparison use transaction-local
+TEMP scratch tables, rolled back after validation. Missing or unexpected document
+diagnostics identify the index, count, and first row ID and recommend
+`backscroll rebuild`; JSON retains the existing `valid: false`/`error` envelope.
+This membership check is not a full token-by-token posting integrity check.
+
 Then query through the database-backed CLI surfaces:
 
 ```bash

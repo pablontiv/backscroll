@@ -476,7 +476,7 @@ func (d *Database) Validate() error {
 		return fmt.Errorf("found %d orphaned search_items", orphans)
 	}
 
-	return nil
+	return d.validateFTSMembership()
 }
 
 // Purge deletes records older than the specified date.
