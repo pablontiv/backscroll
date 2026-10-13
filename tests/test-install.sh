@@ -319,6 +319,8 @@ rm -rf "$CONFIG_DIR" "$HOME_DIR" "$XDG_DIR"
 # Test 11: Without an override, Unix installs under HOME/.config and ignores XDG_CONFIG_HOME
 echo "[Unix default config destination]"
 testable=$(make_testable)
+HOME_DIR=\$(mktemp -d)
+XDG_DIR=\$(mktemp -d)
 HOME_DIR=$(mktemp -d)
 XDG_DIR=$(mktemp -d)
 output=$(HOME="$HOME_DIR" XDG_CONFIG_HOME="$XDG_DIR" BACKSCROLL_INPUTS_SOURCE_DIR="$INPUTS_DIR" bash -c "

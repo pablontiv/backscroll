@@ -74,6 +74,8 @@ func TestLoadInputsFromDir_invalidTOML(t *testing.T) {
 
 func TestInputsDirEnvOverride(t *testing.T) {
 	want := t.TempDir()
+	t.Setenv(\"HOME\", t.TempDir())
+	t.Setenv(\"XDG_CONFIG_HOME\", t.TempDir())
 	t.Setenv("BACKSCROLL_CONFIG_DIR", want)
 
 	got, err := InputsDir()
@@ -86,6 +88,9 @@ func TestInputsDirEnvOverride(t *testing.T) {
 }
 
 func TestInputsDirNoEnv(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv(\"HOME\", home)
+	t.Setenv(\"XDG_CONFIG_HOME\", t.TempDir())
 	t.Setenv("BACKSCROLL_CONFIG_DIR", "")
 
 	got, err := InputsDir()
