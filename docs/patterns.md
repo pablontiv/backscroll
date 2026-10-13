@@ -71,6 +71,34 @@ signal (`is_error` NULL) are excluded and counted. `exit_code=?` means no
 exit code was recoverable (non-Bash tools have none; Bash text is
 regex-mined and capped at 4000 runes by toolfmt).
 
+#### Failure census and weekly output compatibility (#147)
+
+Failure JSON envelopes expose `total_events`, `signalled_events` (both
+success and failure signals), and `unsignalled_events` (NULL signals), even
+when no failures exist or pagination returns no signatures. Counts use the
+same eligible project/tag/time population before pagination; total equals
+signalled plus unsignalled. Signature `count` is failure incidence, NOT
+signal coverage. The retained robot `result_N_coverage=count/signalled`
+field is a signature's incidence among signalled events, not the proportion
+of events carrying a signal.
+
+With `--trend`, each week envelope carries its own census and each signature's
+retained `signalled_events` denominator refers only to that week. The outer
+census sums all dated eligible weeks. Weeks with zero failures (or signatures
+removed by pagination) remain present with `patterns:[]`; signature pagination
+and descending week/frequency ordering are unchanged. The exclusion diagnostic
+counts ALL scoped events without timestamps, including successful and
+unsignalled events, independently of date bounds.
+
+This is an intentional output bug fix: command AND failure trend robot
+payload keys are now `week_N_result_M_<field>`, retaining `week_N=<week>`
+bucket markers and ordering. Consumers must stop relying on duplicate
+`result_M_<field>` keys. Failure robot census keys are emitted once globally
+and once per week as `week_N_total_events`, `week_N_signalled_events`, and
+`week_N_unsignalled_events`; text output displays the same counts.
+JSON census fields and zero-failure week envelopes are additive; historical
+signature fields remain available. No schema or public flags change.
+
 ### templates — recurring errors nobody named
 
 Unsupervised Drain-style templates mined from error-bearing tool output

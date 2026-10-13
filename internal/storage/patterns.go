@@ -126,7 +126,7 @@ ORDER BY week DESC, cnt DESC, tool_name, command_head
 	}
 
 	if excludedPtr != nil {
-		if err := d.countUndatedPatternEvents(opts, false, excludedPtr); err != nil {
+		if err := d.countUndatedPatternEvents(opts, excludedPtr); err != nil {
 			return nil, err
 		}
 	}
@@ -194,9 +194,13 @@ ORDER BY cnt DESC, tool_name, is_error DESC, exit_code
 // NULL timestamps are excluded and the count is reported via a reference parameter.
 func (d *Database) AggregateFailuresTrend(opts AggregateOptions, excludedPtr *int) ([]FailurePatternWeekly, error) {
 	cte, args := eligibleToolEvents(opts.Project, opts.Tag, opts.StartDate, opts.EndDate)
-	var totalSignalled int
-	if err := d.db.QueryRow(cte+`SELECT COUNT(*) FROM eligible_tool_events WHERE is_error IS NOT NULL AND timestamp IS NOT NULL`, args...).Scan(&totalSignalled); err != nil {
-		return nil, fmt.Errorf("count signalled events trend: %w", err)
+	weekly, err := d.FailureCensusTrend(opts)
+	if err != nil {
+		return nil, err
+	}
+	signalled := make(map[string]int, len(weekly))
+	for _, c := range weekly {
+		signalled[c.Week] = c.SignalledEvents
 	}
 	query := cte + `SELECT strftime('%Y-W%W', timestamp) AS week, tool_name, is_error, exit_code, COUNT(*) as cnt
 FROM eligible_tool_events
@@ -235,7 +239,7 @@ ORDER BY week DESC, cnt DESC, tool_name, is_error DESC, exit_code
 			IsError:         isError != 0,
 			ExitCode:        ec,
 			Count:           count,
-			SignalledEvents: totalSignalled,
+			SignalledEvents: signalled[week.String],
 		}
 		if week.Valid {
 			p.Week = week.String
@@ -247,7 +251,7 @@ ORDER BY week DESC, cnt DESC, tool_name, is_error DESC, exit_code
 	}
 
 	if excludedPtr != nil {
-		if err := d.countUndatedPatternEvents(opts, true, excludedPtr); err != nil {
+		if err := d.countUndatedPatternEvents(opts, excludedPtr); err != nil {
 			return nil, err
 		}
 	}
@@ -257,14 +261,53 @@ ORDER BY week DESC, cnt DESC, tool_name, is_error DESC, exit_code
 
 // Missing-timestamp diagnostics share identity and scope, but deliberately omit
 // date bounds: NULL timestamps cannot be compared to either bound.
-func (d *Database) countUndatedPatternEvents(opts AggregateOptions, failuresOnly bool, excluded *int) error {
+func (d *Database) countUndatedPatternEvents(opts AggregateOptions, excluded *int) error {
 	cte, args := eligibleToolEvents(opts.Project, opts.Tag, "", "")
 	query := cte + `SELECT COUNT(*) FROM eligible_tool_events WHERE timestamp IS NULL`
-	if failuresOnly {
-		query += ` AND is_error = 1`
-	}
 	if err := d.db.QueryRow(query, args...).Scan(excluded); err != nil {
 		return fmt.Errorf("count undated pattern events: %w", err)
 	}
 	return nil
+}
+
+// FailureCensus counts the eligible population independently of failure incidence
+// and result pagination.
+type FailureCensus struct {
+	TotalEvents       int `json:"total_events"`
+	SignalledEvents   int `json:"signalled_events"`
+	UnsignalledEvents int `json:"unsignalled_events"`
+}
+
+type FailureCensusWeekly struct {
+	Week string `json:"week"`
+	FailureCensus
+}
+
+func (d *Database) FailureCensus(opts AggregateOptions) (FailureCensus, error) {
+	cte, args := eligibleToolEvents(opts.Project, opts.Tag, opts.StartDate, opts.EndDate)
+	var c FailureCensus
+	err := d.db.QueryRow(cte+`SELECT COUNT(*), COUNT(is_error), COUNT(*)-COUNT(is_error) FROM eligible_tool_events`, args...).Scan(&c.TotalEvents, &c.SignalledEvents, &c.UnsignalledEvents)
+	if err != nil {
+		return c, fmt.Errorf("failure census: %w", err)
+	}
+	return c, nil
+}
+
+func (d *Database) FailureCensusTrend(opts AggregateOptions) ([]FailureCensusWeekly, error) {
+	cte, args := eligibleToolEvents(opts.Project, opts.Tag, opts.StartDate, opts.EndDate)
+	rows, err := d.db.Query(cte+`SELECT strftime('%Y-W%W', timestamp) AS week, COUNT(*), COUNT(is_error), COUNT(*)-COUNT(is_error)
+ FROM eligible_tool_events WHERE timestamp IS NOT NULL GROUP BY week ORDER BY week DESC`, args...)
+	if err != nil {
+		return nil, fmt.Errorf("weekly failure census: %w", err)
+	}
+	defer func() { _ = rows.Close() }()
+	result := []FailureCensusWeekly{}
+	for rows.Next() {
+		var c FailureCensusWeekly
+		if err := rows.Scan(&c.Week, &c.TotalEvents, &c.SignalledEvents, &c.UnsignalledEvents); err != nil {
+			return nil, fmt.Errorf("weekly failure census scan: %w", err)
+		}
+		result = append(result, c)
+	}
+	return result, rows.Err()
 }
