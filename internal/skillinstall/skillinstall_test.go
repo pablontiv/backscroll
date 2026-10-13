@@ -456,6 +456,9 @@ func TestFileAndBrokenLinkRestoreExactPreimages(t *testing.T) {
 	if err := os.WriteFile(targets[0], []byte("file preimage"), 0o640); err != nil {
 		t.Fatal(err)
 	}
+	if err := os.Chmod(targets[0], 0o640); err != nil {
+		t.Fatal(err)
+	}
 	if err := os.Symlink("missing-relative-target", targets[1]); err != nil {
 		t.Fatal(err)
 	}
@@ -981,6 +984,9 @@ func TestRestoreRejectsUnsafeRequests(t *testing.T) {
 		t.Fatalf("missing receipt error = %v", err)
 	}
 	if err := os.WriteFile(missing, []byte("{}"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(missing, 0o644); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := Restore(home, missing, "approval"); err == nil || !strings.Contains(err.Error(), "secure regular file") {

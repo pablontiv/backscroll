@@ -139,3 +139,5 @@ just test-skills
 ```
 
 Las pruebas usan hogares temporales en Linux y macOS. Las pruebas no modifican el hogar real. La prueba opcional `tests/skill_runtime_probe.py` comprueba runtimes externos instalados en macOS. Esa prueba no forma parte de CI y no invoca modelos.
+
+Las pruebas de permisos establecen con `chmod` los modos exactos de sus preimágenes y archivos deliberadamente inseguros. Los permisos de creación están sujetos al `umask` heredado; las pruebas no modifican ese estado global ni relajan las comprobaciones de seguridad.

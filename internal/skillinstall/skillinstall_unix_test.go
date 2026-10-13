@@ -30,6 +30,9 @@ func TestUnixPrivateFileAndLockValidation(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	if err := file.Chmod(0o644); err != nil {
+		t.Fatal(err)
+	}
 	if err := validatePrivateFile(file, 0o600); err == nil {
 		t.Fatal("validatePrivateFile accepted an insecure mode")
 	}
@@ -50,6 +53,9 @@ func TestUnixPrivateFileAndLockValidation(t *testing.T) {
 	if err := os.WriteFile(appendPath, []byte("event\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
+	if err := os.Chmod(appendPath, 0o644); err != nil {
+		t.Fatal(err)
+	}
 	if _, err := openAppendNoFollow(appendPath, 0o600); err == nil {
 		t.Fatal("openAppendNoFollow accepted an insecure existing file")
 	}
@@ -58,6 +64,9 @@ func TestUnixPrivateFileAndLockValidation(t *testing.T) {
 		t.Fatal(err)
 	}
 	if err := os.WriteFile(filepath.Join(state, "lock"), nil, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(filepath.Join(state, "lock"), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := acquireLock(state); err == nil {
@@ -114,6 +123,9 @@ func TestPinnedDirectoryOperations(t *testing.T) {
 		t.Fatal(err)
 	}
 	if err := os.WriteFile(filepath.Join(directoryPath, "file"), []byte("data"), 0o640); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(filepath.Join(directoryPath, "file"), 0o640); err != nil {
 		t.Fatal(err)
 	}
 	if got, err := directory.snapshot("file"); err != nil || got.Kind != "file" || got.Mode != 0o640 {
