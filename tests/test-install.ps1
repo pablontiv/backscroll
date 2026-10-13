@@ -47,8 +47,9 @@ Describe "Input preset functions" -Tag "Static" {
         Get-Command Install-InputPresets | Should -Not -BeNullOrEmpty
     }
 
-    It "ships the Pi preset without expanding the Windows preset set" {
-        $InputPresets.Count | Should -Be 3
+    It "ships exactly the supported Windows native presets" {
+        $InputPresets.Count | Should -Be 4
+        ($InputPresets -join ",") | Should -Be "claude.inputs.toml,pi.inputs.toml,omp.inputs.toml,codex.inputs.toml"
         $InputPresets | Should -Contain "claude.inputs.toml"
         $InputPresets | Should -Contain "pi.inputs.toml"
         $InputPresets | Should -Contain "codex.inputs.toml"
@@ -159,13 +160,14 @@ Describe "Install-InputPresets" -Tag "Runtime" {
             Test-Path $inputsDir | Should -BeTrue
             foreach ($preset in $InputPresets) {
                 Test-Path (Join-Path $inputsDir $preset) | Should -BeTrue
+                (Get-Content (Join-Path $inputsDir $preset) -Raw) | Should -Be (Get-Content (Join-Path $InputsSource $preset) -Raw)
             }
         } finally {
             Remove-Item Env:\BACKSCROLL_CONFIG_DIR -ErrorAction SilentlyContinue
         }
     }
 
-    It "preserves existing Claude, Pi, and Codex presets by default" {
+    It "preserves existing Claude, Pi, OMP, and Codex presets by default" {
         $configDir = Join-Path $TestDrive "config-skip"
         $inputsDir = Join-Path (Join-Path $configDir "backscroll") "inputs"
         New-Item -ItemType Directory -Path $inputsDir -Force | Out-Null
@@ -187,13 +189,16 @@ Describe "Install-InputPresets" -Tag "Runtime" {
         $configDir = Join-Path $TestDrive "config-force"
         $inputsDir = Join-Path (Join-Path $configDir "backscroll") "inputs"
         New-Item -ItemType Directory -Path $inputsDir -Force | Out-Null
-        $claudePreset = Join-Path $inputsDir "claude.inputs.toml"
-        Set-Content -Path $claudePreset -Value "user edit"
+        foreach ($preset in $InputPresets) {
+            Set-Content -Path (Join-Path $inputsDir $preset) -Value "$preset user edit"
+        }
         $env:BACKSCROLL_CONFIG_DIR = $configDir
         $env:BACKSCROLL_FORCE_INPUTS = "1"
         try {
             Install-InputPresets -Version "v0.2.3" -SourceDir $InputsSource
-            Get-Content $claudePreset -Raw | Should -Match 'id = "claude"'
+            foreach ($preset in $InputPresets) {
+                (Get-Content (Join-Path $inputsDir $preset) -Raw) | Should -Be (Get-Content (Join-Path $InputsSource $preset) -Raw)
+            }
         } finally {
             Remove-Item Env:\BACKSCROLL_CONFIG_DIR -ErrorAction SilentlyContinue
             Remove-Item Env:\BACKSCROLL_FORCE_INPUTS -ErrorAction SilentlyContinue

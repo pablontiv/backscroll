@@ -8,7 +8,7 @@ Backscroll has two separate configuration surfaces:
 - **Application config** controls Backscroll runtime settings such as the SQLite database path and embedding options.
 - **Input config** controls ingestion. It is loaded from global, user-scoped `*.inputs.toml` manifests under `<config_dir>/backscroll/inputs/`.
 
-`backscroll.toml` is application config only. It is not the canonical place to declare sessions, plans, Claude/Pi roots, or markdown knowledge sources.
+`backscroll.toml` is application config only. It is not the canonical place to declare sessions, plans, Claude/Pi/OMP roots, or markdown knowledge sources.
 
 ## Application config: `backscroll.toml`
 
@@ -53,7 +53,7 @@ Canonical input manifests are loaded from exactly this runtime directory:
 
 Set `BACKSCROLL_CONFIG_DIR` to override the base directory. For example, `BACKSCROLL_CONFIG_DIR=/tmp/bs-cfg` makes Backscroll read `/tmp/bs-cfg/backscroll/inputs/*.inputs.toml`.
 
-The repository ships source preset manifests for Claude, Pi, OpenCode, and optional Markdown inputs under `inputs/`. Backscroll reads presets only after they are copied into the user input config directory. When installing or refreshing presets, keep existing files by default so user edits are not overwritten.
+The repository ships source preset manifests for Claude, Pi, OMP, OpenCode, Codex, and optional Markdown inputs under `inputs/`. Backscroll reads presets only after they are copied into the user input config directory. When installing or refreshing presets, keep existing files by default so user edits are not overwritten.
 
 A minimal installed manifest looks like:
 
@@ -129,3 +129,14 @@ Use `--source-path` on search as a filter, paired with query text, for database-
 There is no public `inputs` or `sync` command. Manifest TOML is loaded during command preflight; reader resolution and discovery happen during mandatory startup sync, and failures block the requested command. Use `backscroll rebuild` only after startup sync has prepared the database; the handler re-derives FTS and other derived data from the perennial database and performs no second sync. It is not a replacement for correcting manifest errors.
 
 See [the input manifest contract](input-contract.md) for the supported fields and registered decoders. For downstream audit consumers, see the [downstream audit integration contract](audit-integration.md).
+
+### OMP native input
+
+`inputs/omp.inputs.toml` is an active `source = "session"` preset using the
+dedicated `format = "omp"` decoder, not `pi`. It defaults to
+`~/.omp/agent/sessions` with `include = ["*/*.jsonl"]`, excludes nested child
+sessions by shape, and keeps `index_reasoning = false`. Installers preserve
+existing OMP manifests; `BACKSCROLL_FORCE_INPUTS=1` intentionally refreshes them.
+Custom `PI_CODING_AGENT_DIR`, profiles, XDG storage and `--session-dir` are not
+auto-discovered: set explicit roots in a user manifest.
+See the [complete OMP example](input-contract.md#complete-omp-example).

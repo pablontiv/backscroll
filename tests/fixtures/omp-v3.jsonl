@@ -1,0 +1,34 @@
+{"type":"title","title":"ompignoredtitle"}
+{"type":"session","version":3,"id":"omp-fixture-session","timestamp":"2026-09-01T12:00:00Z","cwd":"/workspace/omp-fixture-project","additionalDirectories":["ompignoredextra"]}
+{"type":"message","id":"u","parentId":"unrelated-branch","timestamp":"2026-09-01T12:00:01Z","message":{"role":"user","content":"ompuserquartz native request","timestamp":1788264001000,"attribution":"user","providerPayload":{"secret":"ompignoredprovider"}}}
+{"type":"message","id":"r","parentId":"unrelated-branch","timestamp":"2026-09-01T12:00:01Z","message":{"role":"toolResult","content":[{"type":"text","text":"ompoutputquartz error: native output"},{"type":"image","text":"ompignoredimage","data":"ompignoredblob"}],"timestamp":1788264001000,"toolCallId":"c","toolName":"bash","isError":true,"details":{"exitCode":7,"__interrupted":true,"secret":"ompignoreddetails"}}}
+{"type":"message","id":"a","parentId":"unrelated-branch","timestamp":"2026-09-01T12:00:01Z","message":{"role":"assistant","content":[{"type":"text","text":"ompanswerquartz native answer"},{"type":"thinking","thinking":"ompreasonquartz native reasoning","thinkingSignature":"ompignoredsignature"},{"type":"toolCall","id":"c","name":"bash","arguments":{"command":"echo omptoolquartz"}},{"type":"redactedThinking","data":"ompignoredredacted"},{"type":"reasoning","encrypted_content":"ompignoredencrypted"}],"timestamp":1788264001000}}
+{"type":"message","id":"d","parentId":"unrelated-branch","timestamp":"2026-09-01T12:00:01Z","message":{"role":"developer","content":[{"type":"text","text":"ompdeveloperquartz native instruction"}],"timestamp":1788264001000}}
+{"type":"message","id":"s","parentId":"unrelated-branch","timestamp":"2026-09-01T12:00:01Z","message":{"role":"user","content":"ompsyntheticquartz generated request","timestamp":1788264001000,"synthetic":true,"attribution":"user"}}
+{"type":"message","id":"g","parentId":"unrelated-branch","timestamp":"2026-09-01T12:00:01Z","message":{"role":"user","content":"ompagentquartz delegated request","timestamp":1788264001000,"attribution":"agent"}}
+{"type":"message","id":"n","parentId":"unrelated-branch","timestamp":"2026-09-01T12:00:01Z","message":{"role":"user","content":"ompunknownquartz missing attribution","timestamp":1788264001000}}
+{"type":"message","id":"b","parentId":"unrelated-branch","timestamp":"2026-09-01T12:00:01Z","message":{"role":"assistant","content":[{"type":"text","text":"ompbranchquartz stored branch"}],"timestamp":1788264001000,"stopReason":"aborted"}}
+{"type":"thinking_level_change","id":"ignored-thinking_level_change","message":{"role":"user","content":"ompignoredadmin"},"summary":"ompignoredderived"}
+{"type":"model_change","id":"ignored-model_change","message":{"role":"user","content":"ompignoredadmin"},"summary":"ompignoredderived"}
+{"type":"service_tier_change","id":"ignored-service_tier_change","message":{"role":"user","content":"ompignoredadmin"},"summary":"ompignoredderived"}
+{"type":"model_usage","id":"ignored-model_usage","message":{"role":"user","content":"ompignoredadmin"},"summary":"ompignoredderived"}
+{"type":"custom","id":"ignored-custom","message":{"role":"user","content":"ompignoredadmin"},"summary":"ompignoredderived"}
+{"type":"label","id":"ignored-label","message":{"role":"user","content":"ompignoredadmin"},"summary":"ompignoredderived"}
+{"type":"title_change","id":"ignored-title_change","message":{"role":"user","content":"ompignoredadmin"},"summary":"ompignoredderived"}
+{"type":"ttsr_injection","id":"ignored-ttsr_injection","message":{"role":"user","content":"ompignoredadmin"},"summary":"ompignoredderived"}
+{"type":"credential_pin","id":"ignored-credential_pin","message":{"role":"user","content":"ompignoredadmin"},"summary":"ompignoredderived"}
+{"type":"mode_change","id":"ignored-mode_change","message":{"role":"user","content":"ompignoredadmin"},"summary":"ompignoredderived"}
+{"type":"reset_boundary","id":"ignored-reset_boundary","message":{"role":"user","content":"ompignoredadmin"},"summary":"ompignoredderived"}
+{"type":"compaction","id":"ignored-compaction","message":{"role":"user","content":"ompignoredadmin"},"summary":"ompignoredderived"}
+{"type":"branch_summary","id":"ignored-branch_summary","message":{"role":"user","content":"ompignoredadmin"},"summary":"ompignoredderived"}
+{"type":"session_init","id":"ignored-session_init","message":{"role":"user","content":"ompignoredadmin"},"summary":"ompignoredderived"}
+{"type":"future","id":"ignored-future","message":{"role":"user","content":"ompignoredadmin"},"summary":"ompignoredderived"}
+{"type":"message","id":"ignored-bashExecution","parentId":"unrelated-branch","timestamp":"2026-09-01T12:00:01Z","message":{"role":"bashExecution","content":"ompignoredspecial","timestamp":1788264001000}}
+{"type":"message","id":"ignored-pythonExecution","parentId":"unrelated-branch","timestamp":"2026-09-01T12:00:01Z","message":{"role":"pythonExecution","content":"ompignoredspecial","timestamp":1788264001000}}
+{"type":"message","id":"ignored-fileMention","parentId":"unrelated-branch","timestamp":"2026-09-01T12:00:01Z","message":{"role":"fileMention","content":"ompignoredspecial","timestamp":1788264001000}}
+{"type":"message","id":"ignored-custom","parentId":"unrelated-branch","timestamp":"2026-09-01T12:00:01Z","message":{"role":"custom","content":"ompignoredspecial","timestamp":1788264001000}}
+{"type":"message","id":"ignored-system","parentId":"unrelated-branch","timestamp":"2026-09-01T12:00:01Z","message":{"role":"system","content":"ompignoredspecial","timestamp":1788264001000}}
+{"type":"message","id":"ignored-future","parentId":"unrelated-branch","timestamp":"2026-09-01T12:00:01Z","message":{"role":"future","content":"ompignoredspecial","timestamp":1788264001000}}
+{"type":"message","id":"badtime","timestamp":"invalid","message":{"role":"user","content":"ompignoredtimestamp"}}
+{"type":"message","timestamp":"2026-09-01T12:00:01Z","message":{"role":"user","content":"ompignoredidentity"}}
+{malformed ompignoredmalformed

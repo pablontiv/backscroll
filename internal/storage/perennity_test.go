@@ -288,3 +288,64 @@ func TestTeammateMessageWrapperCleanedInFTSRebuild(t *testing.T) {
 		t.Errorf("message should survive rebuild, got %d rows", n)
 	}
 }
+
+func TestPerennialToolResultMonotonicallyEnrichesProof(t *testing.T) {
+	for _, proof := range []bool{false, true} {
+		t.Run(map[bool]string{false: "success", true: "failure"}[proof], func(t *testing.T) {
+			db, err := Open(filepath.Join(t.TempDir(), "test.db"))
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer db.Close()
+			call := IndexedMessage{Ordinal: 0, Role: "assistant", Origin: "assistant", Text: "bash command=echo proof", UUID: "call", ContentType: "tool", ToolName: "bash", CommandHead: "echo", ExtractionVersion: 1}
+			syncCall := func(hash string, m IndexedMessage) {
+				t.Helper()
+				if err := db.SyncFiles(sessionFile(hash, []IndexedMessage{m})); err != nil {
+					t.Fatal(err)
+				}
+			}
+			syncCall("initial", call)
+			var itemID, eventID int64
+			if err := db.db.QueryRow(`SELECT id FROM search_items WHERE uuid='call'`).Scan(&itemID); err != nil {
+				t.Fatal(err)
+			}
+			if err := db.db.QueryRow(`SELECT id FROM tool_events WHERE message_uuid='call'`).Scan(&eventID); err != nil {
+				t.Fatal(err)
+			}
+			code := 0
+			if proof {
+				code = 7
+			}
+			enriched := call
+			enriched.IsError = &proof
+			enriched.ExitCode = &code
+			enriched.WasInterrupted = true
+			enriched.ExtractionVersion = CurrentExtractionVersion
+			syncCall("result", enriched)
+			assertProof := func() {
+				t.Helper()
+				var gotItemID, gotEventID int64
+				var text, uuid, origin string
+				var epoch, interrupted, eventEpoch, gotCode int
+				var gotError bool
+				if err := db.db.QueryRow(`SELECT s.id,s.text,s.uuid,s.origin,s.extraction_version,s.was_interrupted,e.id,e.extraction_version,e.is_error,e.exit_code FROM search_items s JOIN tool_events e ON e.message_uuid=s.uuid WHERE s.uuid='call'`).Scan(&gotItemID, &text, &uuid, &origin, &epoch, &interrupted, &gotEventID, &eventEpoch, &gotError, &gotCode); err != nil {
+					t.Fatal(err)
+				}
+				if gotItemID != itemID || gotEventID != eventID || text != call.Text || uuid != call.UUID || origin != string(call.Origin) || epoch != 1 || eventEpoch != 1 || interrupted != 1 || gotError != proof || gotCode != code {
+					t.Fatalf("identity/proof changed: item=%d event=%d text=%q uuid=%q origin=%s epochs=%d/%d interrupted=%d error=%t code=%d", gotItemID, gotEventID, text, uuid, origin, epoch, eventEpoch, interrupted, gotError, gotCode)
+				}
+			}
+			assertProof()
+			syncCall("partial", call)
+			assertProof()
+			opposite := !proof
+			otherCode := 99
+			conflicting := enriched
+			conflicting.IsError = &opposite
+			conflicting.ExitCode = &otherCode
+			conflicting.WasInterrupted = false
+			syncCall("conflicting", conflicting)
+			assertProof()
+		})
+	}
+}
