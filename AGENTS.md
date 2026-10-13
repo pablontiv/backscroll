@@ -235,9 +235,9 @@ Workflows delegate to [pablontiv/crossbeam](https://github.com/pablontiv/crossbe
 
 ## Config Resolution Order
 
-1. `./backscroll.toml` (current directory)
-2. `~/.config/backscroll/config.toml`
-3. Environment variables: `BACKSCROLL_DATABASE_PATH`, `BACKSCROLL_SESSION_DIRS`
+1. Environment variables: `BACKSCROLL_DATABASE_PATH`, `BACKSCROLL_SESSION_DIRS`
+2. `./backscroll.toml` (current directory)
+3. `~/.config/backscroll/config.toml`
 4. Defaults: `~/.backscroll.db`, current directory
 
 ## Package Layout

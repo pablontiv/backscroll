@@ -17,9 +17,9 @@ Application config is resolved from:
 
 | Priority | Source | Example |
 | ---------- | -------- | --------- |
-| 1 (highest) | `./backscroll.toml` | Project-local app config |
-| 2 | `~/.config/backscroll/config.toml` | User-level app config |
-| 3 | Environment variables | `BACKSCROLL_DATABASE_PATH` |
+| 1 (highest) | Environment variables | `BACKSCROLL_DATABASE_PATH` |
+| 2 | `./backscroll.toml` | Project-local app config |
+| 3 | `~/.config/backscroll/config.toml` | User-level app config |
 | 4 (lowest) | Built-in defaults | `~/.backscroll.db` |
 
 App config is for global Backscroll options such as:
