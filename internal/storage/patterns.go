@@ -51,10 +51,11 @@ type FailurePatternWeekly struct {
 }
 
 // AggregateCommands returns top (tool_name, command_head) pairs by frequency,
-// optionally stratified by tag and time window.
+// optionally stratified by tag and time window. NULL and empty command heads
+// share the empty-string unknown group; no command is inferred.
 func (d *Database) AggregateCommands(opts AggregateOptions) ([]CommandPattern, error) {
 	query := `
-SELECT tool_name, command_head, COUNT(*) as cnt
+SELECT tool_name, COALESCE(command_head, '') AS command_head, COUNT(*) as cnt
 FROM tool_events
 WHERE 1=1
 `
@@ -107,7 +108,7 @@ WHERE 1=1
 		args = append(args, opts.EndDate)
 	}
 
-	query += ` GROUP BY tool_name, command_head
+	query += ` GROUP BY tool_name, COALESCE(command_head, '')
 ORDER BY cnt DESC, tool_name, command_head
 `
 
@@ -142,10 +143,11 @@ ORDER BY cnt DESC, tool_name, command_head
 }
 
 // AggregateCommandsTrend returns (week, tool_name, command_head) aggregations grouped by week.
+// NULL and empty command heads share the empty-string unknown group.
 // NULL timestamps are excluded and the count is reported via a reference parameter.
 func (d *Database) AggregateCommandsTrend(opts AggregateOptions, excludedPtr *int) ([]CommandPatternWeekly, error) {
 	query := `
-SELECT strftime('%Y-W%W', si.timestamp) AS week, tool_name, command_head, COUNT(*) as cnt
+SELECT strftime('%Y-W%W', si.timestamp) AS week, tool_name, COALESCE(command_head, '') AS command_head, COUNT(*) as cnt
 FROM tool_events
 JOIN search_items si ON (
 	tool_events.source_path = si.source_path
@@ -181,7 +183,7 @@ WHERE si.timestamp IS NOT NULL
 		args = append(args, opts.EndDate)
 	}
 
-	query += ` GROUP BY week, tool_name, command_head
+	query += ` GROUP BY week, tool_name, COALESCE(command_head, '')
 ORDER BY week DESC, cnt DESC, tool_name, command_head
 `
 

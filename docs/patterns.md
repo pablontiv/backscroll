@@ -28,6 +28,12 @@ Base flags for every kind: `--project` / `--all-projects`, `--tag`,
 
 ### commands — what runs most
 
+Missing command heads (persisted SQL `NULL` or empty strings) are grouped together
+as `command_head: ""` in both flat and weekly output. This means unknown command
+metadata, not an inferred command; persisted values are unchanged. Normalization
+happens before grouping, ordering, and pagination, so there is only one unknown
+group per tool (and week for trends).
+
 Top `(tool_name, command_head)` pairs by frequency. The absolute top is
 usually unsurprising (Edit, Read); the informative reads are per-project
 (`--project`) and per-tag (`--tag debugging`) stratifications.
