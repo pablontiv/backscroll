@@ -71,3 +71,13 @@ Do not fall back to `cat`, `jq`, Python, or filesystem session hunting for norma
 | --- | --- |
 | `0` | Query and required startup handling completed successfully. |
 | `1` | Invalid arguments, diagnostic failure, manifest preflight failure, or database/query failure. |
+
+### Session list pagination
+
+`list` returns sessions only, ordered by `timestamp:desc` by default. The only
+accepted `--order` values are `timestamp:desc` and `timestamp:asc`; equal timestamps
+are ordered by source path and project. Without an explicit `--limit`, `--recent`
+sets the limit (default 20). Explicit `--limit 0` or `--recent 0` is unlimited,
+and `--offset` skips sessions after ordering even for unlimited pages.
+Explicit `--recent` cannot be combined with `--limit` or ascending order.
+Invalid order and incompatible flags are rejected before startup side effects.

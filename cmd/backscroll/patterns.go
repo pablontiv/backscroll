@@ -93,7 +93,7 @@ Use --json, --robot for output formats.`,
 	cmd.Flags().StringVar(&project, "project", "", "Filter to single project (mutually exclusive with --all-projects)")
 	cmd.Flags().BoolVar(&allProjects, "all-projects", false, "Query across all projects (default: project inferred from current working directory)")
 	cmd.Flags().StringVar(&tag, "tag", "", "Filter by session tag")
-	cmd.Flags().IntVar(&limit, "limit", 20, "Result limit")
+	cmd.Flags().IntVar(&limit, "limit", 20, "Result limit (0 = unlimited)")
 	cmd.Flags().IntVar(&offset, "offset", 0, "Result offset")
 	cmd.Flags().IntVar(&minSupport, "min-support", 3, "Minimum template/sequence occurrence count (>=0; sequences: 0=default 3)")
 	cmd.Flags().IntVar(&minLength, "min-length", 2, "Minimum sequence pattern length (for --kind sequences, >=0; 0=default 2)")
@@ -567,10 +567,10 @@ func runPatterns(ctx context.Context, stdout, stderr io.Writer, cfg *config.Conf
 		if offset > len(results) {
 			offset = len(results)
 		}
-		if limit <= 0 {
-			limit = 20
+		end := len(results)
+		if limit > 0 && limit < len(results)-offset {
+			end = offset + limit
 		}
-		end := offset + limit
 		if end > len(results) {
 			end = len(results)
 		}

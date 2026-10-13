@@ -33,14 +33,29 @@ func newListCmd(stdout, stderr io.Writer) *cobra.Command {
 Use --project to select a single project explicitly.
 Use --all-projects to list across all projects.
 Use --order to sort results (e.g., timestamp:desc).
-Use --limit to restrict result count.
+Use --limit to restrict result count (0 = unlimited); otherwise --recent defaults to 20.
 Use --offset to skip results.
-Use --recent N to show N most recent sessions (legacy flag; prefer --order timestamp:desc --limit N).
+Use --recent N for the N newest sessions; it cannot be combined with --limit or ascending order.
 Use --json to output as JSON.`,
 		Args: func(cmd *cobra.Command, args []string) error {
-			return validateCommandBeforeStartup(cmd, args, func(_ *cobra.Command, args []string) error {
+			return validateCommandBeforeStartup(cmd, args, func(cmd *cobra.Command, args []string) error {
 				if len(args) > 0 {
 					return fmt.Errorf("unexpected positional argument %q; use --text for text search", args[0])
+				}
+				if recent < 0 || limit < 0 || offset < 0 {
+					return fmt.Errorf("--recent, --limit and --offset must be >= 0")
+				}
+				if order != "timestamp:desc" && order != "timestamp:asc" {
+					return fmt.Errorf("--order must be timestamp:desc or timestamp:asc")
+				}
+				if cmd.Flags().Changed("recent") && cmd.Flags().Changed("limit") {
+					return fmt.Errorf("--recent and --limit cannot be set together")
+				}
+				if cmd.Flags().Changed("recent") && order == "timestamp:asc" {
+					return fmt.Errorf("--recent requires timestamp:desc")
+				}
+				if !cmd.Flags().Changed("limit") {
+					limit = recent
 				}
 				return nil
 			}, func() error {
@@ -69,7 +84,7 @@ Use --json to output as JSON.`,
 	cmd.Flags().IntVar(&recent, "recent", 20, "Show N most recent sessions (0 = all)")
 	cmd.Flags().BoolVar(&jsonFormat, "json", false, "Output as JSON")
 	cmd.Flags().BoolVar(&robotFormat, "robot", false, "Output in robot format")
-	cmd.Flags().StringVar(&order, "order", "", "Sort results (e.g., timestamp:desc)")
+	cmd.Flags().StringVar(&order, "order", "timestamp:desc", "Sort sessions: timestamp:desc or timestamp:asc")
 	cmd.Flags().IntVar(&limit, "limit", 0, "Result limit (0 = no limit)")
 	cmd.Flags().IntVar(&offset, "offset", 0, "Result offset")
 
@@ -95,29 +110,11 @@ func runList(ctx context.Context, stdout, stderr io.Writer, cfg *config.Config,
 	}
 	defer func() { retErr = closeIndexDB(db, retErr) }()
 
-	// If v2 grammar flags are provided (order, limit, offset), use ListItemsV2.
-	// Otherwise fall back to legacy ListSessions for backward compat
-	var sessions []storage.SessionEntry
-	if order != "" || limit > 0 || offset > 0 {
-		opts := storage.ListOptions{
-			Project:     project,
-			AllProjects: allProjects,
-			Order:       order,
-			Limit:       limit,
-			Offset:      offset,
-		}
-		var err error
-		sessions, err = db.ListItemsV2(opts)
-		if err != nil {
-			return fmt.Errorf("list items v2: %w", err)
-		}
-	} else {
-		// Legacy path: use old ListSessions
-		var err error
-		sessions, err = db.ListSessions(project, recent)
-		if err != nil {
-			return fmt.Errorf("list sessions: %w", err)
-		}
+	sessions, err := db.ListItemsV2(storage.ListOptions{
+		Project: project, AllProjects: allProjects, Order: order, Limit: limit, Offset: offset,
+	})
+	if err != nil {
+		return fmt.Errorf("list sessions: %w", err)
 	}
 
 	if len(sessions) == 0 {

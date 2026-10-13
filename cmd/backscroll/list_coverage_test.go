@@ -92,7 +92,7 @@ func TestListInvalidOrderRejected(t *testing.T) {
 	defer cleanup()
 	seedToolEvents(t)
 	if _, _, err := runCmd("list", "--order", "nonsense:updown", "--all-projects"); err == nil {
-		t.Log("invalid order accepted silently (documenting current behavior)")
+		t.Fatal("invalid order accepted silently")
 	}
 }
 

@@ -159,5 +159,14 @@ Support, batch size, limit, offset, and sequence lengths must be nonnegative.
 Confidence must be finite and in [0, 1], including both endpoints.
 Zero sequence support/lengths preserve defaults (3 occurrences, lengths 2..6);
 the effective minimum length must not exceed the effective maximum.
-Zero batch remains inactive, and zero limit retains existing command behavior.
+Zero batch remains inactive; explicit zero limit is unlimited as described below.
 These numeric checks apply even when a flag is irrelevant to the chosen kind.
+
+### Pagination
+
+`--limit` defaults to 20; explicit `--limit 0` is unlimited. `--offset`
+skips final ordered candidates, including with an unlimited limit. This applies
+uniformly to commands, failures (including trends), templates, corrections, and
+sequences. Sequence mining always reads the full filtered corpus before paging
+patterns. Equal-frequency candidates use logical identity tie-breaks (template
+signature, command/failure identity, or sequence lexicographic order), not row IDs.

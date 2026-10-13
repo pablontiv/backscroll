@@ -112,14 +112,7 @@ WHERE 1=1
 ORDER BY cnt DESC, tool_name, command_head
 `
 
-	if opts.Limit > 0 {
-		query += ` LIMIT ?`
-		args = append(args, opts.Limit)
-	}
-	if opts.Offset > 0 {
-		query += ` OFFSET ?`
-		args = append(args, opts.Offset)
-	}
+	query, args = appendPagination(query, args, opts.Limit, opts.Offset)
 
 	rows, err := d.db.Query(query, args...)
 	if err != nil {
@@ -187,14 +180,7 @@ WHERE si.timestamp IS NOT NULL
 ORDER BY week DESC, cnt DESC, tool_name, command_head
 `
 
-	if opts.Limit > 0 {
-		query += ` LIMIT ?`
-		args = append(args, opts.Limit)
-	}
-	if opts.Offset > 0 {
-		query += ` OFFSET ?`
-		args = append(args, opts.Offset)
-	}
+	query, args = appendPagination(query, args, opts.Limit, opts.Offset)
 
 	rows, err := d.db.Query(query, args...)
 	if err != nil {
@@ -362,14 +348,7 @@ WHERE is_error = 1
 ORDER BY cnt DESC, tool_name, is_error DESC, exit_code
 `
 
-	if opts.Limit > 0 {
-		query += ` LIMIT ?`
-		args = append(args, opts.Limit)
-	}
-	if opts.Offset > 0 {
-		query += ` OFFSET ?`
-		args = append(args, opts.Offset)
-	}
+	query, args = appendPagination(query, args, opts.Limit, opts.Offset)
 
 	rows, err := d.db.Query(query, args...)
 	if err != nil {
@@ -487,14 +466,7 @@ WHERE is_error = 1 AND si.timestamp IS NOT NULL
 ORDER BY week DESC, cnt DESC, tool_name, is_error DESC, exit_code
 `
 
-	if opts.Limit > 0 {
-		query += ` LIMIT ?`
-		args = append(args, opts.Limit)
-	}
-	if opts.Offset > 0 {
-		query += ` OFFSET ?`
-		args = append(args, opts.Offset)
-	}
+	query, args = appendPagination(query, args, opts.Limit, opts.Offset)
 
 	rows, err := d.db.Query(query, args...)
 	if err != nil {

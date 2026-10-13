@@ -207,7 +207,7 @@ type SessionEntry struct {
 type ListOptions struct {
 	Project     string // filter to project
 	AllProjects bool   // if true, ignore Project filter
-	Order       string // e.g., "timestamp:desc", "timestamp:asc" (default: no ordering)
+	Order       string // e.g., "timestamp:desc", "timestamp:asc" (default: timestamp:desc)
 	Limit       int    // result limit (0 = no limit)
 	Offset      int    // result offset
 	After       *time.Time
@@ -245,22 +245,15 @@ func (d *Database) ListItemsV2(opts ListOptions) ([]SessionEntry, error) {
 		GROUP BY si.source_path, si.project
 	`
 
-	// Apply ordering
-	if opts.Order != "" {
-		if strings.HasPrefix(opts.Order, "timestamp:desc") {
-			query += " ORDER BY ts DESC"
-		} else if strings.HasPrefix(opts.Order, "timestamp:asc") {
-			query += " ORDER BY ts ASC"
-		}
+	switch opts.Order {
+	case "", "timestamp:desc":
+		query += " ORDER BY ts DESC, si.source_path ASC, si.project ASC"
+	case "timestamp:asc":
+		query += " ORDER BY ts ASC, si.source_path ASC, si.project ASC"
+	default:
+		return nil, fmt.Errorf("invalid order %q: expected timestamp:desc or timestamp:asc", opts.Order)
 	}
-
-	// Apply limit/offset
-	if opts.Limit > 0 {
-		query += fmt.Sprintf(" LIMIT %d", opts.Limit)
-	}
-	if opts.Offset > 0 {
-		query += fmt.Sprintf(" OFFSET %d", opts.Offset)
-	}
+	query, args = appendPagination(query, args, opts.Limit, opts.Offset)
 
 	rows, err := d.db.Query(query, args...)
 	if err != nil {
@@ -788,7 +781,7 @@ func (d *Database) AggregateTemplates(opts TemplateQueryOpts) ([]TemplateRow, er
 		args = append(args, opts.Before)
 	}
 
-	query += ` GROUP BY mt.id HAVING cnt >= ? ORDER BY cnt DESC`
+	query += ` GROUP BY mt.id HAVING cnt >= ? ORDER BY cnt DESC, mt.signature ASC`
 	args = append(args, minSupport)
 
 	rows, err := d.db.Query(query, args...)
@@ -910,14 +903,7 @@ func (d *Database) AggregateCorrections(opts CorrectionAggOpts) ([]CorrectionCan
 	`
 	args = append(args, opts.MinConfidence)
 
-	if opts.Limit > 0 {
-		query += ` LIMIT ?`
-		args = append(args, opts.Limit)
-		if opts.Offset > 0 {
-			query += ` OFFSET ?`
-			args = append(args, opts.Offset)
-		}
-	}
+	query, args = appendPagination(query, args, opts.Limit, opts.Offset)
 
 	rows, err := d.db.Query(query, args...)
 	if err != nil {
