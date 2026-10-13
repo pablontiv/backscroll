@@ -951,6 +951,23 @@ func (d *Database) AggregateCorrections(opts CorrectionAggOpts) ([]CorrectionCan
 // Each supplied coordinate must match the UUID, even when supplied alone.
 // Shares context's typed absence/ambiguity errors; rejection never writes.
 func (d *Database) UpsertAnnotation(itemUUID, sourcePath string, ordinal int, kind, label string) error {
+	// Preserve the legacy -1 absence sentinel for existing callers.
+	if ordinal == -1 {
+		return d.UpsertAnnotationWithOrdinal(itemUUID, sourcePath, nil, kind, label)
+	}
+	return d.UpsertAnnotationWithOrdinal(itemUUID, sourcePath, &ordinal, kind, label)
+}
+
+// UpsertAnnotationWithOrdinal distinguishes an omitted ordinal (nil) from an
+// explicitly supplied value. Explicit negative ordinals never reach a write.
+func (d *Database) UpsertAnnotationWithOrdinal(itemUUID, sourcePath string, suppliedOrdinal *int, kind, label string) error {
+	ordinal := -1
+	if suppliedOrdinal != nil {
+		ordinal = *suppliedOrdinal
+		if ordinal < 0 {
+			return fmt.Errorf("ordinal must be non-negative when supplied")
+		}
+	}
 	q := ContextRecordQuery{}
 	if itemUUID != "" {
 		q.UUID = &itemUUID

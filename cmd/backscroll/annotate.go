@@ -33,6 +33,9 @@ fallback. Re-annotating the same (source_path, ordinal, kind) replaces the label
 				}
 				return nil
 			}, func() error {
+				if cmd.Flags().Changed("ordinal") && ordinal < 0 {
+					return fmt.Errorf("--ordinal must be non-negative when supplied")
+				}
 				return validateAnnotateRequest(uuid, path, ordinal, kind, label)
 			})
 		},
@@ -41,7 +44,7 @@ fallback. Re-annotating the same (source_path, ordinal, kind) replaces the label
 			if startup.Config == nil {
 				return fmt.Errorf("startup configuration unavailable")
 			}
-			return runAnnotate(cmd.Context(), stdout, stderr, startup.Config, uuid, path, ordinal, kind, label)
+			return runAnnotate(cmd.Context(), stdout, stderr, startup.Config, uuid, path, ordinal, kind, label, cmd.Flags().Changed("ordinal"))
 		},
 	}
 
@@ -68,8 +71,11 @@ func validateAnnotateRequest(uuid, path string, ordinal int, kind, label string)
 }
 
 func runAnnotate(ctx context.Context, stdout, stderr io.Writer, cfg *config.Config,
-	uuid, path string, ordinal int, kind, label string) (retErr error) {
+	uuid, path string, ordinal int, kind, label string, ordinalProvided bool) (retErr error) {
 
+	if ordinalProvided && ordinal < 0 {
+		return fmt.Errorf("--ordinal must be non-negative when supplied")
+	}
 	if err := validateAnnotateRequest(uuid, path, ordinal, kind, label); err != nil {
 		return err
 	}
@@ -84,7 +90,11 @@ func runAnnotate(ctx context.Context, stdout, stderr io.Writer, cfg *config.Conf
 	defer func() { retErr = closeIndexDB(db, retErr) }()
 
 	// Upsert annotation
-	if err := db.UpsertAnnotation(uuid, path, ordinal, kind, label); err != nil {
+	var selectedOrdinal *int
+	if ordinalProvided {
+		selectedOrdinal = &ordinal
+	}
+	if err := db.UpsertAnnotationWithOrdinal(uuid, path, selectedOrdinal, kind, label); err != nil {
 		return fmt.Errorf("upsert annotation: %w", err)
 	}
 

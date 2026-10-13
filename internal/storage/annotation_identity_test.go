@@ -61,3 +61,36 @@ func TestAnnotationExactIdentity(t *testing.T) {
 		t.Fatalf("noncanonical annotation: %s %s %d %s", uuid, path, n, label)
 	}
 }
+
+func TestAnnotationExplicitNegativeOrdinal(t *testing.T) {
+	db, cleanup := newTestDB(t)
+	defer cleanup()
+	if _, err := db.db.Exec(`INSERT INTO search_items(source,source_path,ordinal,role,text,content_type,uuid) VALUES ('session','/canonical',7,'user','fixture','text','opaque')`); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.UpsertAnnotationWithOrdinal("opaque", "", nil, "correction", "original"); err != nil {
+		t.Fatal(err)
+	}
+	snapshot := func() string {
+		var state string
+		if err := db.db.QueryRow(`SELECT json_group_array(json_array(id,item_uuid,source_path,ordinal,kind,label,source,created_at)) FROM annotations`).Scan(&state); err != nil {
+			t.Fatal(err)
+		}
+		return state
+	}
+	before := snapshot()
+	for _, n := range []int{-1, -2} {
+		if err := db.UpsertAnnotationWithOrdinal("opaque", "", &n, "correction", "rejected"); err == nil {
+			t.Errorf("explicit %d succeeded", n)
+		}
+		if snapshot() != before {
+			t.Errorf("explicit %d changed annotation state", n)
+		}
+	}
+	if err := db.UpsertAnnotation("opaque", "", -2, "correction", "rejected"); err == nil || snapshot() != before {
+		t.Fatal("legacy invalid negative accepted or changed state")
+	}
+	if err := db.UpsertAnnotationWithOrdinal("opaque", "", nil, "correction", "accepted"); err != nil {
+		t.Fatal(err)
+	}
+}

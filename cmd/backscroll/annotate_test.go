@@ -125,3 +125,50 @@ func TestAnnotateExactIdentity(t *testing.T) {
 		t.Fatalf("noncanonical: %s %s %d", u, p, n)
 	}
 }
+
+func TestAnnotateExplicitNegativeOrdinal(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "negative.db")
+	db, err := storage.Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := db.SyncFiles([]storage.IndexedFile{{SourcePath: "/canonical", Source: "session", Hash: "fixture", Messages: []storage.IndexedMessage{{UUID: "opaque", Ordinal: 7, Role: "user", Text: "fixture", ContentType: "text"}}}}); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.UpsertAnnotation("opaque", "", -1, "correction", "original"); err != nil {
+		t.Fatal(err)
+	}
+	_ = db.Close()
+	raw, err := sql.Open("sqlite", path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer raw.Close()
+	snapshot := func() string {
+		var state string
+		if err := raw.QueryRow(`SELECT json_group_array(json_array(id,item_uuid,source_path,ordinal,kind,label,source,created_at)) FROM annotations`).Scan(&state); err != nil {
+			t.Fatal(err)
+		}
+		return state
+	}
+	setIndexPolicyEnv(t, path, t.TempDir())
+	before := snapshot()
+	for _, n := range []string{"-1", "-2"} {
+		var out, stderr bytes.Buffer
+		err := run(&out, &stderr, []string{"annotate", "--uuid", "opaque", "--ordinal", n, "--kind", "correction", "--label", "rejected"})
+		if err == nil {
+			t.Errorf("explicit %s succeeded", n)
+		}
+		if out.Len() != 0 || snapshot() != before {
+			t.Errorf("explicit %s changed annotations/output", n)
+		}
+	}
+	var out, stderr bytes.Buffer
+	if err := run(&out, &stderr, []string{"annotate", "--uuid", "opaque", "--kind", "correction", "--label", "accepted"}); err != nil {
+		t.Fatal(err)
+	}
+	var label string
+	if err := raw.QueryRow(`SELECT label FROM annotations`).Scan(&label); err != nil || label != "accepted" {
+		t.Fatalf("omitted ordinal: %s %v", label, err)
+	}
+}

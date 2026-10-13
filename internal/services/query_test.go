@@ -565,3 +565,51 @@ func TestQueryServiceAnnotationIdentityParity(t *testing.T) {
 		t.Fatal(err)
 	}
 }
+
+func TestQueryServiceExplicitNegativeAnnotationSelector(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "negative.db")
+	db, err := storage.Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	if err := db.SyncFiles([]storage.IndexedFile{{SourcePath: "/canonical", Source: "session", Hash: "fixture", Messages: []storage.IndexedMessage{{UUID: "opaque", Ordinal: 7, Role: "user", Text: "fixture", ContentType: "text"}}}}); err != nil {
+		t.Fatal(err)
+	}
+	raw, err := sql.Open("sqlite", path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer raw.Close()
+	if err := db.UpsertAnnotationWithOrdinal("opaque", "", nil, "correction", "original"); err != nil {
+		t.Fatal(err)
+	}
+	snapshot := func() string {
+		var state string
+		if err := raw.QueryRow(`SELECT json_group_array(json_array(id,item_uuid,source_path,ordinal,kind,label,source,created_at)) FROM annotations`).Scan(&state); err != nil {
+			t.Fatal(err)
+		}
+		return state
+	}
+	service := QueryService{DB: db}
+	uuid := "opaque"
+	before := snapshot()
+	for _, n := range []int{-1, -2} {
+		ordinal := int64(n)
+		if _, err := service.Context(context.Background(), ContextRequest{UUID: &uuid, Ordinal: &ordinal, MaxTokens: DefaultContextMaxTokens}); err == nil {
+			t.Errorf("context accepted explicit extra %d", n)
+		}
+		if err := db.UpsertAnnotationWithOrdinal(uuid, "", &n, "correction", "rejected"); err == nil {
+			t.Errorf("annotation accepted explicit %d", n)
+		}
+		if snapshot() != before {
+			t.Errorf("explicit %d changed annotation state", n)
+		}
+	}
+	if _, err := service.Context(context.Background(), ContextRequest{UUID: &uuid, MaxTokens: DefaultContextMaxTokens}); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.UpsertAnnotationWithOrdinal(uuid, "", nil, "correction", "accepted"); err != nil {
+		t.Fatal(err)
+	}
+}
