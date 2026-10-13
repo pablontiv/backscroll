@@ -62,16 +62,13 @@ func (c *startupCoordinator) coordinate(ctx context.Context, cfg *config.Config,
 			timing.report = c.syncService.newDiagnostics()
 		}
 		lockStart = timing.report.now()
-		defer func() {
-			// Recovery owns emission through its handler and post-install sync.
-			if class != startupRemediation || result.Failure != nil {
-				writer := progress
-				if diagnosticWriter, ok := ctx.Value(startupDiagnosticsWriterKey{}).(io.Writer); ok {
-					writer = diagnosticWriter
+		if !timing.report.policyOwned {
+			defer func() {
+				if class != startupRemediation || result.Failure != nil {
+					timing.report.render(startupDiagnosticsWriter(ctx, progress))
 				}
-				timing.report.render(writer)
-			}
-		}()
+			}()
+		}
 	}
 
 	lease, acquired, err := c.tryAcquire(cfg.DatabasePath)
@@ -81,6 +78,9 @@ func (c *startupCoordinator) coordinate(ctx context.Context, cfg *config.Config,
 	}
 
 	if ctxErr := ctx.Err(); ctxErr != nil {
+		if timing.measured {
+			timing.report.failedPhase = "Lock Acquisition"
+		}
 		result := canceledStartupResult(cfg, startupStageSyncLock, ctxErr)
 		if acquired {
 			return ownedStartupFailureResult(cfg, class, lease, result.Failure)
@@ -89,6 +89,9 @@ func (c *startupCoordinator) coordinate(ctx context.Context, cfg *config.Config,
 	}
 
 	if err != nil {
+		if timing.measured {
+			timing.report.failedPhase = "Lock Acquisition"
+		}
 		return startupLockFailure(cfg, err)
 	}
 	if acquired {
@@ -101,6 +104,9 @@ func (c *startupCoordinator) coordinate(ctx context.Context, cfg *config.Config,
 			start := timing.report.now()
 			result = c.concurrentSnapshotResult(ctx, cfg)
 			timing.report.prepare, timing.report.hasPrepare = timing.report.now().Sub(start), true
+			if result.Failure != nil {
+				timing.report.failedPhase = "Index Prepare"
+			}
 			return result
 		}
 		return c.concurrentSnapshotResult(ctx, cfg)
@@ -124,6 +130,9 @@ func (c *startupCoordinator) coordinate(ctx context.Context, cfg *config.Config,
 		}
 
 		if err != nil {
+			if timing.measured {
+				timing.report.failedPhase = "Lock Acquisition"
+			}
 			if errors.Is(err, context.DeadlineExceeded) && ctx.Err() == nil {
 				return startupResult{Config: cfg, Failure: syncInProgressFailure(
 					"startup sync remains active after 5s; retry the command", err,
@@ -164,6 +173,9 @@ func (c *startupCoordinator) runOwned(ctx context.Context, cfg *config.Config, p
 		err = ctxErr
 	}
 	if diag != nil || err != nil {
+		if timing.measured {
+			timing.report.failedPhase = "Index Prepare"
+		}
 		d := compat.Diagnostic{Code: compat.CodeMigrationFailed, Summary: "prepare index failed"}
 		if diag != nil {
 			d = *diag

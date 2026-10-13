@@ -116,9 +116,18 @@ func startupResultFrom(cmd *cobra.Command) startupResult {
 	return result
 }
 
-func (c *startupCoordinator) defaultStartupPolicy(ctx context.Context, progress io.Writer, class startupCommandClass) startupResult {
+func (c *startupCoordinator) defaultStartupPolicy(ctx context.Context, progress io.Writer, class startupCommandClass) (result startupResult) {
 	if c.syncService.diagnostics {
-		ctx = context.WithValue(ctx, startupDiagnosticsContextKey{}, c.syncService.newDiagnostics())
+		report := c.syncService.newDiagnostics()
+		report.policyOwned = true
+		ctx = context.WithValue(ctx, startupDiagnosticsContextKey{}, report)
+		defer func() {
+			// Successful remediation transfers this same finalizer to its handler,
+			// which extends the interval through recovery and post-install sync.
+			if class != startupRemediation || result.Failure != nil || result.timing.report != report {
+				report.render(startupDiagnosticsWriter(ctx, progress))
+			}
+		}()
 	}
 	if err := ctx.Err(); err != nil {
 		return startupResult{Failure: &startupFailure{Stage: startupStageInputDir, Cause: err, Diagnostic: compat.Diagnostic{Code: compat.CodeMigrationFailed, Summary: err.Error()}}}

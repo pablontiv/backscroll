@@ -449,6 +449,20 @@ func (s *startupSyncService) syncWithProgress(ctx context.Context, cfg *config.C
 		report.hasLock, report.hasPrepare = timing.measured, timing.measured
 	}
 
+	var bytesHashed int64
+	var filesHashed, filesSkipped int
+	if diag {
+		defer func() {
+			if retErr != nil && report.active != nil {
+				report.failedPhase = report.activeName
+			}
+			report.finishPhase()
+			report.bytesHashed, report.filesHashed, report.filesSkipped = bytesHashed, filesHashed, filesSkipped
+			if standalone {
+				report.render(progress)
+			}
+		}()
+	}
 	registry, err := s.loadGlobalRegistry()
 	if err != nil {
 		return err
@@ -504,11 +518,9 @@ func (s *startupSyncService) syncWithProgress(ctx context.Context, cfg *config.C
 		return err
 	}
 
-	// Track diagnostics
-	var discoveryTime, metadataTime, hashingTime, parsingTime time.Duration
-	var bytesHashed int64
-	var filesHashed, filesSkipped int
-
+	if diag {
+		report.hasDiscovery = true
+	}
 	// Discover first, then establish a single parser contract for every path.
 	// This makes hashing, parsing, and replay selection global rather than input-local.
 	var claims []discoveredPathClaim
@@ -524,9 +536,8 @@ func (s *startupSyncService) syncWithProgress(ctx context.Context, cfg *config.C
 			return fmt.Errorf("resolve reader for input %q: %w", def.ID, err)
 		}
 
-		var discoveryStart time.Time
 		if diag {
-			discoveryStart = s.now()
+			report.beginPhase("Discovery", &report.discovery, &report.hasDiscovery)
 		}
 		refs, err := reader.Discover(ctx, def)
 		if err != nil {
@@ -536,7 +547,7 @@ func (s *startupSyncService) syncWithProgress(ctx context.Context, cfg *config.C
 			return err
 		}
 		if diag {
-			discoveryTime += s.now().Sub(discoveryStart)
+			report.finishPhase()
 		}
 		for _, ref := range refs {
 			if err := ctx.Err(); err != nil {
@@ -550,6 +561,9 @@ func (s *startupSyncService) syncWithProgress(ctx context.Context, cfg *config.C
 		return err
 	}
 
+	if diag && len(uniqueClaims) == 0 {
+		report.hasMetadata, report.hasHashing = true, true
+	}
 	// Classify every unique path before choosing replay work. New and modified
 	// files are natural parses and therefore never spend the maintenance cap.
 	states := make(map[string]*syncPathState, len(uniqueClaims))
@@ -561,9 +575,9 @@ func (s *startupSyncService) syncWithProgress(ctx context.Context, cfg *config.C
 		existingMeta, exists := existingMetadata[ref]
 		state := &syncPathState{claim: claim, existingMeta: existingMeta, exists: exists}
 
-		var metadataStart time.Time
 		if diag {
-			metadataStart = s.now()
+			report.filesChecked++
+			report.beginPhase("Metadata", &report.metadata, &report.hasMetadata)
 		}
 		if usesFileMetadataPrefilter(reader) && exists && existingMeta.Size != nil && existingMeta.Mtime != nil &&
 			existingMeta.LastIndexed != nil {
@@ -577,12 +591,11 @@ func (s *startupSyncService) syncWithProgress(ctx context.Context, cfg *config.C
 			return err
 		}
 		if diag {
-			metadataTime += s.now().Sub(metadataStart)
+			report.finishPhase()
 		}
 
-		var hashingStart time.Time
 		if diag {
-			hashingStart = s.now()
+			report.beginPhase("Hashing", &report.hashing, &report.hasHashing)
 		}
 		if state.hash == "" {
 			state.hash, err = reader.Hash(ctx, ref)
@@ -602,7 +615,7 @@ func (s *startupSyncService) syncWithProgress(ctx context.Context, cfg *config.C
 			filesSkipped++
 		}
 		if diag {
-			hashingTime += s.now().Sub(hashingStart)
+			report.finishPhase()
 		}
 
 		state.naturalParse = !exists || !contentHashesEqual(reader.Name(), existingMeta.Hash, state.hash)
@@ -619,6 +632,9 @@ func (s *startupSyncService) syncWithProgress(ctx context.Context, cfg *config.C
 		return err
 	}
 
+	if diag {
+		report.hasParsing = true
+	}
 	// Collect indexed files. uniqueClaims is path-sorted, so natural work and
 	// selected replays are deterministic even when discovery order changes.
 	var indexedFiles []storage.IndexedFile
@@ -643,9 +659,8 @@ func (s *startupSyncService) syncWithProgress(ctx context.Context, cfg *config.C
 			}
 		}
 
-		var parsingStart time.Time
 		if diag {
-			parsingStart = s.now()
+			report.beginPhase("Parsing", &report.parsing, &report.hasParsing)
 		}
 		pf, err := reader.Parse(ctx, ref, def)
 		if err != nil {
@@ -655,7 +670,7 @@ func (s *startupSyncService) syncWithProgress(ctx context.Context, cfg *config.C
 			return err
 		}
 		if diag {
-			parsingTime += s.now().Sub(parsingStart)
+			report.finishPhase()
 		}
 
 		// Use session cwd for project identification; fall back to file path if cwd is empty
@@ -718,9 +733,8 @@ func (s *startupSyncService) syncWithProgress(ctx context.Context, cfg *config.C
 	}
 
 	// Phase 5: Database
-	var databaseStart time.Time
 	if diag {
-		databaseStart = s.now()
+		report.beginPhase("Database", &report.database, &report.hasDatabase)
 	}
 
 	// Sync all files
@@ -780,14 +794,7 @@ func (s *startupSyncService) syncWithProgress(ctx context.Context, cfg *config.C
 	}
 
 	if diag {
-		report.sync = true
-		report.discovery, report.metadata = discoveryTime, metadataTime
-		report.hashing, report.parsing = hashingTime, parsingTime
-		report.database = s.now().Sub(databaseStart)
-		report.bytesHashed, report.filesHashed, report.filesSkipped = bytesHashed, filesHashed, filesSkipped
-		if standalone {
-			report.render(progress)
-		}
+		report.finishPhase()
 	}
 
 	return nil
