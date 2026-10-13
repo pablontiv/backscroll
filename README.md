@@ -322,3 +322,18 @@ Commits follow [Conventional Commits](https://www.conventionalcommits.org/) (`ty
 ## License
 
 [Apache License 2.0](LICENSE) — free for commercial and non-commercial use.
+
+
+### Automatic updates
+
+Autoupdate is mandatory for valid executable release commands; there is no runtime
+opt-out. It starts after command/flag/argument validation and before startup/index
+work. Invalid invocations, help, version, and `--skill` never apply, fetch, or wait.
+Plain `go build` produces a `dev` identity, exempt in picokit.
+
+Apply and completed fetch failures emit one concise `warning: autoupdate: ...` on
+stderr without failing the command or changing stdout/JSON/robot output. Successful
+updates are silent. After command execution, staging waits up to 10s; if it has not
+completed, the command returns its normal result with a timeout warning.
+Cancellation returns promptly without reporting a fabricated network failure;
+picokit's non-context-aware fetch may finish detached (60s HTTP timeout per request).

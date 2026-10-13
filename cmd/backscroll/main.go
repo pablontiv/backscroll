@@ -79,6 +79,7 @@ type runDependencies struct {
 	fetchAndStage func(context.Context, string) error
 	root          *cobra.Command
 	stagingWait   time.Duration
+	stagingTimer  func(time.Duration) (<-chan time.Time, func())
 }
 
 func newRunDependencies(stdout, stderr io.Writer) runDependencies {
@@ -130,6 +131,15 @@ func runContext(ctx context.Context, stdout, stderr io.Writer, args []string) (r
 }
 
 func runContextWithDependencies(ctx context.Context, stdout, stderr io.Writer, args []string, deps runDependencies) error {
+	// Keep the informational fast path identical for production and injected runs.
+	printSkill, err := validateSkillInvocation(args)
+	if err != nil {
+		return err
+	}
+	if printSkill {
+		_, err := io.WriteString(stdout, embeddedBackscrollSkill)
+		return err
+	}
 	root := deps.root
 	if root == nil {
 		root = buildRootCmd(stdout, stderr)
@@ -138,40 +148,96 @@ func runContextWithDependencies(ctx context.Context, stdout, stderr io.Writer, a
 	if stagingWait <= 0 {
 		stagingWait = autoupdateStagingWait
 	}
-	if deps.applyStaged != nil {
-		_ = deps.applyStaged()
-	}
-
-	// A buffered completion notification prevents a detached worker from ever
-	// blocking when the caller has already returned. The channel is also closed
-	// so completion remains observable after the buffered value is consumed.
-	staged := make(chan struct{}, 1)
-	go func() {
-		defer close(staged)
-		if deps.fetchAndStage != nil {
-			_ = deps.fetchAndStage(ctx, version)
+	newTimer := deps.stagingTimer
+	if newTimer == nil {
+		newTimer = func(d time.Duration) (<-chan time.Time, func()) {
+			timer := time.NewTimer(d)
+			return timer.C, func() { timer.Stop() }
 		}
-		staged <- struct{}{}
-	}()
-
+	}
+	warn := func(err error) {
+		if err != nil {
+			_, _ = fmt.Fprintf(stderr, "warning: autoupdate: %s\n", err)
+		}
+	}
+	var staged chan error
+	// Cobra calls Args after parsing/command selection and before any pre-run.
+	// Required flags and groups normally run AFTER pre-run; move their first
+	// check here so neither updating nor ordinary startup can precede validation.
+	// Wrap each executable command, not just the root's persistent hook: child
+	// hooks may override that hook. Help is informational even though Runnable.
+	root.InitDefaultHelpCmd()
+	root.InitDefaultCompletionCmd(args...)
+	var install func(*cobra.Command)
+	install = func(cmd *cobra.Command) {
+		if cmd.Runnable() && cmd.Name() != "help" {
+			original := cmd.Args
+			cmd.Args = func(cmd *cobra.Command, args []string) error {
+				if original != nil {
+					if err := original(cmd, args); err != nil {
+						return err
+					}
+				} else if err := cobra.ArbitraryArgs(cmd, args); err != nil {
+					return err
+				}
+				if err := validateRequiredFlagsAndGroups(cmd); err != nil {
+					return err
+				}
+				if ctx.Err() != nil {
+					return nil // startup/handler retains cancellation ownership
+				}
+				if staged == nil {
+					if deps.applyStaged != nil {
+						warn(deps.applyStaged())
+					}
+					staged = make(chan error, 1)
+					go func(done chan<- error) {
+						var err error
+						if deps.fetchAndStage != nil {
+							err = deps.fetchAndStage(ctx, version)
+						}
+						// Only this caller writes warnings; detached completion
+						// never touches writers and cannot block on delivery.
+						done <- err
+					}(staged)
+				}
+				return nil
+			}
+		}
+		for _, child := range cmd.Commands() {
+			install(child)
+		}
+	}
+	install(root)
 	if indexPolicyMachineArgs(args) {
 		root.SilenceUsage = true
 	}
 	root.SetArgs(args)
-	if err := root.ExecuteContext(ctx); err != nil {
-		return err
+	commandErr := root.ExecuteContext(ctx)
+	if staged == nil {
+		return commandErr
 	}
-
-	// Wait for staging to complete so short-lived commands don't kill the
-	// download before it finishes. Cancellation returns the caller promptly but
-	// the production Picokit fetch can remain as a bounded detached worker.
-	timer := time.NewTimer(stagingWait)
-	waitErr := waitForStaging(ctx, staged, timer.C)
-	if !timer.Stop() {
+	timeout, stop := newTimer(stagingWait)
+	defer stop()
+	var waitErr error
+	if ctx.Err() != nil {
+		waitErr = ctx.Err()
+	} else {
 		select {
-		case <-timer.C:
-		default:
+		case fetchErr := <-staged:
+			if ctx.Err() == nil {
+				warn(fetchErr)
+			}
+		case <-timeout:
+			if ctx.Err() == nil {
+				warn(fmt.Errorf("staging did not complete within 10s"))
+			}
+		case <-ctx.Done():
 		}
+		waitErr = ctx.Err()
+	}
+	if commandErr != nil {
+		return commandErr
 	}
 	return waitErr
 }

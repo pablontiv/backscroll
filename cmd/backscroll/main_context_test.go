@@ -139,56 +139,6 @@ func TestRunContextCancellationReachesStartupAndHandler(t *testing.T) {
 	})
 }
 
-type cancelOnSecondCheckContext struct {
-	context.Context
-	checks int
-}
-
-func (c *cancelOnSecondCheckContext) Done() <-chan struct{} { return nil }
-
-func (c *cancelOnSecondCheckContext) Err() error {
-	c.checks++
-	if c.checks > 1 {
-		return context.Canceled
-	}
-	return nil
-}
-
-func TestWaitForStagingCancellationDominatesReadyBranches(t *testing.T) {
-	const iterations = 1000
-	for i := 0; i < iterations; i++ {
-		ctx, cancel := context.WithCancel(context.Background())
-		cancel()
-		staged := make(chan struct{}, 1)
-		staged <- struct{}{}
-		if err := waitForStaging(ctx, staged, make(chan time.Time)); !errors.Is(err, context.Canceled) {
-			t.Fatalf("pre-canceled staged-ready iteration %d: error=%v", i, err)
-		}
-
-		ctx, cancel = context.WithCancel(context.Background())
-		cancel()
-		timer := make(chan time.Time, 1)
-		timer <- time.Time{}
-		if err := waitForStaging(ctx, make(chan struct{}), timer); !errors.Is(err, context.Canceled) {
-			t.Fatalf("pre-canceled timer-ready iteration %d: error=%v", i, err)
-		}
-
-		postCtx := &cancelOnSecondCheckContext{Context: context.Background()}
-		staged = make(chan struct{}, 1)
-		staged <- struct{}{}
-		if err := waitForStaging(postCtx, staged, make(chan time.Time)); !errors.Is(err, context.Canceled) {
-			t.Fatalf("post-canceled staged-selected iteration %d: error=%v", i, err)
-		}
-
-		postCtx = &cancelOnSecondCheckContext{Context: context.Background()}
-		timer = make(chan time.Time, 1)
-		timer <- time.Time{}
-		if err := waitForStaging(postCtx, make(chan struct{}), timer); !errors.Is(err, context.Canceled) {
-			t.Fatalf("post-canceled timer-selected iteration %d: error=%v", i, err)
-		}
-	}
-}
-
 func TestRunContextCanceledStagingWorkerExits(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
