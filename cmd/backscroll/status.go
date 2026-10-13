@@ -36,7 +36,7 @@ Startup preflight may sync before status runs; status itself only reads current 
 			if startup.Config == nil {
 				return fmt.Errorf("startup configuration unavailable")
 			}
-			return runStatus(cmd.Context(), stdout, stderr, startup.Config, jsonFormat)
+			return runStatus(cmd.Context(), stdout, stderr, startup.Config, startup.inputs, jsonFormat)
 		},
 	}
 
@@ -45,7 +45,10 @@ Startup preflight may sync before status runs; status itself only reads current 
 	return cmd
 }
 
-func runStatus(ctx context.Context, stdout, stderr io.Writer, cfg *config.Config, jsonFormat bool) (retErr error) {
+func runStatus(ctx context.Context, stdout, stderr io.Writer, cfg *config.Config, snapshot *inputSnapshot, jsonFormat bool) (retErr error) {
+	if snapshot == nil {
+		return fmt.Errorf("startup input snapshot unavailable")
+	}
 	db, diag, err := prepareIndex(ctx, cfg, indexDataRead)
 	if diag != nil {
 		return refuseDiagnostics(stdout, stderr, []compat.Diagnostic{*diag}, jsonFormat)
@@ -62,8 +65,16 @@ func runStatus(ctx context.Context, stdout, stderr io.Writer, cfg *config.Config
 	}
 	stats := response.Stats
 
-	// Resolve active inputs for status display
-	activeInputNames, usingDeclarative := resolveInputsForStatus(cfg.SessionDirs)
+	// Render the same definitions used by preflight and startup sync.
+	activeInputNames := []string{}
+	usingDeclarative := snapshot.mode == input_config.ModeDeclarative
+	if usingDeclarative {
+		for _, def := range snapshot.definitions {
+			if def.ID != "" {
+				activeInputNames = append(activeInputNames, def.ID)
+			}
+		}
+	}
 
 	// Get database file size after startup has prepared the canonical database.
 	fileInfo, err := os.Stat(cfg.DatabasePath)
@@ -167,22 +178,6 @@ func runStatus(ctx context.Context, stdout, stderr io.Writer, cfg *config.Config
 	}
 
 	return nil
-}
-
-// resolveInputsForStatus returns the list of active input IDs and whether
-// declarative inputs (*.inputs.toml) are in use.
-func resolveInputsForStatus(sessionDirs []string) ([]string, bool) {
-	defs, mode, err := input_config.ActiveInputs(sessionDirs)
-	if err != nil || mode != input_config.ModeDeclarative {
-		return []string{}, false
-	}
-	names := make([]string, 0, len(defs))
-	for _, d := range defs {
-		if d.ID != "" {
-			names = append(names, d.ID)
-		}
-	}
-	return names, true
 }
 
 func recoveryDiagnosticsForIndex(ctx context.Context, db *storage.Database, activePath string) ([]compat.Diagnostic, error) {
