@@ -99,8 +99,8 @@ Use --json, --robot for output formats.`,
 	cmd.Flags().IntVar(&minLength, "min-length", 2, "Minimum sequence pattern length (for --kind sequences, >=0; 0=default 2)")
 	cmd.Flags().IntVar(&maxLength, "max-length", 6, "Maximum sequence pattern length (for --kind sequences, >=0; 0=default 6; prevents combinatorial explosion)")
 	cmd.Flags().Float64Var(&minConfidence, "min-confidence", 0.6, "Minimum detector confidence (finite 0..1; for --kind corrections)")
-	cmd.Flags().StringVar(&after, "after", "", "Filter after date (ISO 8601, for --kind sequences)")
-	cmd.Flags().StringVar(&before, "before", "", "Filter before date (ISO 8601, for --kind sequences)")
+	cmd.Flags().StringVar(&after, "after", "", "Filter on or after date (inclusive ISO 8601, for --kind sequences)")
+	cmd.Flags().StringVar(&before, "before", "", "Filter before date (exclusive ISO 8601, for --kind sequences)")
 	cmd.Flags().BoolVar(&jsonFormat, "json", false, "Output as JSON")
 	cmd.Flags().BoolVar(&robotFormat, "robot", false, "Output in robot format")
 	cmd.Flags().BoolVar(&pending, "pending", false, "Only corrections without a 'correction' annotation (checkpoint resume)")
@@ -640,6 +640,7 @@ func runPatterns(ctx context.Context, stdout, stderr io.Writer, cfg *config.Conf
 		}
 
 		correctionOpts := storage.CorrectionAggOpts{
+			Tag:           tag,
 			Project:       project,
 			Origin:        models.MessageOrigin(origin),
 			MinConfidence: minConfidence,
@@ -756,6 +757,7 @@ func runPatterns(ctx context.Context, stdout, stderr io.Writer, cfg *config.Conf
 
 		// Limit/Offset paginate mined patterns below, never the input corpus.
 		seqs, err := db.LoadToolSequences(storage.LoadSequencesOpts{
+			Tag:     tag,
 			Project: project,
 			After:   after,
 			Before:  before,

@@ -28,6 +28,29 @@ Base flags for every kind: `--project` / `--all-projects`, `--tag`,
 `--limit` / `--offset`, `--json` / `--robot`. Corrections alone also accept
 `--origin human|assistant|system|automation|unknown`.
 
+### Eligibility and date bounds
+
+`--tag` applies to every kind, including corrections and sequences. A missing
+session tag yields zero candidates; partial tagging restricts support and share
+to eligible sessions. Project and tag scope apply before aggregation, mining,
+and final pagination, not to an already computed global result.
+
+Satellite metadata resolves to the indexed event's proven UUID first, even
+when retained coordinates differ. A UUID-less satellite can use path and
+ordinal only when exactly one indexed item owns that coordinate. Historical
+peers cannot multiply an event or lend it another project's scope. Tags and
+timestamps come from the resolved item; sequence session grouping and ordering
+use its canonical path and ordinal. Unscoped flat counts retain unresolved
+satellites once, but they cannot prove project/tag/date eligibility. Trends
+exclude those undated events and report the exclusion count.
+
+Every API with temporal filters uses `[after, before)`: the lower bound is
+inclusive (`>=`) and the upper bound exclusive (`<`); NULL timestamps cannot
+satisfy date bounds. The patterns CLI advertises `--after` / `--before` only
+for sequences, accepting ISO 8601 date strings. Internal command/failure and
+template APIs also honor the same bounds; this does not add flags to other
+pattern kinds. Sequence date filtering selects eligible events before mining.
+
 ### commands — what runs most
 
 Missing command heads (persisted SQL `NULL` or empty strings) are grouped together

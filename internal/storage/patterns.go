@@ -9,8 +9,8 @@ import (
 type AggregateOptions struct {
 	Project     string // filter to single project; "" = all
 	Tag         string // filter by session_tags.tag
-	StartDate   string // RFC3339; "" = no lower bound
-	EndDate     string // RFC3339; "" = no upper bound
+	StartDate   string // inclusive RFC3339 lower bound; "" = unbounded
+	EndDate     string // exclusive RFC3339 upper bound; "" = unbounded
 	Limit       int    // result limit; 0 = no limit
 	Offset      int    // result offset
 	TrendWeekly bool   // enable week bucketing (commands/failures only)
@@ -54,59 +54,11 @@ type FailurePatternWeekly struct {
 // optionally stratified by tag and time window. NULL and empty command heads
 // share the empty-string unknown group; no command is inferred.
 func (d *Database) AggregateCommands(opts AggregateOptions) ([]CommandPattern, error) {
-	query := `
-SELECT tool_name, COALESCE(command_head, '') AS command_head, COUNT(*) as cnt
-FROM tool_events
+	cte, args := eligibleToolEvents(opts.Project, opts.Tag, opts.StartDate, opts.EndDate)
+	query := cte + `SELECT tool_name, COALESCE(command_head, '') AS command_head, COUNT(*) as cnt
+FROM eligible_tool_events
 WHERE 1=1
 `
-	var args []interface{}
-
-	// Project filter
-	if opts.Project != "" {
-		query += ` AND tool_events.id IN (
-			SELECT tool_events.id FROM tool_events
-			JOIN search_items ON (
-				tool_events.source_path = search_items.source_path
-				AND tool_events.ordinal = search_items.ordinal
-			)
-			WHERE search_items.project = ?
-		)`
-		args = append(args, opts.Project)
-	}
-
-	// Tag filter
-	if opts.Tag != "" {
-		query += ` AND tool_events.source_path IN (
-			SELECT DISTINCT search_items.source_path FROM search_items
-			JOIN session_tags ON search_items.source_path = session_tags.source_path
-			WHERE session_tags.tag = ?
-		)`
-		args = append(args, opts.Tag)
-	}
-
-	// Time window (start_date, end_date)
-	if opts.StartDate != "" {
-		query += ` AND tool_events.id IN (
-			SELECT tool_events.id FROM tool_events
-			JOIN search_items ON (
-				tool_events.source_path = search_items.source_path
-				AND tool_events.ordinal = search_items.ordinal
-			)
-			WHERE search_items.timestamp >= ?
-		)`
-		args = append(args, opts.StartDate)
-	}
-	if opts.EndDate != "" {
-		query += ` AND tool_events.id IN (
-			SELECT tool_events.id FROM tool_events
-			JOIN search_items ON (
-				tool_events.source_path = search_items.source_path
-				AND tool_events.ordinal = search_items.ordinal
-			)
-			WHERE search_items.timestamp < ?
-		)`
-		args = append(args, opts.EndDate)
-	}
 
 	query += ` GROUP BY tool_name, COALESCE(command_head, '')
 ORDER BY cnt DESC, tool_name, command_head
@@ -139,42 +91,11 @@ ORDER BY cnt DESC, tool_name, command_head
 // NULL and empty command heads share the empty-string unknown group.
 // NULL timestamps are excluded and the count is reported via a reference parameter.
 func (d *Database) AggregateCommandsTrend(opts AggregateOptions, excludedPtr *int) ([]CommandPatternWeekly, error) {
-	query := `
-SELECT strftime('%Y-W%W', si.timestamp) AS week, tool_name, COALESCE(command_head, '') AS command_head, COUNT(*) as cnt
-FROM tool_events
-JOIN search_items si ON (
-	tool_events.source_path = si.source_path
-	AND tool_events.ordinal = si.ordinal
-)
-WHERE si.timestamp IS NOT NULL
+	cte, args := eligibleToolEvents(opts.Project, opts.Tag, opts.StartDate, opts.EndDate)
+	query := cte + `SELECT strftime('%Y-W%W', timestamp) AS week, tool_name, COALESCE(command_head, '') AS command_head, COUNT(*) as cnt
+FROM eligible_tool_events
+WHERE timestamp IS NOT NULL
 `
-	var args []interface{}
-
-	// Project filter
-	if opts.Project != "" {
-		query += ` AND si.project = ?`
-		args = append(args, opts.Project)
-	}
-
-	// Tag filter
-	if opts.Tag != "" {
-		query += ` AND tool_events.source_path IN (
-			SELECT DISTINCT search_items.source_path FROM search_items
-			JOIN session_tags ON search_items.source_path = session_tags.source_path
-			WHERE session_tags.tag = ?
-		)`
-		args = append(args, opts.Tag)
-	}
-
-	// Time window (start_date, end_date)
-	if opts.StartDate != "" {
-		query += ` AND si.timestamp >= ?`
-		args = append(args, opts.StartDate)
-	}
-	if opts.EndDate != "" {
-		query += ` AND si.timestamp < ?`
-		args = append(args, opts.EndDate)
-	}
 
 	query += ` GROUP BY week, tool_name, COALESCE(command_head, '')
 ORDER BY week DESC, cnt DESC, tool_name, command_head
@@ -204,28 +125,10 @@ ORDER BY week DESC, cnt DESC, tool_name, command_head
 		return nil, fmt.Errorf("rows: %w", err)
 	}
 
-	// Count excluded NULL-timestamp rows
-	// Note: date filters (StartDate, EndDate) do not apply here because NULL timestamps
-	// cannot be compared (NULL >= date yields UNKNOWN, not true). This count reflects
-	// rows filtered out due to missing timestamp only.
 	if excludedPtr != nil {
-		query := `SELECT COUNT(*) FROM tool_events
-JOIN search_items si ON (tool_events.source_path = si.source_path AND tool_events.ordinal = si.ordinal)
-WHERE si.timestamp IS NULL`
-		var args []interface{}
-		if opts.Project != "" {
-			query += ` AND si.project = ?`
-			args = append(args, opts.Project)
+		if err := d.countUndatedPatternEvents(opts, false, excludedPtr); err != nil {
+			return nil, err
 		}
-		if opts.Tag != "" {
-			query += ` AND tool_events.source_path IN (
-				SELECT DISTINCT search_items.source_path FROM search_items
-				JOIN session_tags ON search_items.source_path = session_tags.source_path
-				WHERE session_tags.tag = ?
-			)`
-			args = append(args, opts.Tag)
-		}
-		_ = d.db.QueryRow(query, args...).Scan(excludedPtr)
 	}
 
 	return results, nil
@@ -236,113 +139,15 @@ WHERE si.timestamp IS NULL`
 // reports the coverage denominator: the count of events with ANY non-NULL
 // is_error signal, so callers can see how much of the corpus carries a signal.
 func (d *Database) AggregateFailures(opts AggregateOptions) ([]FailurePattern, error) {
-	// First: count total signalled events (coverage denominator)
-	coverageQuery := `
-SELECT COUNT(*) FROM tool_events
-WHERE is_error IS NOT NULL
-`
-	var coverageArgs []interface{}
-
-	if opts.Project != "" {
-		coverageQuery += ` AND tool_events.id IN (
-			SELECT tool_events.id FROM tool_events
-			JOIN search_items ON (
-				tool_events.source_path = search_items.source_path
-				AND tool_events.ordinal = search_items.ordinal
-			)
-			WHERE search_items.project = ?
-		)`
-		coverageArgs = append(coverageArgs, opts.Project)
-	}
-
-	if opts.Tag != "" {
-		coverageQuery += ` AND tool_events.source_path IN (
-			SELECT DISTINCT search_items.source_path FROM search_items
-			JOIN session_tags ON search_items.source_path = session_tags.source_path
-			WHERE session_tags.tag = ?
-		)`
-		coverageArgs = append(coverageArgs, opts.Tag)
-	}
-
-	if opts.StartDate != "" {
-		coverageQuery += ` AND tool_events.id IN (
-			SELECT tool_events.id FROM tool_events
-			JOIN search_items ON (
-				tool_events.source_path = search_items.source_path
-				AND tool_events.ordinal = search_items.ordinal
-			)
-			WHERE search_items.timestamp >= ?
-		)`
-		coverageArgs = append(coverageArgs, opts.StartDate)
-	}
-	if opts.EndDate != "" {
-		coverageQuery += ` AND tool_events.id IN (
-			SELECT tool_events.id FROM tool_events
-			JOIN search_items ON (
-				tool_events.source_path = search_items.source_path
-				AND tool_events.ordinal = search_items.ordinal
-			)
-			WHERE search_items.timestamp < ?
-		)`
-		coverageArgs = append(coverageArgs, opts.EndDate)
-	}
-
+	cte, args := eligibleToolEvents(opts.Project, opts.Tag, opts.StartDate, opts.EndDate)
 	var totalSignalled int
-	if err := d.db.QueryRow(coverageQuery, coverageArgs...).Scan(&totalSignalled); err != nil && err != sql.ErrNoRows {
+	if err := d.db.QueryRow(cte+`SELECT COUNT(*) FROM eligible_tool_events WHERE is_error IS NOT NULL`, args...).Scan(&totalSignalled); err != nil {
 		return nil, fmt.Errorf("count signalled events: %w", err)
 	}
-
-	// Main aggregation: group by signature (only actual failures, not successes)
-	query := `
-SELECT tool_name, is_error, exit_code, COUNT(*) as cnt
-FROM tool_events
+	query := cte + `SELECT tool_name, is_error, exit_code, COUNT(*) as cnt
+FROM eligible_tool_events
 WHERE is_error = 1
 `
-	var args []interface{}
-
-	if opts.Project != "" {
-		query += ` AND tool_events.id IN (
-			SELECT tool_events.id FROM tool_events
-			JOIN search_items ON (
-				tool_events.source_path = search_items.source_path
-				AND tool_events.ordinal = search_items.ordinal
-			)
-			WHERE search_items.project = ?
-		)`
-		args = append(args, opts.Project)
-	}
-
-	if opts.Tag != "" {
-		query += ` AND tool_events.source_path IN (
-			SELECT DISTINCT search_items.source_path FROM search_items
-			JOIN session_tags ON search_items.source_path = session_tags.source_path
-			WHERE session_tags.tag = ?
-		)`
-		args = append(args, opts.Tag)
-	}
-
-	if opts.StartDate != "" {
-		query += ` AND tool_events.id IN (
-			SELECT tool_events.id FROM tool_events
-			JOIN search_items ON (
-				tool_events.source_path = search_items.source_path
-				AND tool_events.ordinal = search_items.ordinal
-			)
-			WHERE search_items.timestamp >= ?
-		)`
-		args = append(args, opts.StartDate)
-	}
-	if opts.EndDate != "" {
-		query += ` AND tool_events.id IN (
-			SELECT tool_events.id FROM tool_events
-			JOIN search_items ON (
-				tool_events.source_path = search_items.source_path
-				AND tool_events.ordinal = search_items.ordinal
-			)
-			WHERE search_items.timestamp < ?
-		)`
-		args = append(args, opts.EndDate)
-	}
 
 	query += ` GROUP BY tool_name, is_error, exit_code
 ORDER BY cnt DESC, tool_name, is_error DESC, exit_code
@@ -388,79 +193,15 @@ ORDER BY cnt DESC, tool_name, is_error DESC, exit_code
 // AggregateFailuresTrend returns (week, tool_name, is_error, exit_code) failure signatures grouped by week.
 // NULL timestamps are excluded and the count is reported via a reference parameter.
 func (d *Database) AggregateFailuresTrend(opts AggregateOptions, excludedPtr *int) ([]FailurePatternWeekly, error) {
-	// First: count total signalled events per week (coverage denominator)
-	coverageQuery := `
-SELECT COUNT(*) FROM tool_events
-JOIN search_items si ON (
-	tool_events.source_path = si.source_path
-	AND tool_events.ordinal = si.ordinal
-)
-WHERE is_error IS NOT NULL AND si.timestamp IS NOT NULL
-`
-	var coverageArgs []interface{}
-
-	if opts.Project != "" {
-		coverageQuery += ` AND si.project = ?`
-		coverageArgs = append(coverageArgs, opts.Project)
-	}
-
-	if opts.Tag != "" {
-		coverageQuery += ` AND tool_events.source_path IN (
-			SELECT DISTINCT search_items.source_path FROM search_items
-			JOIN session_tags ON search_items.source_path = session_tags.source_path
-			WHERE session_tags.tag = ?
-		)`
-		coverageArgs = append(coverageArgs, opts.Tag)
-	}
-
-	if opts.StartDate != "" {
-		coverageQuery += ` AND si.timestamp >= ?`
-		coverageArgs = append(coverageArgs, opts.StartDate)
-	}
-	if opts.EndDate != "" {
-		coverageQuery += ` AND si.timestamp < ?`
-		coverageArgs = append(coverageArgs, opts.EndDate)
-	}
-
+	cte, args := eligibleToolEvents(opts.Project, opts.Tag, opts.StartDate, opts.EndDate)
 	var totalSignalled int
-	if err := d.db.QueryRow(coverageQuery, coverageArgs...).Scan(&totalSignalled); err != nil && err != sql.ErrNoRows {
+	if err := d.db.QueryRow(cte+`SELECT COUNT(*) FROM eligible_tool_events WHERE is_error IS NOT NULL AND timestamp IS NOT NULL`, args...).Scan(&totalSignalled); err != nil {
 		return nil, fmt.Errorf("count signalled events trend: %w", err)
 	}
-
-	// Main aggregation: group by week + signature (only actual failures)
-	query := `
-SELECT strftime('%Y-W%W', si.timestamp) AS week, tool_name, is_error, exit_code, COUNT(*) as cnt
-FROM tool_events
-JOIN search_items si ON (
-	tool_events.source_path = si.source_path
-	AND tool_events.ordinal = si.ordinal
-)
-WHERE is_error = 1 AND si.timestamp IS NOT NULL
+	query := cte + `SELECT strftime('%Y-W%W', timestamp) AS week, tool_name, is_error, exit_code, COUNT(*) as cnt
+FROM eligible_tool_events
+WHERE is_error = 1 AND timestamp IS NOT NULL
 `
-	var args []interface{}
-
-	if opts.Project != "" {
-		query += ` AND si.project = ?`
-		args = append(args, opts.Project)
-	}
-
-	if opts.Tag != "" {
-		query += ` AND tool_events.source_path IN (
-			SELECT DISTINCT search_items.source_path FROM search_items
-			JOIN session_tags ON search_items.source_path = session_tags.source_path
-			WHERE session_tags.tag = ?
-		)`
-		args = append(args, opts.Tag)
-	}
-
-	if opts.StartDate != "" {
-		query += ` AND si.timestamp >= ?`
-		args = append(args, opts.StartDate)
-	}
-	if opts.EndDate != "" {
-		query += ` AND si.timestamp < ?`
-		args = append(args, opts.EndDate)
-	}
 
 	query += ` GROUP BY week, tool_name, is_error, exit_code
 ORDER BY week DESC, cnt DESC, tool_name, is_error DESC, exit_code
@@ -505,29 +246,25 @@ ORDER BY week DESC, cnt DESC, tool_name, is_error DESC, exit_code
 		return nil, fmt.Errorf("rows: %w", err)
 	}
 
-	// Count excluded NULL-timestamp rows (only is_error=1, matching main query)
-	// Note: date filters (StartDate, EndDate) do not apply here because NULL timestamps
-	// cannot be compared (NULL >= date yields UNKNOWN, not true). This count reflects
-	// rows filtered out due to missing timestamp only.
 	if excludedPtr != nil {
-		query := `SELECT COUNT(*) FROM tool_events
-JOIN search_items si ON (tool_events.source_path = si.source_path AND tool_events.ordinal = si.ordinal)
-WHERE si.timestamp IS NULL AND is_error = 1`
-		var args []interface{}
-		if opts.Project != "" {
-			query += ` AND si.project = ?`
-			args = append(args, opts.Project)
+		if err := d.countUndatedPatternEvents(opts, true, excludedPtr); err != nil {
+			return nil, err
 		}
-		if opts.Tag != "" {
-			query += ` AND tool_events.source_path IN (
-				SELECT DISTINCT search_items.source_path FROM search_items
-				JOIN session_tags ON search_items.source_path = session_tags.source_path
-				WHERE session_tags.tag = ?
-			)`
-			args = append(args, opts.Tag)
-		}
-		_ = d.db.QueryRow(query, args...).Scan(excludedPtr)
 	}
 
 	return results, nil
+}
+
+// Missing-timestamp diagnostics share identity and scope, but deliberately omit
+// date bounds: NULL timestamps cannot be compared to either bound.
+func (d *Database) countUndatedPatternEvents(opts AggregateOptions, failuresOnly bool, excluded *int) error {
+	cte, args := eligibleToolEvents(opts.Project, opts.Tag, "", "")
+	query := cte + `SELECT COUNT(*) FROM eligible_tool_events WHERE timestamp IS NULL`
+	if failuresOnly {
+		query += ` AND is_error = 1`
+	}
+	if err := d.db.QueryRow(query, args...).Scan(excluded); err != nil {
+		return fmt.Errorf("count undated pattern events: %w", err)
+	}
+	return nil
 }

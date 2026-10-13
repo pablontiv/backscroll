@@ -254,6 +254,12 @@ backscroll patterns --kind commands --all-projects --robot
 
 Interpret the complete table returned. The census did the counting; the agent's job is judgment, not sampling.
 
+`--tag` restricts every pattern kind before counting, mining, and pagination;
+sequence support/share use only eligible sessions. Date filters are half-open:
+`after` inclusive and `before` exclusive (patterns advertises dates only for
+sequences; search accepts YYYY-MM-DD). Context before/after are neighbor counts.
+
+
 For corrections, `--origin human|assistant|system|automation|unknown` is opt-in,
 valid only with `--kind corrections`, and filters before pagination. Use
 `--origin human` whenever the question is about what the human said. Origin is

@@ -94,3 +94,11 @@ sets the limit (default 20). Explicit `--limit 0` or `--recent 0` is unlimited,
 and `--offset` skips sessions after ordering even for unlimited pages.
 Explicit `--recent` cannot be combined with `--limit` or ascending order.
 Invalid order and incompatible flags are rejected before startup side effects.
+
+### Internal temporal filters
+
+The search, session-list, indexed-record, and applicable pattern APIs share
+half-open date intervals: `after` inclusive (`>=`), `before` exclusive (`<`).
+Rows without timestamps do not satisfy either bound. The session-list CLI
+continues to expose only its existing flags; internal date options do not add
+public flags. Context's `--before` / `--after` are neighbor counts, not dates.

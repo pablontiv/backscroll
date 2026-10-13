@@ -233,7 +233,7 @@ func (d *Database) ListItemsV2(opts ListOptions) ([]SessionEntry, error) {
 
 	// Date filters
 	if opts.After != nil {
-		query += " AND si.timestamp > ?"
+		query += " AND si.timestamp >= ?"
 		args = append(args, opts.After.Format(time.RFC3339))
 	}
 	if opts.Before != nil {
@@ -695,8 +695,8 @@ type TemplateQueryOpts struct {
 	MinSupport int
 	Project    string
 	Tag        string // filter by session_tags.tag
-	After      string // RFC3339 timestamp
-	Before     string // RFC3339 timestamp
+	After      string // inclusive RFC3339 lower bound
+	Before     string // exclusive RFC3339 upper bound
 }
 
 // TemplateRow is a result from AggregateTemplates.
@@ -733,53 +733,11 @@ func (d *Database) AggregateTemplates(opts TemplateQueryOpts) ([]TemplateRow, er
 			GROUP_CONCAT(DISTINCT tm.item_uuid) as uuids
 		FROM message_templates mt
 		LEFT JOIN template_matches tm ON tm.template_id = mt.id
-		LEFT JOIN search_items si ON si.source_path = tm.source_path AND si.ordinal = tm.ordinal
+		LEFT JOIN search_items si ON si.id = ` + patternItemID("tm.item_uuid", "tm.source_path", "tm.ordinal") + `
+		WHERE 1=1
 	`
-	args := []interface{}{}
-
-	whereAdded := false
-	if opts.Project != "" {
-		query += ` WHERE si.project = ?`
-		args = append(args, opts.Project)
-		whereAdded = true
-	}
-
-	if opts.Tag != "" {
-		if whereAdded {
-			query += ` AND tm.source_path IN (
-				SELECT DISTINCT search_items.source_path FROM search_items
-				JOIN session_tags ON search_items.source_path = session_tags.source_path
-				WHERE session_tags.tag = ?
-			)`
-		} else {
-			query += ` WHERE tm.source_path IN (
-				SELECT DISTINCT search_items.source_path FROM search_items
-				JOIN session_tags ON search_items.source_path = session_tags.source_path
-				WHERE session_tags.tag = ?
-			)`
-			whereAdded = true
-		}
-		args = append(args, opts.Tag)
-	}
-
-	if opts.After != "" {
-		if whereAdded {
-			query += ` AND si.timestamp > ?`
-		} else {
-			query += ` WHERE si.timestamp > ?`
-			whereAdded = true
-		}
-		args = append(args, opts.After)
-	}
-
-	if opts.Before != "" {
-		if whereAdded {
-			query += ` AND si.timestamp < ?`
-		} else {
-			query += ` WHERE si.timestamp < ?`
-		}
-		args = append(args, opts.Before)
-	}
+	filter, args := patternEligibility(opts.Project, opts.Tag, opts.After, opts.Before)
+	query += filter
 
 	query += ` GROUP BY mt.id HAVING cnt >= ? ORDER BY cnt DESC, mt.signature ASC`
 	args = append(args, minSupport)
@@ -818,6 +776,7 @@ func (d *Database) AggregateTemplates(opts TemplateQueryOpts) ([]TemplateRow, er
 
 // CorrectionAggOpts filters and paginates correction aggregation.
 type CorrectionAggOpts struct {
+	Tag           string // filter eligible sessions before aggregation and pagination
 	Project       string
 	Origin        models.MessageOrigin
 	MinConfidence float64
@@ -855,22 +814,9 @@ func (d *Database) AggregateCorrections(opts CorrectionAggOpts) ([]CorrectionCan
 			COALESCE(si.uuid, ''),
 			si.origin
 		FROM correction_signals cs
-		JOIN search_items si ON (
-			(NULLIF(cs.item_uuid, '') IS NOT NULL AND si.uuid = cs.item_uuid)
-			OR (
-				NULLIF(cs.item_uuid, '') IS NULL
-				AND cs.source_path = si.source_path
-				AND cs.ordinal = si.ordinal
-				AND NOT EXISTS (
-					SELECT 1
-					FROM search_items peer
-					WHERE peer.source_path = si.source_path
-						AND peer.ordinal = si.ordinal
-						AND peer.id <> si.id
-				)
-			)
-		)
+		JOIN search_items si ON si.id = ` + patternItemID("cs.item_uuid", "cs.source_path", "cs.ordinal") + `
 	`
+
 	if opts.PendingOnly {
 		query += `
 		LEFT JOIN annotations a ON (
@@ -882,16 +828,12 @@ func (d *Database) AggregateCorrections(opts CorrectionAggOpts) ([]CorrectionCan
 	}
 
 	query += `WHERE si.source = 'session'`
-	var args []interface{}
-
+	filter, args := patternEligibility(opts.Project, opts.Tag, "", "")
+	query += filter
 	if opts.PendingOnly {
 		query += ` AND a.id IS NULL`
 	}
 
-	if opts.Project != "" {
-		query += " AND si.project = ?"
-		args = append(args, opts.Project)
-	}
 	if opts.Origin != "" {
 		query += " AND si.origin = ?"
 		args = append(args, opts.Origin)
@@ -995,11 +937,12 @@ func (d *Database) UpsertAnnotationWithOrdinal(itemUUID, sourcePath string, supp
 
 // LoadSequencesOpts specifies filters for loading tool sequences.
 type LoadSequencesOpts struct {
+	Tag     string // filter eligible sessions before mining
 	Project string // if set, filter to this project
-	After   string // ISO 8601 date, exclusive lower bound (tool_events.timestamp > After)
-	Before  string // ISO 8601 date, exclusive upper bound (tool_events.timestamp < Before)
-	Limit   int    // max sequences to return (0 = no limit)
-	Offset  int    // skip first N sequences
+	After   string // ISO 8601 date, inclusive lower bound (indexed timestamp >= After)
+	Before  string // ISO 8601 date, exclusive upper bound (indexed timestamp < Before)
+	Limit   int    // ignored: paginate mined patterns, never the input corpus
+	Offset  int    // ignored: paginate mined patterns, never the input corpus
 }
 
 // LoadToolSequences loads tool sequences for PrefixSpan mining.
@@ -1010,34 +953,9 @@ func (d *Database) LoadToolSequences(opts LoadSequencesOpts) ([]sequences.Sequen
 		return nil, fmt.Errorf("load categories: %w", err)
 	}
 
-	// Build SQL with filters
-	query := `
-		SELECT source_path, tool_name, command_head
-		FROM tool_events
-		WHERE 1=1
-	`
-	var args []interface{}
-
-	if opts.Project != "" {
-		query += ` AND source_path IN (
-			SELECT DISTINCT source_path FROM search_items WHERE project = ?
-		)`
-		args = append(args, opts.Project)
-	}
-
-	if opts.After != "" {
-		query += ` AND (SELECT timestamp FROM search_items WHERE search_items.source_path = tool_events.source_path
-			AND search_items.ordinal = tool_events.ordinal LIMIT 1) > ?`
-		args = append(args, opts.After)
-	}
-
-	if opts.Before != "" {
-		query += ` AND (SELECT timestamp FROM search_items WHERE search_items.source_path = tool_events.source_path
-			AND search_items.ordinal = tool_events.ordinal LIMIT 1) < ?`
-		args = append(args, opts.Before)
-	}
-
-	query += ` ORDER BY source_path, ordinal ASC`
+	cte, args := eligibleToolEvents(opts.Project, opts.Tag, opts.After, opts.Before)
+	query := cte + `SELECT session_path, tool_name, command_head
+		FROM eligible_tool_events ORDER BY session_path, session_ordinal ASC, id ASC`
 
 	rows, err := d.db.Query(query, args...)
 	if err != nil {

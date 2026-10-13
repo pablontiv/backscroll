@@ -106,8 +106,8 @@ func TestAggregateTemplatesWithDateFilter(t *testing.T) {
 
 	// Insert search items and template matches with matching timestamp
 	_, err = db.db.Exec(`
-		INSERT INTO search_items (source, source_path, ordinal, role, text, timestamp, content_type)
-		VALUES ('session', '/s1.jsonl', 0, 'user', 'error text', '2026-06-01T00:00:00Z', 'text')
+		INSERT INTO search_items (source, source_path, ordinal, role, text, timestamp, content_type, uuid)
+		VALUES ('session', '/s1.jsonl', 0, 'user', 'error text', '2026-06-01T00:00:00Z', 'text', 'u1')
 	`)
 	if err != nil {
 		t.Fatalf("insert search_items: %v", err)

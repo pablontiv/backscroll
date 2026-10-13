@@ -21,6 +21,8 @@ backscroll search "artifact literal" --source-path "*/session.jsonl" --robot
 | Flag | Description |
 | ------ | ------------- |
 | `--project <NAME>` | Filter results to a specific project |
+| `--after <YYYY-MM-DD>` | Include timestamps on or after the date (inclusive) |
+| `--before <YYYY-MM-DD>` | Include timestamps strictly before the date (exclusive) |
 | `--json` | Output as a JSON array |
 | `--robot` | Output compact `result_N_field=value` lines |
 | `--fields minimal\|full` | Field set to include (default: `minimal`) |
