@@ -259,6 +259,13 @@ func (u *Updater) extractZipContext(ctx context.Context, data []byte, dest strin
 			return fmt.Errorf("expanded archive exceeds byte limit")
 		}
 		expanded += f.UncompressedSize64
+	}
+	// Preflight the entire central directory before opening any payload or
+	// publishing the target; irrelevant members are never decompressed.
+	for _, f := range zr.File {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
 		if filepath.Base(f.Name) != u.binaryName() {
 			continue
 		}
