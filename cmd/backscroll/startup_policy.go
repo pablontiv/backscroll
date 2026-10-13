@@ -158,7 +158,7 @@ func (c *startupCoordinator) defaultStartupPolicy(ctx context.Context, progress 
 		return startupResult{Config: cfg, Failure: &startupFailure{Stage: startupStageActiveManifest, Cause: err, Diagnostic: compat.Diagnostic{Code: compat.CodeMigrationFailed, Summary: err.Error()}}}
 	}
 	ctx = context.WithValue(ctx, inputSnapshotKey{}, snapshot)
-	result := c.coordinate(ctx, cfg, progress, class)
+	result = c.coordinate(ctx, cfg, progress, class)
 	result.inputs = snapshot
 	return result
 }
