@@ -118,9 +118,13 @@ func runList(ctx context.Context, stdout, stderr io.Writer, cfg *config.Config,
 
 	if len(sessions) == 0 {
 		if jsonFormat {
-			_, _ = fmt.Fprintf(stdout, "{\"count\":0,\"sessions\":[]}\n")
+			if err := writeOutput(stdout, "{\"count\":0,\"sessions\":[]}\n"); err != nil {
+				return err
+			}
 		} else {
-			_, _ = fmt.Fprintf(stdout, "No sessions found\n")
+			if err := writeOutput(stdout, "No sessions found\n"); err != nil {
+				return err
+			}
 		}
 		writeListEmptyHint(stderr, project, allProjects)
 		return nil
@@ -138,26 +142,46 @@ func runList(ctx context.Context, stdout, stderr io.Writer, cfg *config.Config,
 		}
 	} else if robotFormat {
 		// Robot format
-		_, _ = fmt.Fprintf(stdout, "*** Sessions ***\n")
+		if err := writeOutput(stdout, "*** Sessions ***\n"); err != nil {
+			return err
+		}
 		for i, s := range sessions {
-			_, _ = fmt.Fprintf(stdout, "Session %d: %s\n", i+1, s.Path)
-			_, _ = fmt.Fprintf(stdout, "  Project: %s\n", s.Project)
-			_, _ = fmt.Fprintf(stdout, "  Timestamp: %s\n", s.Timestamp.Format("2006-01-02 15:04:05 MST"))
+			if err := writeOutput(stdout, "Session %d: %s\n", i+1, s.Path); err != nil {
+				return err
+			}
+			if err := writeOutput(stdout, "  Project: %s\n", s.Project); err != nil {
+				return err
+			}
+			if err := writeOutput(stdout, "  Timestamp: %s\n", s.Timestamp.Format("2006-01-02 15:04:05 MST")); err != nil {
+				return err
+			}
 			if len(s.Tags) > 0 {
-				_, _ = fmt.Fprintf(stdout, "  Tags: %v\n", s.Tags)
+				if err := writeOutput(stdout, "  Tags: %v\n", s.Tags); err != nil {
+					return err
+				}
 			}
 		}
-		_, _ = fmt.Fprintf(stdout, "*** Total: %d sessions ***\n", len(sessions))
+		if err := writeOutput(stdout, "*** Total: %d sessions ***\n", len(sessions)); err != nil {
+			return err
+		}
 	} else {
 		// Text output
 		for i, s := range sessions {
-			_, _ = fmt.Fprintf(stdout, "%d. %s\n", i+1, s.Path)
-			_, _ = fmt.Fprintf(stdout, "   Project: %s, Timestamp: %s\n", s.Project, s.Timestamp.Format("2006-01-02 15:04:05 MST"))
+			if err := writeOutput(stdout, "%d. %s\n", i+1, s.Path); err != nil {
+				return err
+			}
+			if err := writeOutput(stdout, "   Project: %s, Timestamp: %s\n", s.Project, s.Timestamp.Format("2006-01-02 15:04:05 MST")); err != nil {
+				return err
+			}
 			if len(s.Tags) > 0 {
-				_, _ = fmt.Fprintf(stdout, "   Tags: %v\n", s.Tags)
+				if err := writeOutput(stdout, "   Tags: %v\n", s.Tags); err != nil {
+					return err
+				}
 			}
 		}
-		_, _ = fmt.Fprintf(stdout, "\nTotal: %d sessions\n", len(sessions))
+		if err := writeOutput(stdout, "\nTotal: %d sessions\n", len(sessions)); err != nil {
+			return err
+		}
 	}
 
 	return nil

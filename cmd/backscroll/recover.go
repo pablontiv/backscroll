@@ -68,8 +68,7 @@ func newRecoverCmd(stdout, stderr io.Writer, syncService *startupSyncService, ex
 					return fmt.Errorf("post-recovery sync: %w", err)
 				}
 			}
-			printRecoveryReport(stdout, report, dryRun)
-			return nil
+			return printRecoveryReport(stdout, report, dryRun)
 		},
 	}
 	cmd.SetOut(stdout)
@@ -103,24 +102,45 @@ func (v *singleUseStringValue) String() string {
 
 func (v *singleUseStringValue) Type() string { return "string" }
 
-func printRecoveryReport(w io.Writer, report recovery.Report, dryRun bool) {
+func printRecoveryReport(w io.Writer, report recovery.Report, dryRun bool) error {
 	if dryRun {
-		_, _ = fmt.Fprintln(w, "recovery dry run")
+		if _, err := fmt.Fprintln(w, "recovery dry run"); err != nil {
+			return fmt.Errorf("write output: %w", err)
+		}
 	} else {
-		_, _ = fmt.Fprintln(w, "recovery complete")
+		if _, err := fmt.Fprintln(w, "recovery complete"); err != nil {
+			return fmt.Errorf("write output: %w", err)
+		}
 	}
-	_, _ = fmt.Fprintf(w, "active path: %s\n", report.ActivePath)
-	_, _ = fmt.Fprintf(w, "replacement target: %s\n", report.ActivePath)
-	_, _ = fmt.Fprintf(w, "backup path: %s\n", report.BackupPath)
+	if err := writeOutput(w, "active path: %s\n", report.ActivePath); err != nil {
+		return err
+	}
+	if err := writeOutput(w, "replacement target: %s\n", report.ActivePath); err != nil {
+		return err
+	}
+	if err := writeOutput(w, "backup path: %s\n", report.BackupPath); err != nil {
+		return err
+	}
 	for i, count := range report.InputCounts {
-		_, _ = fmt.Fprintf(w, "input %d records: %d\n", i+1, count)
+		if err := writeOutput(w, "input %d records: %d\n", i+1, count); err != nil {
+			return err
+		}
 	}
-	_, _ = fmt.Fprintf(w, "exact duplicates: %d\n", report.ExactDuplicates)
-	_, _ = fmt.Fprintf(w, "final count: %d\n", report.FinalCount)
+	if err := writeOutput(w, "exact duplicates: %d\n", report.ExactDuplicates); err != nil {
+		return err
+	}
+	if err := writeOutput(w, "final count: %d\n", report.FinalCount); err != nil {
+		return err
+	}
 	for i, shape := range report.Shapes {
-		_, _ = fmt.Fprintf(w, "input %d shape: version=%d signature=%s\n", i+1, shape.AppliedVersion, shape.Signature)
+		if err := writeOutput(w, "input %d shape: version=%d signature=%s\n", i+1, shape.AppliedVersion, shape.Signature); err != nil {
+			return err
+		}
 	}
 	for _, conflict := range report.Conflicts {
-		_, _ = fmt.Fprintf(w, "diagnostic: %s: %s\n", conflict.Code, strings.TrimSpace(conflict.Summary))
+		if err := writeOutput(w, "diagnostic: %s: %s\n", conflict.Code, strings.TrimSpace(conflict.Summary)); err != nil {
+			return err
+		}
 	}
+	return nil
 }

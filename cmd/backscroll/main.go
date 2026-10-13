@@ -103,7 +103,17 @@ func run(stdout, stderr io.Writer, args []string) error {
 	return runContext(context.Background(), stdout, stderr, args)
 }
 
-func runContext(ctx context.Context, stdout, stderr io.Writer, args []string) error {
+func runContext(ctx context.Context, stdout, stderr io.Writer, args []string) (retErr error) {
+	// Cobra's help callback cannot return an error. Preserve failures at the
+	// public run boundary even when a framework output branch discards them.
+	output := &requiredOutputWriter{Writer: stdout}
+	stdout = output
+	defer func() {
+		if retErr == nil && output.err != nil {
+			retErr = fmt.Errorf("write output: %w", output.err)
+		}
+	}()
+
 	// The skill is informational, self-contained output. Validate and handle its
 	// global option before constructing the updater or command tree, while
 	// preserving arguments after the POSIX -- separator as command literals.

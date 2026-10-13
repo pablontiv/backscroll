@@ -195,9 +195,13 @@ func runPatterns(ctx context.Context, stdout, stderr io.Writer, cfg *config.Conf
 
 			if len(results) == 0 {
 				if !jsonFormat && !robotFormat {
-					_, _ = fmt.Fprintf(stdout, "No patterns found. Try --min-support <lower> or --min-length <lower>.\n")
+					if err := writeOutput(stdout, "No patterns found. Try --min-support <lower> or --min-length <lower>.\n"); err != nil {
+						return err
+					}
 				} else if jsonFormat {
-					_, _ = fmt.Fprintf(stdout, "{\"count\":0,\"kind\":\"commands\",\"trends\":[]}\n")
+					if err := writeOutput(stdout, "{\"count\":0,\"kind\":\"commands\",\"trends\":[]}\n"); err != nil {
+						return err
+					}
 				}
 				writeSearchHints(stderr, allProjects, true)
 				return nil
@@ -231,25 +235,47 @@ func runPatterns(ctx context.Context, stdout, stderr io.Writer, cfg *config.Conf
 					return fmt.Errorf("encode JSON: %w", err)
 				}
 			} else if robotFormat {
-				_, _ = fmt.Fprintf(stdout, "*** Trends ***\n")
+				if err := writeOutput(stdout, "*** Trends ***\n"); err != nil {
+					return err
+				}
 				for weekIdx, w := range weeks {
-					_, _ = fmt.Fprintf(stdout, "week_%d=%s\n", weekIdx, w)
+					if err := writeOutput(stdout, "week_%d=%s\n", weekIdx, w); err != nil {
+						return err
+					}
 					for i, p := range weekMap[w] {
-						_, _ = fmt.Fprintf(stdout, "result_%d_tool_name=%s\n", i, p.ToolName)
-						_, _ = fmt.Fprintf(stdout, "result_%d_command_head=%s\n", i, p.CommandHead)
-						_, _ = fmt.Fprintf(stdout, "result_%d_count=%d\n", i, p.Count)
+						if err := writeOutput(stdout, "result_%d_tool_name=%s\n", i, p.ToolName); err != nil {
+							return err
+						}
+						if err := writeOutput(stdout, "result_%d_command_head=%s\n", i, p.CommandHead); err != nil {
+							return err
+						}
+						if err := writeOutput(stdout, "result_%d_count=%d\n", i, p.Count); err != nil {
+							return err
+						}
 					}
 				}
-				_, _ = fmt.Fprintf(stdout, "*** Total: %d patterns ***\n", len(results))
+				if err := writeOutput(stdout, "*** Total: %d patterns ***\n", len(results)); err != nil {
+					return err
+				}
 			} else {
-				_, _ = fmt.Fprintf(stdout, "Trends in Commands (Week-over-Week)\n")
-				_, _ = fmt.Fprintf(stdout, "==================================\n\n")
+				if err := writeOutput(stdout, "Trends in Commands (Week-over-Week)\n"); err != nil {
+					return err
+				}
+				if err := writeOutput(stdout, "==================================\n\n"); err != nil {
+					return err
+				}
 				for _, w := range weeks {
-					_, _ = fmt.Fprintf(stdout, "%s\n", w)
-					for i, p := range weekMap[w] {
-						_, _ = fmt.Fprintf(stdout, "  %d. %s %s (%d times)\n", i+1, p.ToolName, p.CommandHead, p.Count)
+					if err := writeOutput(stdout, "%s\n", w); err != nil {
+						return err
 					}
-					_, _ = fmt.Fprintf(stdout, "\n")
+					for i, p := range weekMap[w] {
+						if err := writeOutput(stdout, "  %d. %s %s (%d times)\n", i+1, p.ToolName, p.CommandHead, p.Count); err != nil {
+							return err
+						}
+					}
+					if err := writeOutput(stdout, "\n"); err != nil {
+						return err
+					}
 				}
 			}
 		} else {
@@ -260,9 +286,13 @@ func runPatterns(ctx context.Context, stdout, stderr io.Writer, cfg *config.Conf
 
 			if len(results) == 0 {
 				if !jsonFormat && !robotFormat {
-					_, _ = fmt.Fprintf(stdout, "No patterns found.\n")
+					if err := writeOutput(stdout, "No patterns found.\n"); err != nil {
+						return err
+					}
 				} else if jsonFormat {
-					_, _ = fmt.Fprintf(stdout, "{\"count\":0,\"patterns\":[]}\n")
+					if err := writeOutput(stdout, "{\"count\":0,\"patterns\":[]}\n"); err != nil {
+						return err
+					}
 				}
 				writeSearchHints(stderr, allProjects, true)
 				return nil
@@ -278,18 +308,34 @@ func runPatterns(ctx context.Context, stdout, stderr io.Writer, cfg *config.Conf
 					return fmt.Errorf("encode JSON: %w", err)
 				}
 			} else if robotFormat {
-				_, _ = fmt.Fprintf(stdout, "*** Commands ***\n")
-				for i, p := range results {
-					_, _ = fmt.Fprintf(stdout, "result_%d_tool_name=%s\n", i, p.ToolName)
-					_, _ = fmt.Fprintf(stdout, "result_%d_command_head=%s\n", i, p.CommandHead)
-					_, _ = fmt.Fprintf(stdout, "result_%d_count=%d\n", i, p.Count)
+				if err := writeOutput(stdout, "*** Commands ***\n"); err != nil {
+					return err
 				}
-				_, _ = fmt.Fprintf(stdout, "*** Total: %d patterns ***\n", len(results))
-			} else {
-				_, _ = fmt.Fprintf(stdout, "Top Commands\n")
-				_, _ = fmt.Fprintf(stdout, "============\n\n")
 				for i, p := range results {
-					_, _ = fmt.Fprintf(stdout, "%d. %s %s (%d times)\n", i+1, p.ToolName, p.CommandHead, p.Count)
+					if err := writeOutput(stdout, "result_%d_tool_name=%s\n", i, p.ToolName); err != nil {
+						return err
+					}
+					if err := writeOutput(stdout, "result_%d_command_head=%s\n", i, p.CommandHead); err != nil {
+						return err
+					}
+					if err := writeOutput(stdout, "result_%d_count=%d\n", i, p.Count); err != nil {
+						return err
+					}
+				}
+				if err := writeOutput(stdout, "*** Total: %d patterns ***\n", len(results)); err != nil {
+					return err
+				}
+			} else {
+				if err := writeOutput(stdout, "Top Commands\n"); err != nil {
+					return err
+				}
+				if err := writeOutput(stdout, "============\n\n"); err != nil {
+					return err
+				}
+				for i, p := range results {
+					if err := writeOutput(stdout, "%d. %s %s (%d times)\n", i+1, p.ToolName, p.CommandHead, p.Count); err != nil {
+						return err
+					}
 				}
 			}
 		}
@@ -308,9 +354,13 @@ func runPatterns(ctx context.Context, stdout, stderr io.Writer, cfg *config.Conf
 
 			if len(results) == 0 {
 				if !jsonFormat && !robotFormat {
-					_, _ = fmt.Fprintf(stdout, "No patterns found. Try --min-support <lower> or --min-length <lower>.\n")
+					if err := writeOutput(stdout, "No patterns found. Try --min-support <lower> or --min-length <lower>.\n"); err != nil {
+						return err
+					}
 				} else if jsonFormat {
-					_, _ = fmt.Fprintf(stdout, "{\"count\":0,\"kind\":\"failures\",\"trends\":[]}\n")
+					if err := writeOutput(stdout, "{\"count\":0,\"kind\":\"failures\",\"trends\":[]}\n"); err != nil {
+						return err
+					}
 				}
 				writeSearchHints(stderr, allProjects, true)
 				return nil
@@ -344,36 +394,62 @@ func runPatterns(ctx context.Context, stdout, stderr io.Writer, cfg *config.Conf
 					return fmt.Errorf("encode JSON: %w", err)
 				}
 			} else if robotFormat {
-				_, _ = fmt.Fprintf(stdout, "*** Trends ***\n")
+				if err := writeOutput(stdout, "*** Trends ***\n"); err != nil {
+					return err
+				}
 				for weekIdx, w := range weeks {
-					_, _ = fmt.Fprintf(stdout, "week_%d=%s\n", weekIdx, w)
+					if err := writeOutput(stdout, "week_%d=%s\n", weekIdx, w); err != nil {
+						return err
+					}
 					for i, p := range weekMap[w] {
 						exitCodeStr := "?"
 						if p.ExitCode != nil {
 							exitCodeStr = fmt.Sprintf("%d", *p.ExitCode)
 						}
-						_, _ = fmt.Fprintf(stdout, "result_%d_tool_name=%s\n", i, p.ToolName)
-						_, _ = fmt.Fprintf(stdout, "result_%d_is_error=%v\n", i, p.IsError)
-						_, _ = fmt.Fprintf(stdout, "result_%d_exit_code=%s\n", i, exitCodeStr)
-						_, _ = fmt.Fprintf(stdout, "result_%d_count=%d\n", i, p.Count)
-						_, _ = fmt.Fprintf(stdout, "result_%d_coverage=%d/%d\n", i, p.Count, p.SignalledEvents)
+						if err := writeOutput(stdout, "result_%d_tool_name=%s\n", i, p.ToolName); err != nil {
+							return err
+						}
+						if err := writeOutput(stdout, "result_%d_is_error=%v\n", i, p.IsError); err != nil {
+							return err
+						}
+						if err := writeOutput(stdout, "result_%d_exit_code=%s\n", i, exitCodeStr); err != nil {
+							return err
+						}
+						if err := writeOutput(stdout, "result_%d_count=%d\n", i, p.Count); err != nil {
+							return err
+						}
+						if err := writeOutput(stdout, "result_%d_coverage=%d/%d\n", i, p.Count, p.SignalledEvents); err != nil {
+							return err
+						}
 					}
 				}
-				_, _ = fmt.Fprintf(stdout, "*** Total: %d patterns ***\n", len(results))
+				if err := writeOutput(stdout, "*** Total: %d patterns ***\n", len(results)); err != nil {
+					return err
+				}
 			} else {
-				_, _ = fmt.Fprintf(stdout, "Trends in Failures (Week-over-Week)\n")
-				_, _ = fmt.Fprintf(stdout, "===================================\n\n")
+				if err := writeOutput(stdout, "Trends in Failures (Week-over-Week)\n"); err != nil {
+					return err
+				}
+				if err := writeOutput(stdout, "===================================\n\n"); err != nil {
+					return err
+				}
 				for _, w := range weeks {
-					_, _ = fmt.Fprintf(stdout, "%s\n", w)
+					if err := writeOutput(stdout, "%s\n", w); err != nil {
+						return err
+					}
 					for i, p := range weekMap[w] {
 						exitCodeStr := "?"
 						if p.ExitCode != nil {
 							exitCodeStr = fmt.Sprintf("%d", *p.ExitCode)
 						}
-						_, _ = fmt.Fprintf(stdout, "  %d. %s (is_error=%v, exit_code=%s) — %d occurrences\n",
-							i+1, p.ToolName, p.IsError, exitCodeStr, p.Count)
+						if err := writeOutput(stdout, "  %d. %s (is_error=%v, exit_code=%s) — %d occurrences\n",
+							i+1, p.ToolName, p.IsError, exitCodeStr, p.Count); err != nil {
+							return err
+						}
 					}
-					_, _ = fmt.Fprintf(stdout, "\n")
+					if err := writeOutput(stdout, "\n"); err != nil {
+						return err
+					}
 				}
 			}
 		} else {
@@ -384,9 +460,13 @@ func runPatterns(ctx context.Context, stdout, stderr io.Writer, cfg *config.Conf
 
 			if len(results) == 0 {
 				if !jsonFormat && !robotFormat {
-					_, _ = fmt.Fprintf(stdout, "No failure patterns found.\n")
+					if err := writeOutput(stdout, "No failure patterns found.\n"); err != nil {
+						return err
+					}
 				} else if jsonFormat {
-					_, _ = fmt.Fprintf(stdout, "{\"count\":0,\"patterns\":[]}\n")
+					if err := writeOutput(stdout, "{\"count\":0,\"patterns\":[]}\n"); err != nil {
+						return err
+					}
 				}
 				writeSearchHints(stderr, allProjects, true)
 				return nil
@@ -402,32 +482,54 @@ func runPatterns(ctx context.Context, stdout, stderr io.Writer, cfg *config.Conf
 					return fmt.Errorf("encode JSON: %w", err)
 				}
 			} else if robotFormat {
-				_, _ = fmt.Fprintf(stdout, "*** Failures ***\n")
+				if err := writeOutput(stdout, "*** Failures ***\n"); err != nil {
+					return err
+				}
 				for i, p := range results {
 					exitCodeStr := "?"
 					if p.ExitCode != nil {
 						exitCodeStr = fmt.Sprintf("%d", *p.ExitCode)
 					}
-					_, _ = fmt.Fprintf(stdout, "result_%d_tool_name=%s\n", i, p.ToolName)
-					_, _ = fmt.Fprintf(stdout, "result_%d_is_error=%v\n", i, p.IsError)
-					_, _ = fmt.Fprintf(stdout, "result_%d_exit_code=%s\n", i, exitCodeStr)
-					_, _ = fmt.Fprintf(stdout, "result_%d_count=%d\n", i, p.Count)
-					_, _ = fmt.Fprintf(stdout, "result_%d_coverage=%d/%d\n", i, p.Count, p.SignalledEvents)
+					if err := writeOutput(stdout, "result_%d_tool_name=%s\n", i, p.ToolName); err != nil {
+						return err
+					}
+					if err := writeOutput(stdout, "result_%d_is_error=%v\n", i, p.IsError); err != nil {
+						return err
+					}
+					if err := writeOutput(stdout, "result_%d_exit_code=%s\n", i, exitCodeStr); err != nil {
+						return err
+					}
+					if err := writeOutput(stdout, "result_%d_count=%d\n", i, p.Count); err != nil {
+						return err
+					}
+					if err := writeOutput(stdout, "result_%d_coverage=%d/%d\n", i, p.Count, p.SignalledEvents); err != nil {
+						return err
+					}
 				}
-				_, _ = fmt.Fprintf(stdout, "*** Total: %d patterns ***\n", len(results))
+				if err := writeOutput(stdout, "*** Total: %d patterns ***\n", len(results)); err != nil {
+					return err
+				}
 			} else {
-				_, _ = fmt.Fprintf(stdout, "Failure Patterns\n")
-				_, _ = fmt.Fprintf(stdout, "================\n\n")
+				if err := writeOutput(stdout, "Failure Patterns\n"); err != nil {
+					return err
+				}
+				if err := writeOutput(stdout, "================\n\n"); err != nil {
+					return err
+				}
 				if len(results) > 0 {
-					_, _ = fmt.Fprintf(stdout, "Signalled events (with error signal): %d\n\n", results[0].SignalledEvents)
+					if err := writeOutput(stdout, "Signalled events (with error signal): %d\n\n", results[0].SignalledEvents); err != nil {
+						return err
+					}
 				}
 				for i, p := range results {
 					exitCodeStr := "?"
 					if p.ExitCode != nil {
 						exitCodeStr = fmt.Sprintf("%d", *p.ExitCode)
 					}
-					_, _ = fmt.Fprintf(stdout, "%d. %s (is_error=%v, exit_code=%s) — %d occurrences\n",
-						i+1, p.ToolName, p.IsError, exitCodeStr, p.Count)
+					if err := writeOutput(stdout, "%d. %s (is_error=%v, exit_code=%s) — %d occurrences\n",
+						i+1, p.ToolName, p.IsError, exitCodeStr, p.Count); err != nil {
+						return err
+					}
 				}
 			}
 		}
@@ -445,9 +547,13 @@ func runPatterns(ctx context.Context, stdout, stderr io.Writer, cfg *config.Conf
 
 		if len(results) == 0 {
 			if !jsonFormat && !robotFormat {
-				_, _ = fmt.Fprintf(stdout, "No templates found.\n")
+				if err := writeOutput(stdout, "No templates found.\n"); err != nil {
+					return err
+				}
 			} else if jsonFormat {
-				_, _ = fmt.Fprintf(stdout, "{\"count\":0,\"patterns\":[]}\n")
+				if err := writeOutput(stdout, "{\"count\":0,\"patterns\":[]}\n"); err != nil {
+					return err
+				}
 			}
 			writeSearchHints(stderr, allProjects, true)
 			return nil
@@ -476,23 +582,49 @@ func runPatterns(ctx context.Context, stdout, stderr io.Writer, cfg *config.Conf
 				return fmt.Errorf("encode JSON: %w", err)
 			}
 		} else if robotFormat {
-			_, _ = fmt.Fprintf(stdout, "*** Templates ***\n")
-			for i, r := range results {
-				_, _ = fmt.Fprintf(stdout, "result_%d_template_id=%d\n", i, r.TemplateID)
-				_, _ = fmt.Fprintf(stdout, "result_%d_template=%q\n", i, r.TemplateText)
-				_, _ = fmt.Fprintf(stdout, "result_%d_occurrence_count=%d\n", i, r.OccurrenceCount)
-				_, _ = fmt.Fprintf(stdout, "result_%d_normalization_version=%d\n", i, r.NormalizationVersion)
+			if err := writeOutput(stdout, "*** Templates ***\n"); err != nil {
+				return err
 			}
-			_, _ = fmt.Fprintf(stdout, "*** Total: %d patterns ***\n", len(results))
+			for i, r := range results {
+				if err := writeOutput(stdout, "result_%d_template_id=%d\n", i, r.TemplateID); err != nil {
+					return err
+				}
+				if err := writeOutput(stdout, "result_%d_template=%q\n", i, r.TemplateText); err != nil {
+					return err
+				}
+				if err := writeOutput(stdout, "result_%d_occurrence_count=%d\n", i, r.OccurrenceCount); err != nil {
+					return err
+				}
+				if err := writeOutput(stdout, "result_%d_normalization_version=%d\n", i, r.NormalizationVersion); err != nil {
+					return err
+				}
+			}
+			if err := writeOutput(stdout, "*** Total: %d patterns ***\n", len(results)); err != nil {
+				return err
+			}
 		} else {
-			_, _ = fmt.Fprintf(stdout, "Found %d templates (min_support=%d):\n\n", len(results), minSupport)
+			if err := writeOutput(stdout, "Found %d templates (min_support=%d):\n\n", len(results), minSupport); err != nil {
+				return err
+			}
 			for i, row := range results {
-				_, _ = fmt.Fprintf(stdout, "%d. [%s]\n", i+1, row.Signature[:8])
-				_, _ = fmt.Fprintf(stdout, "   Text: %s\n", row.TemplateText)
-				_, _ = fmt.Fprintf(stdout, "   Occurrences: %d\n", row.OccurrenceCount)
-				_, _ = fmt.Fprintf(stdout, "   Normalization: v%d\n", row.NormalizationVersion)
-				_, _ = fmt.Fprintf(stdout, "   Projects: %v\n", row.ProjectsAffected)
-				_, _ = fmt.Fprintf(stdout, "   Sample UUIDs: %v\n\n", row.SampleUUIDs)
+				if err := writeOutput(stdout, "%d. [%s]\n", i+1, row.Signature[:8]); err != nil {
+					return err
+				}
+				if err := writeOutput(stdout, "   Text: %s\n", row.TemplateText); err != nil {
+					return err
+				}
+				if err := writeOutput(stdout, "   Occurrences: %d\n", row.OccurrenceCount); err != nil {
+					return err
+				}
+				if err := writeOutput(stdout, "   Normalization: v%d\n", row.NormalizationVersion); err != nil {
+					return err
+				}
+				if err := writeOutput(stdout, "   Projects: %v\n", row.ProjectsAffected); err != nil {
+					return err
+				}
+				if err := writeOutput(stdout, "   Sample UUIDs: %v\n\n", row.SampleUUIDs); err != nil {
+					return err
+				}
 			}
 		}
 
@@ -517,9 +649,13 @@ func runPatterns(ctx context.Context, stdout, stderr io.Writer, cfg *config.Conf
 
 		if len(results) == 0 {
 			if !jsonFormat && !robotFormat {
-				_, _ = fmt.Fprintf(stdout, "No correction candidates found.\n")
+				if err := writeOutput(stdout, "No correction candidates found.\n"); err != nil {
+					return err
+				}
 			} else if jsonFormat {
-				_, _ = fmt.Fprintf(stdout, "{\"count\":0,\"kind\":\"corrections\",\"patterns\":[]}\n")
+				if err := writeOutput(stdout, "{\"count\":0,\"kind\":\"corrections\",\"patterns\":[]}\n"); err != nil {
+					return err
+				}
 			}
 			if pending {
 				_, _ = fmt.Fprintf(stderr, "hint: no pending corrections. All candidates have been annotated, or use --pending=false to view all.\n")
@@ -539,31 +675,65 @@ func runPatterns(ctx context.Context, stdout, stderr io.Writer, cfg *config.Conf
 				return fmt.Errorf("encode JSON: %w", err)
 			}
 		} else if robotFormat {
-			_, _ = fmt.Fprintf(stdout, "*** Corrections ***\n")
+			if err := writeOutput(stdout, "*** Corrections ***\n"); err != nil {
+				return err
+			}
 			for i, c := range results {
-				_, _ = fmt.Fprintf(stdout, "result_%d_uuid=%s\n", i, c.UUID)
-				_, _ = fmt.Fprintf(stdout, "result_%d_source_path=%s\n", i, c.SourcePath)
-				_, _ = fmt.Fprintf(stdout, "result_%d_ordinal=%d\n", i, c.Ordinal)
-				_, _ = fmt.Fprintf(stdout, "result_%d_detectors=%s\n", i, strings.Join(c.Detectors, ","))
-				_, _ = fmt.Fprintf(stdout, "result_%d_max_confidence=%.2f\n", i, c.MaxConfidence)
-				_, _ = fmt.Fprintf(stdout, "result_%d_text_snippet=%q\n", i, c.TextSnippet)
+				if err := writeOutput(stdout, "result_%d_uuid=%s\n", i, c.UUID); err != nil {
+					return err
+				}
+				if err := writeOutput(stdout, "result_%d_source_path=%s\n", i, c.SourcePath); err != nil {
+					return err
+				}
+				if err := writeOutput(stdout, "result_%d_ordinal=%d\n", i, c.Ordinal); err != nil {
+					return err
+				}
+				if err := writeOutput(stdout, "result_%d_detectors=%s\n", i, strings.Join(c.Detectors, ",")); err != nil {
+					return err
+				}
+				if err := writeOutput(stdout, "result_%d_max_confidence=%.2f\n", i, c.MaxConfidence); err != nil {
+					return err
+				}
+				if err := writeOutput(stdout, "result_%d_text_snippet=%q\n", i, c.TextSnippet); err != nil {
+					return err
+				}
 				if origin != "" {
-					_, _ = fmt.Fprintf(stdout, "result_%d_origin=%s\n", i, c.Origin)
+					if err := writeOutput(stdout, "result_%d_origin=%s\n", i, c.Origin); err != nil {
+						return err
+					}
 				}
 			}
-			_, _ = fmt.Fprintf(stdout, "*** Total: %d patterns ***\n", len(results))
+			if err := writeOutput(stdout, "*** Total: %d patterns ***\n", len(results)); err != nil {
+				return err
+			}
 		} else {
-			_, _ = fmt.Fprintf(stdout, "Correction Candidates\n")
-			_, _ = fmt.Fprintf(stdout, "====================\n\n")
+			if err := writeOutput(stdout, "Correction Candidates\n"); err != nil {
+				return err
+			}
+			if err := writeOutput(stdout, "====================\n\n"); err != nil {
+				return err
+			}
 			for i, c := range results {
-				_, _ = fmt.Fprintf(stdout, "%d. UUID: %s\n", i+1, c.UUID)
-				_, _ = fmt.Fprintf(stdout, "   Source: %s (ordinal %d)\n", c.SourcePath, c.Ordinal)
-				_, _ = fmt.Fprintf(stdout, "   Detectors: %s (max confidence: %.2f)\n", strings.Join(c.Detectors, ", "), c.MaxConfidence)
-				_, _ = fmt.Fprintf(stdout, "   Text: %s\n", c.TextSnippet)
-				if origin != "" {
-					_, _ = fmt.Fprintf(stdout, "   Origin: %s\n", c.Origin)
+				if err := writeOutput(stdout, "%d. UUID: %s\n", i+1, c.UUID); err != nil {
+					return err
 				}
-				_, _ = fmt.Fprintln(stdout)
+				if err := writeOutput(stdout, "   Source: %s (ordinal %d)\n", c.SourcePath, c.Ordinal); err != nil {
+					return err
+				}
+				if err := writeOutput(stdout, "   Detectors: %s (max confidence: %.2f)\n", strings.Join(c.Detectors, ", "), c.MaxConfidence); err != nil {
+					return err
+				}
+				if err := writeOutput(stdout, "   Text: %s\n", c.TextSnippet); err != nil {
+					return err
+				}
+				if origin != "" {
+					if err := writeOutput(stdout, "   Origin: %s\n", c.Origin); err != nil {
+						return err
+					}
+				}
+				if _, err := fmt.Fprintln(stdout); err != nil {
+					return fmt.Errorf("write output: %w", err)
+				}
 			}
 		}
 
@@ -606,9 +776,13 @@ func runPatterns(ctx context.Context, stdout, stderr io.Writer, cfg *config.Conf
 		}
 		if len(patterns) == 0 {
 			if !jsonFormat && !robotFormat {
-				_, _ = fmt.Fprintf(stdout, "No patterns found. Try --min-support <lower> or --min-length <lower>.\n")
+				if err := writeOutput(stdout, "No patterns found. Try --min-support <lower> or --min-length <lower>.\n"); err != nil {
+					return err
+				}
 			} else if jsonFormat {
-				_, _ = fmt.Fprintf(stdout, "{\"count\":0,\"kind\":\"sequences\",\"patterns\":[]}\n")
+				if err := writeOutput(stdout, "{\"count\":0,\"kind\":\"sequences\",\"patterns\":[]}\n"); err != nil {
+					return err
+				}
 			}
 			writeSearchHints(stderr, allProjects, true)
 			return nil
@@ -640,22 +814,42 @@ func runPatterns(ctx context.Context, stdout, stderr io.Writer, cfg *config.Conf
 				return fmt.Errorf("encode JSON: %w", err)
 			}
 		} else if robotFormat {
-			_, _ = fmt.Fprintf(stdout, "*** Sequences ***\n")
-			for i, p := range patterns {
-				share := float64(p.Support) * 100.0 / float64(totalSessions)
-				_, _ = fmt.Fprintf(stdout, "result_%d_pattern=%s\n", i, strings.Join(p.Items, " → "))
-				_, _ = fmt.Fprintf(stdout, "result_%d_support=%d\n", i, p.Support)
-				_, _ = fmt.Fprintf(stdout, "result_%d_share=%.1f%%\n", i, share)
+			if err := writeOutput(stdout, "*** Sequences ***\n"); err != nil {
+				return err
 			}
-			_, _ = fmt.Fprintf(stdout, "*** Total: %d patterns ***\n", len(patterns))
-		} else {
-			_, _ = fmt.Fprintf(stdout, "Frequent Tool Sequences (exploratory)\n")
-			_, _ = fmt.Fprintf(stdout, "======================================\n\n")
-			_, _ = fmt.Fprintf(stdout, "Total sessions analyzed: %d\n\n", totalSessions)
 			for i, p := range patterns {
 				share := float64(p.Support) * 100.0 / float64(totalSessions)
-				_, _ = fmt.Fprintf(stdout, "%d. %s\n", i+1, strings.Join(p.Items, " → "))
-				_, _ = fmt.Fprintf(stdout, "   Support: %d sessions (%.1f%%)\n\n", p.Support, share)
+				if err := writeOutput(stdout, "result_%d_pattern=%s\n", i, strings.Join(p.Items, " → ")); err != nil {
+					return err
+				}
+				if err := writeOutput(stdout, "result_%d_support=%d\n", i, p.Support); err != nil {
+					return err
+				}
+				if err := writeOutput(stdout, "result_%d_share=%.1f%%\n", i, share); err != nil {
+					return err
+				}
+			}
+			if err := writeOutput(stdout, "*** Total: %d patterns ***\n", len(patterns)); err != nil {
+				return err
+			}
+		} else {
+			if err := writeOutput(stdout, "Frequent Tool Sequences (exploratory)\n"); err != nil {
+				return err
+			}
+			if err := writeOutput(stdout, "======================================\n\n"); err != nil {
+				return err
+			}
+			if err := writeOutput(stdout, "Total sessions analyzed: %d\n\n", totalSessions); err != nil {
+				return err
+			}
+			for i, p := range patterns {
+				share := float64(p.Support) * 100.0 / float64(totalSessions)
+				if err := writeOutput(stdout, "%d. %s\n", i+1, strings.Join(p.Items, " → ")); err != nil {
+					return err
+				}
+				if err := writeOutput(stdout, "   Support: %d sessions (%.1f%%)\n\n", p.Support, share); err != nil {
+					return err
+				}
 			}
 		}
 	}

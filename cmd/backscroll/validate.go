@@ -71,17 +71,27 @@ func runValidate(ctx context.Context, stdout, stderr io.Writer, cfg *config.Conf
 			}
 			return err
 		}
-		_, _ = fmt.Fprintf(stdout, "❌ Validation failed: %v\n", err)
+		if err := writeOutput(stdout, "❌ Validation failed: %v\n", err); err != nil {
+			return err
+		}
 		return err
 	}
 
 	if jsonFormat {
 		return json.NewEncoder(stdout).Encode(map[string]any{"valid": true, "database_exists": true})
 	}
-	_, _ = fmt.Fprintf(stdout, "✓ Index validation passed\n")
-	_, _ = fmt.Fprintf(stdout, "✓ All required tables exist\n")
-	_, _ = fmt.Fprintf(stdout, "✓ FTS5 virtual table is set up correctly\n")
-	_, _ = fmt.Fprintf(stdout, "✓ No orphaned records found\n")
+	if err := writeOutput(stdout, "✓ Index validation passed\n"); err != nil {
+		return err
+	}
+	if err := writeOutput(stdout, "✓ All required tables exist\n"); err != nil {
+		return err
+	}
+	if err := writeOutput(stdout, "✓ FTS5 virtual table is set up correctly\n"); err != nil {
+		return err
+	}
+	if err := writeOutput(stdout, "✓ No orphaned records found\n"); err != nil {
+		return err
+	}
 
 	return nil
 }

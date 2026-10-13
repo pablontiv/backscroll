@@ -99,9 +99,13 @@ func runAnnotate(ctx context.Context, stdout, stderr io.Writer, cfg *config.Conf
 	}
 
 	if uuid != "" {
-		_, _ = fmt.Fprintf(stdout, "Annotated %s as %s=%s\n", uuid, kind, label)
+		if err := writeOutput(stdout, "Annotated %s as %s=%s\n", uuid, kind, label); err != nil {
+			return err
+		}
 	} else {
-		_, _ = fmt.Fprintf(stdout, "Annotated %s:%d as %s=%s\n", path, ordinal, kind, label)
+		if err := writeOutput(stdout, "Annotated %s:%d as %s=%s\n", path, ordinal, kind, label); err != nil {
+			return err
+		}
 	}
 
 	return nil

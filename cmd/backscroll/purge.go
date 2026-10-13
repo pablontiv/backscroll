@@ -76,7 +76,9 @@ func runPurge(ctx context.Context, stdout, stderr io.Writer, cfg *config.Config,
 		return fmt.Errorf("purge records: %w", err)
 	}
 
-	_, _ = fmt.Fprintf(stdout, "Deleted %d indexed items before %s\n", deleted, before)
+	if err := writeOutput(stdout, "Deleted %d indexed items before %s\n", deleted, before); err != nil {
+		return err
+	}
 
 	return nil
 }

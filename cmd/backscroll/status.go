@@ -101,33 +101,67 @@ func runStatus(ctx context.Context, stdout, stderr io.Writer, cfg *config.Config
 		}
 	} else {
 		// Text output
-		_, _ = fmt.Fprintf(stdout, "Backscroll Status\n")
-		_, _ = fmt.Fprintf(stdout, "=================\n\n")
-
-		_, _ = fmt.Fprintf(stdout, "Database:\n")
-		_, _ = fmt.Fprintf(stdout, "  Path: %s\n", cfg.DatabasePath)
-		_, _ = fmt.Fprintf(stdout, "  Size: %.2f MB\n", float64(dbSize)/1024/1024)
-
-		_, _ = fmt.Fprintf(stdout, "\nIndex:\n")
-		_, _ = fmt.Fprintf(stdout, "  Files indexed:    %d\n", stats.TotalFiles)
-		_, _ = fmt.Fprintf(stdout, "  Messages indexed: %d\n", stats.TotalMessages)
-		_, _ = fmt.Fprintf(stdout, "  Chunks stored:    %d\n", stats.TotalChunks)
-		_, _ = fmt.Fprintf(stdout, "  Embeddings:       %d\n", stats.TotalEmbeddings)
-		_, _ = fmt.Fprintf(stdout, "  Vectors stored:   %d\n", stats.TotalVectors)
-		if !stats.IndexedAt.IsZero() {
-			_, _ = fmt.Fprintf(stdout, "  Last indexed:     %s\n", stats.IndexedAt.Format("2006-01-02 15:04:05 MST"))
+		if err := writeOutput(stdout, "Backscroll Status\n"); err != nil {
+			return err
+		}
+		if err := writeOutput(stdout, "=================\n\n"); err != nil {
+			return err
 		}
 
-		_, _ = fmt.Fprintf(stdout, "\nConfiguration:\n")
+		if err := writeOutput(stdout, "Database:\n"); err != nil {
+			return err
+		}
+		if err := writeOutput(stdout, "  Path: %s\n", cfg.DatabasePath); err != nil {
+			return err
+		}
+		if err := writeOutput(stdout, "  Size: %.2f MB\n", float64(dbSize)/1024/1024); err != nil {
+			return err
+		}
+
+		if err := writeOutput(stdout, "\nIndex:\n"); err != nil {
+			return err
+		}
+		if err := writeOutput(stdout, "  Files indexed:    %d\n", stats.TotalFiles); err != nil {
+			return err
+		}
+		if err := writeOutput(stdout, "  Messages indexed: %d\n", stats.TotalMessages); err != nil {
+			return err
+		}
+		if err := writeOutput(stdout, "  Chunks stored:    %d\n", stats.TotalChunks); err != nil {
+			return err
+		}
+		if err := writeOutput(stdout, "  Embeddings:       %d\n", stats.TotalEmbeddings); err != nil {
+			return err
+		}
+		if err := writeOutput(stdout, "  Vectors stored:   %d\n", stats.TotalVectors); err != nil {
+			return err
+		}
+		if !stats.IndexedAt.IsZero() {
+			if err := writeOutput(stdout, "  Last indexed:     %s\n", stats.IndexedAt.Format("2006-01-02 15:04:05 MST")); err != nil {
+				return err
+			}
+		}
+
+		if err := writeOutput(stdout, "\nConfiguration:\n"); err != nil {
+			return err
+		}
 		if usingDeclarative {
-			_, _ = fmt.Fprintf(stdout, "  Inputs: %d active (declarative)\n", len(activeInputNames))
+			if err := writeOutput(stdout, "  Inputs: %d active (declarative)\n", len(activeInputNames)); err != nil {
+				return err
+			}
 			for _, name := range activeInputNames {
-				_, _ = fmt.Fprintf(stdout, "    - %s\n", name)
+				if err := writeOutput(stdout, "    - %s\n", name); err != nil {
+					return err
+				}
 			}
 		} else {
-			_, _ = fmt.Fprintf(stdout, "  Inputs: legacy (session_dirs)\n")
+			if err := writeOutput(stdout, "  Inputs: legacy (session_dirs)\n"); err != nil {
+				return err
+			}
 			for _, dir := range cfg.SessionDirs {
-				_, _ = fmt.Fprintf(stdout, "    - %s\n", dir)
+				if err := writeOutput(stdout, "    - %s\n", dir); err != nil {
+					return err
+				}
 			}
 		}
 	}

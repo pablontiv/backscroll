@@ -75,24 +75,48 @@ func runConfig(stdout, stderr io.Writer, cfg *config.Config, jsonFormat bool) er
 		}
 	} else {
 		// Text output
-		_, _ = fmt.Fprintf(stdout, "Backscroll Configuration\n")
-		_, _ = fmt.Fprintf(stdout, "========================\n\n")
-
-		_, _ = fmt.Fprintf(stdout, "Database:\n")
-		_, _ = fmt.Fprintf(stdout, "  Path: %s\n\n", cfg.DatabasePath)
-
-		_, _ = fmt.Fprintf(stdout, "Session Directories:\n")
-		for _, dir := range cfg.SessionDirs {
-			_, _ = fmt.Fprintf(stdout, "  - %s\n", dir)
+		if err := writeOutput(stdout, "Backscroll Configuration\n"); err != nil {
+			return err
+		}
+		if err := writeOutput(stdout, "========================\n\n"); err != nil {
+			return err
 		}
 
-		_, _ = fmt.Fprintf(stdout, "\nInputs (%s):\n", mode)
+		if err := writeOutput(stdout, "Database:\n"); err != nil {
+			return err
+		}
+		if err := writeOutput(stdout, "  Path: %s\n\n", cfg.DatabasePath); err != nil {
+			return err
+		}
+
+		if err := writeOutput(stdout, "Session Directories:\n"); err != nil {
+			return err
+		}
+		for _, dir := range cfg.SessionDirs {
+			if err := writeOutput(stdout, "  - %s\n", dir); err != nil {
+				return err
+			}
+		}
+
+		if err := writeOutput(stdout, "\nInputs (%s):\n", mode); err != nil {
+			return err
+		}
 		for _, def := range defs {
-			_, _ = fmt.Fprintf(stdout, "  id:      %s\n", def.ID)
-			_, _ = fmt.Fprintf(stdout, "  format:  %s\n", def.Decode.Format)
-			_, _ = fmt.Fprintf(stdout, "  include: %v\n", def.Discover.Include)
-			_, _ = fmt.Fprintf(stdout, "  exclude: %v\n", def.Discover.Exclude)
-			_, _ = fmt.Fprintln(stdout)
+			if err := writeOutput(stdout, "  id:      %s\n", def.ID); err != nil {
+				return err
+			}
+			if err := writeOutput(stdout, "  format:  %s\n", def.Decode.Format); err != nil {
+				return err
+			}
+			if err := writeOutput(stdout, "  include: %v\n", def.Discover.Include); err != nil {
+				return err
+			}
+			if err := writeOutput(stdout, "  exclude: %v\n", def.Discover.Exclude); err != nil {
+				return err
+			}
+			if _, err := fmt.Fprintln(stdout); err != nil {
+				return fmt.Errorf("write output: %w", err)
+			}
 		}
 	}
 
