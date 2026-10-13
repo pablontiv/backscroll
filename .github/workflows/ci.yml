@@ -78,7 +78,7 @@ jobs:
     needs: [ci, gitleaks, skill-install, durability]
     if: github.event_name == 'pull_request'
     uses: >-
-      pablontiv/crossbeam/.github/workflows/go-candidate.yml@d8c1cd73ac11e43c2079147f61a86f0e5ceaed65
+      pablontiv/crossbeam/.github/workflows/go-candidate.yml@b012cf53f083e637a013080ef8c677d1af5e0161
     permissions:
       pull-requests: read
     with:
