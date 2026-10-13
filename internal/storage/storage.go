@@ -240,9 +240,10 @@ func openWriteConnectionWithPragmasContext(ctx context.Context, path string, mig
 	}
 	// mode=rw prevents an existing canonical database that disappears during
 	// open from being silently replaced by a new empty database.
+	// DSN pragmas initialize every physical connection, including pool replacements.
 	query := url.Values{
 		"mode":    {"rw"},
-		"_pragma": {fmt.Sprintf("journal_mode(%s)", journalMode), fmt.Sprintf("synchronous(%s)", synchronous), "busy_timeout(5000)"},
+		"_pragma": {fmt.Sprintf("journal_mode(%s)", journalMode), fmt.Sprintf("synchronous(%s)", synchronous), "busy_timeout(5000)", "foreign_keys(1)"},
 	}
 	if migrationImmediate {
 		query.Set("_txlock", "immediate")
@@ -257,12 +258,6 @@ func openWriteConnectionWithPragmasContext(ctx context.Context, path string, mig
 	if err := db.PingContext(ctx); err != nil {
 		_ = db.Close()
 		return nil, contextIdentityError(ctx, fmt.Errorf("ping database %s: %w", canonicalPath, err))
-	}
-
-	// Enable FK enforcement (required for ON DELETE CASCADE in V2 schema).
-	if _, err := db.ExecContext(ctx, "PRAGMA foreign_keys = ON"); err != nil {
-		_ = db.Close()
-		return nil, contextIdentityError(ctx, fmt.Errorf("enable foreign keys: %w", err))
 	}
 
 	return &Database{db: db, path: canonicalPath}, nil

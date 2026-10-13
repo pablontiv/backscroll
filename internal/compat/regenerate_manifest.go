@@ -48,7 +48,7 @@ func RegenerateManifestJSON(manifestPath string) error {
 		provenance := fmt.Sprintf("%x", sha256.Sum256(fixtureData))
 
 		// Open and inspect the fixture
-		db, err := sql.Open("sqlite", ":memory:")
+		db, err := sql.Open("sqlite", ":memory:?_pragma=foreign_keys(1)")
 		if err != nil {
 			return fmt.Errorf("open sqlite for fixture %s: %w", entry.Name(), err)
 		}
