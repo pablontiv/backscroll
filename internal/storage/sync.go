@@ -105,7 +105,8 @@ func validateSyncUUIDs(ctx context.Context, tx *sql.Tx, files []IndexedFile) (ma
 }
 
 // reconcilePerennialOrdinals reserves the entire persisted path before allocating
-// any incoming identity. Existing UUIDs keep their anchors; collisions use the
+// any incoming identity, including unknown identities and historical shared
+// search ordinals. Existing UUIDs keep their anchors; new collisions use the
 // lowest free non-negative ordinal, in incoming order. The caller's slice is not
 // mutated, and every downstream consumer receives the same reconciled copy.
 func reconcilePerennialOrdinals(ctx context.Context, tx *sql.Tx, file IndexedFile) ([]IndexedMessage, error) {
@@ -114,7 +115,7 @@ func reconcilePerennialOrdinals(ctx context.Context, tx *sql.Tx, file IndexedFil
 	if err != nil {
 		return nil, err
 	}
-	reserved := make(map[int]string)
+	reserved := make(map[int]struct{})
 	identities := make(map[string]int)
 	for rows.Next() {
 		var ordinal int
@@ -127,10 +128,6 @@ func reconcilePerennialOrdinals(ctx context.Context, tx *sql.Tx, file IndexedFil
 			rows.Close()
 			return nil, fmt.Errorf("negative persisted ordinal %d", ordinal)
 		}
-		if owner, ok := reserved[ordinal]; ok && owner != uuid {
-			rows.Close()
-			return nil, fmt.Errorf("persisted ordinal %d has conflicting identities %q and %q", ordinal, owner, uuid)
-		}
 		if uuid != "" {
 			if previous, ok := identities[uuid]; ok && previous != ordinal {
 				rows.Close()
@@ -138,7 +135,7 @@ func reconcilePerennialOrdinals(ctx context.Context, tx *sql.Tx, file IndexedFil
 			}
 			identities[uuid] = ordinal
 		}
-		reserved[ordinal] = uuid
+		reserved[ordinal] = struct{}{}
 	}
 	if err := rows.Err(); err != nil {
 		rows.Close()
@@ -173,7 +170,7 @@ func reconcilePerennialOrdinals(ctx context.Context, tx *sql.Tx, file IndexedFil
 			}
 			msg.Ordinal = nextFree
 		}
-		reserved[msg.Ordinal] = msg.UUID
+		reserved[msg.Ordinal] = struct{}{}
 		identities[msg.UUID] = msg.Ordinal
 	}
 	return messages, nil
@@ -375,7 +372,7 @@ func (d *Database) SyncFilesContext(ctx context.Context, files []IndexedFile) (r
 				if eventErr != nil && eventErr != sql.ErrNoRows {
 					return fmt.Errorf("inspect tool_event ordinal for %s: %w", file.SourcePath, eventErr)
 				}
-				if eventErr == nil && (!eventUUID.Valid || eventUUID.String != msg.UUID || msg.UUID == "") {
+				if eventErr == nil && eventUUID.String != "" && eventUUID.String != msg.UUID {
 					return fmt.Errorf("tool_event ordinal %d for %s belongs to another identity", msg.Ordinal, file.SourcePath)
 				}
 				if eventErr == sql.ErrNoRows {
@@ -385,6 +382,25 @@ func (d *Database) SyncFilesContext(ctx context.Context, files []IndexedFile) (r
 					VALUES (?, ?, ?, ?, ?, ?, ?, ?)
 				`, uuidVal, file.SourcePath, msg.Ordinal, msg.ToolName, msg.CommandHead, isErrVal, exitCodeVal, msg.ExtractionVersion); err != nil {
 						return fmt.Errorf("insert tool_event for %s: %w", file.SourcePath, err)
+					}
+				}
+				// Lossy backfill deliberately leaves identity unknown. A retained
+				// search anchor proves which incoming call can claim this coordinate.
+				// Fill missing metadata only: false, zero, and known names/heads
+				// remain evidence, and extraction epochs can only advance.
+				if eventErr == nil && eventUUID.String == "" && msg.UUID != "" {
+					if _, err := tx.ExecContext(ctx, `UPDATE tool_events
+                        SET message_uuid = ?,
+                            tool_name = COALESCE(NULLIF(tool_name, ''), ?),
+                            command_head = COALESCE(NULLIF(command_head, ''), ?),
+                            is_error = COALESCE(is_error, ?),
+                            exit_code = COALESCE(exit_code, ?),
+                            extraction_version = MAX(COALESCE(extraction_version, 0), ?)
+                        WHERE source_path = ? AND ordinal = ?
+                          AND COALESCE(message_uuid, '') = ''`,
+						msg.UUID, msg.ToolName, msg.CommandHead, isErrVal, exitCodeVal,
+						msg.ExtractionVersion, file.SourcePath, msg.Ordinal); err != nil {
+						return fmt.Errorf("claim lossy tool_event for %s: %w", file.SourcePath, err)
 					}
 				}
 				// A stable call may precede its result. Fill only unknown signals;
