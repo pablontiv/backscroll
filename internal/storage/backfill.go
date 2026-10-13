@@ -458,7 +458,8 @@ func (d *Database) backfillCorrectionsForFileContext(ctx context.Context, tx *sq
 	// signal is not lossy, and stamping it current is what lets this converge — a
 	// path re-derived under today's rules is no longer discovered as stale.
 	count := 0
-	for ordinal, dets := range detections {
+	// Detector keys are slice indices, not the perennial coordinates loaded from SQLite.
+	for index, dets := range detections {
 		if err := ctx.Err(); err != nil {
 			return 0, err
 		}
@@ -470,7 +471,7 @@ func (d *Database) backfillCorrectionsForFileContext(ctx context.Context, tx *sq
 				INSERT OR IGNORE INTO correction_signals
 				(item_uuid, source_path, ordinal, detector, confidence, extraction_version)
 				VALUES (?, ?, ?, ?, ?, ?)
-			`, messages[ordinal].UUID, sourcePath, ordinal, det.DetectorName, det.Confidence, CurrentExtractionVersion)
+			`, messages[index].UUID, sourcePath, messages[index].Ordinal, det.DetectorName, det.Confidence, CurrentExtractionVersion)
 			if err != nil {
 				return 0, fmt.Errorf("insert correction_signal: %w", err)
 			}
