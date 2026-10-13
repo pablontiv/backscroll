@@ -1205,25 +1205,9 @@ func sqliteSidecarSuffixes() []string {
 	return []string{"-wal", "-shm", "-journal"}
 }
 
-func syncFile(path string) error {
-	f, err := os.Open(path)
-	if err != nil {
-		return err
-	}
-	syncErr := f.Sync()
-	closeErr := f.Close()
-	return errors.Join(syncErr, closeErr)
-}
+func syncFile(path string) error { return storage.SyncFile(path) }
 
-func syncDir(path string) error {
-	f, err := os.Open(path)
-	if err != nil {
-		return err
-	}
-	syncErr := f.Sync()
-	closeErr := f.Close()
-	return errors.Join(syncErr, closeErr)
-}
+func syncDir(path string) error { return storage.SyncDirectory(path) }
 
 func resolvePath(path string) (resolvedPath, error) {
 	abs, err := filepath.Abs(path)

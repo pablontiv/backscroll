@@ -13,7 +13,6 @@ import (
 	"sort"
 	"strconv"
 	"strings"
-	"syscall"
 
 	"github.com/pablontiv/backscroll/internal/compat"
 )
@@ -573,31 +572,14 @@ func supportsPOSIXModes() bool {
 }
 
 func fsyncPath(path string) error {
-	file, err := os.Open(path)
-	if err != nil {
-		return fmt.Errorf("open for fsync %s: %w", path, err)
-	}
-	defer file.Close()
-	if err := file.Sync(); err != nil {
+	if err := SyncFile(path); err != nil {
 		return fmt.Errorf("fsync %s: %w", path, err)
 	}
 	return nil
 }
 
 func fsyncDirectory(path string) error {
-	if runtime.GOOS == "windows" {
-		return nil
-	}
-	file, err := os.Open(path)
-	if err != nil {
-		return fmt.Errorf("open directory for fsync %s: %w", path, err)
-	}
-	defer file.Close()
-	if err := file.Sync(); err != nil {
-		message := strings.ToLower(err.Error())
-		if errors.Is(err, syscall.EINVAL) || errors.Is(err, syscall.ENOTSUP) || errors.Is(err, syscall.EOPNOTSUPP) || strings.Contains(message, "not supported") {
-			return nil
-		}
+	if err := SyncDirectory(path); err != nil {
 		return fmt.Errorf("fsync directory %s: %w", path, err)
 	}
 	return nil

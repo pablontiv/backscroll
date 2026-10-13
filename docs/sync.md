@@ -37,6 +37,12 @@ On Unix, a pre-existing sidecar must be a regular file owned by the effective us
 
 The parent directory must remain trusted: these checks detect acquisition-boundary replacements, not arbitrary later mutation by another process able to rename files in that directory. Do not replace or remove a sidecar while processes may be using it. To repair an unsafe mode, first stop all Backscroll processes, verify the regular file and its ownership in a trusted directory, and explicitly set its mode to `0600` before retrying.
 
+## Snapshot and recovery durability by platform
+
+Migration snapshots (including their ownership markers) and recovery destination/backup files are flushed before publication or replacement. File synchronization opens an existing file without creation or truncation: Windows uses a writable handle because `FlushFileBuffers` rejects read-only handles; Unix retains read-only handles, so readable files need not be writable. Open, sync, and close failures propagate, including permission errors; file bytes and permissions are not changed by synchronization.
+
+Directory synchronization is shared by migration snapshots and recovery. On Darwin and Linux it opens and synchronizes the directory, and **all errors propagate**, including unsupported-filesystem errors. On Windows directory synchronization is unsupported and deliberately a no-op: regular-file contents are flushed, but this primitive does **not** guarantee crash durability of directory entries or renames. Recovery verification and backup preservation still apply. This synchronization policy does not enable Windows atomic recovery replacement: the existing no-clobber move policy supports Darwin/Linux and rejects unsupported platforms before mutation.
+
 ## Normal workflow
 
 ```bash

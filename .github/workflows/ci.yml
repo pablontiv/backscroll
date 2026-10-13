@@ -17,6 +17,25 @@ jobs:
       go-version-file: go.mod
       coverage-threshold: 85
 
+  durability:
+    name: Native durability (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+      - name: Build
+        run: go build ./...
+      - name: Test real migration and recovery durability
+        run: go test ./internal/storage ./internal/recovery -run '^TestDurability' -count=1
+
   gitleaks:
     uses: pablontiv/crossbeam/.github/workflows/gitleaks.yml@v2
 
@@ -56,7 +75,7 @@ jobs:
               bash tests/test-install-isolation.sh
 
   candidate-build:
-    needs: [ci, gitleaks, skill-install]
+    needs: [ci, gitleaks, skill-install, durability]
     if: github.event_name == 'pull_request'
     uses: >-
       pablontiv/crossbeam/.github/workflows/go-candidate.yml@d8c1cd73ac11e43c2079147f61a86f0e5ceaed65
@@ -71,7 +90,7 @@ jobs:
       go-version: '1.26.2'
 
   candidate:
-    needs: [ci, gitleaks, skill-install, candidate-build]
+    needs: [ci, gitleaks, skill-install, durability, candidate-build]
     if: always() && github.event_name == 'pull_request'
     runs-on: ubuntu-24.04
     permissions:
@@ -82,6 +101,7 @@ jobs:
           CI_RESULT: ${{ needs.ci.result }}
           GITLEAKS_RESULT: ${{ needs.gitleaks.result }}
           SKILL_INSTALL_RESULT: ${{ needs.skill-install.result }}
+          DURABILITY_RESULT: ${{ needs.durability.result }}
           CANDIDATE_BUILD_RESULT: ${{ needs.candidate-build.result }}
         run: |
           set -euo pipefail
@@ -89,6 +109,7 @@ jobs:
             "$CI_RESULT" \
             "$GITLEAKS_RESULT" \
             "$SKILL_INSTALL_RESULT" \
+            "$DURABILITY_RESULT" \
             "$CANDIDATE_BUILD_RESULT"; do
             if [[ "$result" != success ]]; then
               echo "::error::required candidate dependency was $result"
@@ -316,10 +337,10 @@ jobs:
 
   release:
     uses: pablontiv/crossbeam/.github/workflows/go-release.yml@v2
-    needs: [ci, gitleaks]
+    needs: [ci, gitleaks, durability]
     if: github.event_name == 'push'
     with:
-      quality-gate-jobs: '["ci","gitleaks"]'
+      quality-gate-jobs: '["ci","gitleaks","durability"]'
       binary-name: backscroll
     permissions:
       contents: write
