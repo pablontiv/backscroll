@@ -114,7 +114,7 @@ The SQLite database is the perennial event store, not a disposable cache. When a
 
 ## Noise filtering
 
-Each dedicated reader owns provider-specific record inclusion, text cleanup, and tool extraction. Discovery exclusions in the manifest remove configured paths such as Claude subagent sessions; readers remove provider noise such as system reminders, task notifications, and local command metadata. Pi reasoning is indexed only when its manifest sets `index_reasoning = true`.
+Each dedicated reader owns provider-specific record inclusion, text cleanup, and tool extraction. Discovery exclusions in the manifest remove configured paths such as Claude subagent sessions; readers remove provider noise such as system reminders, task notifications, and local command metadata. Pi, OMP, and Codex reasoning is indexed only when its manifest sets `index_reasoning = true`.
 
 ## Exit codes
 
@@ -122,3 +122,20 @@ Each dedicated reader owns provider-specific record inclusion, text cleanup, and
 |------|---------|
 | `0` | Command and any required incremental sync completed |
 | `1` | Invalid manifest, incompatible index, permission, parse, or database failure |
+
+## Native OMP sessions
+
+Install `inputs/omp.inputs.toml` into the runtime input directory. The dedicated
+`omp` decoder reads only native v3 filesystem JSONL and stores `source = "session"`.
+Its canonical `*/*.jsonl` include selects direct project-bucket files, not nested
+child sessions. Missing roots are safe. Custom agent directories, profiles,
+XDG layouts, and `--session-dir` need explicit roots in user manifests.
+
+OMP uses header cwd for project identity and namespaces every emitted physical
+block by header session ID and entry ID. Stored branch history is included in
+physical order, not reduced to the active branch. Unchanged files skip by hash;
+appended UUID-bearing rows preserve previous IDs. Removing a source does not
+remove perennial recall, and `rebuild` reconstructs FTS from SQLite. Raw call
+IDs pair even out-of-order results for native error/exit/interruption and search
+echo provenance before serialization. Unsupported/admin/private payloads are
+never serialized as fallback text. See the [OMP input contract](input-contract.md#complete-omp-example).

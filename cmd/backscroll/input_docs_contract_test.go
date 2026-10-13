@@ -16,6 +16,9 @@ func TestLivingInputManifestExamplesIngestThroughCommandBoundary(t *testing.T) {
 			`{"type":"message","id":"docs-pi-u1","parentId":"docs-pi-session","timestamp":"2026-09-09T20:00:01Z","message":{"role":"user","content":[{"type":"text","text":"docpisaffron manifest example"}]}}` + "\n"
 	)
 
+	const ompFixture = `{"type":"session","version":3,"id":"docs-omp-session","timestamp":"2026-09-01T12:00:00Z","cwd":"/workspace/docs"}` + "\n" +
+		`{"type":"message","id":"u1","timestamp":"2026-09-01T12:00:01Z","message":{"role":"user","attribution":"user","content":"docompquartz manifest example"}}` + "\n"
+
 	cases := []struct {
 		name      string
 		path      string
@@ -59,6 +62,8 @@ func TestLivingInputManifestExamplesIngestThroughCommandBoundary(t *testing.T) {
 			fixture: piFixture,
 			query:   "docpisaffron",
 		},
+		{name: "supported shipped OMP preset", path: "inputs/omp.inputs.toml", fixture: ompFixture, query: "docompquartz", wholeFile: true},
+		{name: "input contract complete OMP example", path: "docs/input-contract.md", anchor: "## Complete OMP example", fixture: ompFixture, query: "docompquartz"},
 		{
 			name:      "supported shipped Codex preset",
 			path:      "inputs/codex.inputs.toml",

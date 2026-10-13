@@ -77,7 +77,7 @@ format = "claude"
 | `source` | string | Semantic source stored in SQLite, such as `session`, `plan`, `decision`, or `ke`. |
 | `active` | bool | Only active definitions participate in ingestion. Set it explicitly. |
 
-`source` is not the provider or decoder name. Claude, Pi, OpenCode, and Codex
+`source` is not the provider or decoder name. Claude, Pi, OMP, OpenCode, and Codex
 conversation inputs all use `source = "session"`.
 
 ### `inputs.discover`
@@ -96,8 +96,8 @@ outside the configured root.
 
 | Field | Type | Use |
 | --- | ---: | --- |
-| `format` | string | Registered decoder: `claude`, `pi`, `opencode`, `codex`, `markdown_document`, or `markdown_sections`. |
-| `index_reasoning` | bool | Pi/Codex opt-in for readable reasoning blocks; false by default. |
+| `format` | string | Registered decoder: `claude`, `pi`, `omp`, `opencode`, `codex`, `markdown_document`, or `markdown_sections`. |
+| `index_reasoning` | bool | Pi/OMP/Codex opt-in for readable reasoning blocks; false by default. |
 
 An active input with an unregistered decoder fails startup with an actionable
 `no reader registered for format ...` error. Adding a new format requires a
@@ -124,6 +124,12 @@ The built-in readers map native records as follows:
 | `pi` (Pi/Pion) | Supported message role `user` or `assistant` | `human` or `assistant` |
 | `pi` (Pi/Pion) | `toolCall` or optional `thinking` block | `assistant` |
 | `pi` (Pi) | Supported `custom` tool-result record | `automation` |
+| `omp` | User with `attribution="user"`, not synthetic | `human` |
+| `omp` | User with `synthetic=true` or `attribution="agent"` | `automation` |
+| `omp` | User without supported attribution | `unknown` |
+| `omp` | Assistant text, thinking or tool call | `assistant` |
+| `omp` | Native `toolResult` | `automation` |
+| `omp` | Native `developer` | `system` |
 | `codex` | Supported message role `user` or `assistant` | `human` or `assistant` |
 | `codex` | Function/custom tool call or readable reasoning | `assistant` |
 | `codex` | Function/custom tool output | `automation` |
@@ -233,6 +239,92 @@ the `**/run-*/session.jsonl` exclusion and companion definition above, or
 explicitly refresh the shipped preset. Excluding a path later is not retroactive:
 rows already indexed remain in the perennial SQLite store, and `rebuild` does
 not remove them. Use the explicit `purge` command for retention-based deletion.
+
+## Complete OMP example
+
+Install `inputs/omp.inputs.toml` into the runtime manifest directory:
+
+```toml
+version = 1
+
+[[inputs]]
+id = "omp"
+source = "session"
+active = true
+
+[inputs.discover]
+roots = ["~/.omp/agent/sessions"]
+include = ["*/*.jsonl"]
+exclude = []
+follow_symlinks = false
+
+[inputs.decode]
+format = "omp"
+index_reasoning = false
+```
+
+OMP is a dedicated decoder, **not a Pi alias**. Initial support is native OMP
+v3 UTF-8 filesystem JSONL (structural evidence: [OMP input evidence](research/omp-input-evidence.md)).
+A fixed-width `title` slot may precede the `session` header. Exactly one header
+with `version=3`, nonempty `id`/`cwd` and a valid RFC3339 timestamp is required;
+unsupported/missing/duplicate headers reject the file. Malformed neighboring
+lines and unknown records are skipped without raw-JSON fallback.
+
+Supported `type="message"` entries have their own nonempty `id`, RFC3339
+`timestamp` and `message` envelope:
+
+- User/developer/assistant string content or `text` blocks becomes text.
+- Assistant `thinking.thinking` becomes `reasoning` only with
+  `index_reasoning=true`; signatures and provider payloads are never indexed.
+- Assistant `toolCall` blocks require native `id`, `name` and an object
+  `arguments`; input serialization preserves tool name and command head.
+- Native `role="toolResult"` reads only `content` blocks with `type="text"` as
+  tool output. `toolCallId` pairs with the raw call ID in this file, even when
+  output precedes input. Matching tool names guard the pairing; `parentId` is
+  branch ancestry and is never used to pair calls/results.
+- Native `isError` is the error signal. Only Bash (`toolName="bash"`) numeric
+  integer `details.exitCode` proves an exit code; only
+  `details.__interrupted=true` proves interruption. These signals are captured
+  before each tool text block is capped at 4,000 runes and paired onto the call.
+  Textual exit codes/interrupt phrases and assistant `stopReason="aborted"`
+  are not evidence. Direct Backscroll Bash search inputs/results use the shared
+  raw-input query-echo boundary, not output-text guesses.
+
+Origin follows the native attribution table above. Missing/unsupported user
+attribution stays `unknown`; textual claims never prove a human actor.
+Every emitted block uses `omp:<header-session-id>:<entry-id>#b<physical-index>`
+(string content uses `#b0`). Omitted images/reasoning do not renumber later
+blocks. Entry IDs alone are session-scoped and cannot be global UUIDs. Header
+cwd determines project identity; bucket names, `additionalDirectories` and
+`parentSession` do not. All physical message entries, including stored branch
+history, are indexed in order rather than reconstructing only the active branch.
+UUID-bearing rows use the existing perennial append-only sync path; no new
+source value or schema migration is introduced.
+
+Excluded: title/header/admin records (`thinking_level_change`, `model_change`,
+`service_tier_change`, `model_usage`, `custom`, `label`, `title_change`,
+`ttsr_injection`, `credential_pin`, `mode_change`, `reset_boundary`), derived
+`compaction`/`branch_summary`, `session_init`, unknown records/roles,
+`redactedThinking`/encrypted reasoning, images/blob references, provider
+payloads/cache keys/context snapshots and arbitrary details/custom data.
+Native special roles `bashExecution`, `pythonExecution`, `fileMention`, and
+custom/hook messages are outside this initial boundary. No arbitrary JSON
+object is serialized to rescue unsupported content.
+
+Canonical discovery includes direct files exactly one level under project
+buckets (`*/*.jsonl`), not root-level files or nested child-agent sessions.
+Missing roots are non-fatal. `PI_CODING_AGENT_DIR`, custom profiles/XDG layouts
+and `--session-dir` require explicit user manifest roots; environment variables
+are not interpolated or used to infer those roots. This decoder does not access
+OMP SQL/Redis stores, mutate OMP configuration or change transcript files.
+
+Verify with an installed manifest (use your actual custom source path if needed):
+
+```bash
+backscroll config --json
+backscroll search --text "a phrase you remember" --all-projects --source session --source-path '*omp*' --lexical-only --json
+backscroll search --text "a command fragment" --all-projects --source session --content-type tool --source-path '*omp*' --robot
+```
 
 ## Complete Codex example
 

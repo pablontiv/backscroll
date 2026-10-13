@@ -1,0 +1,20 @@
+# Native OMP v3 filesystem sessions only; not a Pi alias.
+# Copy into <config_dir>/backscroll/inputs/ and inspect with backscroll config.
+# Custom PI_CODING_AGENT_DIR, profiles and --session-dir need explicit roots.
+version = 1
+
+[[inputs]]
+id = "omp"
+source = "session"
+active = true
+
+[inputs.discover]
+roots = ["~/.omp/agent/sessions"]
+# Direct sessions in project buckets only: nested child-agent files are excluded.
+include = ["*/*.jsonl"]
+exclude = []
+follow_symlinks = false
+
+[inputs.decode]
+format = "omp"
+index_reasoning = false

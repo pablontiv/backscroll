@@ -266,6 +266,14 @@ func (d *Database) SyncFilesContext(ctx context.Context, files []IndexedFile) (r
 					msg.SearchEcho, file.SourcePath, msg.UUID, msg.Text, msg.ContentType, msg.SearchEcho); err != nil {
 					return fmt.Errorf("update search echo provenance for %s: %w", file.SourcePath, err)
 				}
+				// Interruption is positive evidence: later partial parses cannot erase it.
+				if _, err := tx.ExecContext(ctx, `UPDATE search_items
+					SET was_interrupted = 1
+					WHERE source_path = ? AND uuid = ? AND ? = 1
+					AND COALESCE(was_interrupted, 0) = 0`,
+					file.SourcePath, msg.UUID, msg.WasInterrupted); err != nil {
+					return fmt.Errorf("enrich interruption proof for %s: %w", file.SourcePath, err)
+				}
 				if err := enrichOrigin(ctx, tx, msg.UUID, origin); err != nil {
 					return fmt.Errorf("update message origin provenance for %s: %w", file.SourcePath, err)
 				}
@@ -286,6 +294,16 @@ func (d *Database) SyncFilesContext(ctx context.Context, files []IndexedFile) (r
 					VALUES (?, ?, ?, ?, ?, ?, ?, ?)
 				`, uuidVal, file.SourcePath, msg.Ordinal, msg.ToolName, msg.CommandHead, isErrVal, exitCodeVal, msg.ExtractionVersion); err != nil {
 					return fmt.Errorf("insert tool_event for %s: %w", file.SourcePath, err)
+				}
+				// A stable call may precede its result. Fill only unknown signals;
+				// false and zero are established proof, not missing values.
+				if perennial && msg.UUID != "" {
+					if _, err := tx.ExecContext(ctx, `UPDATE tool_events
+						SET is_error = COALESCE(is_error, ?), exit_code = COALESCE(exit_code, ?)
+						WHERE source_path = ? AND message_uuid = ? AND tool_name = ?`,
+						isErrVal, exitCodeVal, file.SourcePath, msg.UUID, msg.ToolName); err != nil {
+						return fmt.Errorf("enrich tool result proof for %s: %w", file.SourcePath, err)
+					}
 				}
 			}
 		}

@@ -2,7 +2,7 @@
 
 Run this only after the intended change has been merged and the local branch
 contains that approved commit. This source-build path installs locally; it does
-not tag, release, publish, deploy, or change Codex configuration.
+not tag, release, publish, deploy, or change provider configuration.
 
 From the clean Backscroll repository root, with Go installed:
 
@@ -17,9 +17,11 @@ go build -buildvcs=true -o "$install_dir/backscroll" ./cmd/backscroll
 # Match the binary's runtime manifest directory, including on macOS.
 config_dir="${BACKSCROLL_CONFIG_DIR:-$HOME/.config}"
 mkdir -p "$config_dir/backscroll/inputs"
-if [ ! -e "$config_dir/backscroll/inputs/codex.inputs.toml" ]; then
-  cp inputs/codex.inputs.toml "$config_dir/backscroll/inputs/codex.inputs.toml"
-fi
+for preset in claude pi omp opencode codex; do
+  if [ ! -e "$config_dir/backscroll/inputs/$preset.inputs.toml" ]; then
+    cp "inputs/$preset.inputs.toml" "$config_dir/backscroll/inputs/$preset.inputs.toml"
+  fi
+done
 
 # Inspect the installed artifact, not a temporary build or a shadowing PATH entry.
 "$install_dir/backscroll" --version
@@ -38,11 +40,13 @@ Keeping `main.version=dev` also preserves the existing intrinsic development-bui
 autoupdate exemption; do not invent an environment opt-out or stamp a fake release
 version. A dirty build reports `vcs.modified=true` and must not count as verified.
 
-A pre-existing Codex manifest is preserved, so inspect `backscroll config --json`
+Pre-existing provider manifests, including OMP, are preserved, so inspect `backscroll config --json`
 and confirm it is active with the intended roots. For custom `CODEX_HOME`, edit
 only the Backscroll manifest roots. See [Codex verification and limits](../input-contract.md#complete-codex-example).
 Operational Backscroll commands synchronize its SQLite index; they never modify
-the Codex transcript store.
+provider transcript stores. OMP defaults to `~/.omp/agent/sessions/*/*.jsonl`;
+custom agent directories/profiles require explicit manifest roots, not a Pi alias.
+See [OMP verification and limits](../input-contract.md#complete-omp-example).
 
 The task worker validates the build and version commands using a destination
 inside its isolated copy. Installation into the operator's actual `~/.local/bin`

@@ -26,7 +26,7 @@ fail() {
 
 core_presets_match() {
     local destination="$1" preset
-    for preset in claude pi codex; do
+    for preset in claude pi omp decisions opencode codex; do
         cmp -s "$INPUTS_DIR/$preset.inputs.toml" "$destination/$preset.inputs.toml" || return 1
     done
 }
@@ -79,6 +79,16 @@ run_main_linux() {
 }
 
 echo "=== install.sh tests ==="
+
+# The Unix preset set is a literal shipped contract, not inferred from itself.
+testable=$(make_testable)
+presets=$(bash -c "source '$testable'; printf '%s\n' \"\${INPUT_PRESETS[*]}\"")
+rm -f "$testable"
+if [ "$presets" = "claude.inputs.toml pi.inputs.toml omp.inputs.toml decisions.inputs.toml opencode.inputs.toml codex.inputs.toml" ]; then
+    pass "exact Unix shipped preset set includes dedicated OMP"
+else
+    fail "preset set" "unexpected presets: $presets"
+fi
 
 # Test 1: script has valid bash syntax
 echo "[syntax check]"
@@ -300,7 +310,7 @@ rm -f "$testable"
 if core_presets_match "$CONFIG_DIR/backscroll/inputs" &&
     [ ! -e "$HOME_DIR/.config/backscroll" ] &&
     [ ! -e "$XDG_DIR/backscroll" ]; then
-    pass "BACKSCROLL_CONFIG_DIR installs Pi, Claude, and Codex only under its destination"
+    pass "BACKSCROLL_CONFIG_DIR installs Pi, OMP, Claude, and Codex only under its destination"
 else
     fail "config override destination" "unexpected preset destination; output: $output"
 fi
@@ -320,7 +330,7 @@ rm -f "$testable"
 
 if core_presets_match "$HOME_DIR/.config/backscroll/inputs" &&
     [ ! -e "$XDG_DIR/backscroll" ]; then
-    pass "default installs Pi, Claude, and Codex under HOME/.config despite XDG_CONFIG_HOME"
+    pass "default installs Pi, OMP, Claude, and Codex under HOME/.config despite XDG_CONFIG_HOME"
 else
     fail "Unix default config destination" "expected presets only under $HOME_DIR/.config; output: $output"
 fi
@@ -333,6 +343,7 @@ CONFIG_DIR=$(mktemp -d)
 mkdir -p "$CONFIG_DIR/backscroll/inputs"
 printf '%s\n' "claude user edit" >"$CONFIG_DIR/backscroll/inputs/claude.inputs.toml"
 printf '%s\n' "pi user edit" >"$CONFIG_DIR/backscroll/inputs/pi.inputs.toml"
+printf '%s\n' "omp user edit" >"$CONFIG_DIR/backscroll/inputs/omp.inputs.toml"
 printf '%s\n' "codex user edit" >"$CONFIG_DIR/backscroll/inputs/codex.inputs.toml"
 output=$(BACKSCROLL_CONFIG_DIR="$CONFIG_DIR" BACKSCROLL_INPUTS_SOURCE_DIR="$INPUTS_DIR" bash -c "
     unset BACKSCROLL_FORCE_INPUTS
@@ -343,9 +354,10 @@ rm -f "$testable"
 
 if grep -qxF "claude user edit" "$CONFIG_DIR/backscroll/inputs/claude.inputs.toml" &&
     grep -qxF "pi user edit" "$CONFIG_DIR/backscroll/inputs/pi.inputs.toml" &&
+    grep -qxF "omp user edit" "$CONFIG_DIR/backscroll/inputs/omp.inputs.toml" &&
     grep -qxF "codex user edit" "$CONFIG_DIR/backscroll/inputs/codex.inputs.toml" &&
-    [ "$(printf '%s\n' "$output" | grep -c 'exists, skipping')" -eq 3 ]; then
-    pass "existing Pi, Claude, and Codex presets are preserved by default"
+    [ "$(printf '%s\n' "$output" | grep -c 'exists, skipping')" -eq 4 ]; then
+    pass "existing Pi, OMP, Claude, and Codex presets are preserved by default"
 else
     fail "input preset preservation" "a core preset changed or was not skipped; output: $output"
 fi
@@ -358,6 +370,7 @@ CONFIG_DIR=$(mktemp -d)
 mkdir -p "$CONFIG_DIR/backscroll/inputs"
 printf '%s\n' "claude user edit" >"$CONFIG_DIR/backscroll/inputs/claude.inputs.toml"
 printf '%s\n' "pi user edit" >"$CONFIG_DIR/backscroll/inputs/pi.inputs.toml"
+printf '%s\n' "omp user edit" >"$CONFIG_DIR/backscroll/inputs/omp.inputs.toml"
 printf '%s\n' "codex user edit" >"$CONFIG_DIR/backscroll/inputs/codex.inputs.toml"
 output=$(BACKSCROLL_CONFIG_DIR="$CONFIG_DIR" BACKSCROLL_INPUTS_SOURCE_DIR="$INPUTS_DIR" \
     BACKSCROLL_FORCE_INPUTS=1 bash -c "
@@ -367,7 +380,7 @@ output=$(BACKSCROLL_CONFIG_DIR="$CONFIG_DIR" BACKSCROLL_INPUTS_SOURCE_DIR="$INPU
 rm -f "$testable"
 
 if core_presets_match "$CONFIG_DIR/backscroll/inputs"; then
-    pass "BACKSCROLL_FORCE_INPUTS=1 overwrites Pi, Claude, and Codex presets"
+    pass "BACKSCROLL_FORCE_INPUTS=1 overwrites Pi, OMP, Claude, and Codex presets"
 else
     fail "input preset force" "a core preset was not overwritten; output: $output"
 fi
