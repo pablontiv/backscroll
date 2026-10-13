@@ -496,7 +496,7 @@ func (d *Database) Purge(before string) (int64, error) {
 	// Find source_paths to delete
 	rows, err := tx.Query(`
 		SELECT DISTINCT source_path FROM search_items
-		WHERE timestamp < ?
+		WHERE julianday(timestamp) < julianday(?)
 	`, beforeStr)
 	if err != nil {
 		return 0, fmt.Errorf("find items to purge: %w", err)
@@ -517,7 +517,7 @@ func (d *Database) Purge(before string) (int64, error) {
 	if _, err := tx.Exec(`
 		DELETE FROM template_matches
 		WHERE (source_path, ordinal) IN (
-			SELECT source_path, ordinal FROM search_items WHERE timestamp < ?
+			SELECT source_path, ordinal FROM search_items WHERE julianday(timestamp) < julianday(?)
 		)
 	`, beforeStr); err != nil {
 		return 0, fmt.Errorf("delete template_matches: %w", err)
@@ -527,7 +527,7 @@ func (d *Database) Purge(before string) (int64, error) {
 	if _, err := tx.Exec(`
 		DELETE FROM tool_events
 		WHERE (source_path, ordinal) IN (
-			SELECT source_path, ordinal FROM search_items WHERE timestamp < ?
+			SELECT source_path, ordinal FROM search_items WHERE julianday(timestamp) < julianday(?)
 		)
 	`, beforeStr); err != nil {
 		return 0, fmt.Errorf("delete tool_events: %w", err)
@@ -538,7 +538,7 @@ func (d *Database) Purge(before string) (int64, error) {
 	if _, err := tx.Exec(`
 		DELETE FROM correction_signals
 		WHERE (source_path, ordinal) IN (
-			SELECT source_path, ordinal FROM search_items WHERE timestamp < ?
+			SELECT source_path, ordinal FROM search_items WHERE julianday(timestamp) < julianday(?)
 		)
 	`, beforeStr); err != nil {
 		return 0, fmt.Errorf("delete correction_signals: %w", err)
@@ -549,7 +549,7 @@ func (d *Database) Purge(before string) (int64, error) {
 	if _, err := tx.Exec(`
 		DELETE FROM annotations
 		WHERE (source_path, ordinal) IN (
-			SELECT source_path, ordinal FROM search_items WHERE timestamp < ?
+			SELECT source_path, ordinal FROM search_items WHERE julianday(timestamp) < julianday(?)
 		)
 	`, beforeStr); err != nil {
 		return 0, fmt.Errorf("delete annotations: %w", err)
@@ -558,7 +558,7 @@ func (d *Database) Purge(before string) (int64, error) {
 	// Delete from search_items
 	result, err := tx.Exec(`
 		DELETE FROM search_items
-		WHERE timestamp < ?
+		WHERE julianday(timestamp) < julianday(?)
 	`, beforeStr)
 	if err != nil {
 		return 0, fmt.Errorf("delete search_items: %w", err)
