@@ -23,7 +23,10 @@ func effectiveProject(project string, allProjects bool) (string, error) {
 	if err != nil {
 		return "", fmt.Errorf("resolve project from current working directory: %w; use --project NAME or --all-projects", err)
 	}
-	registry := projects.LoadGlobalRegistry()
+	registry, err := projects.LoadGlobalRegistry()
+	if err != nil {
+		return "", err
+	}
 	result := projects.Identify(cwd, registry)
 	projectID := strings.TrimSpace(result.ProjectID)
 	if projectID == "" {

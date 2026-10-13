@@ -3,9 +3,10 @@ estado: Completed
 ---
 # Configuration
 
-Backscroll has two separate configuration surfaces:
+Backscroll has three separate configuration surfaces:
 
 - **Application config** controls Backscroll runtime settings such as the SQLite database path and embedding options.
+- **Project registry** controls canonical project identity and scope through `~/.config/backscroll/projects.toml`.
 - **Input config** controls ingestion. It is loaded from global, user-scoped `*.inputs.toml` manifests under `<config_dir>/backscroll/inputs/`.
 
 `backscroll.toml` is application config only. It is not the canonical place to declare sessions, plans, Claude/Pi/OMP roots, or markdown knowledge sources.
@@ -140,3 +141,36 @@ existing OMP manifests; `BACKSCROLL_FORCE_INPUTS=1` intentionally refreshes them
 Custom `PI_CODING_AGENT_DIR`, profiles, XDG storage and `--session-dir` are not
 auto-discovered: set explicit roots in a user manifest.
 See the [complete OMP example](input-contract.md#complete-omp-example).
+
+## Optional project registry
+
+The project registry is loaded from `~/.config/backscroll/projects.toml`, independently
+of `BACKSCROLL_CONFIG_DIR` (which selects application/input configuration).
+
+```toml
+[[projects]]
+id = "my-app"
+roots = ["/home/user/my-app"]
+worktree_patterns = ["/home/user/my-app-worktrees/*"]
+aliases = ["app"]
+```
+
+A missing registry is valid and yields an empty registry: project identification
+retains local hints and basename fallback, and startup ingestion and `rebuild`
+continue normally. A valid registry retains the existing identification order:
+local hint, exact root, worktree pattern, root subpath, truncated suffix, then
+basename fallback for unmatched paths.
+
+An existing registry with invalid TOML, a directory at the file path, or a read or
+permission failure is **fatal configuration**, not an empty registry. Operational
+startup validates it before acquiring the startup lock or preparing/syncing the
+database, including explicit `--project` and `--all-projects` invocations and
+`config`. Errors identify the registry path and parser or OS cause; fix the TOML,
+replace the directory with a file, or restore read permissions before retrying.
+Help and version do not require registry loading. `rebuild` validates before FTS,
+derived-data, or project-label changes; it must not silently relabel sessions with
+fallback identities because a registry could not be read.
+
+The Go API is `projects.LoadGlobalRegistry() (ProjectRegistry, error)`: only
+`os.ErrNotExist` returns an empty registry with a nil error. Scope, ingestion, and
+rebuild callers propagate all other failures before project identification.

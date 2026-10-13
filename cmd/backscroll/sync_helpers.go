@@ -42,7 +42,7 @@ type startupSyncService struct {
 	diagnostics        bool
 	open               func(context.Context, string) (*storage.Database, error)
 	activeInputs       func([]string) ([]input_config.InputDefinition, input_config.InputMode, error)
-	loadGlobalRegistry func() projects.ProjectRegistry
+	loadGlobalRegistry func() (projects.ProjectRegistry, error)
 	newRegistry        func() *readers.Registry
 	syncFiles          func(context.Context, *storage.Database, []storage.IndexedFile) error
 	getFileMetadata    func(string) (*int64, *string, error)
@@ -433,6 +433,11 @@ func (s *startupSyncService) syncWithProgress(ctx context.Context, cfg *config.C
 		startTime = time.Now()
 	}
 
+	registry, err := s.loadGlobalRegistry()
+	if err != nil {
+		return err
+	}
+
 	// Open database for reading to check if it exists
 	// (this will auto-create if missing)
 	db, err := s.open(ctx, cfg.DatabasePath)
@@ -482,8 +487,6 @@ func (s *startupSyncService) syncWithProgress(ctx context.Context, cfg *config.C
 		return err
 	}
 
-	// Load project registry
-	registry := s.loadGlobalRegistry()
 	if err := ctx.Err(); err != nil {
 		return err
 	}

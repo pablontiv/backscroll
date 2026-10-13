@@ -1,6 +1,8 @@
 package projects
 
 import (
+	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -39,22 +41,29 @@ type Identification struct {
 	FromRegistry bool // true iff the match came from registry.Projects (not fallback)
 }
 
-func LoadGlobalRegistry() ProjectRegistry {
-	home, _ := os.UserHomeDir()
-	path := filepath.Join(home, ".config", "backscroll", "projects.toml")
-	return loadRegistryFrom(path)
+// LoadGlobalRegistry reads the optional registry. Only a missing file is empty;
+// explicit unreadable or malformed state must not become fallback attribution.
+func LoadGlobalRegistry() (ProjectRegistry, error) {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return ProjectRegistry{}, fmt.Errorf("resolve project registry home: %w", err)
+	}
+	return loadRegistryFrom(filepath.Join(home, ".config", "backscroll", "projects.toml"))
 }
 
-func loadRegistryFrom(path string) ProjectRegistry {
+func loadRegistryFrom(path string) (ProjectRegistry, error) {
 	data, err := os.ReadFile(path)
+	if errors.Is(err, os.ErrNotExist) {
+		return ProjectRegistry{}, nil
+	}
 	if err != nil {
-		return ProjectRegistry{}
+		return ProjectRegistry{}, fmt.Errorf("read project registry %q: %w; fix its path or read permissions", path, err)
 	}
 	var reg ProjectRegistry
 	if err := toml.Unmarshal(data, &reg); err != nil {
-		return ProjectRegistry{}
+		return ProjectRegistry{}, fmt.Errorf("parse project registry %q: %w; fix the TOML configuration", path, err)
 	}
-	return reg
+	return reg, nil
 }
 
 // LoadLocalHint walks upward from cwd up to 4 directory levels looking for

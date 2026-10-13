@@ -10,6 +10,7 @@ import (
 	"github.com/pablontiv/backscroll/internal/compat"
 	"github.com/pablontiv/backscroll/internal/config"
 	"github.com/pablontiv/backscroll/internal/input_config"
+	"github.com/pablontiv/backscroll/internal/projects"
 	"github.com/pablontiv/backscroll/internal/recovery"
 	"github.com/spf13/cobra"
 )
@@ -19,14 +20,15 @@ type startupPolicyFunc func(context.Context, io.Writer, startupCommandClass) sta
 type startupStage string
 
 const (
-	startupStageUnknown        startupStage = "unknown"
-	startupStageInputDir       startupStage = "input_dir"
-	startupStageLegacySource   startupStage = "legacy_source"
-	startupStageConfigLoad     startupStage = "config_load"
-	startupStageActiveManifest startupStage = "active_manifest"
-	startupStageSyncLock       startupStage = "sync_lock"
-	startupStageIndexPrepare   startupStage = "index_prepare"
-	startupStageStartupSync    startupStage = "startup_sync"
+	startupStageUnknown         startupStage = "unknown"
+	startupStageInputDir        startupStage = "input_dir"
+	startupStageLegacySource    startupStage = "legacy_source"
+	startupStageProjectRegistry startupStage = "project_registry"
+	startupStageConfigLoad      startupStage = "config_load"
+	startupStageActiveManifest  startupStage = "active_manifest"
+	startupStageSyncLock        startupStage = "sync_lock"
+	startupStageIndexPrepare    startupStage = "index_prepare"
+	startupStageStartupSync     startupStage = "startup_sync"
 )
 
 type startupFailure struct {
@@ -134,6 +136,9 @@ func (c *startupCoordinator) defaultStartupPolicy(ctx context.Context, progress 
 	if err != nil {
 		cause := fmt.Errorf("load config: %w", err)
 		return startupResult{Failure: &startupFailure{Stage: startupStageConfigLoad, Cause: cause, Diagnostic: compat.Diagnostic{Code: compat.CodeMigrationFailed, Summary: cause.Error()}}}
+	}
+	if _, err := projects.LoadGlobalRegistry(); err != nil {
+		return startupResult{Config: cfg, Failure: &startupFailure{Stage: startupStageProjectRegistry, Cause: err, Diagnostic: compat.Diagnostic{Code: compat.CodeMigrationFailed, Summary: err.Error()}}}
 	}
 	if _, _, err := input_config.ActiveInputs(cfg.SessionDirs); err != nil {
 		cause := fmt.Errorf("validate active inputs: %w", err)

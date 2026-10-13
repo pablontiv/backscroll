@@ -19,7 +19,7 @@ type rebuildDependencies struct {
 	rebuildFTSContext                    func(*storage.Database, context.Context) error
 	backfillDerivedContext               func(*storage.Database, context.Context, storage.BackfillDerivedOpts) error
 	reresolveProjectsContext             func(*storage.Database, context.Context, func(string) string) (int64, error)
-	loadRegistry                         func() projects.ProjectRegistry
+	loadRegistry                         func() (projects.ProjectRegistry, error)
 	reresolveProjectsWithRegistryContext func(*storage.Database, context.Context, projects.ProjectRegistry) (int64, error)
 }
 
@@ -117,6 +117,11 @@ func (r *rebuildRunner) runRebuild(ctx context.Context, stdout, stderr io.Writer
 		stderr = io.Discard
 	}
 
+	registry, err := r.deps.loadRegistry()
+	if err != nil {
+		return err
+	}
+
 	db, diag, err := r.deps.prepareIndex(ctx, cfg, indexMutation)
 	if diag != nil {
 		return refuseIndex(stdout, stderr, *diag, false, false)
@@ -184,7 +189,6 @@ func (r *rebuildRunner) runRebuild(ctx context.Context, stdout, stderr io.Writer
 	if err := writeRebuildOutput(stdout, "Checking registry for project label corrections...\n"); err != nil {
 		return err
 	}
-	registry := r.deps.loadRegistry()
 	registryMatched, err := r.deps.reresolveProjectsWithRegistryContext(db, ctx, registry)
 	if err != nil {
 		return fmt.Errorf("registry re-resolution: %w", err)

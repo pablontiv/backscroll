@@ -1,8 +1,10 @@
 package projects_test
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/pablontiv/backscroll/internal/projects"
@@ -61,7 +63,9 @@ func TestIdentifyWorktreePattern(t *testing.T) {
 	if id.Confidence != projects.ConfidencePattern {
 		t.Errorf("expected pattern, got %s", id.Confidence)
 	}
-	_ = reg
+	if len(reg.Projects) != 0 {
+		t.Fatal("absent registry was not empty")
+	}
 }
 
 func TestIdentifyUnknown(t *testing.T) {
@@ -163,9 +167,14 @@ func TestLoadLocalHintWalksUp(t *testing.T) {
 }
 
 func TestLoadGlobalRegistry(t *testing.T) {
-	// Just ensure it doesn't panic; may return empty registry if file not present.
-	reg := projects.LoadGlobalRegistry()
-	_ = reg
+	t.Setenv("HOME", t.TempDir())
+	reg, err := projects.LoadGlobalRegistry()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(reg.Projects) != 0 {
+		t.Fatal("absent registry was not empty")
+	}
 }
 
 func TestListProjects(t *testing.T) {
@@ -237,7 +246,10 @@ roots = ["/home/user/myapp"]
 	}
 	t.Setenv("HOME", home)
 
-	reg := projects.LoadGlobalRegistry()
+	reg, err := projects.LoadGlobalRegistry()
+	if err != nil {
+		t.Fatal(err)
+	}
 	if len(reg.Projects) != 1 || reg.Projects[0].ID != "myapp" {
 		t.Errorf("expected myapp project, got %+v", reg.Projects)
 	}
@@ -254,9 +266,12 @@ func TestLoadGlobalRegistryInvalidTOML(t *testing.T) {
 	}
 	t.Setenv("HOME", home)
 
-	reg := projects.LoadGlobalRegistry()
+	reg, err := projects.LoadGlobalRegistry()
+	if err == nil || !strings.Contains(err.Error(), filepath.Join(cfgDir, "projects.toml")) {
+		t.Fatalf("expected actionable invalid TOML error: %v", err)
+	}
 	if len(reg.Projects) != 0 {
-		t.Errorf("expected empty registry for invalid TOML, got %+v", reg.Projects)
+		t.Fatal("error returned partial registry")
 	}
 }
 
@@ -281,7 +296,10 @@ roots = ["/tmp/myproject"]
 	t.Setenv("HOME", home)
 
 	// Load the registry (should contain myproject)
-	reg := projects.LoadGlobalRegistry()
+	reg, err := projects.LoadGlobalRegistry()
+	if err != nil {
+		t.Fatal(err)
+	}
 	if len(reg.Projects) == 0 {
 		t.Fatal("expected projects in registry")
 	}
@@ -577,5 +595,53 @@ func TestIdentifyFromRegistry(t *testing.T) {
 	id = projects.Identify(dir, registry)
 	if id.ProjectID != "local-proj" || id.FromRegistry || id.Confidence != projects.ConfidenceHint {
 		t.Errorf("hint should have FromRegistry=false: got %#v", id)
+	}
+}
+
+func TestLoadGlobalRegistryReadFailures(t *testing.T) {
+	for _, state := range []string{"directory", "unreadable"} {
+		t.Run(state, func(t *testing.T) {
+			home := t.TempDir()
+			t.Setenv("HOME", home)
+			path := filepath.Join(home, ".config", "backscroll", "projects.toml")
+			if err := os.MkdirAll(filepath.Dir(path), 0700); err != nil {
+				t.Fatal(err)
+			}
+			if state == "directory" {
+				if err := os.Mkdir(path, 0700); err != nil {
+					t.Fatal(err)
+				}
+			} else {
+				if err := os.WriteFile(path, []byte(""), 0); err != nil {
+					t.Fatal(err)
+				}
+				if _, err := os.ReadFile(path); err == nil {
+					t.Skip("permissions bypassed by execution identity")
+				}
+			}
+			reg, err := projects.LoadGlobalRegistry()
+			if err == nil || !strings.Contains(err.Error(), path) {
+				t.Fatalf("expected actionable read error: %v", err)
+			}
+			if state == "unreadable" && !errors.Is(err, os.ErrPermission) {
+				t.Fatalf("lost permission cause: %v", err)
+			}
+			if len(reg.Projects) != 0 {
+				t.Fatal("partial registry returned")
+			}
+		})
+	}
+}
+
+func TestAbsentRegistryFallback(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	reg, err := projects.LoadGlobalRegistry()
+	if err != nil || len(reg.Projects) != 0 {
+		t.Fatalf("absent registry: %+v, %v", reg, err)
+	}
+	cwd := filepath.Join(t.TempDir(), "fallback-project")
+	id := projects.Identify(cwd, reg)
+	if id.ProjectID != "fallback-project" || id.FromRegistry {
+		t.Fatalf("fallback: %+v", id)
 	}
 }

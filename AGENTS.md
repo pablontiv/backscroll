@@ -63,7 +63,7 @@ internal/
 ├── tagging/           — heuristic auto-tagging (debugging, refactoring, feature, testing, docs, config)
 ├── plans/             — Markdown plan parser (split by ## headers, goldmark)
 ├── sources/           — external source parsers (ke, decision, memory, rule, spec, backlog) + SourceRegistry
-├── projects/          — project identity registry: LoadGlobalRegistry(), Identify(), LoadLocalHint()
+├── projects/          — project identity registry: LoadGlobalRegistry() (ProjectRegistry, error), Identify(), LoadLocalHint()
 ├── readers/           — SessionReader interface, Registry, ClaudeReader (text+tool_use+tool_result), PiReader (text+toolCall+custom results), OMPReader (native v3 text+thinking+toolCall+toolResult; parser-backed identities and origin), OpenCodeReader (text+tool state.input+state.output), CodexReader (rollout response items; docs/input-contract.md), MarkdownDocumentReader (`markdown_document`), MarkdownSectionsReader (`markdown_sections`); toolfmt serializer
 ├── recovery/          — stranded database recovery orchestration, verified active+stranded union, durable backup, atomic replacement, and post-install sync
 ├── startuplock/       — canonical database lock coordination via persistent OS advisory sidecar
@@ -114,6 +114,8 @@ recover apply → post-install sync under retained remediation lease
 External knowledge sources are configured with active `*.inputs.toml` manifests under `<config_dir>/backscroll/inputs/`, not with legacy `[sources]` tables. Supported Markdown decode formats are `markdown_document` (whole file as one record) and `markdown_sections` (one record per section whose heading starts with two hash characters followed by a space, falling back to one whole-document record when no sections exist). Source values such as `ke`, `decision`, `memory`, `rule`, `spec`, and `backlog` are preserved from the manifest and are filterable via `--source`.
 
 ### Key Design Decisions
+
+- **Optional project registry**: `~/.config/backscroll/projects.toml` remains independent of `BACKSCROLL_CONFIG_DIR`. `projects.LoadGlobalRegistry()` returns `(ProjectRegistry, error)`; only not-exist is optional empty. Invalid TOML, directory paths, and read/permission failures are fatal preflight configuration errors before startup lock/database side effects, even with explicit project scope. Scope, ingest, and rebuild callers propagate errors; direct ingest/rebuild runners validate before opening/preparing the database. Absent registries retain local-hint/basename fallback. See `docs/configuration.md#optional-project-registry`.
 
 - **Codex rollout boundary**: `internal/readers/codex_reader.go` and `docs/input-contract.md` own supported records and exclusions; `docs/research/codex-input-evidence.md` records privacy-safe shape evidence and the native RED/GREEN test. The exact local-build install and commit verification path is `docs/runbooks/local-install.md`; development builds must retain `version=dev` and verify `vcs.revision` via `go version -m` rather than inventing a release version.
 
