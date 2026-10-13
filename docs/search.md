@@ -292,10 +292,10 @@ Their independent default scope remains unchanged.
 
 Before startup, search requires a finite `--similarity-threshold` in [0, 1]
 (0 still means no threshold) and nonnegative `--max-tokens` (0 is unlimited).
-List requires nonnegative `--recent`, `--limit`, and `--offset`. With
-`--limit 0`, no `--order`, and `--offset 0`, list uses the legacy path:
-`--recent` still caps results at its default of 20; `--recent 0` removes that
-cap. A nonempty `--order` or positive `--offset` selects the v2 path, where
-`--limit 0` adds no limit and `--recent` is not applied. Invalid invocations
-do not prepare the index, create the startup lock, or sync inputs. Output-mode
-precedence and payloads are unchanged.
+List requires nonnegative `--recent`, `--limit`, and `--offset`.
+List defaults to 20 results; explicit `--limit 0` or `--recent 0` is unlimited.
+`--recent` cannot be combined with explicit `--limit` or `--order`;
+`--offset` applies after ordering, including with an unlimited limit.
+Invalid invocations do not prepare the index, create the startup lock, or sync inputs.
+Simultaneous `--json` and `--robot` is rejected before startup; the selected
+output mode remains fixed for the invocation.

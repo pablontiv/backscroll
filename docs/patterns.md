@@ -161,7 +161,7 @@ Support, batch size, limit, offset, and sequence lengths must be nonnegative.
 Confidence must be finite and in [0, 1], including both endpoints.
 Zero sequence support/lengths preserve defaults (3 occurrences, lengths 2..6);
 the effective minimum length must not exceed the effective maximum.
-Zero batch remains inactive; explicit zero limit is unlimited as described below.
+Zero batch remains inactive. Pagination is defined below.
 These numeric checks apply even when a flag is irrelevant to the chosen kind.
 
 ### Pagination
