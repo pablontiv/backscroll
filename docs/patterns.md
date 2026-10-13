@@ -1,5 +1,7 @@
 # Pattern Discovery: `patterns` and `annotate`
 
+`--json` and `--robot` are mutually exclusive; combined flags fail before startup side effects. Empty robot results produce zero stdout bytes, with actionable hints on stderr.
+
 Deterministic census aggregations over the indexed event store, plus the
 write surface for agent-driven classification. Together they implement the
 discovery loop designed in

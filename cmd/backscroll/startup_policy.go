@@ -170,6 +170,9 @@ func validateRequiredFlagsAndGroups(cmd *cobra.Command) error {
 	if err := cmd.ValidateRequiredFlags(); err != nil {
 		return err
 	}
+	if _, err := resolveOutputMode(commandBoolFlag(cmd, "json"), commandBoolFlag(cmd, "robot")); err != nil {
+		return err
+	}
 	return cmd.ValidateFlagGroups()
 }
 
@@ -220,6 +223,9 @@ query merges both by rank position (RRF).`,
 			if err := validateRequiredFlagsAndGroups(cmd); err != nil {
 				return err
 			}
+			if err := selectInvocationOutputMode(cmd); err != nil {
+				return err
+			}
 			class, _ := startupCommandClassFor(cmd)
 			result := policy(cmd.Context(), startupProgressWriter(cmd, stderr), class)
 			ctx := context.WithValue(cmd.Context(), startupContextKey{}, result)
@@ -238,7 +244,7 @@ query merges both by rank position (RRF).`,
 			}
 			failureErr := result.release(failure)
 			if failure.Diagnostic.Code != "" || strings.TrimSpace(failure.Diagnostic.Summary) != "" {
-				return refuseIndexWithCause(stdout, stderr, failure.renderedDiagnostic(), failureErr, commandBoolFlag(cmd, "json"), commandBoolFlag(cmd, "robot"))
+				return refuseIndexWithCause(stdout, stderr, failure.renderedDiagnostic(), failureErr, invocationOutputMode(cmd))
 			}
 			return failureErr
 		},
@@ -263,7 +269,7 @@ query merges both by rank position (RRF).`,
 }
 
 func startupProgressWriter(cmd *cobra.Command, stderr io.Writer) io.Writer {
-	if commandBoolFlag(cmd, "json") || commandBoolFlag(cmd, "robot") {
+	if invocationOutputMode(cmd) != outputText {
 		return io.Discard
 	}
 	return stderr

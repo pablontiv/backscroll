@@ -29,7 +29,7 @@ func TestContextFormatsGoldenAndStructuralFields(t *testing.T) {
 		Anchor:      true,
 	}}
 
-	jsonPayload, fits, err := contextSuccessfulPayloadWithinBudget(records, contextJSONFormat, contextMaxMaxTokens)
+	jsonPayload, fits, err := contextSuccessfulPayloadWithinBudget(records, outputJSON, contextMaxMaxTokens)
 	if err != nil || !fits {
 		t.Fatalf("JSON payload: fits=%t err=%v", fits, err)
 	}
@@ -49,7 +49,7 @@ func TestContextFormatsGoldenAndStructuralFields(t *testing.T) {
 		t.Fatalf("provenance/anchor fields = %+v", got)
 	}
 
-	robotPayload, fits, err := contextSuccessfulPayloadWithinBudget(records, contextRobotFormat, contextMaxMaxTokens)
+	robotPayload, fits, err := contextSuccessfulPayloadWithinBudget(records, outputRobot, contextMaxMaxTokens)
 	if err != nil || !fits {
 		t.Fatalf("robot payload: fits=%t err=%v", fits, err)
 	}
@@ -79,7 +79,7 @@ func TestContextFormatsGoldenAndStructuralFields(t *testing.T) {
 		}
 	}
 
-	textPayload, fits, err := contextSuccessfulPayloadWithinBudget(records, contextTextFormat, contextMaxMaxTokens)
+	textPayload, fits, err := contextSuccessfulPayloadWithinBudget(records, outputText, contextMaxMaxTokens)
 	if err != nil || !fits {
 		t.Fatalf("text payload: fits=%t err=%v", fits, err)
 	}
@@ -146,13 +146,13 @@ func TestContextBudgetRemovesWholeEdgeRecordsDeterministically(t *testing.T) {
 			Ordinal:    normalized[2].Ordinal,
 		},
 		Records: normalized[1:4], Truncated: true, Omitted: 2,
-	}, contextJSONFormat)
+	}, outputJSON)
 	if err != nil {
 		t.Fatal(err)
 	}
 	budget := picokitoutput.TokenCount(string(desired))
 
-	payload, fits, err := contextSuccessfulPayloadWithinBudget(records, contextJSONFormat, budget)
+	payload, fits, err := contextSuccessfulPayloadWithinBudget(records, outputJSON, budget)
 	if err != nil || !fits {
 		t.Fatalf("budgeted payload: fits=%t err=%v", fits, err)
 	}
@@ -178,12 +178,12 @@ func TestContextBudgetRemovesWholeEdgeRecordsDeterministically(t *testing.T) {
 	full, err := renderContextPayload(contextEnvelope{
 		Anchor:  contextAnchorOutput{UUID: normalized[2].UUID, SourcePath: normalized[2].SourcePath, Ordinal: 2},
 		Records: normalized,
-	}, contextJSONFormat)
+	}, outputJSON)
 	if err != nil {
 		t.Fatal(err)
 	}
 	exactBudget := picokitoutput.TokenCount(string(full))
-	exactPayload, fits, err := contextSuccessfulPayloadWithinBudget(records, contextJSONFormat, exactBudget)
+	exactPayload, fits, err := contextSuccessfulPayloadWithinBudget(records, outputJSON, exactBudget)
 	if err != nil || !fits || string(exactPayload) != string(full) {
 		t.Fatalf("exact token limit did not retain complete payload: fits=%t err=%v", fits, err)
 	}
@@ -206,11 +206,11 @@ func TestContextTextAndRobotSuccessfulPayloadBudgetBoundaries(t *testing.T) {
 
 	tests := []struct {
 		name   string
-		format contextOutputFormat
+		format outputMode
 		robot  bool
 	}{
-		{name: "text", format: contextTextFormat},
-		{name: "robot", format: contextRobotFormat, robot: true},
+		{name: "text", format: outputText},
+		{name: "robot", format: outputRobot, robot: true},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
@@ -227,7 +227,7 @@ func TestContextTextAndRobotSuccessfulPayloadBudgetBoundaries(t *testing.T) {
 
 			opts := contextCommandOptions{
 				uuid: "anchor", uuidSet: true, before: 0, after: 0,
-				maxTokens: exactBudget, robotFormat: tc.robot,
+				maxTokens: exactBudget, mode: testOutputMode(false, tc.robot),
 			}
 			var stdout, stderr bytes.Buffer
 			if err := runContextCommand(context.Background(), &stdout, &stderr, cfg, opts); err != nil {
@@ -325,11 +325,6 @@ func TestContextValidationGoldenErrorsAndOrder(t *testing.T) {
 			want: "--max-tokens must be between 64 and 16384",
 		},
 		{
-			name: "format conflict follows shared validation",
-			opts: contextCommandOptions{uuid: "u", uuidSet: true, maxTokens: contextDefaultMaxTokens, jsonFormat: true, robotFormat: true},
-			want: "--json and --robot are mutually exclusive",
-		},
-		{
 			name: "minimum bounds",
 			opts: contextCommandOptions{uuid: "u", uuidSet: true, before: 0, after: 0, maxTokens: 64},
 		},
@@ -350,7 +345,7 @@ func TestContextValidationLimitsAndSelectors(t *testing.T) {
 	if err := validateContextRequest(validUUID); err != nil {
 		t.Fatalf("minimum/exact limits rejected: %v", err)
 	}
-	validPath := contextCommandOptions{sourcePath: "/session", sourcePathSet: true, ordinalSet: true, ordinal: -9, before: 50, after: 0, maxTokens: 16384, robotFormat: true}
+	validPath := contextCommandOptions{sourcePath: "/session", sourcePathSet: true, ordinalSet: true, ordinal: -9, before: 50, after: 0, maxTokens: 16384, mode: outputRobot}
 	if err := validateContextRequest(validPath); err != nil {
 		t.Fatalf("path/ordinal and maximum limits rejected: %v", err)
 	}
@@ -411,7 +406,7 @@ func TestContextCommandUsesIndexedAPIAndEmitsDiagnostics(t *testing.T) {
 	t.Run("successful JSON", func(t *testing.T) {
 		var stdout, stderr bytes.Buffer
 		err := runContextCommand(context.Background(), &stdout, &stderr, cfg, contextCommandOptions{
-			uuid: "anchor", uuidSet: true, before: 1, after: 1, maxTokens: contextMaxMaxTokens, jsonFormat: true,
+			uuid: "anchor", uuidSet: true, before: 1, after: 1, maxTokens: contextMaxMaxTokens, mode: outputJSON,
 		})
 		if err != nil {
 			t.Fatalf("runContext: %v", err)
@@ -435,7 +430,7 @@ func TestContextCommandUsesIndexedAPIAndEmitsDiagnostics(t *testing.T) {
 		var stdout, stderr bytes.Buffer
 		missing := strings.Repeat("missing value ", 80)
 		err := runContextCommand(context.Background(), &stdout, &stderr, cfg, contextCommandOptions{
-			uuid: missing, uuidSet: true, before: 5, after: 5, maxTokens: 64, jsonFormat: true,
+			uuid: missing, uuidSet: true, before: 5, after: 5, maxTokens: 64, mode: outputJSON,
 		})
 		assertContextDiagnostic(t, err, stdout.String(), stderr.String(), "context_not_found", true)
 		if tokens := picokitoutput.TokenCount(stdout.String()); tokens <= 64 {
@@ -447,7 +442,7 @@ func TestContextCommandUsesIndexedAPIAndEmitsDiagnostics(t *testing.T) {
 		var stdout, stderr bytes.Buffer
 		err := runContextCommand(context.Background(), &stdout, &stderr, cfg, contextCommandOptions{
 			sourcePath: "/duplicate", sourcePathSet: true, ordinal: 9, ordinalSet: true,
-			before: 5, after: 5, maxTokens: 2000, robotFormat: true,
+			before: 5, after: 5, maxTokens: 2000, mode: outputRobot,
 		})
 		if err == nil || !strings.Contains(stdout.String(), "diagnostic_code=context_ambiguous\n") {
 			t.Fatalf("err=%v stdout=%q", err, stdout.String())
@@ -470,7 +465,7 @@ func TestContextCommandUsesIndexedAPIAndEmitsDiagnostics(t *testing.T) {
 	t.Run("valid tiny budget gets structured diagnostic and no partial payload", func(t *testing.T) {
 		var stdout, stderr bytes.Buffer
 		err := runContextCommand(context.Background(), &stdout, &stderr, cfg, contextCommandOptions{
-			uuid: "anchor", uuidSet: true, before: 0, after: 0, maxTokens: 64, jsonFormat: true,
+			uuid: "anchor", uuidSet: true, before: 0, after: 0, maxTokens: 64, mode: outputJSON,
 		})
 		assertContextDiagnostic(t, err, stdout.String(), stderr.String(), "context_budget_too_small", true)
 		var diagnostic map[string]any
@@ -539,7 +534,7 @@ func TestContextEmptyUUIDFallbackFormats(t *testing.T) {
 			err := runContextCommand(context.Background(), &stdout, &stderr, cfg, contextCommandOptions{
 				sourcePath: "/empty-uuid", sourcePathSet: true,
 				ordinal: 11, ordinalSet: true, before: 0, after: 0,
-				maxTokens: contextMaxMaxTokens, jsonFormat: tc.json, robotFormat: tc.robot,
+				maxTokens: contextMaxMaxTokens, mode: testOutputMode(tc.json, tc.robot),
 			})
 			if err != nil || stderr.Len() != 0 {
 				t.Fatalf("context empty UUID fallback: err=%v stderr=%q", err, stderr.String())
@@ -565,12 +560,12 @@ func TestContextDiagnosticsAreIntentionallyExemptFromSuccessfulPayloadBudget(t *
 		{
 			name: "json",
 			opts: contextCommandOptions{uuid: missing, uuidSet: true, before: 0, after: 0,
-				maxTokens: contextMinMaxTokens, jsonFormat: true},
+				maxTokens: contextMinMaxTokens, mode: outputJSON},
 		},
 		{
 			name: "robot",
 			opts: contextCommandOptions{uuid: missing, uuidSet: true, before: 0, after: 0,
-				maxTokens: contextMinMaxTokens, robotFormat: true},
+				maxTokens: contextMinMaxTokens, mode: outputRobot},
 		},
 	}
 	for _, tc := range tests {

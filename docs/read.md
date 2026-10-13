@@ -11,6 +11,19 @@ active manifests -> mandatory startup sync -> perennial SQLite -> database-backe
 
 Session, plan, and Markdown files are ingestion inputs. SQLite is the perennial record used by `search`, `context`, `list`, `patterns`, `status`, and `validate`.
 
+## Output-mode policy
+
+Text is the default. Commands exposing both `--json` and `--robot` (`list`,
+`search`, `patterns`, and `context`) reject the combined flags during argument
+validation, before configuration/input loading, startup sync, or database access.
+This replaces undocumented JSON precedence; no compatibility alias is provided.
+`status`, `validate`, and `config` expose JSON only.
+
+One invocation-scoped mode controls success payloads and startup refusal diagnostics.
+Command-specific JSON schemas remain separate and unchanged. Valid empty robot
+results from `list`, `search`, and `patterns` write zero stdout bytes; actionable
+hints remain on stderr. Existing numeric bounds are unchanged.
+
 ## Choose discovery or exact context
 
 Use `search` for discovery when you know terms, a path fragment, project, source, stored role, date, tag, or content type but do not yet have an exact record identity:

@@ -30,6 +30,8 @@ backscroll search "artifact literal" --source-path "*/session.jsonl" --robot
 
 ## Output Formats
 
+`--json` and `--robot` are mutually exclusive; combined flags fail before startup side effects. Empty robot results produce zero stdout bytes, with actionable hints on stderr.
+
 ### Text (default)
 
 Human-readable output with terminal bold for match highlights. Each result uses the exact text-layout envelope emitted by the CLI:

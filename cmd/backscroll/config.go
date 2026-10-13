@@ -32,7 +32,7 @@ Use --json to output as JSON.`,
 			if startup.Config == nil {
 				return fmt.Errorf("startup configuration unavailable")
 			}
-			return runConfig(stdout, stderr, startup.Config, startup.inputs, jsonFormat)
+			return runConfig(stdout, stderr, startup.Config, startup.inputs, invocationOutputMode(cmd))
 		},
 	}
 
@@ -41,14 +41,14 @@ Use --json to output as JSON.`,
 	return cmd
 }
 
-func runConfig(stdout, stderr io.Writer, cfg *config.Config, snapshot *inputSnapshot, jsonFormat bool) error {
+func runConfig(stdout, stderr io.Writer, cfg *config.Config, snapshot *inputSnapshot, output outputMode) error {
 	if snapshot == nil {
 		return fmt.Errorf("startup input snapshot unavailable")
 	}
 	defs, mode := cloneInputDefinitions(snapshot.definitions), snapshot.mode
 
 	// Format output
-	if jsonFormat {
+	if output == outputJSON {
 		// JSON output with both config and inputs
 		inputSummaries := make([]map[string]interface{}, len(defs))
 		for i, def := range defs {

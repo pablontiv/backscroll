@@ -149,16 +149,16 @@ func robotEscape(value string) string {
 	return value
 }
 
-func refuseIndex(stdout, stderr io.Writer, d compat.Diagnostic, jsonMode, robotMode bool) error {
-	return refuseIndexWithCause(stdout, stderr, d, nil, jsonMode, robotMode)
+func refuseIndex(stdout, stderr io.Writer, d compat.Diagnostic, mode outputMode) error {
+	return refuseIndexWithCause(stdout, stderr, d, nil, mode)
 }
 
-func refuseIndexWithCause(stdout, stderr io.Writer, d compat.Diagnostic, cause error, jsonMode, robotMode bool) error {
+func refuseIndexWithCause(stdout, stderr io.Writer, d compat.Diagnostic, cause error, mode outputMode) error {
 	var err error
-	if robotMode {
+	if mode == outputRobot {
 		err = writeRobotDiagnostic(stdout, d)
 	} else {
-		err = writeDiagnostic(stdout, stderr, d, jsonMode)
+		err = writeDiagnostic(stdout, stderr, d, mode == outputJSON)
 	}
 	if err != nil {
 		return err

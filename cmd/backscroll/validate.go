@@ -37,7 +37,7 @@ second sync.`,
 			if startup.Config == nil {
 				return fmt.Errorf("startup configuration unavailable")
 			}
-			return runValidate(cmd.Context(), stdout, stderr, startup.Config, jsonFormat)
+			return runValidate(cmd.Context(), stdout, stderr, startup.Config, invocationOutputMode(cmd))
 		},
 	}
 
@@ -46,10 +46,10 @@ second sync.`,
 	return cmd
 }
 
-func runValidate(ctx context.Context, stdout, stderr io.Writer, cfg *config.Config, jsonFormat bool) (retErr error) {
+func runValidate(ctx context.Context, stdout, stderr io.Writer, cfg *config.Config, output outputMode) (retErr error) {
 	db, diag, err := prepareIndex(ctx, cfg, indexDataRead)
 	if diag != nil {
-		return refuseDiagnostics(stdout, stderr, []compat.Diagnostic{*diag}, jsonFormat)
+		return refuseDiagnostics(stdout, stderr, []compat.Diagnostic{*diag}, output == outputJSON)
 	}
 	if err != nil {
 		return fmt.Errorf("prepare index: %w", err)
@@ -66,9 +66,9 @@ func runValidate(ctx context.Context, stdout, stderr io.Writer, cfg *config.Conf
 			return fmt.Errorf("inspect recovery diagnostics: %w", inspectErr)
 		}
 		if len(diagnostics) > 0 {
-			return refuseDiagnostics(stdout, stderr, diagnostics, jsonFormat)
+			return refuseDiagnostics(stdout, stderr, diagnostics, output == outputJSON)
 		}
-		if jsonFormat {
+		if output == outputJSON {
 			if encodeErr := json.NewEncoder(stdout).Encode(map[string]any{"valid": false, "error": err.Error()}); encodeErr != nil {
 				return encodeErr
 			}
@@ -80,7 +80,7 @@ func runValidate(ctx context.Context, stdout, stderr io.Writer, cfg *config.Conf
 		return err
 	}
 
-	if jsonFormat {
+	if output == outputJSON {
 		return json.NewEncoder(stdout).Encode(map[string]any{"valid": true, "database_exists": true})
 	}
 	if err := writeOutput(stdout, "✓ Index validation passed\n"); err != nil {

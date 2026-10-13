@@ -74,7 +74,7 @@ Use --json to output as JSON.`,
 			if startup.Config == nil {
 				return fmt.Errorf("startup configuration unavailable")
 			}
-			return runList(cmd.Context(), stdout, stderr, startup.Config, project, allProjects, recent, jsonFormat, robotFormat,
+			return runList(cmd.Context(), stdout, stderr, startup.Config, project, allProjects, recent, invocationOutputMode(cmd),
 				order, limit, offset)
 		},
 	}
@@ -89,11 +89,12 @@ Use --json to output as JSON.`,
 	cmd.Flags().IntVar(&offset, "offset", 0, "Result offset")
 
 	cmd.MarkFlagsMutuallyExclusive("project", "all-projects")
+	describeOutputModes(cmd)
 	return cmd
 }
 
 func runList(ctx context.Context, stdout, stderr io.Writer, cfg *config.Config,
-	project string, allProjects bool, recent int, jsonFormat, robotFormat bool,
+	project string, allProjects bool, recent int, mode outputMode,
 	order string, limit, offset int) (retErr error) {
 
 	project, err := effectiveProject(project, allProjects)
@@ -103,7 +104,7 @@ func runList(ctx context.Context, stdout, stderr io.Writer, cfg *config.Config,
 
 	db, diag, err := prepareIndex(ctx, cfg, indexDataRead)
 	if diag != nil {
-		return refuseIndex(stdout, stderr, *diag, jsonFormat, robotFormat)
+		return refuseIndex(stdout, stderr, *diag, mode)
 	}
 	if err != nil {
 		return fmt.Errorf("prepare index: %w", err)
@@ -118,11 +119,11 @@ func runList(ctx context.Context, stdout, stderr io.Writer, cfg *config.Config,
 	}
 
 	if len(sessions) == 0 {
-		if jsonFormat {
+		if mode == outputJSON {
 			if err := writeOutput(stdout, "{\"count\":0,\"sessions\":[]}\n"); err != nil {
 				return err
 			}
-		} else {
+		} else if mode == outputText {
 			if err := writeOutput(stdout, "No sessions found\n"); err != nil {
 				return err
 			}
@@ -132,7 +133,7 @@ func runList(ctx context.Context, stdout, stderr io.Writer, cfg *config.Config,
 	}
 
 	// Format output
-	if jsonFormat {
+	if mode == outputJSON {
 		// JSON output
 		data := map[string]interface{}{
 			"count":    len(sessions),
@@ -141,7 +142,7 @@ func runList(ctx context.Context, stdout, stderr io.Writer, cfg *config.Config,
 		if err := json.NewEncoder(stdout).Encode(data); err != nil {
 			return fmt.Errorf("encode JSON: %w", err)
 		}
-	} else if robotFormat {
+	} else if mode == outputRobot {
 		// Robot format
 		if err := writeOutput(stdout, "*** Sessions ***\n"); err != nil {
 			return err

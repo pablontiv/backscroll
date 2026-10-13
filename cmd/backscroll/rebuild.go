@@ -127,7 +127,7 @@ func (r *rebuildRunner) runRebuild(ctx context.Context, stdout, stderr io.Writer
 
 	db, diag, err := r.deps.prepareIndex(ctx, cfg, indexMutation)
 	if diag != nil {
-		return refuseIndex(stdout, stderr, *diag, false, false)
+		return refuseIndex(stdout, stderr, *diag, outputText)
 	}
 	if err != nil {
 		return fmt.Errorf("prepare index: %w", err)

@@ -39,7 +39,7 @@ Startup preflight may sync before status runs; status itself only reads current 
 			if startup.Config == nil {
 				return fmt.Errorf("startup configuration unavailable")
 			}
-			return runStatus(cmd.Context(), stdout, stderr, startup.Config, startup.inputs, jsonFormat)
+			return runStatus(cmd.Context(), stdout, stderr, startup.Config, startup.inputs, invocationOutputMode(cmd))
 		},
 	}
 
@@ -48,13 +48,13 @@ Startup preflight may sync before status runs; status itself only reads current 
 	return cmd
 }
 
-func runStatus(ctx context.Context, stdout, stderr io.Writer, cfg *config.Config, snapshot *inputSnapshot, jsonFormat bool) (retErr error) {
+func runStatus(ctx context.Context, stdout, stderr io.Writer, cfg *config.Config, snapshot *inputSnapshot, output outputMode) (retErr error) {
 	if snapshot == nil {
 		return fmt.Errorf("startup input snapshot unavailable")
 	}
 	db, diag, err := prepareIndex(ctx, cfg, indexDataRead)
 	if diag != nil {
-		return refuseDiagnostics(stdout, stderr, []compat.Diagnostic{*diag}, jsonFormat)
+		return refuseDiagnostics(stdout, stderr, []compat.Diagnostic{*diag}, output == outputJSON)
 	}
 	if err != nil {
 		return fmt.Errorf("prepare index: %w", err)
@@ -87,7 +87,7 @@ func runStatus(ctx context.Context, stdout, stderr io.Writer, cfg *config.Config
 	dbSize := fileInfo.Size()
 
 	// Format output
-	if jsonFormat {
+	if output == outputJSON {
 		// JSON output
 		data := map[string]interface{}{
 			"database": map[string]interface{}{

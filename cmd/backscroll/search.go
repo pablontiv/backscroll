@@ -86,7 +86,7 @@ protected. All scope filters remain fixed; no OR or semantic expansion is used.`
 			if startup.Config == nil {
 				return fmt.Errorf("startup configuration unavailable")
 			}
-			return runSearch(cmd.Context(), stdout, stderr, startup.Config, query, project, allProjects, jsonFormat, robotFormat,
+			return runSearch(cmd.Context(), stdout, stderr, startup.Config, query, project, allProjects, invocationOutputMode(cmd),
 				source, sourcePath, after, before, role, limit, offset, contentType, tag,
 				fields, maxTokens, lexicalOnly, similarityThreshold, relax)
 		},
@@ -113,6 +113,7 @@ protected. All scope filters remain fixed; no OR or semantic expansion is used.`
 	cmd.Flags().StringVar(&text, "text", "", "Search text (v2 preferred grammar)")
 
 	cmd.MarkFlagsMutuallyExclusive("project", "all-projects")
+	describeOutputModes(cmd)
 	return cmd
 }
 
@@ -166,7 +167,7 @@ func validateAndParseSearchRequest(query, fields, contentType, after, before str
 
 func runSearch(ctx context.Context, stdout, stderr io.Writer, cfg *config.Config,
 	query string,
-	project string, allProjects bool, jsonFormat, robotFormat bool,
+	project string, allProjects bool, mode outputMode,
 	source, sourcePath, after, before, role string,
 	limit, offset int, contentType, tag string,
 	fields string, maxTokens int,
@@ -184,7 +185,7 @@ func runSearch(ctx context.Context, stdout, stderr io.Writer, cfg *config.Config
 
 	db, diag, err := prepareIndex(ctx, cfg, indexDataRead)
 	if diag != nil {
-		return refuseIndex(stdout, stderr, *diag, jsonFormat, robotFormat)
+		return refuseIndex(stdout, stderr, *diag, mode)
 	}
 	if err != nil {
 		return fmt.Errorf("prepare index: %w", err)
@@ -233,9 +234,9 @@ func runSearch(ctx context.Context, stdout, stderr io.Writer, cfg *config.Config
 
 	// Determine output format
 	format := picokitoutput.FormatText
-	if jsonFormat {
+	if mode == outputJSON {
 		format = picokitoutput.FormatJSON
-	} else if robotFormat {
+	} else if mode == outputRobot {
 		format = picokitoutput.FormatRobot
 	}
 

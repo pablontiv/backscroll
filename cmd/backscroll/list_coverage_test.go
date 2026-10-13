@@ -180,7 +180,7 @@ func TestListEmptyOutputKeepsFormatsAndWritesScopedHintToStderr(t *testing.T) {
 	}{
 		{name: "text", want: "No sessions found\n"},
 		{name: "json", flag: "--json", want: "{\"count\":0,\"sessions\":[]}\n"},
-		{name: "robot", flag: "--robot", want: "No sessions found\n"},
+		{name: "robot", flag: "--robot", want: ""},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			args := []string{"list", "--project", "missing"}

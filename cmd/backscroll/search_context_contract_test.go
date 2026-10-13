@@ -155,7 +155,7 @@ func TestSearchIdentityOutputsAndContextSelectors(t *testing.T) {
 		var stdout, stderr bytes.Buffer
 		err := runContextCommand(context.Background(), &stdout, &stderr, cfg, contextCommandOptions{
 			uuid: *result.UUID, uuidSet: true, before: 0, after: 0,
-			maxTokens: contextMaxMaxTokens, jsonFormat: true,
+			maxTokens: contextMaxMaxTokens, mode: outputJSON,
 		})
 		if err != nil || stderr.Len() != 0 {
 			t.Fatalf("context by UUID: err=%v stderr=%q", err, stderr.String())
@@ -178,7 +178,7 @@ func TestSearchIdentityOutputsAndContextSelectors(t *testing.T) {
 		err := runContextCommand(context.Background(), &stdout, &stderr, cfg, contextCommandOptions{
 			sourcePath: result.SourcePath, sourcePathSet: true,
 			ordinal: int64(result.Ordinal), ordinalSet: true,
-			before: 0, after: 0, maxTokens: contextMaxMaxTokens, jsonFormat: true,
+			before: 0, after: 0, maxTokens: contextMaxMaxTokens, mode: outputJSON,
 		})
 		if err != nil || stderr.Len() != 0 {
 			t.Fatalf("context by fallback: err=%v stderr=%q", err, stderr.String())
@@ -198,7 +198,7 @@ func TestSearchIdentityOutputsAndContextSelectors(t *testing.T) {
 		err := runContextCommand(context.Background(), &stdout, &stderr, cfg, contextCommandOptions{
 			sourcePath: result.SourcePath, sourcePathSet: true,
 			ordinal: int64(result.Ordinal), ordinalSet: true,
-			before: 0, after: 0, maxTokens: contextMaxMaxTokens, robotFormat: true,
+			before: 0, after: 0, maxTokens: contextMaxMaxTokens, mode: outputRobot,
 		})
 		if err == nil || stderr.Len() != 0 || !strings.Contains(stdout.String(), "diagnostic_code=context_ambiguous\n") {
 			t.Fatalf("ambiguous fallback: err=%v stdout=%q stderr=%q", err, stdout.String(), stderr.String())
@@ -241,8 +241,12 @@ func newSearchIdentityContractIndex(t *testing.T) *config.Config {
 func runSearchContract(t *testing.T, cfg *config.Config, query, fields string, jsonFormat, robotFormat bool) string {
 	t.Helper()
 	var stdout, stderr bytes.Buffer
+	mode, modeErr := resolveOutputMode(jsonFormat, robotFormat)
+	if modeErr != nil {
+		t.Fatal(modeErr)
+	}
 	err := runSearch(context.Background(), &stdout, &stderr, cfg,
-		query, "", true, jsonFormat, robotFormat,
+		query, "", true, mode,
 		"", "", "", "", "", 20, 0, "text", "",
 		fields, 0, true, 0.3, false)
 	if err != nil {

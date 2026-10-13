@@ -84,7 +84,7 @@ Use --json, --robot for output formats.`,
 				return fmt.Errorf("startup configuration unavailable")
 			}
 			return runPatterns(cmd.Context(), stdout, stderr, startup.Config, kind, project, allProjects, tag, limit, offset,
-				jsonFormat, robotFormat, minSupport, minConfidence, pending, batch,
+				invocationOutputMode(cmd), minSupport, minConfidence, pending, batch,
 				minLength, maxLength, after, before, trend, origin)
 		},
 	}
@@ -111,6 +111,7 @@ Use --json, --robot for output formats.`,
 	cmd.MarkFlagRequired("kind")
 
 	cmd.MarkFlagsMutuallyExclusive("project", "all-projects")
+	describeOutputModes(cmd)
 	return cmd
 }
 
@@ -152,7 +153,7 @@ func validatePatternsOrigin(kind, origin string) error {
 
 func runPatterns(ctx context.Context, stdout, stderr io.Writer, cfg *config.Config,
 	kind string, project string, allProjects bool, tag string,
-	limit, offset int, jsonFormat, robotFormat bool, minSupport int, minConfidence float64, pending bool, batch int,
+	limit, offset int, mode outputMode, minSupport int, minConfidence float64, pending bool, batch int,
 	minLength, maxLength int, after, before string, trend bool, origin string) (retErr error) {
 
 	if err := validatePatternsRequest(kind, project, allProjects, limit, offset, trend); err != nil {
@@ -169,7 +170,7 @@ func runPatterns(ctx context.Context, stdout, stderr io.Writer, cfg *config.Conf
 
 	db, diag, err := prepareIndex(ctx, cfg, indexDataRead)
 	if diag != nil {
-		return refuseIndex(stdout, stderr, *diag, jsonFormat, robotFormat)
+		return refuseIndex(stdout, stderr, *diag, mode)
 	}
 	if err != nil {
 		return fmt.Errorf("prepare index: %w", err)
@@ -198,11 +199,11 @@ func runPatterns(ctx context.Context, stdout, stderr io.Writer, cfg *config.Conf
 			}
 
 			if len(results) == 0 {
-				if !jsonFormat && !robotFormat {
+				if mode == outputText {
 					if err := writeOutput(stdout, "No patterns found. Try --min-support <lower> or --min-length <lower>.\n"); err != nil {
 						return err
 					}
-				} else if jsonFormat {
+				} else if mode == outputJSON {
 					if err := writeOutput(stdout, "{\"count\":0,\"kind\":\"commands\",\"trends\":[]}\n"); err != nil {
 						return err
 					}
@@ -221,7 +222,7 @@ func runPatterns(ctx context.Context, stdout, stderr io.Writer, cfg *config.Conf
 				weekMap[r.Week] = append(weekMap[r.Week], r)
 			}
 
-			if jsonFormat {
+			if mode == outputJSON {
 				type trendBucket struct {
 					Week     string                         `json:"week"`
 					Patterns []storage.CommandPatternWeekly `json:"patterns"`
@@ -238,7 +239,7 @@ func runPatterns(ctx context.Context, stdout, stderr io.Writer, cfg *config.Conf
 				if err := json.NewEncoder(stdout).Encode(data); err != nil {
 					return fmt.Errorf("encode JSON: %w", err)
 				}
-			} else if robotFormat {
+			} else if mode == outputRobot {
 				if err := writeOutput(stdout, "*** Trends ***\n"); err != nil {
 					return err
 				}
@@ -289,11 +290,11 @@ func runPatterns(ctx context.Context, stdout, stderr io.Writer, cfg *config.Conf
 			}
 
 			if len(results) == 0 {
-				if !jsonFormat && !robotFormat {
+				if mode == outputText {
 					if err := writeOutput(stdout, "No patterns found.\n"); err != nil {
 						return err
 					}
-				} else if jsonFormat {
+				} else if mode == outputJSON {
 					if err := writeOutput(stdout, "{\"count\":0,\"patterns\":[]}\n"); err != nil {
 						return err
 					}
@@ -302,7 +303,7 @@ func runPatterns(ctx context.Context, stdout, stderr io.Writer, cfg *config.Conf
 				return nil
 			}
 
-			if jsonFormat {
+			if mode == outputJSON {
 				data := map[string]interface{}{
 					"count":    len(results),
 					"kind":     "commands",
@@ -311,7 +312,7 @@ func runPatterns(ctx context.Context, stdout, stderr io.Writer, cfg *config.Conf
 				if err := json.NewEncoder(stdout).Encode(data); err != nil {
 					return fmt.Errorf("encode JSON: %w", err)
 				}
-			} else if robotFormat {
+			} else if mode == outputRobot {
 				if err := writeOutput(stdout, "*** Commands ***\n"); err != nil {
 					return err
 				}
@@ -357,11 +358,11 @@ func runPatterns(ctx context.Context, stdout, stderr io.Writer, cfg *config.Conf
 			}
 
 			if len(results) == 0 {
-				if !jsonFormat && !robotFormat {
+				if mode == outputText {
 					if err := writeOutput(stdout, "No patterns found. Try --min-support <lower> or --min-length <lower>.\n"); err != nil {
 						return err
 					}
-				} else if jsonFormat {
+				} else if mode == outputJSON {
 					if err := writeOutput(stdout, "{\"count\":0,\"kind\":\"failures\",\"trends\":[]}\n"); err != nil {
 						return err
 					}
@@ -380,7 +381,7 @@ func runPatterns(ctx context.Context, stdout, stderr io.Writer, cfg *config.Conf
 				weekMap[r.Week] = append(weekMap[r.Week], r)
 			}
 
-			if jsonFormat {
+			if mode == outputJSON {
 				type trendBucket struct {
 					Week     string                         `json:"week"`
 					Patterns []storage.FailurePatternWeekly `json:"patterns"`
@@ -397,7 +398,7 @@ func runPatterns(ctx context.Context, stdout, stderr io.Writer, cfg *config.Conf
 				if err := json.NewEncoder(stdout).Encode(data); err != nil {
 					return fmt.Errorf("encode JSON: %w", err)
 				}
-			} else if robotFormat {
+			} else if mode == outputRobot {
 				if err := writeOutput(stdout, "*** Trends ***\n"); err != nil {
 					return err
 				}
@@ -463,11 +464,11 @@ func runPatterns(ctx context.Context, stdout, stderr io.Writer, cfg *config.Conf
 			}
 
 			if len(results) == 0 {
-				if !jsonFormat && !robotFormat {
+				if mode == outputText {
 					if err := writeOutput(stdout, "No failure patterns found.\n"); err != nil {
 						return err
 					}
-				} else if jsonFormat {
+				} else if mode == outputJSON {
 					if err := writeOutput(stdout, "{\"count\":0,\"patterns\":[]}\n"); err != nil {
 						return err
 					}
@@ -476,7 +477,7 @@ func runPatterns(ctx context.Context, stdout, stderr io.Writer, cfg *config.Conf
 				return nil
 			}
 
-			if jsonFormat {
+			if mode == outputJSON {
 				data := map[string]interface{}{
 					"count":    len(results),
 					"kind":     "failures",
@@ -485,7 +486,7 @@ func runPatterns(ctx context.Context, stdout, stderr io.Writer, cfg *config.Conf
 				if err := json.NewEncoder(stdout).Encode(data); err != nil {
 					return fmt.Errorf("encode JSON: %w", err)
 				}
-			} else if robotFormat {
+			} else if mode == outputRobot {
 				if err := writeOutput(stdout, "*** Failures ***\n"); err != nil {
 					return err
 				}
@@ -550,11 +551,11 @@ func runPatterns(ctx context.Context, stdout, stderr io.Writer, cfg *config.Conf
 		}
 
 		if len(results) == 0 {
-			if !jsonFormat && !robotFormat {
+			if mode == outputText {
 				if err := writeOutput(stdout, "No templates found.\n"); err != nil {
 					return err
 				}
-			} else if jsonFormat {
+			} else if mode == outputJSON {
 				if err := writeOutput(stdout, "{\"count\":0,\"patterns\":[]}\n"); err != nil {
 					return err
 				}
@@ -576,7 +577,7 @@ func runPatterns(ctx context.Context, stdout, stderr io.Writer, cfg *config.Conf
 		}
 		results = results[offset:end]
 
-		if jsonFormat {
+		if mode == outputJSON {
 			data := map[string]interface{}{
 				"count":    len(results),
 				"kind":     "templates",
@@ -585,7 +586,7 @@ func runPatterns(ctx context.Context, stdout, stderr io.Writer, cfg *config.Conf
 			if err := json.NewEncoder(stdout).Encode(data); err != nil {
 				return fmt.Errorf("encode JSON: %w", err)
 			}
-		} else if robotFormat {
+		} else if mode == outputRobot {
 			if err := writeOutput(stdout, "*** Templates ***\n"); err != nil {
 				return err
 			}
@@ -652,11 +653,11 @@ func runPatterns(ctx context.Context, stdout, stderr io.Writer, cfg *config.Conf
 		}
 
 		if len(results) == 0 {
-			if !jsonFormat && !robotFormat {
+			if mode == outputText {
 				if err := writeOutput(stdout, "No correction candidates found.\n"); err != nil {
 					return err
 				}
-			} else if jsonFormat {
+			} else if mode == outputJSON {
 				if err := writeOutput(stdout, "{\"count\":0,\"kind\":\"corrections\",\"patterns\":[]}\n"); err != nil {
 					return err
 				}
@@ -669,7 +670,7 @@ func runPatterns(ctx context.Context, stdout, stderr io.Writer, cfg *config.Conf
 			return nil
 		}
 
-		if jsonFormat {
+		if mode == outputJSON {
 			data := map[string]interface{}{
 				"count":    len(results),
 				"kind":     "corrections",
@@ -678,7 +679,7 @@ func runPatterns(ctx context.Context, stdout, stderr io.Writer, cfg *config.Conf
 			if err := json.NewEncoder(stdout).Encode(data); err != nil {
 				return fmt.Errorf("encode JSON: %w", err)
 			}
-		} else if robotFormat {
+		} else if mode == outputRobot {
 			if err := writeOutput(stdout, "*** Corrections ***\n"); err != nil {
 				return err
 			}
@@ -779,11 +780,11 @@ func runPatterns(ctx context.Context, stdout, stderr io.Writer, cfg *config.Conf
 			patterns = patterns[:limit]
 		}
 		if len(patterns) == 0 {
-			if !jsonFormat && !robotFormat {
+			if mode == outputText {
 				if err := writeOutput(stdout, "No patterns found. Try --min-support <lower> or --min-length <lower>.\n"); err != nil {
 					return err
 				}
-			} else if jsonFormat {
+			} else if mode == outputJSON {
 				if err := writeOutput(stdout, "{\"count\":0,\"kind\":\"sequences\",\"patterns\":[]}\n"); err != nil {
 					return err
 				}
@@ -794,7 +795,7 @@ func runPatterns(ctx context.Context, stdout, stderr io.Writer, cfg *config.Conf
 
 		// Format results
 		totalSessions := len(seqs)
-		if jsonFormat {
+		if mode == outputJSON {
 			type sequencePattern struct {
 				Pattern string `json:"pattern"`
 				Support int    `json:"support"`
@@ -817,7 +818,7 @@ func runPatterns(ctx context.Context, stdout, stderr io.Writer, cfg *config.Conf
 			if err := json.NewEncoder(stdout).Encode(data); err != nil {
 				return fmt.Errorf("encode JSON: %w", err)
 			}
-		} else if robotFormat {
+		} else if mode == outputRobot {
 			if err := writeOutput(stdout, "*** Sequences ***\n"); err != nil {
 				return err
 			}
