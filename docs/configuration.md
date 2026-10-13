@@ -145,11 +145,11 @@ backscroll list --order timestamp:desc --limit 20
 
 Operational commands validate active manifests before startup side effects.
 Owners attempt one incremental sync before executing (except recovery);
-read-safe followers use the last committed snapshot, and busy `config` followers
+read-safe followers use the last committed snapshot, and busy `backscroll config` followers
 print the validated configuration without opening the database. Session, plan, and Markdown files are ingestion inputs;
 SQLite is the perennial record used by search, list, patterns, status, and validate.
-`config --json` exposes `database`, `session_dirs`, and `inputs`; use it for
-inventory, not `validate`. Check deployed version with `backscroll --version`;
+`backscroll config --json` exposes `database`, `session_dirs`, and `inputs`; use it for
+inventory, not `backscroll validate`. Check deployed version with `backscroll --version`;
 for a dev binary's exact revision, inspect `go version -m "$(command -v backscroll)"`.
 For recovery exceptions, backup restoration, and the separate two-snapshot
 migration retention policy, see the [operator runbook](sync.md#recovery-runbook).

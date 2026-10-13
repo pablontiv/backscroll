@@ -71,7 +71,7 @@ retain them until replacement validation and operator review are complete.
 The report's actual `backup path` is authoritative, not a filename you construct.
 
 A snapshot can be inspected as a stranded recovery input with
-`recover --from "$SNAPSHOT" --dry-run`, then deliberately merged if compatible.
+`backscroll recover --from "$SNAPSHOT" --dry-run`, then deliberately merged if compatible.
 That is lossless union recovery, **not rollback to the snapshot**. For exact
 restoration of an earlier active state, follow the manual restoration procedure
 below. Never overwrite an active database while a Backscroll or SQLite process
@@ -83,7 +83,7 @@ Recovery is remediation, not a missing-input discovery command:
 
 1. Stop processes that might write the stranded database; do not bypass a busy
    startup lease. Identify the effective active path from configuration
-   (`BACKSCROLL_DATABASE_PATH` or app config). `config --json` is useful when
+   (`BACKSCROLL_DATABASE_PATH` or app config). `backscroll config --json` is useful when
    ordinary startup can open that index, but may itself fail on an incompatible
    active index. Both the active database and one `--from` input must already
    exist. Recovery does not create an empty active input for you.
@@ -117,7 +117,7 @@ Recovery is remediation, not a missing-input discovery command:
    installation succeeded but subsequent sync failed. The replacement remains
    active and the reported backup remains available; **no automatic rollback
    occurs at this stage**. Fix the reported input/decoder/permission problem,
-   then run `status` to retry ordinary sync and `validate --json` to check the
+   then run `backscroll status` to retry ordinary sync and `backscroll validate --json` to check the
    prepared index. Do not blindly apply recovery again. Earlier replacement
    failures report their phase/state; some restore the original and others
    leave a restorable backup. Use the emitted `manual recovery backup path`
