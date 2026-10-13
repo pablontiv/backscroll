@@ -117,7 +117,20 @@ func TestRequiredOutputFailures(t *testing.T) {
 						}
 						key := fmt.Sprintf("%t/%s", populated, strings.Join(args, " "))
 						normalized := strings.ReplaceAll(good.String(), filepath.Dir(path), "<env>")
-						if want, ok := goldens[key]; !ok || want != normalized {
+						// C08 adds census text; validate its behavioral counts without
+						// pinning incidental headings, spacing, or prose.
+						censusText := command[0] == "patterns" && len(command) > 2 && command[2] == "failures" && mode == ""
+						if censusText {
+							total := 0
+							if populated {
+								total = 3
+							}
+							for _, count := range []string{fmt.Sprintf("Total events: %d", total), fmt.Sprintf("Signalled events (with error signal): %d", total), "Unsignalled events: 0"} {
+								if !strings.Contains(normalized, count) {
+									t.Fatalf("missing census %q: %s", count, normalized)
+								}
+							}
+						} else if want, ok := goldens[key]; !ok || want != normalized {
 							t.Fatalf("output incompatible with audited baseline\nwant: %s\ngot: %s", want, normalized)
 						}
 						if goldens[key] != "" && good.Len() == 0 {
