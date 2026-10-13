@@ -260,9 +260,13 @@ func TestRequiredInvalidValidationOutputFailures(t *testing.T) {
 		t.Fatal(err)
 	}
 	for _, jsonMode := range []bool{false, true} {
+		mode := outputText
+		if jsonMode {
+			mode = outputJSON
+		}
 		cfg := &config.Config{DatabasePath: path}
 		var out bytes.Buffer
-		if err := runValidate(context.Background(), &out, io.Discard, cfg, jsonMode); err == nil {
+		if err := runValidate(context.Background(), &out, io.Discard, cfg, mode); err == nil {
 			t.Fatal("orphaned index validated")
 		}
 		if out.Len() == 0 {
@@ -272,7 +276,7 @@ func TestRequiredInvalidValidationOutputFailures(t *testing.T) {
 			}
 			continue
 		}
-		if err := runValidate(context.Background(), &outputFailureWriter{failAt: 1}, io.Discard, cfg, jsonMode); !errors.Is(err, errRequiredOutput) {
+		if err := runValidate(context.Background(), &outputFailureWriter{failAt: 1}, io.Discard, cfg, mode); !errors.Is(err, errRequiredOutput) {
 			t.Fatalf("json=%t: %v", jsonMode, err)
 		}
 	}
