@@ -49,11 +49,14 @@ regex-mined and capped at 4000 runes by toolfmt).
 ### templates — recurring errors nobody named
 
 Unsupervised Drain-style templates mined from error-bearing tool output
-(`--min-support N`, default 3). Mining selects only rows with the
-`error: ` output prefix or an `is_error = 1` event, and always excludes
-tool-input serializations. Templates carry a `normalization_version`;
-when extraction logic evolves the version bumps, so counts from different
-mining epochs never silently mix.
+(`--min-support N`, default 3). Sync uses structured `is_error` proof;
+text-only backfill uses the `error: ` output prefix or a retained
+`is_error = 1` event. Both exclude tool-input serializations and share
+normalization and persistence, but backfill never invents structured proof.
+Templates carry a `normalization_version`: observing the same signature
+under current normalization advances an older row's epoch in either path,
+without replacing its identity, matches, stored count, or first/last-seen
+values. Repeated sync and backfill remain idempotent.
 
 ### corrections — process-error candidates
 

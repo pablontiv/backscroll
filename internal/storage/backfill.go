@@ -227,13 +227,7 @@ func (d *Database) backfillTemplatesForFileContext(ctx context.Context, tx *sql.
 	if err := ctx.Err(); err != nil {
 		return 0, err
 	}
-	type errorLine struct {
-		toolName string
-		text     string
-		ordinal  int
-		uuid     string
-	}
-	var errorLines []errorLine
+	var errorLines []templateErrorLine
 
 	// Pre-load tool_events with is_error=1 for this file to avoid per-message queries.
 	errorEventOrdinals := make(map[int]bool)
@@ -288,85 +282,16 @@ func (d *Database) backfillTemplatesForFileContext(ctx context.Context, tx *sql.
 			if err := ctx.Err(); err != nil {
 				return 0, err
 			}
-			errorLines = append(errorLines, errorLine{
-				toolName: "Unknown", // lossy: tool_name not available
-				text:     line,
-				ordinal:  msg.Ordinal,
-				uuid:     msg.UUID,
+			errorLines = append(errorLines, templateErrorLine{
+				text:    line,
+				ordinal: msg.Ordinal,
+				uuid:    msg.UUID,
 			})
 		}
 	}
 
-	// Mine templates and record matches (unchanged from original).
-	templateMap := make(map[string]*templateRecord)
-	for _, errLine := range errorLines {
-		if err := ctx.Err(); err != nil {
-			return 0, err
-		}
-		tmpl := miner.ProcessLine(errLine.text)
-		if tmpl.Signature == "" {
-			continue
-		}
-
-		rec, ok := templateMap[tmpl.Signature]
-		if !ok {
-			rec = &templateRecord{
-				signature:            tmpl.Signature,
-				text:                 tmpl.Text,
-				normalizationVersion: tmpl.NormalizationVersion,
-				matches:              []matchRecord{},
-			}
-			templateMap[tmpl.Signature] = rec
-		}
-		rec.matches = append(rec.matches, matchRecord{
-			uuid:       errLine.uuid,
-			sourcePath: sourcePath,
-			ordinal:    errLine.ordinal,
-		})
-	}
-
-	// Write templates and matches to database.
-	for _, rec := range templateMap {
-		if err := ctx.Err(); err != nil {
-			return 0, err
-		}
-		_, err := tx.ExecContext(ctx, `
-			INSERT OR IGNORE INTO message_templates (signature, normalization_version, template_text, occurrence_count, first_seen, last_seen)
-			VALUES (?, ?, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
-		`, rec.signature, rec.normalizationVersion, rec.text, 1)
-		if err != nil {
-			return 0, fmt.Errorf("insert template: %w", err)
-		}
-
-		// Upsert: if template exists with lower normalization_version, update to current version.
-		// This handles the case where a v1 template is being re-mined under v2 heuristics.
-		_, err = tx.ExecContext(ctx, `
-			UPDATE message_templates
-			SET normalization_version = ?
-			WHERE signature = ? AND normalization_version < ?
-		`, rec.normalizationVersion, rec.signature, rec.normalizationVersion)
-		if err != nil {
-			return 0, fmt.Errorf("update template normalization_version: %w", err)
-		}
-
-		var tmplID int64
-		err = tx.QueryRowContext(ctx, `SELECT id FROM message_templates WHERE signature = ?`, rec.signature).Scan(&tmplID)
-		if err != nil {
-			return 0, fmt.Errorf("query template id: %w", err)
-		}
-
-		for _, m := range rec.matches {
-			if err := ctx.Err(); err != nil {
-				return 0, err
-			}
-			_, err := tx.ExecContext(ctx, `
-				INSERT OR IGNORE INTO template_matches (template_id, item_uuid, source_path, ordinal)
-				VALUES (?, ?, ?, ?)
-			`, tmplID, m.uuid, m.sourcePath, m.ordinal)
-			if err != nil {
-				return 0, fmt.Errorf("insert template_match: %w", err)
-			}
-		}
+	if err := mineAndPersistTemplates(ctx, tx, sourcePath, errorLines, miner); err != nil {
+		return 0, err
 	}
 
 	// Delete templates that were not re-mined (stuck templates with old version).
