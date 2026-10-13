@@ -117,8 +117,8 @@ func TestOpenCodeReader_Hash(t *testing.T) {
 	if h == "" || h == "empty" {
 		t.Errorf("Hash = %q, want non-empty hex string", h)
 	}
-	if len(h) != 16 {
-		t.Errorf("Hash len = %d, want 16 (%%016x format): %q", len(h), h)
+	if len(h) != 64 {
+		t.Errorf("Hash len = %d, want 64 (SHA-256): %q", len(h), h)
 	}
 }
 
@@ -130,7 +130,7 @@ func TestOpenCodeReader_Hash_Empty(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	_, err = db.Exec(`CREATE TABLE message (id TEXT PRIMARY KEY, session_id TEXT NOT NULL, time_created INTEGER NOT NULL, time_updated INTEGER NOT NULL, data TEXT NOT NULL)`)
+	_, err = db.Exec(`CREATE TABLE message (id TEXT PRIMARY KEY, session_id TEXT NOT NULL, time_created INTEGER NOT NULL, time_updated INTEGER NOT NULL, data TEXT NOT NULL); CREATE TABLE part (id TEXT PRIMARY KEY, message_id TEXT NOT NULL, session_id TEXT NOT NULL, time_created INTEGER NOT NULL, time_updated INTEGER NOT NULL, data TEXT NOT NULL);`)
 	_ = db.Close()
 	if err != nil {
 		t.Fatal(err)
@@ -141,8 +141,8 @@ func TestOpenCodeReader_Hash_Empty(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Hash empty: %v", err)
 	}
-	if h != "empty" {
-		t.Errorf("Hash empty DB = %q, want %q", h, "empty")
+	if len(h) != 64 {
+		t.Errorf("Hash empty DB = %q, want SHA-256", h)
 	}
 }
 

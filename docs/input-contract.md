@@ -456,3 +456,16 @@ Every operational command validates the active configuration, attempts one
 incremental sync, and then queries the perennial SQLite record. Use
 `backscroll config` to inspect resolved manifests and `backscroll validate
 --json` to inspect index health.
+
+### OpenCode incremental snapshot token
+
+OpenCode uses a deterministic SHA-256 token over length-framed native `message`
+and `part` rows ordered by their primary IDs, including payloads and membership.
+Both table scans share one SQLite read transaction, so committed WAL changes are
+visible without relying on main-file size, modification time, or
+`MAX(message.time_updated)`. `Parse` computes its returned token and reads its
+records inside that same snapshot; a concurrent later commit is detected on the
+next startup rather than attached to older parsed records. Equal-timestamp
+additions, deletions, and part-only edits therefore invalidate the token, while
+an unchanged native snapshot hashes identically. This does not change session
+identity or the existing UUID-less per-file reload behavior.

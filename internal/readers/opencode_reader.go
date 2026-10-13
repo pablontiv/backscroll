@@ -2,7 +2,10 @@ package readers
 
 import (
 	"context"
+	"crypto/sha256"
 	"database/sql"
+	"encoding/binary"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"strings"
@@ -24,8 +27,8 @@ func (r *OpenCodeReader) Discover(ctx context.Context, def input_config.InputDef
 	return input_config.DiscoverFilesContext(ctx, def.Discover)
 }
 
-// Hash returns a stable watermark for the database based on MAX(time_updated) of messages.
-// If the database is empty or inaccessible, it returns "empty" and no error.
+// Hash returns a SHA-256 token of native message and part rows in one read
+// snapshot, including committed WAL data (not the database file's bytes).
 func (r *OpenCodeReader) Hash(ctx context.Context, dbPath string) (string, error) {
 	if err := ctx.Err(); err != nil {
 		return "", err
@@ -34,23 +37,76 @@ func (r *OpenCodeReader) Hash(ctx context.Context, dbPath string) (string, error
 	if err != nil {
 		return "", fmt.Errorf("opencode hash open %s: %w", dbPath, err)
 	}
-	defer func() { _ = db.Close() }()
-	if err := ctx.Err(); err != nil {
+	defer db.Close()
+	tx, err := db.BeginTx(ctx, &sql.TxOptions{ReadOnly: true})
+	if err != nil {
 		return "", err
 	}
+	defer tx.Rollback()
+	token, err := openCodeSnapshotHash(ctx, tx)
+	if err != nil {
+		return "", fmt.Errorf("opencode hash %s: %w", dbPath, err)
+	}
+	return token, nil
+}
 
-	var maxUpdated sql.NullInt64
-	row := db.QueryRowContext(ctx, `SELECT MAX(time_updated) FROM message`)
-	if err := row.Scan(&maxUpdated); err != nil {
-		return "", fmt.Errorf("opencode hash query %s: %w", dbPath, err)
+// Hash raw columns before JSON decoding or output truncation. Length framing
+// distinguishes row/column boundaries; RawBytes avoids copying payloads merely
+// to hash them. Both table scans share the transaction's SQLite snapshot.
+func openCodeSnapshotHash(ctx context.Context, tx *sql.Tx) (string, error) {
+	h := sha256.New()
+	var size [8]byte
+	for _, query := range []string{
+		`SELECT id, session_id, time_created, time_updated, data FROM message ORDER BY id`,
+		`SELECT id, message_id, session_id, time_created, time_updated, data FROM part ORDER BY id`,
+	} {
+		rows, err := tx.QueryContext(ctx, query)
+		if err != nil {
+			return "", fmt.Errorf("opencode hash query: %w", err)
+		}
+		columns, err := rows.Columns()
+		if err != nil {
+			rows.Close()
+			return "", err
+		}
+		values := make([]sql.RawBytes, len(columns))
+		dest := make([]any, len(values))
+		for i := range values {
+			dest[i] = &values[i]
+		}
+		h.Write([]byte{byte(len(columns))})
+		for rows.Next() {
+			if err := ctx.Err(); err != nil {
+				rows.Close()
+				return "", err
+			}
+			if err := rows.Scan(dest...); err != nil {
+				rows.Close()
+				return "", err
+			}
+			h.Write([]byte{1})
+			for _, value := range values {
+				if value == nil {
+					h.Write([]byte{0})
+					continue
+				}
+				h.Write([]byte{1})
+				binary.BigEndian.PutUint64(size[:], uint64(len(value)))
+				h.Write(size[:])
+				h.Write(value)
+			}
+		}
+		err = rows.Err()
+		rows.Close()
+		if err != nil {
+			return "", err
+		}
+		h.Write([]byte{0})
 	}
 	if err := ctx.Err(); err != nil {
 		return "", err
 	}
-	if !maxUpdated.Valid {
-		return "empty", nil
-	}
-	return fmt.Sprintf("%016x", maxUpdated.Int64), nil
+	return hex.EncodeToString(h.Sum(nil)), nil
 }
 
 type msgInfoData struct {
@@ -75,30 +131,33 @@ type toolPartState struct {
 // Parse reads all messages from the OpenCode database and returns them as a ParsedFile.
 // Parts of type "text" (with ignored != true) and "tool" (with non-empty state.input/state.output) are indexed; all other part types are skipped.
 func (r *OpenCodeReader) Parse(ctx context.Context, dbPath string, _ input_config.InputDefinition) (models.ParsedFile, error) {
-	hash, err := r.Hash(ctx, dbPath)
-	if err != nil {
-		return models.ParsedFile{}, err
-	}
-
 	db, err := openReadOnly(dbPath)
 	if err != nil {
 		return models.ParsedFile{}, fmt.Errorf("opencode parse open %s: %w", dbPath, err)
 	}
-	defer func() { _ = db.Close() }()
-	if err := ctx.Err(); err != nil {
+	defer db.Close()
+	tx, err := db.BeginTx(ctx, &sql.TxOptions{ReadOnly: true})
+	if err != nil {
 		return models.ParsedFile{}, err
 	}
+	defer tx.Rollback()
+	return parseOpenCodeSnapshot(ctx, tx, dbPath)
+}
 
-	rows, err := db.QueryContext(ctx, `
+func parseOpenCodeSnapshot(ctx context.Context, tx *sql.Tx, dbPath string) (models.ParsedFile, error) {
+	hash, err := openCodeSnapshotHash(ctx, tx)
+	if err != nil {
+		return models.ParsedFile{}, err
+	}
+	rows, err := tx.QueryContext(ctx, `
 		SELECT m.id, m.session_id, m.data, m.time_created, p.data
-		FROM message m
-		JOIN part p ON p.message_id = m.id
-		ORDER BY m.time_created ASC, p.id ASC
+		FROM message m JOIN part p ON p.message_id = m.id
+		ORDER BY m.time_created ASC, m.id ASC, p.id ASC
 	`)
 	if err != nil {
 		return models.ParsedFile{}, fmt.Errorf("opencode parse query %s: %w", dbPath, err)
 	}
-	defer func() { _ = rows.Close() }()
+	defer rows.Close()
 
 	var (
 		msgs         []models.Message
@@ -141,19 +200,19 @@ func (r *OpenCodeReader) Parse(ctx context.Context, dbPath string, _ input_confi
 		var (
 			msgID       string
 			sessionID   string
-			msgData     string
+			msgData     sql.RawBytes
 			timeCreated int64
-			partData    string
+			partData    sql.RawBytes
 		)
 		if err := rows.Scan(&msgID, &sessionID, &msgData, &timeCreated, &partData); err != nil {
-			continue
+			return models.ParsedFile{}, err
 		}
 		if err := ctx.Err(); err != nil {
 			return models.ParsedFile{}, err
 		}
 
 		var pd partInfoData
-		if err := json.Unmarshal([]byte(partData), &pd); err != nil {
+		if err := json.Unmarshal(partData, &pd); err != nil {
 			continue
 		}
 
@@ -163,7 +222,7 @@ func (r *OpenCodeReader) Parse(ctx context.Context, dbPath string, _ input_confi
 			}
 			currentMsgID = msgID
 			var md msgInfoData
-			if err := json.Unmarshal([]byte(msgData), &md); err == nil {
+			if err := json.Unmarshal(msgData, &md); err == nil {
 				currentRole = md.Role
 			} else {
 				currentRole = ""
