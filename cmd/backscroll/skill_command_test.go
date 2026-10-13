@@ -336,7 +336,7 @@ func TestPresetsInstallUsesExplicitConfigHome(t *testing.T) {
 	if err := json.Unmarshal([]byte(stdout), &result); err != nil {
 		t.Fatal(err)
 	}
-	if len(result.Installed) != 5 || len(result.Skipped) != 0 {
+	if len(result.Installed) != 6 || len(result.Skipped) != 0 {
 		t.Fatalf("presets result = %+v", result)
 	}
 	inputs := filepath.Join(configHome, "backscroll", "inputs")

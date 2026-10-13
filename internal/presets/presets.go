@@ -18,6 +18,7 @@ const fileMode = 0o600
 var presetNames = []string{
 	"claude.inputs.toml",
 	"pi.inputs.toml",
+	"omp.inputs.toml",
 	"decisions.inputs.toml",
 	"opencode.inputs.toml",
 	"codex.inputs.toml",

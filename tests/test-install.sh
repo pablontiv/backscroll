@@ -31,7 +31,7 @@ while [ "$#" -gt 0 ]; do
 done
 destination="$config_home/backscroll/inputs"
 mkdir -p "$destination"
-for name in claude.inputs.toml pi.inputs.toml decisions.inputs.toml opencode.inputs.toml codex.inputs.toml; do
+for name in claude.inputs.toml pi.inputs.toml omp.inputs.toml decisions.inputs.toml opencode.inputs.toml codex.inputs.toml; do
   if [ -e "$destination/$name" ] && [ "$overwrite" != 1 ]; then
     continue
   fi
@@ -94,7 +94,7 @@ run_main() {
 
 presets_match() {
   local destination="$1" name
-  for name in claude.inputs.toml pi.inputs.toml decisions.inputs.toml opencode.inputs.toml codex.inputs.toml; do
+  for name in claude.inputs.toml pi.inputs.toml omp.inputs.toml decisions.inputs.toml opencode.inputs.toml codex.inputs.toml; do
     cmp -s "$INPUTS_DIR/$name" "$destination/$name" || return 1
   done
 }

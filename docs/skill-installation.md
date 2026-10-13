@@ -94,10 +94,11 @@ La instalación de presets es una operación separada.
 backscroll presets install
 ```
 
-La operación instala estos cinco manifiestos incorporados:
+La operación instala estos seis manifiestos incorporados:
 
 - `claude.inputs.toml`
 - `pi.inputs.toml`
+- `omp.inputs.toml`
 - `decisions.inputs.toml`
 - `opencode.inputs.toml`
 - `codex.inputs.toml`
@@ -108,7 +109,7 @@ El destino es `<config-home>/backscroll/inputs`. Use una ruta explícita cuando 
 backscroll presets install --config-home /ruta/absoluta/a/config
 ```
 
-La operación conserva todos los archivos existentes por defecto. La operación no modifica otros nombres. Use `--overwrite` para sustituir de forma explícita los cinco nombres gestionados.
+La operación conserva todos los archivos existentes por defecto. La operación no modifica otros nombres. Use `--overwrite` para sustituir de forma explícita los seis nombres gestionados.
 
 ```bash
 backscroll presets install --config-home /ruta/absoluta/a/config --overwrite

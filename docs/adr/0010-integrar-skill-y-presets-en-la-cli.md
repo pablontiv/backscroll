@@ -220,11 +220,12 @@ La implementación no elimina respaldos de forma automática. Una política de r
 
 ## Instalación de presets
 
-El binario incorpora los cinco manifiestos `*.inputs.toml` propiedad de Backscroll:
+El binario incorpora los seis manifiestos `*.inputs.toml` propiedad de Backscroll:
 
 ```text
 claude.inputs.toml
 pi.inputs.toml
+omp.inputs.toml
 decisions.inputs.toml
 opencode.inputs.toml
 codex.inputs.toml
@@ -234,7 +235,7 @@ codex.inputs.toml
 
 La operación conserva cada archivo existente de forma predeterminada. Esta regla se aplica aunque el contenido difiera del preset incorporado.
 
-`--overwrite` autoriza la sustitución de los cinco nombres gestionados. La operación no modifica otros archivos. Cada escritura usa un archivo temporal hermano y `fsync`. La ruta sin sobrescritura publica mediante un enlace físico exclusivo y elimina el nombre temporal. La ruta con sobrescritura usa un renombrado. Ambas rutas ejecutan `fsync` del directorio padre.
+`--overwrite` autoriza la sustitución de los seis nombres gestionados. La operación no modifica otros archivos. Cada escritura usa un archivo temporal hermano y `fsync`. La ruta sin sobrescritura publica mediante un enlace físico exclusivo y elimina el nombre temporal. La ruta con sobrescritura usa un renombrado. Ambas rutas ejecutan `fsync` del directorio padre.
 
 La operación no compila ni instala el binario. `install.sh` permanece como bootstrap de Unix. Después de instalar el binario, el script ejecuta `backscroll presets install`. Si el operador solicita la compatibilidad de sobrescritura del bootstrap, el script traduce esa solicitud a `--overwrite`.
 

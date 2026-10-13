@@ -218,6 +218,17 @@ func TestInstallReportsWriteFailure(t *testing.T) {
 }
 
 func TestEmbeddedPresetsMatchShippedInputs(t *testing.T) {
+	wantNames := []string{
+		"claude.inputs.toml",
+		"pi.inputs.toml",
+		"omp.inputs.toml",
+		"decisions.inputs.toml",
+		"opencode.inputs.toml",
+		"codex.inputs.toml",
+	}
+	if !reflect.DeepEqual(presetNames, wantNames) {
+		t.Fatalf("managed preset names = %v, want %v", presetNames, wantNames)
+	}
 	for _, name := range presetNames {
 		embedded, err := presetFiles.ReadFile(filepath.ToSlash(filepath.Join("assets", name)))
 		if err != nil {
