@@ -141,12 +141,140 @@ func TestValidateHelpDescribesStartupPreparedIndex(t *testing.T) {
 }
 
 func TestVersion(t *testing.T) {
-	out, _, err := runCmd("--version")
-	if err != nil {
-		t.Fatalf("--version error: %v", err)
+	original := version
+	t.Cleanup(func() { version = original })
+	for _, buildVersion := range []string{"dev", "v1.2.3"} {
+		t.Run(buildVersion, func(t *testing.T) {
+			version = buildVersion
+			for _, flag := range []string{"-v", "--version"} {
+				out, stderr, err := runDocContractCommand(flag)
+				if err != nil || out != "backscroll version "+buildVersion+"\n" || stderr != "" {
+					t.Fatalf("%s: stdout=%q stderr=%q err=%v", flag, out, stderr, err)
+				}
+			}
+			out, stderr, err := runDocContractCommand("--help")
+			if err != nil || stderr != "" {
+				t.Fatalf("--help: stderr=%q err=%v", stderr, err)
+			}
+			if !strings.Contains(out, "-v, --version") {
+				t.Fatalf("--help does not expose both version flags: %s", out)
+			}
+		})
 	}
-	if !strings.Contains(out, "backscroll") {
-		t.Errorf("version output missing 'backscroll': %s", out)
+}
+
+// Inject only the real command tree: no updater is constructed, staged, or applied.
+func runDocContractCommand(args ...string) (string, string, error) {
+	var stdout, stderr bytes.Buffer
+	err := runContextWithDependencies(context.Background(), &stdout, &stderr, args, runDependencies{
+		root: buildRootCmd(&stdout, &stderr),
+	})
+	return stdout.String(), stderr.String(), err
+}
+
+func TestShippedPresetCommandsExecuteAndSync(t *testing.T) {
+	presets, err := filepath.Glob(filepath.Join("..", "..", "inputs", "*.inputs.toml"))
+	if err != nil || len(presets) == 0 {
+		t.Fatalf("discover shipped presets: %v (%d files)", err, len(presets))
+	}
+	commands := 0
+	for _, preset := range presets {
+		content, err := os.ReadFile(preset)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for lineNumber, line := range strings.Split(string(content), "\n") {
+			line = strings.TrimSpace(line)
+			if !strings.HasPrefix(line, "#") {
+				continue
+			}
+			argv := strings.Fields(strings.TrimSpace(strings.TrimPrefix(line, "#")))
+			if len(argv) < 2 || argv[0] != "backscroll" {
+				continue
+			}
+			commands++
+			t.Run(fmt.Sprintf("%s:%d", filepath.Base(preset), lineNumber+1), func(t *testing.T) {
+				dbPath, source, _ := installOMPFixture(t, false)
+				out, stderr, err := runDocContractCommand(argv[1:]...)
+				if err != nil {
+					t.Fatalf("documented command %q: %v stdout=%s stderr=%s", line, err, out, stderr)
+				}
+				// Informational examples must be executable too, but do not sync.
+				if strings.Contains(line, "--help") || strings.Contains(line, "--version") || strings.Contains(line, "--skill") || argv[1] == "-v" {
+					return
+				}
+				db, err := storage.Open(dbPath)
+				if err != nil {
+					t.Fatal(err)
+				}
+				defer db.Close()
+				var indexed int
+				if err := db.DB().QueryRow("SELECT COUNT(*) FROM search_items WHERE source_path = ?", source).Scan(&indexed); err != nil {
+					t.Fatal(err)
+				}
+				if indexed == 0 {
+					t.Fatalf("documented operational command %q did not synchronize active inputs", line)
+				}
+			})
+		}
+	}
+	if commands == 0 {
+		t.Fatal("shipped presets contain no executable backscroll examples")
+	}
+}
+
+func TestPurgeHelpAndCutoffContract(t *testing.T) {
+	help, stderr, err := runDocContractCommand("purge", "--help")
+	if err != nil || stderr != "" {
+		t.Fatalf("purge help: err=%v stderr=%q", err, stderr)
+	}
+	for _, term := range []string{"YYYY-MM-DD", "RFC3339", "exclusive"} {
+		if !strings.Contains(help, term) {
+			t.Errorf("purge help does not describe %s: %s", term, help)
+		}
+	}
+	for _, cutoff := range []string{"2026-01-02T02:00:00+02:00", "2026-01-01T19:00:00-05:00"} {
+		if err := validatePurgeBefore(cutoff); err != nil {
+			t.Fatalf("RFC3339 offset cutoff %q rejected: %v", cutoff, err)
+		}
+	}
+	for _, cutoff := range []string{"2026-01-02", "2026-01-02T00:00:00Z"} {
+		t.Run(cutoff, func(t *testing.T) {
+			dbPath, cleanup := testEnv(t)
+			defer cleanup()
+			if err := validatePurgeBefore(cutoff); err != nil {
+				t.Fatalf("documented cutoff rejected: %v", err)
+			}
+			db, err := storage.Open(dbPath)
+			if err != nil {
+				t.Fatal(err)
+			}
+			for i, timestamp := range []any{"2026-01-01T23:59:59Z", "2026-01-02T00:00:00Z", "2026-01-02T00:00:01Z", nil} {
+				if _, err := db.DB().Exec(`INSERT INTO search_items (source_path, ordinal, text, role, content_type, timestamp) VALUES (?, ?, ?, 'user', 'text', ?)`, "/purge/fixture.jsonl", i, fmt.Sprintf("purge contract %d", i), timestamp); err != nil {
+					_ = db.Close()
+					t.Fatal(err)
+				}
+			}
+			if err := db.Close(); err != nil {
+				t.Fatal(err)
+			}
+			out, stderr, err := runDocContractCommand("purge", "--before", cutoff)
+			if err != nil || out != "Deleted 1 indexed items before "+cutoff+"\n" {
+				t.Fatalf("purge: stdout=%q stderr=%q err=%v", out, stderr, err)
+			}
+			db, err = storage.Open(dbPath)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer db.Close()
+			var count, equal, unknown int
+			if err := db.DB().QueryRow(`SELECT COUNT(*), SUM(timestamp = '2026-01-02T00:00:00Z'), SUM(timestamp IS NULL) FROM search_items WHERE source_path = ?`, "/purge/fixture.jsonl").Scan(&count, &equal, &unknown); err != nil {
+				t.Fatal(err)
+			}
+			if count != 3 || equal != 1 || unknown != 1 {
+				t.Fatalf("exclusive cutoff must retain equality and NULL: count=%d equal=%d NULL=%d", count, equal, unknown)
+			}
+		})
 	}
 }
 

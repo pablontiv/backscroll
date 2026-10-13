@@ -4,9 +4,12 @@ Backscroll owns the perennial corpus and supported CLI query surfaces. A downstr
 
 ## Supported operational boundary
 
-Every operational command validates active manifests and attempts one incremental
-sync before executing. Session, plan, and Markdown files are ingestion inputs;
-SQLite is the perennial record used by search, context, list, patterns, status, and validate.
+Ordinary snapshot-read, metadata-read, and mutation owners validate active manifests
+and attempt one incremental sync before executing. Busy readers may follow the
+last committed snapshot; remediation (`recover`) skips preparation/pre-sync and
+syncs only after installing a replacement. See [startup classes and exceptions](sync.md).
+Session, plan, and Markdown files are ingestion inputs; SQLite is the perennial
+record used by search, context, list, patterns, status, and validate.
 Use `search` for ranked discovery. Every search result publishes exact context selectors: `uuid`, `source_path`, and `ordinal` in minimal JSON (`UUID`, `FilePath`, and `Ordinal` in full JSON), or `result_N_uuid`, `result_N_filepath`, and `result_N_ordinal` in robot output. For the selected result, use its opaque UUID when non-null; only when UUID is null, fall back to its exact stored source path plus ordinal.
 
 Use diagnostics at the start of an audit run:

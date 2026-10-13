@@ -149,6 +149,16 @@ explodes combinatorially on repetitive sessions without it).
 `--limit`/`--offset` paginate the MINED patterns; the input corpus is
 never truncated.
 
+```bash
+backscroll patterns --kind sequences --after 2026-01-01 --before 2027-01-01 --json
+```
+
+Sequence `--after`/`--before` select timestamped events before mining using
+`[after, before)`: the lower bound is inclusive (`>=`), the upper exclusive (`<`).
+Use ISO 8601 bounds; `YYYY-MM-DD` denotes the start of the UTC date. Unknown
+timestamps cannot satisfy a bound. The example includes January 1, 2026 but
+excludes January 1, 2027. These CLI date filters are for sequences only.
+
 ## Trends: what grows beats what is common
 
 ```bash
@@ -186,7 +196,7 @@ Before step 2, assign `UUID`, `SOURCE_PATH`, and `ORDINAL` from one selected mac
 
 ## Operating notes
 
-- Every operational command validates active manifests and attempts one incremental sync before executing. Session, plan, and Markdown files are ingestion inputs; SQLite is the perennial record used by search, context, list, patterns, status, and validate. Use search for discovery. For one selected search result, use context with its published UUID when non-null, or its exact source path plus ordinal only when UUID is null.
+- Ordinary snapshot-read, metadata-read, and mutation owners validate active manifests and attempt one incremental sync before executing. Busy readers may follow the last committed snapshot; remediation (`recover`) skips preparation/pre-sync and only syncs after installing a replacement. See [startup classes and exceptions](sync.md). Session, plan, and Markdown files are ingestion inputs; SQLite is the perennial record used by search, context, list, patterns, status, and validate. Use search for discovery. For one selected search result, use context with its published UUID when non-null, or its exact source path plus ordinal only when UUID is null.
 - Zero-result guidance goes to stderr; stdout stays clean for `--json`.
 - Robot mode on search emits `result_N_field=value` lines and escapes search string values with backslash as `\\`, carriage return as `\r`, and newline as `\n`.
 - A malformed `categories.toml` fails the command (non-zero exit) rather

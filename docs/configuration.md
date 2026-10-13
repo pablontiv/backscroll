@@ -48,11 +48,11 @@ Canonical input manifests are loaded from exactly this runtime directory:
 
 | OS | Default `<config_dir>` | Manifest directory |
 | --- | --- | --- |
-| Linux | `${XDG_CONFIG_HOME:-$HOME/.config}` | `${XDG_CONFIG_HOME:-$HOME/.config}/backscroll/inputs/` |
-| macOS | `$HOME/Library/Application Support` | `$HOME/Library/Application Support/backscroll/inputs/` |
-| Windows | `%APPDATA%` | `%APPDATA%\backscroll\inputs\` |
+| Linux | `$HOME/.config` | `$HOME/.config/backscroll/inputs/` |
+| macOS | `$HOME/.config` | `$HOME/.config/backscroll/inputs/` |
+| Windows | `<user-home>\.config` | `<user-home>\.config\backscroll\inputs\` |
 
-Set `BACKSCROLL_CONFIG_DIR` to override the base directory. For example, `BACKSCROLL_CONFIG_DIR=/tmp/bs-cfg` makes Backscroll read `/tmp/bs-cfg/backscroll/inputs/*.inputs.toml`.
+Set non-empty `BACKSCROLL_CONFIG_DIR` to override the base directory. For example, `BACKSCROLL_CONFIG_DIR=/tmp/bs-cfg` makes Backscroll read `/tmp/bs-cfg/backscroll/inputs/*.inputs.toml`. This is an explicit cross-OS contract, not native config-directory discovery: `XDG_CONFIG_HOME`, macOS Application Support, and `%APPDATA%` are ignored for input manifests.
 
 The repository ships source preset manifests for Claude, Pi, OMP, OpenCode, Codex, and optional Markdown inputs under `inputs/`. Backscroll reads presets only after they are copied into the user input config directory. When installing or refreshing presets, keep existing files by default so user edits are not overwritten.
 
@@ -132,10 +132,13 @@ preparation and pre-handler sync; apply reuses the snapshot for post-install syn
 backscroll config
 backscroll config --json
 
-# Inspect the index and manifest health.
+# Check prepared-index integrity; startup validates manifests separately.
+backscroll validate --json
+
+# Inspect index metrics (not build identity or the manifest inventory).
 backscroll status --json
 
-# Operational commands validate manifests and incrementally index changed inputs.
+# Ordinary owners validate manifests and incrementally index changed inputs.
 backscroll search --text "migration plan" --all-projects
 backscroll list --order timestamp:desc --limit 20
 ```
@@ -145,6 +148,11 @@ Owners attempt one incremental sync before executing (except recovery);
 read-safe followers use the last committed snapshot, and busy `config` followers
 print the validated configuration without opening the database. Session, plan, and Markdown files are ingestion inputs;
 SQLite is the perennial record used by search, list, patterns, status, and validate.
+`config --json` exposes `database`, `session_dirs`, and `inputs`; use it for
+inventory, not `validate`. Check deployed version with `backscroll --version`;
+for a dev binary's exact revision, inspect `go version -m "$(command -v backscroll)"`.
+For recovery exceptions, backup restoration, and the separate two-snapshot
+migration retention policy, see the [operator runbook](sync.md#recovery-runbook).
 Use `--source-path` on search as a filter, paired with query text, for database-backed retrieval scoped to a known input path.
 
 There is no public `inputs` or `sync` command. Manifest TOML, semantic fields, glob syntax, and reader names are validated during preflight; discovery uses that same snapshot during owner startup sync. Failures block the requested command. Use `backscroll rebuild` only after startup sync has prepared the database; the handler re-derives FTS and other derived data from the perennial database and performs no second sync. It is not a replacement for correcting manifest errors.

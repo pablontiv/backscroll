@@ -29,6 +29,14 @@ backscroll search "artifact literal" --source-path "*/session.jsonl" --robot
 | `--max-tokens <N>` | Approximate token budget for text and robot output; JSON is not contractually truncated |
 | `--source-path <PATH_OR_PATTERN>` | Filter a normal text query by indexed `source_path`; exact paths or `*`/SQL `LIKE` patterns |
 | `--relax` | Opt in to bounded lexical term dropping after zero rows; all scope filters stay fixed |
+| `--lexical-only` | Force BM25-only search; skip vector retrieval |
+| `--similarity-threshold <F>` | Finite `0..1` vector cosine threshold (default `0.3`; `0` disables it); not a BM25 filter |
+
+The CLI has no wired embedding provider, so search currently falls back to
+lexical retrieval even without `--lexical-only`. `--similarity-threshold` only
+affects vector candidates when a provider is available; it does not filter
+BM25 results and is ignored by lexical `--relax`. Neither flag enables
+semantic expansion in the deployed CLI.
 
 ## Output Formats
 

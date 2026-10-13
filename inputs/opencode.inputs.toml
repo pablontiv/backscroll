@@ -5,7 +5,7 @@
 #
 # Installation:
 #   cp inputs/opencode.inputs.toml ~/.config/backscroll/inputs/
-#   backscroll sync
+#   backscroll status  # ordinary startup automatically syncs installed inputs
 version = 1
 
 [[inputs]]
