@@ -125,6 +125,10 @@ func TestProcessDeathReleasesLock(t *testing.T) {
 
 func TestProcessTryReportsBusyFromSecondProcess(t *testing.T) {
 	dbPath := filepath.Join(t.TempDir(), "index.db")
+	// Exercise a pre-existing private sidecar rather than only the creation path.
+	if err := os.WriteFile(dbPath+".startup-sync.lock", nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
 	holdCmd := exec.Command(os.Args[0], "-test.run=^TestLockHelperProcess$")
 	holdCmd.Env = append(os.Environ(),
 		"BACKSCROLL_LOCK_HELPER=hold",

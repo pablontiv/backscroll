@@ -31,7 +31,11 @@ validated invocation
      -> busy mutation/remediation: wait <=5s -> owner or retryable sync_in_progress
 ```
 
-The lock sidecar is an empty file that persists with mode `0600`; it is never deleted, and only the OS advisory lock on that file represents ownership. Startup coordination is local-host only and assumes a trusted local filesystem.
+The lock sidecar is an empty file that persists with mode `0600` on Unix; it is never deleted, and only the OS advisory lock on that file represents ownership. Startup coordination is local-host only and assumes a trusted local filesystem.
+
+On Unix, a pre-existing sidecar must be a regular file owned by the effective user with exactly `0600` permissions and no special mode bits. Modes `0644` and `0666` fail with `unsafe startup lock sidecar` (surfaced at startup stage `sync_lock` with the existing `migration_failed` diagnostic), without chmod, deletion, database preparation, or sync; `0600` remains valid. The portable flock API cannot chmod its held descriptor, so Backscroll rejects unsafe permissions rather than repairing a pathname. Symlinks and nonregular files are rejected; POSIX opens also refuse symlink traversal and do not block on a substituted FIFO. After acquiring the OS lock, Backscroll validates the held descriptor's mode and ownership and compares its identity with the initial sidecar and the current nonsymlink path before returning a lease. A detected replacement releases the lock and fails closed. Windows retains regular-file, symlink, and path-identity validation; POSIX mode/UID checks do not apply there, and Windows ACL/owner validation is outside C13.
+
+The parent directory must remain trusted: these checks detect acquisition-boundary replacements, not arbitrary later mutation by another process able to rename files in that directory. Do not replace or remove a sidecar while processes may be using it. To repair an unsafe mode, first stop all Backscroll processes, verify the regular file and its ownership in a trusted directory, and explicitly set its mode to `0600` before retrying.
 
 ## Normal workflow
 

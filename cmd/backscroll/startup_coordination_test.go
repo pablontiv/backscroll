@@ -4,7 +4,9 @@ import (
 	"context"
 	"errors"
 	"io"
+	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -389,4 +391,38 @@ func seedCompatibleStartupDB(t *testing.T) string {
 		t.Fatalf("close seed db: %v", err)
 	}
 	return dbPath
+}
+
+func TestCoordinateStartupRejectsPublicSidecarBeforeDatabasePreparation(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("POSIX modes do not describe Windows ACLs")
+	}
+	for _, class := range []startupCommandClass{startupSnapshotRead, startupMetadataRead, startupMutation, startupRemediation} {
+		t.Run(string(class), func(t *testing.T) {
+			db := filepath.Join(t.TempDir(), "index.db")
+			path := db + ".startup-sync.lock"
+			if err := os.WriteFile(path, nil, 0o644); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.Chmod(path, 0o644); err != nil {
+				t.Fatal(err)
+			}
+			coordinator := newStartupCoordinator()
+			coordinator.prepareIndex = func(context.Context, *config.Config, indexCommandClass) (*storage.Database, *compat.Diagnostic, error) {
+				t.Fatal("unsafe sidecar reached database preparation")
+				return nil, nil, nil
+			}
+			result := coordinator.coordinate(t.Context(), &config.Config{DatabasePath: db}, io.Discard, class)
+			if result.Failure == nil || result.Failure.Stage != startupStageSyncLock || result.Failure.Diagnostic.Code != compat.CodeMigrationFailed || !strings.Contains(result.Failure.Error(), "permissions") {
+				t.Fatalf("failure=%v", result.Failure)
+			}
+			if _, err := os.Stat(db); !errors.Is(err, os.ErrNotExist) {
+				t.Fatalf("database stat=%v", err)
+			}
+			info, err := os.Stat(path)
+			if err != nil || info.Mode().Perm() != 0o644 {
+				t.Fatalf("sidecar changed: info=%v err=%v", info, err)
+			}
+		})
+	}
 }
