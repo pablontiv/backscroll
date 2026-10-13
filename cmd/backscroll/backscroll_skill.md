@@ -68,7 +68,7 @@ backscroll config
 backscroll config --json
 ```
 
-Config JSON exposes `database`, `session_dirs`, and `inputs`. `validate --json`
+Config JSON exposes `database`, `session_dirs`, and `inputs`. `backscroll validate --json`
 checks prepared-index integrity, not the input inventory. Markdown manifests use
 `decode.format = "markdown_document"` (whole file) or `"markdown_sections"`
 (`## ` sections with whole-document fallback); see the authoritative examples
