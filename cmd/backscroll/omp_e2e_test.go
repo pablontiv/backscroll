@@ -225,3 +225,101 @@ func TestOMPAppendedToolResultEnrichesPerennialCall(t *testing.T) {
 		t.Fatalf("partial reparse erased echo proof: %+v", rows)
 	}
 }
+
+func TestOMPReasoningTogglePreservesPerennialToolCoordinates(t *testing.T) {
+	dbPath, source, _ := installOMPFixture(t, true)
+	const initial = `{"type":"session","version":3,"id":"toggle","cwd":"/workspace/omp-fixture-project","timestamp":"2026-09-01T12:00:00Z"}
+{"type":"message","id":"a","timestamp":"2026-09-01T12:00:01Z","message":{"role":"assistant","content":[{"type":"thinking","thinking":"omptogglereason"},{"type":"toolCall","id":"ca","name":"bash","arguments":{"command":"go test omptogglea"}}]}}
+`
+	const appended = `{"type":"message","id":"b","timestamp":"2026-09-01T12:00:02Z","message":{"role":"assistant","content":[{"type":"toolCall","id":"cb","name":"bash","arguments":{"command":"make omptoggleb"}}]}}
+{"type":"message","id":"rb","timestamp":"2026-09-01T12:00:03Z","message":{"role":"toolResult","toolCallId":"cb","toolName":"bash","isError":true,"details":{"exitCode":7},"content":[{"type":"text","text":"error: omptogglefailure"}]}}
+`
+	writeFile(t, source, initial)
+	if rows := ompRecall(t, "omptogglea", "--content-type", "tool"); len(rows) != 1 {
+		t.Fatalf("initial call: %+v", rows)
+	}
+	type anchor struct {
+		itemID, eventID            int64
+		ordinal, epoch, eventEpoch int
+		text, uuid, origin         string
+	}
+	readA := func() anchor {
+		t.Helper()
+		db, err := storage.OpenReadOnly(dbPath)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer db.Close()
+		var a anchor
+		if err := db.DB().QueryRow(`SELECT s.id,e.id,s.ordinal,s.extraction_version,e.extraction_version,s.text,s.uuid,s.origin FROM search_items s JOIN tool_events e ON e.message_uuid=s.uuid WHERE s.uuid='omp:toggle:a#b1'`).Scan(&a.itemID, &a.eventID, &a.ordinal, &a.epoch, &a.eventEpoch, &a.text, &a.uuid, &a.origin); err != nil {
+			t.Fatal(err)
+		}
+		return a
+	}
+	before := readA()
+	manifestPath := filepath.Join(os.Getenv("BACKSCROLL_CONFIG_DIR"), "backscroll", "inputs", "omp.inputs.toml")
+	manifest, err := os.ReadFile(manifestPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	writeFile(t, manifestPath, strings.ReplaceAll(string(manifest), "index_reasoning = true", "index_reasoning = false"))
+	writeFile(t, source, initial+appended)
+	if rows := ompRecall(t, "omptoggleb", "--content-type", "tool"); len(rows) != 1 {
+		t.Fatalf("appended call: %+v", rows)
+	}
+	if after := readA(); after != before {
+		t.Fatalf("retained call changed: before=%+v after=%+v", before, after)
+	}
+	db, err := storage.OpenReadOnly(dbPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	var collisions, events, anchors int
+	if err := db.DB().QueryRow(`SELECT COUNT(*) FROM (SELECT ordinal FROM search_items WHERE source_path=? GROUP BY ordinal HAVING COUNT(*)>1)`, source).Scan(&collisions); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.DB().QueryRow(`SELECT COUNT(*) FROM tool_events WHERE source_path=?`, source).Scan(&events); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.DB().QueryRow(`SELECT COUNT(*) FROM tool_events e JOIN search_items s ON s.source_path=e.source_path AND s.ordinal=e.ordinal AND s.uuid=e.message_uuid WHERE e.source_path=?`, source).Scan(&anchors); err != nil {
+		t.Fatal(err)
+	}
+	if collisions != 0 || events != 2 || anchors != 2 {
+		t.Fatalf("coordinates: collisions=%d events=%d anchors=%d", collisions, events, anchors)
+	}
+	// Exercise actual CLI consumers rather than only counting physical rows.
+	for _, kind := range []string{"commands", "failures", "sequences"} {
+		out, stderr, err := runCmd("patterns", "--kind", kind, "--all-projects", "--min-support", "1", "--min-length", "2", "--max-length", "2", "--json")
+		if err != nil {
+			t.Fatalf("%s: %v %s", kind, err, stderr)
+		}
+		var payload struct {
+			Count    int `json:"count"`
+			Patterns []struct {
+				CommandHead string `json:"command_head"`
+				Count       int    `json:"count"`
+				ExitCode    *int   `json:"exit_code"`
+				Support     int    `json:"support"`
+				Pattern     string `json:"pattern"`
+			} `json:"patterns"`
+		}
+		if err := json.Unmarshal([]byte(out), &payload); err != nil {
+			t.Fatal(err)
+		}
+		found := false
+		for _, p := range payload.Patterns {
+			switch kind {
+			case "commands":
+				found = found || (p.CommandHead == "make" && p.Count == 1)
+			case "failures":
+				found = found || (p.ExitCode != nil && *p.ExitCode == 7 && p.Count == 1)
+			case "sequences":
+				found = found || (p.Support == 1 && strings.Contains(p.Pattern, " → "))
+			}
+		}
+		if !found {
+			t.Fatalf("%s omitted appended call B: %s", kind, out)
+		}
+	}
+}

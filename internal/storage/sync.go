@@ -104,6 +104,81 @@ func validateSyncUUIDs(ctx context.Context, tx *sql.Tx, files []IndexedFile) (ma
 	return existing, nil
 }
 
+// reconcilePerennialOrdinals reserves the entire persisted path before allocating
+// any incoming identity. Existing UUIDs keep their anchors; collisions use the
+// lowest free non-negative ordinal, in incoming order. The caller's slice is not
+// mutated, and every downstream consumer receives the same reconciled copy.
+func reconcilePerennialOrdinals(ctx context.Context, tx *sql.Tx, file IndexedFile) ([]IndexedMessage, error) {
+	rows, err := tx.QueryContext(ctx, `SELECT ordinal, COALESCE(uuid, '') FROM search_items WHERE source_path = ?
+ UNION ALL SELECT ordinal, COALESCE(message_uuid, '') FROM tool_events WHERE source_path = ?`, file.SourcePath, file.SourcePath)
+	if err != nil {
+		return nil, err
+	}
+	reserved := make(map[int]string)
+	identities := make(map[string]int)
+	for rows.Next() {
+		var ordinal int
+		var uuid string
+		if err := rows.Scan(&ordinal, &uuid); err != nil {
+			rows.Close()
+			return nil, err
+		}
+		if ordinal < 0 {
+			rows.Close()
+			return nil, fmt.Errorf("negative persisted ordinal %d", ordinal)
+		}
+		if owner, ok := reserved[ordinal]; ok && owner != uuid {
+			rows.Close()
+			return nil, fmt.Errorf("persisted ordinal %d has conflicting identities %q and %q", ordinal, owner, uuid)
+		}
+		if uuid != "" {
+			if previous, ok := identities[uuid]; ok && previous != ordinal {
+				rows.Close()
+				return nil, fmt.Errorf("UUID %q has conflicting persisted ordinals %d and %d", uuid, previous, ordinal)
+			}
+			identities[uuid] = ordinal
+		}
+		reserved[ordinal] = uuid
+	}
+	if err := rows.Err(); err != nil {
+		rows.Close()
+		return nil, err
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	messages := append([]IndexedMessage(nil), file.Messages...)
+	nextFree := 0
+	for i := range messages {
+		msg := &messages[i]
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
+		if msg.UUID == "" {
+			continue
+		}
+		if msg.Ordinal < 0 {
+			return nil, fmt.Errorf("negative incoming ordinal %d for UUID %q", msg.Ordinal, msg.UUID)
+		}
+		if ordinal, ok := identities[msg.UUID]; ok {
+			msg.Ordinal = ordinal
+			continue
+		}
+		if _, occupied := reserved[msg.Ordinal]; occupied {
+			for {
+				if _, occupied := reserved[nextFree]; !occupied {
+					break
+				}
+				nextFree++
+			}
+			msg.Ordinal = nextFree
+		}
+		reserved[msg.Ordinal] = msg.UUID
+		identities[msg.UUID] = msg.Ordinal
+	}
+	return messages, nil
+}
+
 // SyncFiles syncs a batch of files into the database without cancellation.
 // It is retained for compatibility with existing callers.
 func (d *Database) SyncFiles(files []IndexedFile) error {
@@ -200,6 +275,13 @@ func (d *Database) SyncFilesContext(ctx context.Context, files []IndexedFile) (r
 			}
 		}
 
+		if perennial {
+			file.Messages, err = reconcilePerennialOrdinals(ctx, tx, file)
+			if err != nil {
+				return fmt.Errorf("reconcile ordinals for %s: %w", file.SourcePath, err)
+			}
+		}
+
 		// Insert new search_items. UUID ownership and batch uniqueness were
 		// validated before any mutation. Existing UUID rows owned by this path
 		// are retained explicitly; INSERT conflict handling is not used to
@@ -288,12 +370,22 @@ func (d *Database) SyncFilesContext(ctx context.Context, files []IndexedFile) (r
 				if exitCode != nil {
 					exitCodeVal = *exitCode
 				}
-				if _, err := tx.ExecContext(ctx, `
-					INSERT OR IGNORE INTO tool_events
+				var eventUUID sql.NullString
+				eventErr := tx.QueryRowContext(ctx, `SELECT message_uuid FROM tool_events WHERE source_path = ? AND ordinal = ?`, file.SourcePath, msg.Ordinal).Scan(&eventUUID)
+				if eventErr != nil && eventErr != sql.ErrNoRows {
+					return fmt.Errorf("inspect tool_event ordinal for %s: %w", file.SourcePath, eventErr)
+				}
+				if eventErr == nil && (!eventUUID.Valid || eventUUID.String != msg.UUID || msg.UUID == "") {
+					return fmt.Errorf("tool_event ordinal %d for %s belongs to another identity", msg.Ordinal, file.SourcePath)
+				}
+				if eventErr == sql.ErrNoRows {
+					if _, err := tx.ExecContext(ctx, `
+					INSERT INTO tool_events
 					(message_uuid, source_path, ordinal, tool_name, command_head, is_error, exit_code, extraction_version)
 					VALUES (?, ?, ?, ?, ?, ?, ?, ?)
 				`, uuidVal, file.SourcePath, msg.Ordinal, msg.ToolName, msg.CommandHead, isErrVal, exitCodeVal, msg.ExtractionVersion); err != nil {
-					return fmt.Errorf("insert tool_event for %s: %w", file.SourcePath, err)
+						return fmt.Errorf("insert tool_event for %s: %w", file.SourcePath, err)
+					}
 				}
 				// A stable call may precede its result. Fill only unknown signals;
 				// false and zero are established proof, not missing values.
@@ -420,7 +512,7 @@ func (d *Database) SyncFilesContext(ctx context.Context, files []IndexedFile) (r
 					INSERT OR IGNORE INTO correction_signals
 					(item_uuid, source_path, ordinal, detector, confidence, extraction_version)
 					VALUES (?, ?, ?, ?, ?, ?)
-				`, file.Messages[ordinal].UUID, file.SourcePath, ordinal, det.DetectorName, det.Confidence, CurrentExtractionVersion)
+				`, file.Messages[ordinal].UUID, file.SourcePath, file.Messages[ordinal].Ordinal, det.DetectorName, det.Confidence, CurrentExtractionVersion)
 				if err != nil {
 					return fmt.Errorf("insert correction_signal for %s: %w", file.SourcePath, err)
 				}
