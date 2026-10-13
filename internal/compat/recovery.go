@@ -92,9 +92,7 @@ func PlanRecovery(inputs []RecoveryInput) (RecoveryPlan, []Diagnostic, error) {
 			originConflict := false
 			for _, occurrence := range occurrences {
 				record.SearchEcho = record.SearchEcho || occurrence.record.SearchEcho
-				if projectProofRank(occurrence.record.ProjectEvidence) > projectProofRank(record.ProjectEvidence) {
-					record.ProjectEvidence = occurrence.record.ProjectEvidence
-				}
+				record.ProjectEvidence = mergeProjectEvidence(record.ProjectEvidence, occurrence.record.ProjectEvidence)
 				merged, ok := mergeMessageOrigins(record.Origin, occurrence.record.Origin)
 				if !ok {
 					originConflict = true
@@ -322,4 +320,22 @@ func projectProofRank(value string) int {
 		return 1
 	}
 	return 0
+}
+
+// mergeProjectEvidence keeps attribution precedence separate from completion.
+// Neither unknown nor pending proves a cwd. Without parser epoch/availability
+// evidence, an unknown duplicate cannot certify that pending replay completed.
+// Actual attribution proof retains its existing precedence and is never erased.
+func mergeProjectEvidence(left, right string) string {
+	leftRank, rightRank := projectProofRank(left), projectProofRank(right)
+	if leftRank > rightRank {
+		return left
+	}
+	if rightRank > leftRank {
+		return right
+	}
+	if leftRank == 0 && (left == "" || right == "") {
+		return ""
+	}
+	return left
 }

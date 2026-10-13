@@ -1,6 +1,7 @@
 package main
 
 import (
+	"crypto/sha256"
 	"database/sql"
 	"fmt"
 	"os"
@@ -176,5 +177,77 @@ func TestProjectProofBacklogConvergesAcrossRegistryRebuild(t *testing.T) {
 				t.Fatalf("unavailable source relabeled: %+v", got)
 			}
 		})
+	}
+}
+
+func TestRecoveryDuplicatePendingConfiguredReplay(t *testing.T) {
+	for _, pendingActive := range []bool{false, true} {
+		for _, available := range []bool{false, true} {
+			t.Run(fmt.Sprintf("pendingActive=%t/available=%t", pendingActive, available), func(t *testing.T) {
+				dbPath, _ := testEnv(t)
+				root := filepath.Join(os.Getenv("HOME"), ".claude", "projects")
+				source := filepath.Join(root, "-home-shared-proj", "native.jsonl")
+				uuid := "11111111-1111-4111-8111-111111111111"
+				raw := `{"type":"user","uuid":"11111111-1111-4111-8111-111111111111","cwd":"/actual/native-label","message":{"role":"user","content":"recoveryproofquartz"}}` + "\n"
+				if available {
+					writeFile(t, source, raw)
+				}
+				preset, err := os.ReadFile("../../inputs/claude.inputs.toml")
+				if err != nil {
+					t.Fatal(err)
+				}
+				writeFile(t, filepath.Join(os.Getenv("BACKSCROLL_CONFIG_DIR"), "backscroll", "inputs", "claude.inputs.toml"), replaceManifestRoots(t, "inputs/claude.inputs.toml", string(preset), root))
+				stranded := filepath.Join(t.TempDir(), "stranded.db")
+				for i, path := range []string{dbPath, stranded} {
+					db, err := storage.Open(path)
+					if err != nil {
+						t.Fatal(err)
+					}
+					file := storage.IndexedFile{Source: "session", SourcePath: source, Hash: fmt.Sprintf("%x", sha256.Sum256([]byte(raw))), Project: "historical", ProjectEvidence: "unknown", Messages: []storage.IndexedMessage{{UUID: uuid, Role: "user", Text: "recoveryproofquartz", ContentType: "text"}}}
+					if err := db.SyncFiles([]storage.IndexedFile{file}); err != nil {
+						db.Close()
+						t.Fatal(err)
+					}
+					if (i == 0) == pendingActive {
+						if _, err := db.DB().Exec("UPDATE search_items SET project_evidence=NULL"); err != nil {
+							db.Close()
+							t.Fatal(err)
+						}
+					}
+					if err := db.Close(); err != nil {
+						t.Fatal(err)
+					}
+				}
+				if _, stderr, err := runCmd("recover", "--from", stranded); err != nil {
+					t.Fatalf("%v %s", err, stderr)
+				}
+				// A second normal startup proves unavailable sources cannot accidentally
+				// complete replay; available sources must have been enriched by recovery sync.
+				if _, stderr, err := runCmd("status"); err != nil {
+					t.Fatalf("%v %s", err, stderr)
+				}
+				db, err := storage.OpenReadOnly(dbPath)
+				if err != nil {
+					t.Fatal(err)
+				}
+				defer db.Close()
+				var label, text, gotUUID string
+				var proof sql.NullString
+				var ordinal int
+				if err := db.DB().QueryRow("SELECT project,project_evidence,uuid,text,ordinal FROM search_items").Scan(&label, &proof, &gotUUID, &text, &ordinal); err != nil {
+					t.Fatal(err)
+				}
+				if gotUUID != uuid || text != "recoveryproofquartz" || ordinal != 0 {
+					t.Fatalf("payload changed: %s %s %d", gotUUID, text, ordinal)
+				}
+				if available {
+					if proof.String != "native_cwd" || label != "native-label" {
+						t.Fatalf("native replay lost: %s %+v", label, proof)
+					}
+				} else if proof.Valid || label != "historical" {
+					t.Fatalf("unavailable replay consumed: %s %+v", label, proof)
+				}
+			})
+		}
 	}
 }

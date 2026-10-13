@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	"github.com/pablontiv/backscroll/internal/compat"
+	"github.com/pablontiv/backscroll/internal/models"
 	"github.com/pablontiv/backscroll/internal/projects"
 )
 
@@ -274,5 +275,51 @@ func TestRecoveryPreservesPendingAndCompletedProjectReplay(t *testing.T) {
 	}
 	if pending.String != "native_cwd" {
 		t.Fatalf("recovered pending row cannot gain native proof: %+v", pending)
+	}
+}
+
+func TestRecoveryDuplicatePendingDestinationReadback(t *testing.T) {
+	for _, pendingFirst := range []bool{false, true} {
+		t.Run(fmt.Sprint(pendingFirst), func(t *testing.T) {
+			uuid, project := "11111111-1111-4111-8111-111111111111", "historical"
+			pending := models.IndexedRecord{UUID: &uuid, Source: "session", SourcePath: "/unavailable/session.jsonl", Ordinal: 0, Role: "user", Text: "retained payload", Project: &project, ContentType: "text"}
+			completed := pending
+			completed.ProjectEvidence = "unknown"
+			inputs := []compat.RecoveryInput{{Records: []models.IndexedRecord{completed}}, {Records: []models.IndexedRecord{pending}}}
+			if pendingFirst {
+				inputs[0], inputs[1] = inputs[1], inputs[0]
+			}
+			plan, diags, err := compat.PlanRecovery(inputs)
+			if err != nil || len(diags) != 0 {
+				t.Fatalf("%v %+v", err, diags)
+			}
+			path, err := CreateRecoveryDestination(context.Background(), t.TempDir(), plan)
+			if err != nil {
+				t.Fatal(err)
+			}
+			db, err := Open(path)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer db.Close()
+			var proof sql.NullString
+			if err := db.db.QueryRow("SELECT project_evidence FROM search_items").Scan(&proof); err != nil {
+				t.Fatal(err)
+			}
+			if proof.Valid {
+				t.Fatalf("pending marker lost on install: %+v", proof)
+			}
+			readback, diag, err := ReadRecoveryInput(context.Background(), db)
+			if err != nil || diag != nil {
+				t.Fatalf("%v %+v", err, diag)
+			}
+			if len(readback.Records) != 1 || readback.Records[0].ProjectEvidence != "" {
+				t.Fatalf("pending lost on readback: %+v", readback)
+			}
+			paths, err := db.PendingProjectEvidencePathsContext(context.Background())
+			if err != nil || len(paths) != 1 || paths[0] != pending.SourcePath {
+				t.Fatalf("replay eligibility=%v err=%v", paths, err)
+			}
+		})
 	}
 }
