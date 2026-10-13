@@ -2264,10 +2264,10 @@ func TestRebuildProjectResolution(t *testing.T) {
 		t.Fatalf("open: %v", err)
 	}
 
-	// Insert a row with 'unknown' project from a Claude session path
+	// Seed completed parser evidence so path repair is authorized.
 	_, err = db.DB().Exec(`INSERT INTO search_items
-		(source, source_path, ordinal, role, text, timestamp, project, content_type)
-		VALUES ('session', '/Users/pones/.claude/projects/-home-user-myapp/uuid.jsonl', 0, 'user', 'text', '2026-01-01T00:00:00Z', 'unknown', 'text')`)
+		(source, source_path, ordinal, role, text, timestamp, project, content_type, project_evidence)
+		VALUES ('session', '/Users/pones/.claude/projects/-home-user-myapp/uuid.jsonl', 0, 'user', 'text', '2026-01-01T00:00:00Z', 'unknown', 'text', 'unknown')`)
 	if err != nil {
 		t.Fatalf("insert: %v", err)
 	}
@@ -2318,13 +2318,13 @@ func TestRebuildMultipleProjects(t *testing.T) {
 		t.Fatalf("open: %v", err)
 	}
 
-	// Insert rows with 'unknown' project from different Claude session paths
+	// Seed completed parser evidence for path repair across session paths.
 	_, err = db.DB().Exec(`INSERT INTO search_items
-		(source, source_path, ordinal, role, text, timestamp, project, content_type)
+		(source, source_path, ordinal, role, text, timestamp, project, content_type, project_evidence)
 		VALUES
-		('session', '/Users/pones/.claude/projects/-home-user-app1/uuid.jsonl', 0, 'user', 'text', '2026-01-01T00:00:00Z', 'unknown', 'text'),
-		('session', '/Users/pones/.claude/projects/-home-user-app2/uuid.jsonl', 0, 'user', 'text', '2026-01-01T00:00:00Z', 'unknown', 'text'),
-		('session', '/Users/pones/.claude/projects/-home-user-app1/uuid2.jsonl', 1, 'user', 'text', '2026-01-01T00:00:00Z', 'unknown', 'text')`)
+		('session', '/Users/pones/.claude/projects/-home-user-app1/uuid.jsonl', 0, 'user', 'text', '2026-01-01T00:00:00Z', 'unknown', 'text', 'unknown'),
+		('session', '/Users/pones/.claude/projects/-home-user-app2/uuid.jsonl', 0, 'user', 'text', '2026-01-01T00:00:00Z', 'unknown', 'text', 'unknown'),
+		('session', '/Users/pones/.claude/projects/-home-user-app1/uuid2.jsonl', 1, 'user', 'text', '2026-01-01T00:00:00Z', 'unknown', 'text', 'unknown')`)
 	if err != nil {
 		t.Fatalf("insert: %v", err)
 	}

@@ -223,6 +223,11 @@ func insertRecoveryDestinationRecord(ctx context.Context, tx *sql.Tx, r models.I
 	if origin != models.OriginUnknown {
 		originVersion = CurrentOriginVersion
 	}
+	// NULL preserves pending parser replay; explicit unknown preserves completion.
+	var projectProof any
+	if r.ProjectEvidence != "" {
+		projectProof = r.ProjectEvidence
+	}
 	_, err = tx.ExecContext(ctx, `
 		INSERT INTO search_items
 			(source, source_path, ordinal, role, origin, text, timestamp, uuid, project,
@@ -230,7 +235,7 @@ func insertRecoveryDestinationRecord(ctx context.Context, tx *sql.Tx, r models.I
 		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, NULL, ?, ?, ?)
 	`, r.Source, r.SourcePath, r.Ordinal, r.Role, origin, r.Text,
 		recoveryDestinationNullableString(r.Timestamp), recoveryDestinationUUIDValue(r.UUID),
-		recoveryDestinationNullableString(r.Project), r.ContentType, r.SearchEcho, originVersion, projectEvidence(r.ProjectEvidence))
+		recoveryDestinationNullableString(r.Project), r.ContentType, r.SearchEcho, originVersion, projectProof)
 	if err != nil {
 		return fmt.Errorf("insert search_items: %w", err)
 	}
@@ -403,19 +408,19 @@ func verifyRecoveryDestinationOrigins(ctx context.Context, q compat.Queryer, pla
 		var gotProof string
 		if record.UUID != nil && *record.UUID != "" {
 			err = q.QueryRowContext(ctx, `
-				SELECT origin, origin_version, COALESCE(project_evidence, 'unknown') FROM search_items WHERE uuid = ?
+				SELECT origin, origin_version, COALESCE(project_evidence, '') FROM search_items WHERE uuid = ?
 			`, *record.UUID).Scan(&gotOrigin, &gotVersion, &gotProof)
 		} else {
 			err = q.QueryRowContext(ctx, `
-				SELECT origin, origin_version, COALESCE(project_evidence, 'unknown') FROM search_items
+				SELECT origin, origin_version, COALESCE(project_evidence, '') FROM search_items
 				WHERE source_path = ? AND ordinal = ? AND COALESCE(uuid, '') = ''
 			`, record.SourcePath, record.Ordinal).Scan(&gotOrigin, &gotVersion, &gotProof)
 		}
 		if err != nil {
 			return fmt.Errorf("read destination origin for record %d: %w", i, err)
 		}
-		if gotProof != projectEvidence(record.ProjectEvidence) {
-			return fmt.Errorf("destination project_evidence for record %d = %q, want %q", i, gotProof, projectEvidence(record.ProjectEvidence))
+		if gotProof != record.ProjectEvidence {
+			return fmt.Errorf("destination project_evidence for record %d = %q, want %q", i, gotProof, record.ProjectEvidence)
 		}
 		if gotOrigin != wantOrigin {
 			return fmt.Errorf("destination origin for record %d = %q, want %q", i, gotOrigin, wantOrigin)
@@ -573,7 +578,6 @@ func recoveryDestinationPayload(r models.IndexedRecord) (string, error) {
 		return "", err
 	}
 	r.Origin = origin
-	r.ProjectEvidence = projectEvidence(r.ProjectEvidence)
 	if r.UUID != nil && *r.UUID == "" {
 		r.UUID = nil
 	}

@@ -16,7 +16,8 @@ type IndexedRecord struct {
 	SearchEcho      bool `json:",omitempty"` // positive reader provenance, retained by recovery
 }
 
-// ValidProjectEvidence accepts the legacy empty representation of unknown.
+// ValidProjectEvidence accepts empty historical evidence (native replay pending).
+// Explicit unknown means a parser pass completed without retained native proof.
 func ValidProjectEvidence(value string) bool {
 	switch value {
 	case "", "unknown", "path_fallback", "registry", "native_cwd":

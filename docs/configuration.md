@@ -225,4 +225,8 @@ A completed parser pass closes unprovable retained rows as `unknown`, without
 changing their label or repeatedly consuming the maintenance budget.
 Available configured sources replay under the shared 200-path startup budget
 to recover native proof; expired historical sources cannot acquire that proof.
-Recovery carries existing project evidence into the replacement index.
+Path-based fallback and registry repair exclude pending `NULL` rows, even when
+the source is unavailable: absence cannot distinguish delayed replay from expiry.
+Only a successful parser transaction closes pending evidence, before rebuild
+repair may relabel completed unknown/path-fallback rows. Recovery preserves both
+pending `NULL` and completed `unknown` evidence in the replacement index.

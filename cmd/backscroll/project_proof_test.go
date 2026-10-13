@@ -1,10 +1,14 @@
 package main
 
 import (
-	"github.com/pablontiv/backscroll/internal/storage"
+	"database/sql"
+	"fmt"
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
+
+	"github.com/pablontiv/backscroll/internal/storage"
 )
 
 func TestClaudeProjectProofSurvivesExpiredSourceRebuild(t *testing.T) {
@@ -67,5 +71,110 @@ func TestClaudeProjectProofSurvivesExpiredSourceRebuild(t *testing.T) {
 	gotID, gotLabel, gotProof, gotUUID, gotText := read()
 	if gotID != id || gotLabel != label || gotProof != proof || gotUUID != uuid || gotText != text {
 		t.Fatal("expired native row changed")
+	}
+}
+
+// Registry repair must not consume native replay work beyond the shared cap.
+func TestProjectProofBacklogConvergesAcrossRegistryRebuild(t *testing.T) {
+	for _, count := range []int{201, 401} {
+		t.Run(fmt.Sprint(count), func(t *testing.T) {
+			dbPath, _ := testEnv(t)
+			root := filepath.Join(os.Getenv("HOME"), ".claude", "projects")
+			dir := filepath.Join(root, "-home-shared-proj")
+			old := time.Unix(1577836800, 0)
+			for i := 0; i < count+2; i++ {
+				path := filepath.Join(dir, fmt.Sprintf("%03d.jsonl", i))
+				writeFile(t, path, fmt.Sprintf(`{"type":"user","uuid":"proof-%03d","cwd":"/actual/native-label","timestamp":"2020-01-01T00:00:00Z","message":{"role":"user","content":"backlogquartz"}}`+"\n", i))
+				if err := os.Chtimes(path, old, old); err != nil {
+					t.Fatal(err)
+				}
+			}
+			preset, err := os.ReadFile("../../inputs/claude.inputs.toml")
+			if err != nil {
+				t.Fatal(err)
+			}
+			writeFile(t, filepath.Join(os.Getenv("BACKSCROLL_CONFIG_DIR"), "backscroll", "inputs", "claude.inputs.toml"), replaceManifestRoots(t, "inputs/claude.inputs.toml", string(preset), root))
+			invoke := func(args ...string) {
+				t.Helper()
+				if _, stderr, err := runCmd(args...); err != nil {
+					t.Fatalf("%v: %v %s", args, err, stderr)
+				}
+			}
+			invoke("status", "--json")
+			db, err := storage.Open(dbPath)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer db.Close()
+			type row struct {
+				id         int64
+				label      string
+				proof      sql.NullString
+				uuid, text string
+			}
+			read := func() []row {
+				t.Helper()
+				rs, err := db.DB().Query("SELECT id,project,project_evidence,uuid,text FROM search_items ORDER BY uuid")
+				if err != nil {
+					t.Fatal(err)
+				}
+				defer rs.Close()
+				var out []row
+				for rs.Next() {
+					var r row
+					if err := rs.Scan(&r.id, &r.label, &r.proof, &r.uuid, &r.text); err != nil {
+						t.Fatal(err)
+					}
+					out = append(out, r)
+				}
+				if err := rs.Err(); err != nil {
+					t.Fatal(err)
+				}
+				return out
+			}
+			before := read()
+			// One unavailable historical source and one expired proven native row.
+			for i := count; i < count+2; i++ {
+				if err := os.Remove(filepath.Join(dir, fmt.Sprintf("%03d.jsonl", i))); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if _, err := db.DB().Exec("UPDATE search_items SET project='historical',project_evidence=NULL WHERE uuid != ?", fmt.Sprintf("proof-%03d", count+1)); err != nil {
+				t.Fatal(err)
+			}
+			writeFile(t, filepath.Join(os.Getenv("HOME"), ".config", "backscroll", "projects.toml"), "[[projects]]\nid=\"encoded-registry\"\nroots=[\"/home/shared/proj\"]\n")
+			processed := 0
+			for processed < count {
+				if processed == 200 {
+					invoke("status", "--json")
+				} else {
+					invoke("rebuild")
+				}
+				processed += 200
+				if processed > count {
+					processed = count
+				}
+				after := read()
+				if len(after) != len(before) {
+					t.Fatal("row count changed")
+				}
+				for i, r := range after {
+					if r.id != before[i].id || r.uuid != before[i].uuid || r.text != before[i].text {
+						t.Fatalf("identity/payload changed: %+v", r)
+					}
+					if i < processed || i == count+1 {
+						if r.label != "native-label" || r.proof.String != "native_cwd" {
+							t.Fatalf("native row %d: %+v", i, r)
+						}
+					} else if r.label != "historical" || r.proof.Valid {
+						t.Fatalf("unreplayed row %d consumed: %+v", i, r)
+					}
+				}
+			}
+			invoke("rebuild")
+			if got := read()[count]; got.proof.Valid || got.label != "historical" {
+				t.Fatalf("unavailable source relabeled: %+v", got)
+			}
+		})
 	}
 }

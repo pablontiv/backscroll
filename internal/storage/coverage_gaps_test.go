@@ -439,8 +439,8 @@ func TestReresolveProjectsWithRegistryUpdate(t *testing.T) {
 	// This allows DecodeCwdFromSessionPath to extract cwd=/home/user/proj (fallback from encoded dir)
 	_, err = db.db.Exec(`
 		INSERT INTO search_items
-		(source, source_path, ordinal, role, text, uuid, project, content_type)
-		VALUES ('session', '/home/user/.claude/projects/-home-user-proj/abc123.jsonl', 0, 'user', 'text', 'u1', 'proj', 'text')
+		(source, source_path, ordinal, role, text, uuid, project, content_type, project_evidence)
+		VALUES ('session', '/home/user/.claude/projects/-home-user-proj/abc123.jsonl', 0, 'user', 'text', 'u1', 'proj', 'text', 'unknown')
 	`)
 	if err != nil {
 		t.Fatalf("insert: %v", err)

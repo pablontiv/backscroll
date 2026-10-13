@@ -123,7 +123,7 @@ func readCanonicalSearchItems(ctx context.Context, q compat.Queryer) ([]models.I
 		return nil, nil, err
 	}
 	if hasProjectEvidence != 0 {
-		proofRows, err := q.QueryContext(ctx, "SELECT COALESCE(project_evidence, 'unknown') FROM search_items ORDER BY source_path, ordinal, id")
+		proofRows, err := q.QueryContext(ctx, "SELECT COALESCE(project_evidence, '') FROM search_items ORDER BY source_path, ordinal, id")
 		if err != nil {
 			return nil, nil, err
 		}
@@ -140,9 +140,6 @@ func readCanonicalSearchItems(ctx context.Context, q compat.Queryer) ([]models.I
 			if !models.ValidProjectEvidence(records[i].ProjectEvidence) {
 				proofRows.Close()
 				return nil, uninterpretableRecoveryRowDiagnostic(), nil
-			}
-			if records[i].ProjectEvidence == "unknown" {
-				records[i].ProjectEvidence = ""
 			}
 			i++
 		}

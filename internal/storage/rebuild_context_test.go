@@ -150,8 +150,8 @@ func TestReresolveProjectsContextCancellationRollsBackAllPaths(t *testing.T) {
 	for i, path := range []string{"/a.jsonl", "/b.jsonl", "/c.jsonl"} {
 		if _, err := db.db.Exec(`
 			INSERT INTO search_items
-			(source_path, source, ordinal, role, text, timestamp, uuid, project, content_type)
-			VALUES (?, 'session', 0, 'user', 'text', '2026-01-01T00:00:00Z', ?, 'unknown', 'text')
+			(source_path, source, ordinal, role, text, timestamp, uuid, project, content_type, project_evidence)
+			VALUES (?, 'session', 0, 'user', 'text', '2026-01-01T00:00:00Z', ?, 'unknown', 'text', 'unknown')
 		`, path, fmt.Sprintf("resolve-%d", i)); err != nil {
 			t.Fatal(err)
 		}
@@ -465,8 +465,8 @@ func seedUnknownResolutionRows(t *testing.T, db *Database) {
 	for i, path := range []string{"/wrapper/a.jsonl", "/wrapper/b.jsonl"} {
 		if _, err := db.db.Exec(`
 			INSERT INTO search_items
-			(source_path, source, ordinal, role, text, timestamp, uuid, project, content_type)
-			VALUES (?, 'session', 0, 'user', 'text', '2026-01-01T00:00:00Z', ?, 'unknown', 'text')
+			(source_path, source, ordinal, role, text, timestamp, uuid, project, content_type, project_evidence)
+			VALUES (?, 'session', 0, 'user', 'text', '2026-01-01T00:00:00Z', ?, 'unknown', 'text', 'unknown')
 		`, path, fmt.Sprintf("wrapper-%d", i)); err != nil {
 			t.Fatal(err)
 		}
@@ -481,8 +481,8 @@ func seedRegistryResolutionRows(t *testing.T, db *Database) projects.ProjectRegi
 	} {
 		if _, err := db.db.Exec(`
 			INSERT INTO search_items
-			(source_path, source, ordinal, role, text, timestamp, uuid, project, content_type)
-			VALUES (?, 'session', 0, 'user', 'text', '2026-01-01T00:00:00Z', ?, 'fallback', 'text')
+			(source_path, source, ordinal, role, text, timestamp, uuid, project, content_type, project_evidence)
+			VALUES (?, 'session', 0, 'user', 'text', '2026-01-01T00:00:00Z', ?, 'fallback', 'text', 'unknown')
 		`, path, fmt.Sprintf("registry-%d", i)); err != nil {
 			t.Fatal(err)
 		}

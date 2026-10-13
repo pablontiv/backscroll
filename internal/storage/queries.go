@@ -1316,14 +1316,16 @@ func (d *Database) ReresolveProjects(ctx context.Context, resolver func(sourcePa
 }
 
 // ReresolveProjectsContext resolves unknown project labels in deterministic
-// source-path order. Cancellation rolls back the complete resolution set.
+// source-path order. NULL evidence remains reserved for pending native replay,
+// including unavailable sources; path repair cannot establish parser completion.
+// Cancellation rolls back the complete resolution set.
 func (d *Database) ReresolveProjectsContext(ctx context.Context, resolver func(sourcePath string) string) (resolvedPaths int64, retErr error) {
 	if err := ctx.Err(); err != nil {
 		return 0, err
 	}
 	rows, err := d.db.QueryContext(ctx, `
 		SELECT DISTINCT source_path FROM search_items
-		WHERE (project = 'unknown' OR project IS NULL) AND COALESCE(project_evidence,'unknown') IN ('unknown','path_fallback')
+		WHERE (project = 'unknown' OR project IS NULL) AND project_evidence IN ('unknown','path_fallback')
 		ORDER BY source_path ASC
 	`)
 	if err != nil {
@@ -1383,7 +1385,7 @@ func (d *Database) ReresolveProjectsContext(ctx context.Context, resolver func(s
 			continue
 		}
 		if _, err := tx.ExecContext(ctx, `
-			UPDATE search_items SET project = ? WHERE source_path = ? AND COALESCE(project_evidence,'unknown') IN ('unknown','path_fallback')
+			UPDATE search_items SET project = ? WHERE source_path = ? AND project_evidence IN ('unknown','path_fallback')
 		`, resolvedID, sourcePath); err != nil {
 			if ctxErr := ctx.Err(); ctxErr != nil {
 				return 0, ctxErr
@@ -1409,7 +1411,9 @@ func (d *Database) ReresolveProjectsWithRegistry(ctx context.Context, registry p
 }
 
 // ReresolveProjectsWithRegistryContext corrects fallback project labels using
-// registry matches. Cancellation rolls back all updates from this call.
+// registry matches only after parser completion (non-NULL evidence). Both the
+// candidate query and transactional update guard pending native replay per row.
+// Cancellation rolls back all updates from this call.
 func (d *Database) ReresolveProjectsWithRegistryContext(ctx context.Context, registry projects.ProjectRegistry) (updatedPaths int64, retErr error) {
 	if err := ctx.Err(); err != nil {
 		return 0, err
@@ -1420,7 +1424,7 @@ func (d *Database) ReresolveProjectsWithRegistryContext(ctx context.Context, reg
 	rows, err := d.db.QueryContext(ctx, `
 		SELECT DISTINCT si.source_path, si.project
 		FROM search_items si
-		WHERE si.project IS NOT NULL AND COALESCE(si.project_evidence,'unknown') IN ('unknown','path_fallback')
+		WHERE si.project IS NOT NULL AND si.project_evidence IN ('unknown','path_fallback')
 		ORDER BY si.source_path ASC, si.project ASC
 	`)
 	if err != nil {
@@ -1488,7 +1492,7 @@ func (d *Database) ReresolveProjectsWithRegistryContext(ctx context.Context, reg
 			continue
 		}
 		if _, err := tx.ExecContext(ctx, `
-			UPDATE search_items SET project = ?, project_evidence = 'registry' WHERE source_path = ? AND COALESCE(project_evidence,'unknown') IN ('unknown','path_fallback')
+			UPDATE search_items SET project = ?, project_evidence = 'registry' WHERE source_path = ? AND project_evidence IN ('unknown','path_fallback')
 		`, identity.ProjectID, path.path); err != nil {
 			if ctxErr := ctx.Err(); ctxErr != nil {
 				return 0, ctxErr
