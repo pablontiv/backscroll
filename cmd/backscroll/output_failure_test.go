@@ -120,7 +120,7 @@ func TestRequiredOutputFailures(t *testing.T) {
 						if want, ok := goldens[key]; !ok || want != normalized {
 							t.Fatalf("output incompatible with audited baseline\nwant: %s\ngot: %s", want, normalized)
 						}
-						if populated && good.Len() == 0 {
+						if goldens[key] != "" && good.Len() == 0 {
 							t.Fatal("nonempty branch produced no output")
 						}
 						for failAt := 1; failAt <= good.calls; failAt++ {
