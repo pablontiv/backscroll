@@ -152,16 +152,18 @@ func (d *Database) QueryContextRecords(ctx context.Context, q ContextRecordQuery
 type contextRecordAnchor struct {
 	id         int64
 	sourcePath string
+	ordinal    int64
+	uuid       sql.NullString
 }
 
 func resolveContextRecordAnchor(ctx context.Context, tx *sql.Tx, q ContextRecordQuery) (contextRecordAnchor, error) {
 	var query string
 	var args []any
 	if q.UUID != nil {
-		query = `SELECT id, source_path FROM search_items WHERE uuid = ? ORDER BY id ASC LIMIT 2`
+		query = `SELECT id, source_path, ordinal, uuid FROM search_items WHERE uuid = ? ORDER BY id ASC LIMIT 2`
 		args = []any{*q.UUID}
 	} else {
-		query = `SELECT id, source_path FROM search_items WHERE source_path = ? AND ordinal = ? ORDER BY id ASC LIMIT 2`
+		query = `SELECT id, source_path, ordinal, uuid FROM search_items WHERE source_path = ? AND ordinal = ? ORDER BY id ASC LIMIT 2`
 		args = []any{*q.SourcePath, *q.Ordinal}
 	}
 
@@ -174,7 +176,7 @@ func resolveContextRecordAnchor(ctx context.Context, tx *sql.Tx, q ContextRecord
 	matches := make([]contextRecordAnchor, 0, 2)
 	for rows.Next() {
 		var match contextRecordAnchor
-		if err := rows.Scan(&match.id, &match.sourcePath); err != nil {
+		if err := rows.Scan(&match.id, &match.sourcePath, &match.ordinal, &match.uuid); err != nil {
 			return contextRecordAnchor{}, fmt.Errorf("scan context record anchor: %w", err)
 		}
 		matches = append(matches, match)

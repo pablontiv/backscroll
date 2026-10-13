@@ -948,54 +948,41 @@ func (d *Database) AggregateCorrections(opts CorrectionAggOpts) ([]CorrectionCan
 // UpsertAnnotation inserts or replaces an annotation for a message.
 // Resolves the target message to canonical (source_path, ordinal) coordinates.
 // If uuid is provided, resolves from uuid; otherwise uses source_path+ordinal.
-// If both are provided and differ, returns error (no write).
-// Returns error early if message not found (no write on validation failure).
+// Each supplied coordinate must match the UUID, even when supplied alone.
+// Shares context's typed absence/ambiguity errors; rejection never writes.
 func (d *Database) UpsertAnnotation(itemUUID, sourcePath string, ordinal int, kind, label string) error {
-	var resolvedPath string
-	var resolvedOrdinal int
-
-	// Resolve canonical coordinates
+	q := ContextRecordQuery{}
 	if itemUUID != "" {
-		// Resolve from uuid
-		if err := d.db.QueryRow("SELECT source_path, ordinal FROM search_items WHERE uuid = ?", itemUUID).Scan(&resolvedPath, &resolvedOrdinal); err != nil {
-			if err == sql.ErrNoRows {
-				return fmt.Errorf("message not found: uuid=%q", itemUUID)
-			}
-			return fmt.Errorf("resolve uuid %q: %w", itemUUID, err)
-		}
-
-		// If caller also provided path/ordinal, validate they match
-		if sourcePath != "" && ordinal >= 0 {
-			if resolvedPath != sourcePath || resolvedOrdinal != ordinal {
-				return fmt.Errorf("uuid and path/ordinal refer to different messages: uuid=%q resolved to (%q,%d), caller provided (%q,%d)", itemUUID, resolvedPath, resolvedOrdinal, sourcePath, ordinal)
-			}
-		}
+		q.UUID = &itemUUID
 	} else if sourcePath != "" && ordinal >= 0 {
-		// Resolve from source_path+ordinal and validate message exists
-		var uuid sql.NullString
-		if err := d.db.QueryRow("SELECT uuid FROM search_items WHERE source_path = ? AND ordinal = ?", sourcePath, ordinal).Scan(&uuid); err != nil {
-			if err == sql.ErrNoRows {
-				return fmt.Errorf("message not found: source_path=%q ordinal=%d", sourcePath, ordinal)
-			}
-			return fmt.Errorf("resolve source_path %q ordinal %d: %w", sourcePath, ordinal, err)
-		}
-		resolvedPath = sourcePath
-		resolvedOrdinal = ordinal
-		if uuid.Valid {
-			itemUUID = uuid.String
-		}
+		q.SourcePath = &sourcePath
+		n := int64(ordinal)
+		q.Ordinal = &n
 	} else {
 		return fmt.Errorf("must provide either --uuid or both --path and --ordinal")
 	}
-
-	// Upsert with RESOLVED coordinates: INSERT OR REPLACE with current timestamp
-	now := time.Now().Format(time.RFC3339)
-	_, err := d.db.Exec(`
+	// Resolve and write in one transaction, using the same exact boundary as context.
+	tx, err := d.db.BeginTx(context.Background(), nil)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = tx.Rollback() }()
+	anchor, err := resolveContextRecordAnchor(context.Background(), tx, q)
+	if err != nil {
+		return err
+	}
+	if itemUUID != "" && ((sourcePath != "" && sourcePath != anchor.sourcePath) || (ordinal >= 0 && int64(ordinal) != anchor.ordinal)) {
+		return fmt.Errorf("uuid and path/ordinal refer to different messages: uuid=%q resolved to (%q,%d), caller provided (%q,%d)", itemUUID, anchor.sourcePath, anchor.ordinal, sourcePath, ordinal)
+	}
+	_, err = tx.Exec(`
 		INSERT OR REPLACE INTO annotations
 		(item_uuid, source_path, ordinal, kind, label, source, created_at)
 		VALUES (?, ?, ?, ?, ?, 'agent', ?)
-	`, itemUUID, resolvedPath, resolvedOrdinal, kind, label, now)
-	return err
+	`, anchor.uuid.String, anchor.sourcePath, anchor.ordinal, kind, label, time.Now().Format(time.RFC3339))
+	if err != nil {
+		return err
+	}
+	return tx.Commit()
 }
 
 // LoadSequencesOpts specifies filters for loading tool sequences.

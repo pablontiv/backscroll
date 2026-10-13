@@ -2,7 +2,9 @@ package main
 
 import (
 	"bytes"
+	"database/sql"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/pablontiv/backscroll/internal/storage"
@@ -63,5 +65,63 @@ func TestAnnotateCommandMissingMessage(t *testing.T) {
 	err = run(&stdout, &stderr, []string{"annotate", "--uuid", "nonexistent", "--kind", "correction", "--label", "label"})
 	if err == nil {
 		t.Fatal("expected error for missing message")
+	}
+}
+
+func TestAnnotateExactIdentity(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "identity.db")
+	db, err := storage.Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = db.Close()
+	raw, err := sql.Open("sqlite", path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer raw.Close()
+	for _, u := range []string{"opaque one", "opaque two"} {
+		if _, err := raw.Exec(`INSERT INTO search_items(source,source_path,ordinal,role,text,content_type,uuid) VALUES ('session','/duplicate',7,'user','hello','text',?)`, u); err != nil {
+			t.Fatal(err)
+		}
+	}
+	setIndexPolicyEnv(t, path, t.TempDir())
+	invoke := func(selectors []string) error {
+		var out, stderr bytes.Buffer
+		return run(&out, &stderr, append(append([]string{"annotate"}, selectors...), "--kind", "correction", "--label", "reviewed"))
+	}
+	for _, c := range []struct {
+		args []string
+		want string
+	}{
+		{[]string{"--path", "/duplicate", "--ordinal", "7"}, "ambiguous"},
+		{[]string{"--uuid", "absent"}, "not found"},
+		{[]string{"--path", "/absent", "--ordinal", "7"}, "not found"},
+		{[]string{"--uuid", "opaque one", "--path", "/wrong"}, "different messages"},
+		{[]string{"--uuid", "opaque one", "--ordinal", "8"}, "different messages"},
+		{[]string{"--uuid", "opaque one", "--path", "/wrong", "--ordinal", "8"}, "different messages"},
+		{nil, "must provide"},
+	} {
+		if err := invoke(c.args); err == nil || !strings.Contains(err.Error(), c.want) {
+			t.Fatalf("%v: %v", c.args, err)
+		}
+		var count int
+		if err := raw.QueryRow(`SELECT COUNT(*) FROM annotations`).Scan(&count); err != nil {
+			t.Fatal(err)
+		}
+		if count != 0 {
+			t.Fatalf("rejection wrote %d annotations", count)
+		}
+	}
+	if err := invoke([]string{"--uuid", "opaque two"}); err != nil {
+		t.Fatal(err)
+	}
+	var u, p string
+	var n int
+	if err := raw.QueryRow(`SELECT item_uuid,source_path,ordinal FROM annotations`).Scan(&u, &p, &n); err != nil {
+		t.Fatal(err)
+	}
+	if u != "opaque two" || p != "/duplicate" || n != 7 {
+		t.Fatalf("noncanonical: %s %s %d", u, p, n)
 	}
 }
