@@ -19,7 +19,7 @@ type rebuildDependencies struct {
 	rebuildFTSContext                    func(*storage.Database, context.Context) error
 	backfillDerivedContext               func(*storage.Database, context.Context, storage.BackfillDerivedOpts) error
 	reresolveProjectsContext             func(*storage.Database, context.Context, func(string) string) (int64, error)
-	loadRegistry                         func() projects.ProjectRegistry
+	loadRegistry                         func() (projects.ProjectRegistry, error)
 	reresolveProjectsWithRegistryContext func(*storage.Database, context.Context, projects.ProjectRegistry) (int64, error)
 }
 
@@ -84,9 +84,12 @@ func newRebuildCmd(stdout, stderr io.Writer, runner *rebuildRunner) *cobra.Comma
 	}
 	cmd := &cobra.Command{
 		Use:          "rebuild",
+		Args:         cobra.NoArgs,
 		Short:        "Rebuild the FTS search indexes from the database",
 		SilenceUsage: true,
-		Long: `Rebuild re-derives the FTS search indexes from the database itself and
+		Long: `This command accepts no positional operands.
+
+Rebuild re-derives the FTS search indexes from the database itself and
 operates on the index synchronized at command startup. It never deletes indexed
 content: sessions whose source files have expired from disk are preserved (the
 database is the perennial event store). Use 'purge' to delete data explicitly.`,
@@ -117,9 +120,14 @@ func (r *rebuildRunner) runRebuild(ctx context.Context, stdout, stderr io.Writer
 		stderr = io.Discard
 	}
 
+	registry, err := r.deps.loadRegistry()
+	if err != nil {
+		return err
+	}
+
 	db, diag, err := r.deps.prepareIndex(ctx, cfg, indexMutation)
 	if diag != nil {
-		return refuseIndex(stdout, stderr, *diag, false, false)
+		return refuseIndex(stdout, stderr, *diag, outputText)
 	}
 	if err != nil {
 		return fmt.Errorf("prepare index: %w", err)
@@ -184,7 +192,6 @@ func (r *rebuildRunner) runRebuild(ctx context.Context, stdout, stderr io.Writer
 	if err := writeRebuildOutput(stdout, "Checking registry for project label corrections...\n"); err != nil {
 		return err
 	}
-	registry := r.deps.loadRegistry()
 	registryMatched, err := r.deps.reresolveProjectsWithRegistryContext(db, ctx, registry)
 	if err != nil {
 		return fmt.Errorf("registry re-resolution: %w", err)

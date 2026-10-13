@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 
@@ -337,7 +338,8 @@ func TestStatsOptionalTablesDoNotHideMandatoryIndexFailure(t *testing.T) {
 }
 
 // NULL project and command metadata are possible in retained legacy rows.
-// APIs that require those fields must not emit partially decoded records.
+// Required project fields still reject partial pages; optional command heads
+// normalize to complete empty-string identities without dropping retained rows.
 func TestNullLegacyMetadataIsNotPublishedAsPartialPage(t *testing.T) {
 	db, err := Open(filepath.Join(t.TempDir(), "null.db"))
 	if err != nil {
@@ -355,14 +357,69 @@ func TestNullLegacyMetadataIsNotPublishedAsPartialPage(t *testing.T) {
 	if err == nil || sessions != nil || !strings.Contains(err.Error(), "scan session") {
 		t.Fatalf("sessions: %+v %v", sessions, err)
 	}
+
+	// Mix native NULL, empty, and named heads with tied counts. The input order
+	// deliberately differs from the final logical order.
+	for i, head := range []any{"go", "", "git", "go", "git"} {
+		ordinal := i + 1
+		if _, err := db.db.Exec(`INSERT INTO search_items(source,source_path,ordinal,role,text,uuid,content_type,timestamp) VALUES('session','/omp',?,'assistant','retained',?,'tool','2026-09-01T00:00:00Z');`, ordinal, fmt.Sprintf("call-%d", ordinal)); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := db.db.Exec(`INSERT INTO tool_events(source_path,ordinal,tool_name,command_head,extraction_version) VALUES('/omp',?,'bash',?,0)`, ordinal, head); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, err := db.db.Exec("UPDATE tool_events SET is_error=1,exit_code=1"); err != nil {
+		t.Fatal(err)
+	}
+	want := []CommandPattern{{"bash", "", 2}, {"bash", "git", 2}, {"bash", "go", 2}}
 	commands, err := db.AggregateCommands(AggregateOptions{})
-	if err == nil || commands != nil || !strings.Contains(err.Error(), "scan") {
-		t.Fatalf("commands: %+v %v", commands, err)
+	if err != nil || !reflect.DeepEqual(commands, want) {
+		t.Fatalf("complete commands: %+v %v", commands, err)
 	}
 	trends, err := db.AggregateCommandsTrend(AggregateOptions{}, nil)
-	if err == nil || trends != nil || !strings.Contains(err.Error(), "scan") {
-		t.Fatalf("trends: %+v %v", trends, err)
+	if err != nil || len(trends) != len(want) {
+		t.Fatalf("complete trends: %+v %v", trends, err)
 	}
+	for i, expected := range want {
+		if trends[i].Week != "2026-W35" || trends[i].ToolName != expected.ToolName || trends[i].CommandHead != expected.CommandHead || trends[i].Count != expected.Count {
+			t.Fatalf("trend %d: %+v", i, trends[i])
+		}
+		page, err := db.AggregateCommands(AggregateOptions{Limit: 1, Offset: i})
+		if err != nil || !reflect.DeepEqual(page, want[i:i+1]) {
+			t.Fatalf("command page %d: %+v %v", i, page, err)
+		}
+		weekly, err := db.AggregateCommandsTrend(AggregateOptions{Limit: 1, Offset: i}, nil)
+		if err != nil || !reflect.DeepEqual(weekly, trends[i:i+1]) {
+			t.Fatalf("weekly page %d: %+v %v", i, weekly, err)
+		}
+	}
+	tail, err := db.AggregateCommands(AggregateOptions{Offset: 1})
+	if err != nil || !reflect.DeepEqual(tail, want[1:]) {
+		t.Fatalf("unlimited tail: %+v %v", tail, err)
+	}
+	failures, err := db.AggregateFailures(AggregateOptions{})
+	if err != nil || len(failures) != 1 || failures[0].ToolName != "bash" || !failures[0].IsError || failures[0].ExitCode == nil || *failures[0].ExitCode != 1 || failures[0].Count != 6 || failures[0].SignalledEvents != 6 {
+		t.Fatalf("complete failures: %+v %v", failures, err)
+	}
+	weeklyFailures, err := db.AggregateFailuresTrend(AggregateOptions{}, nil)
+	if err != nil || len(weeklyFailures) != 1 || weeklyFailures[0].Count != 6 || weeklyFailures[0].SignalledEvents != 6 {
+		t.Fatalf("complete failure trends: %+v %v", weeklyFailures, err)
+	}
+	var nulls int
+	if err := db.db.QueryRow("SELECT COUNT(*) FROM tool_events WHERE command_head IS NULL").Scan(&nulls); err != nil || nulls != 1 {
+		t.Fatalf("persisted NULL proof changed: %d %v", nulls, err)
+	}
+	// tool_name remains required by the persisted contract: reject malformed
+	// proof at the write boundary instead of weakening aggregate consumers.
+	if _, err := db.db.Exec("UPDATE tool_events SET tool_name=NULL WHERE ordinal=5"); err == nil {
+		t.Fatal("required tool_name accepted NULL")
+	}
+	commands, err = db.AggregateCommands(AggregateOptions{})
+	if err != nil || !reflect.DeepEqual(commands, want) {
+		t.Fatalf("rejected malformed write changed complete records: %+v %v", commands, err)
+	}
+
 }
 
 // Optional embedding counts may tolerate an absent table, but must never

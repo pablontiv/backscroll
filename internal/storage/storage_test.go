@@ -203,7 +203,7 @@ func TestOpenReadOnly(t *testing.T) {
 	defer cleanup()
 
 	// Close the write connection
-	dbPath := filepath.Join(os.TempDir(), "test_readonly.db")
+	dbPath := filepath.Join(t.TempDir(), "test_readonly.db")
 	_ = db.Close()
 
 	// Create a fresh database for read-only test
@@ -1132,6 +1132,51 @@ func TestPurge(t *testing.T) {
 	err = db.db.QueryRow("SELECT COUNT(*) FROM search_items WHERE source_path = ?", "/path/to/new_session.jsonl").Scan(&count)
 	if err != nil || count != 1 {
 		t.Fatalf("expected 1 new record, got %d", count)
+	}
+}
+
+func TestPurgeComparesRFC3339TimestampsAsInstants(t *testing.T) {
+	db, cleanup := newTestDB(t)
+	defer cleanup()
+
+	files := []IndexedFile{
+		{
+			SourcePath: "/offset-before.jsonl",
+			Source:     "session",
+			Hash:       "before",
+			Messages: []IndexedMessage{{
+				Ordinal: 0, Role: "user", Text: "before", UUID: getTestUUID(),
+				Timestamp: "2026-01-01T00:30:00+01:00", ContentType: "text",
+			}},
+		},
+		{
+			SourcePath: "/offset-equal.jsonl",
+			Source:     "session",
+			Hash:       "equal",
+			Messages: []IndexedMessage{{
+				Ordinal: 0, Role: "user", Text: "equal", UUID: getTestUUID(),
+				Timestamp: "2025-12-31T19:00:00-05:00", ContentType: "text",
+			}},
+		},
+	}
+	if err := db.SyncFiles(files); err != nil {
+		t.Fatal(err)
+	}
+
+	deleted, err := db.Purge("2026-01-01T00:00:00Z")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if deleted != 1 {
+		t.Fatalf("deleted = %d, want 1", deleted)
+	}
+
+	var remaining string
+	if err := db.db.QueryRow(`SELECT source_path FROM search_items`).Scan(&remaining); err != nil {
+		t.Fatal(err)
+	}
+	if remaining != "/offset-equal.jsonl" {
+		t.Fatalf("remaining source = %q, want exclusive cutoff row", remaining)
 	}
 }
 

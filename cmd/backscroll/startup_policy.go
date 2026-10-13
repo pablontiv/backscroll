@@ -10,6 +10,7 @@ import (
 	"github.com/pablontiv/backscroll/internal/compat"
 	"github.com/pablontiv/backscroll/internal/config"
 	"github.com/pablontiv/backscroll/internal/input_config"
+	"github.com/pablontiv/backscroll/internal/projects"
 	"github.com/pablontiv/backscroll/internal/recovery"
 	"github.com/spf13/cobra"
 )
@@ -19,14 +20,15 @@ type startupPolicyFunc func(context.Context, io.Writer, startupCommandClass) sta
 type startupStage string
 
 const (
-	startupStageUnknown        startupStage = "unknown"
-	startupStageInputDir       startupStage = "input_dir"
-	startupStageLegacySource   startupStage = "legacy_source"
-	startupStageConfigLoad     startupStage = "config_load"
-	startupStageActiveManifest startupStage = "active_manifest"
-	startupStageSyncLock       startupStage = "sync_lock"
-	startupStageIndexPrepare   startupStage = "index_prepare"
-	startupStageStartupSync    startupStage = "startup_sync"
+	startupStageUnknown         startupStage = "unknown"
+	startupStageInputDir        startupStage = "input_dir"
+	startupStageLegacySource    startupStage = "legacy_source"
+	startupStageProjectRegistry startupStage = "project_registry"
+	startupStageConfigLoad      startupStage = "config_load"
+	startupStageActiveManifest  startupStage = "active_manifest"
+	startupStageSyncLock        startupStage = "sync_lock"
+	startupStageIndexPrepare    startupStage = "index_prepare"
+	startupStageStartupSync     startupStage = "startup_sync"
 )
 
 type startupFailure struct {
@@ -86,6 +88,7 @@ type startupWarning struct {
 
 type startupResult struct {
 	Config  *config.Config
+	inputs  *inputSnapshot
 	Failure *startupFailure
 	Warning *startupWarning
 	Lease   startupLease
@@ -113,7 +116,19 @@ func startupResultFrom(cmd *cobra.Command) startupResult {
 	return result
 }
 
-func (c *startupCoordinator) defaultStartupPolicy(ctx context.Context, progress io.Writer, class startupCommandClass) startupResult {
+func (c *startupCoordinator) defaultStartupPolicy(ctx context.Context, progress io.Writer, class startupCommandClass) (result startupResult) {
+	if c.syncService.diagnostics {
+		report := c.syncService.newDiagnostics()
+		report.policyOwned = true
+		ctx = context.WithValue(ctx, startupDiagnosticsContextKey{}, report)
+		defer func() {
+			// Successful remediation transfers this same finalizer to its handler,
+			// which extends the interval through recovery and post-install sync.
+			if class != startupRemediation || result.Failure != nil || result.timing.report != report {
+				report.render(startupDiagnosticsWriter(ctx, progress))
+			}
+		}()
+	}
 	if err := ctx.Err(); err != nil {
 		return startupResult{Failure: &startupFailure{Stage: startupStageInputDir, Cause: err, Diagnostic: compat.Diagnostic{Code: compat.CodeMigrationFailed, Summary: err.Error()}}}
 	}
@@ -122,7 +137,8 @@ func (c *startupCoordinator) defaultStartupPolicy(ctx context.Context, progress 
 		cause := fmt.Errorf("resolve inputs directory: %w", err)
 		return startupResult{Failure: &startupFailure{Stage: startupStageInputDir, Cause: cause, Diagnostic: compat.Diagnostic{Code: compat.CodeMigrationFailed, Summary: cause.Error()}}}
 	}
-	if err := config.ValidateNoLegacySources(inputsDir); err != nil {
+	cfg, err := config.LoadValidated(inputsDir)
+	if err != nil {
 		stage := startupStageConfigLoad
 		var legacyErr *config.LegacySourcesError
 		if errors.As(err, &legacyErr) {
@@ -130,19 +146,21 @@ func (c *startupCoordinator) defaultStartupPolicy(ctx context.Context, progress 
 		}
 		return startupResult{Failure: &startupFailure{Stage: stage, Cause: err, Diagnostic: compat.Diagnostic{Code: compat.CodeMigrationFailed, Summary: err.Error()}}}
 	}
-	cfg, err := config.Load()
-	if err != nil {
-		cause := fmt.Errorf("load config: %w", err)
-		return startupResult{Failure: &startupFailure{Stage: startupStageConfigLoad, Cause: cause, Diagnostic: compat.Diagnostic{Code: compat.CodeMigrationFailed, Summary: cause.Error()}}}
+	if _, err := projects.LoadGlobalRegistry(); err != nil {
+		return startupResult{Config: cfg, Failure: &startupFailure{Stage: startupStageProjectRegistry, Cause: err, Diagnostic: compat.Diagnostic{Code: compat.CodeMigrationFailed, Summary: err.Error()}}}
 	}
-	if _, _, err := input_config.ActiveInputs(cfg.SessionDirs); err != nil {
+	snapshot, err := c.syncService.resolveInputSnapshot(cfg)
+	if err != nil {
 		cause := fmt.Errorf("validate active inputs: %w", err)
 		return startupResult{Config: cfg, Failure: &startupFailure{Stage: startupStageActiveManifest, Cause: cause, Diagnostic: compat.Diagnostic{Code: compat.CodeMigrationFailed, Summary: cause.Error()}}}
 	}
 	if err := ctx.Err(); err != nil {
 		return startupResult{Config: cfg, Failure: &startupFailure{Stage: startupStageActiveManifest, Cause: err, Diagnostic: compat.Diagnostic{Code: compat.CodeMigrationFailed, Summary: err.Error()}}}
 	}
-	return c.coordinate(ctx, cfg, progress, class)
+	ctx = context.WithValue(ctx, inputSnapshotKey{}, snapshot)
+	result = c.coordinate(ctx, cfg, progress, class)
+	result.inputs = snapshot
+	return result
 }
 
 func validateCommandBeforeStartup(cmd *cobra.Command, args []string, positional cobra.PositionalArgs, semantic func() error) error {
@@ -162,6 +180,9 @@ func validateCommandBeforeStartup(cmd *cobra.Command, args []string, positional 
 
 func validateRequiredFlagsAndGroups(cmd *cobra.Command) error {
 	if err := cmd.ValidateRequiredFlags(); err != nil {
+		return err
+	}
+	if _, err := resolveOutputMode(commandBoolFlag(cmd, "json"), commandBoolFlag(cmd, "robot")); err != nil {
 		return err
 	}
 	return cmd.ValidateFlagGroups()
@@ -214,9 +235,20 @@ query merges both by rank position (RRF).`,
 			if err := validateRequiredFlagsAndGroups(cmd); err != nil {
 				return err
 			}
+			if err := selectInvocationOutputMode(cmd); err != nil {
+				return err
+			}
 			class, _ := startupCommandClassFor(cmd)
-			result := policy(cmd.Context(), startupProgressWriter(cmd, stderr), class)
-			cmd.SetContext(context.WithValue(cmd.Context(), startupContextKey{}, result))
+			ctx := cmd.Context()
+			if syncService.diagnostics {
+				ctx = context.WithValue(ctx, startupDiagnosticsWriterKey{}, stderr)
+			}
+			result := policy(ctx, startupProgressWriter(cmd, stderr), class)
+			ctx = context.WithValue(cmd.Context(), startupContextKey{}, result)
+			if result.inputs != nil {
+				ctx = context.WithValue(ctx, inputSnapshotKey{}, result.inputs)
+			}
+			cmd.SetContext(ctx)
 			if result.Warning != nil {
 				if _, err := fmt.Fprintf(stderr, "warning: %s: %s\n", result.Warning.Code, result.Warning.Summary); err != nil {
 					return result.release(err)
@@ -228,7 +260,7 @@ query merges both by rank position (RRF).`,
 			}
 			failureErr := result.release(failure)
 			if failure.Diagnostic.Code != "" || strings.TrimSpace(failure.Diagnostic.Summary) != "" {
-				return refuseIndexWithCause(stdout, stderr, failure.renderedDiagnostic(), failureErr, commandBoolFlag(cmd, "json"), commandBoolFlag(cmd, "robot"))
+				return refuseIndexWithCause(stdout, stderr, failure.renderedDiagnostic(), failureErr, invocationOutputMode(cmd))
 			}
 			return failureErr
 		},
@@ -253,7 +285,7 @@ query merges both by rank position (RRF).`,
 }
 
 func startupProgressWriter(cmd *cobra.Command, stderr io.Writer) io.Writer {
-	if commandBoolFlag(cmd, "json") || commandBoolFlag(cmd, "robot") {
+	if invocationOutputMode(cmd) != outputText {
 		return io.Discard
 	}
 	return stderr

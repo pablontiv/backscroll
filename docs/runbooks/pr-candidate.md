@@ -145,12 +145,20 @@ database at the isolated path.
 ## Autoupdate limitation and cleanup
 
 Candidate binaries retain Backscroll's mandatory autoupdate behavior; there is
-no supported environment-variable opt-out. A command may contact GitHub and
+no supported environment-variable opt-out. A valid executable command may contact GitHub and
 stage a newer stable release in the isolated cache. A later invocation can
 replace the candidate binary in its side-by-side directory if that stable
 version compares newer. Re-extract the verified archive before further
 candidate testing when exact build identity matters, and check `--version`
-again.
+again. Help, version, invalid invocations, and `--skill` do not apply or fetch.
+Apply/fetch failures warn nonfatally on stderr; stdout/JSON/robot are unchanged.
+After execution staging waits up to 10s, then warns if incomplete without changing
+command success. Dev builds remain exempt by identity; cancellation returns promptly
+and cancels context-aware fetch requests, also bounded by a 60s HTTP timeout per
+request. Cancellation/the cap joins bounded backend cleanup before returning.
+Private staging uses unique synced temporary files and conservative byte limits.
+The private updater retains valid staged candidates when applying fails;
+see `internal/autoupdate/README.md` for the release-format contract.
 
 Remove downloaded archives, the side-by-side candidate directory, and the smoke
 directory when testing is complete:

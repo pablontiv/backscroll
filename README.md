@@ -151,9 +151,12 @@ How a file is re-synced depends on whether its messages carry identity. Sessions
 
 ### Recover what happened
 
-Every operational command validates active manifests and attempts one incremental
-sync before executing. Session, plan, and Markdown files are ingestion inputs;
-SQLite is the perennial record used by search, context, list, patterns, status, and validate.
+Ordinary snapshot-read, metadata-read, and mutation owners validate active manifests
+and attempt one incremental sync before executing. Busy readers may follow the
+last committed snapshot; `recover` skips preparation/pre-sync and syncs only after
+installing a replacement. See [startup classes and exceptions](docs/sync.md).
+Session, plan, and Markdown files are ingestion inputs; SQLite is the perennial
+record used by search, context, list, patterns, status, and validate.
 Use `search` to discover relevant records. Every search result exposes its stored path, nullable UUID, and ordinal. If `uuid`/`UUID` is not null, pass that UUID to `context`. If it is null, pass the exact stored path and ordinal instead.
 
 ```bash
@@ -173,6 +176,12 @@ A context UUID is opaque and is never synthesized for a result that lacks one. T
 
 Filters worth knowing: `--after` / `--before` for a date window, `--tag` for auto-detected session categories (debugging, refactoring, testing…), `--source-path` to pin one stored input path, `--source` to keep one source class, and `--role` to filter the stored role field. The role field is not a semantic-origin guarantee.
 
+`--lexical-only` explicitly selects BM25-only retrieval. The CLI currently has no
+wired embedding provider, so ordinary search also falls back to lexical retrieval.
+`--similarity-threshold F` accepts a finite value in `0..1` (default `0.3`,
+`0` disables a vector threshold), but applies only to vector results; it does not
+filter BM25 results or `--relax`. These flags do not enable semantic expansion.
+
 ### Discover what recurs
 
 ```bash
@@ -180,10 +189,14 @@ backscroll patterns --kind commands     # what runs most
 backscroll patterns --kind failures     # what breaks, with exit codes
 backscroll patterns --kind templates    # recurring error shapes
 backscroll patterns --kind sequences    # workflows that repeat
+backscroll patterns --kind sequences --after 2026-01-01 --before 2027-01-01 --json
 backscroll patterns --kind corrections --origin human  # where you corrected course
 ```
 
 `--trend` buckets commands and failures by week. `--min-support N` sets how many occurrences make a pattern. Sequences also take `--min-length` / `--max-length`.
+Sequence `--after` is inclusive (`>=`) and `--before` exclusive (`<`): the example
+selects timestamped events in `[2026-01-01, 2027-01-01)` before mining, excluding
+events with unknown timestamps. See [sequence date filters](docs/patterns.md#sequences--frequent-workflows-exploratory).
 
 Correction candidates are detected deterministically, never by a model, and are meant to be labelled. `--origin human|assistant|system|automation|unknown` is an opt-in corrections-only filter; it is applied before pagination, and omitting it preserves the existing population and output shape:
 
@@ -201,11 +214,29 @@ Labelled candidates drop out of `--pending`, so the loop resumes wherever it sto
 ### Keep the index healthy
 
 ```bash
-backscroll status            # size, counts, last sync
-backscroll validate --json   # parseable integrity check
+backscroll --version         # deployed version; dev builds report dev
+backscroll config --json     # effective database, session_dirs, and active inputs
+backscroll status            # size, counts, last sync (not build identity)
+backscroll validate --json   # prepared-index integrity, not input inventory
 backscroll rebuild           # re-derive search indexes from the database
 backscroll purge --before "$DATE"   # the only deletion path
 ```
+
+For exact development-build provenance, use `go version -m "$(command -v backscroll)"`
+and inspect `vcs.revision`/`vcs.modified`; `--version` is not a commit identifier.
+Purge is destructive: `--before` accepts `YYYY-MM-DD` (midnight UTC) or RFC3339
+with `Z`/an explicit offset (for example `2026-01-01T12:30:00+02:00`). It deletes
+only timestamps strictly earlier than that instant; equal and NULL timestamps
+survive. Offset timestamps are compared as UTC instants, not local calendar dates.
+
+For stranded indexes, first inspect `backscroll recover --from "$STRANDED_DB" --dry-run`,
+then intentionally apply without `--dry-run`. The configured active database must
+already exist. Recovery preserves an active backup, but a post-install sync error
+leaves the replacement installed; it is **not automatic rollback**. Follow the
+[recovery runbook](docs/sync.md#recovery-runbook), including backup restoration.
+Automatic migration snapshots are sibling `*.snapshot-v<from>-<signature12>-to-v<to>`
+files with collision suffixes and two validated snapshots retained; they are
+distinct from recovery backups. See [snapshot retention](docs/sync.md#migration-snapshots-and-recovery-backups).
 
 `rebuild` operates after the mandatory root startup sync has already prepared the database. The handler does not perform a second sync: it re-derives search indexes from stored rows, re-derives templates/correction signals/tool-event satellites where possible, and re-resolves project identities. Sessions that vanished from disk survive it untouched.
 
@@ -234,7 +265,7 @@ Agents use the same commands with `--robot --fields minimal --max-tokens N`. The
 Backscroll separates application configuration from input configuration.
 
 - **Application config** (`backscroll.toml`) controls where the database lives. By default, Backscroll creates an index at `~/.backscroll.db`.
-- **Input config** (`*.inputs.toml`) controls what files are ingested before operational commands query SQLite. The canonical runtime location is `<config_dir>/backscroll/inputs/*.inputs.toml`, where `<config_dir>` is the OS config directory or `BACKSCROLL_CONFIG_DIR` when set.
+- **Input config** (`*.inputs.toml`) controls ingestion during ordinary owner startup. The canonical runtime location is `<config_dir>/backscroll/inputs/*.inputs.toml`, where `<config_dir>` is `BACKSCROLL_CONFIG_DIR` when non-empty, otherwise `$HOME/.config` on every OS (including Windows `<user-home>\.config`). `XDG_CONFIG_HOME`, macOS Application Support, and `%APPDATA%` do not select this directory.
 
 Override app settings by creating `~/.config/backscroll/config.toml` or `backscroll.toml` in the current directory:
 
@@ -267,7 +298,7 @@ exclude = ["**/subagents/**"]
 format = "claude"
 ```
 
-A manifest declares only **where** to find sessions (`discover`) and **how** to decode them (`decode.format`). Each `format` is handled by a dedicated reader that knows that agent's session schema — `claude`, `pi`, `omp`, `opencode`, and `codex` ship built in. The repository presets (`inputs/*.inputs.toml`) are examples to install into the global input directory via the install script; Backscroll does not read the repository `inputs/` directory at runtime. View configured inputs with `backscroll config` or `backscroll validate`.
+A manifest declares **where** to find inputs (`discover`) and **how** to decode them (`decode.format`). Built-in readers are `claude`, `pi`, `omp`, `opencode`, `codex`, `markdown_document` (one whole-document record), and `markdown_sections` (records split on `## ` headings, with whole-document fallback). The repository presets (`inputs/*.inputs.toml`) are examples to install into the global input directory; Backscroll does not read that repository directory at runtime. Use `backscroll config` or `backscroll config --json` for the input inventory; `validate` checks prepared-index integrity instead. See the [authoritative Markdown input contract](docs/input-contract.md#markdown-document-inputs) for manifest examples and split behavior.
 
 See [Configuration docs](docs/configuration.md) for the full resolution order and all options.
 
@@ -322,3 +353,23 @@ Commits follow [Conventional Commits](https://www.conventionalcommits.org/) (`ty
 ## License
 
 [Apache License 2.0](LICENSE) — free for commercial and non-commercial use.
+
+
+### Automatic updates
+
+Autoupdate is mandatory for valid executable release commands; there is no runtime
+opt-out. It starts after command/flag/argument validation and before startup/index
+work. Invalid invocations, help, version, and `--skill` never apply, fetch, or wait.
+Plain `go build` produces a `dev` identity, exempt in the private updater backend.
+
+Apply and completed fetch failures emit one concise `warning: autoupdate: ...` on
+stderr without failing the command or changing stdout/JSON/robot output. Successful
+updates are silent. After command execution, staging waits up to 10s; if it has not
+completed, the command returns its normal result with a timeout warning.
+Cancellation returns promptly without reporting a fabricated network failure;
+all fetch requests are context-aware and canceled on cancellation or the staging cap,
+with a 60s HTTP timeout per request. The private backend preserves the pinned picokit
+Apache v1.0.0 release format while returning errors upstream swallowed; cancellation
+and the cap join bounded extraction/publication cleanup before return, with unique
+synced temporary files and conservative byte limits; see
+[`internal/autoupdate/README.md`](internal/autoupdate/README.md).

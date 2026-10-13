@@ -2,6 +2,7 @@ package input_config
 
 import (
 	"context"
+	"fmt"
 	"io/fs"
 	"os"
 	"path/filepath"
@@ -55,42 +56,27 @@ func DiscoverFilesContext(ctx context.Context, cfg DiscoverConfig) ([]string, er
 	return results, nil
 }
 
+const (
+	maxDiscoveryDepth   = 256
+	maxDiscoveryEntries = 100_000
+)
+
 func walkGlobContext(ctx context.Context, root, pattern string, excludes []string, followSymlinks bool, seen map[string]struct{}) ([]string, error) {
+	physicalRoot, err := filepath.EvalSymlinks(root)
+	if err != nil {
+		return nil, nil
+	}
+	rootInfo, err := os.Stat(physicalRoot)
+	if err != nil || !rootInfo.IsDir() {
+		return nil, nil
+	}
+
 	var results []string
+	visitedEntries := 0
 
-	err := filepath.WalkDir(root, func(path string, d fs.DirEntry, err error) error {
-		if ctxErr := ctx.Err(); ctxErr != nil {
-			return ctxErr
-		}
-		if err != nil {
-			return nil // skip unreadable entries
-		}
-
-		if d.Type()&fs.ModeSymlink != 0 {
-			if !followSymlinks {
-				if d.IsDir() {
-					return filepath.SkipDir
-				}
-				return nil
-			}
-			// Resolve symlink and check for loops
-			resolved, err := filepath.EvalSymlinks(path)
-			if err != nil {
-				return nil
-			}
-			if _, already := seen[resolved]; already {
-				return filepath.SkipDir
-			}
-			seen[resolved] = struct{}{}
-		}
-
-		if d.IsDir() {
-			return nil
-		}
-
-		// Check against exclude patterns
+	addMatch := func(aliasPath string) error {
 		for _, excl := range excludes {
-			matched, err := matchPattern(path, excl)
+			matched, err := matchPattern(aliasPath, excl)
 			if err != nil {
 				return err
 			}
@@ -99,34 +85,111 @@ func walkGlobContext(ctx context.Context, root, pattern string, excludes []strin
 			}
 		}
 
-		// Check against the include pattern
-		rel, err := filepath.Rel(root, path)
+		rel, err := filepath.Rel(root, aliasPath)
 		if err != nil {
 			return err
 		}
 		matched, err := matchDoublestar(pattern, rel)
-		if err != nil {
+		if err != nil || !matched {
 			return err
 		}
-		if !matched {
-			return nil
-		}
 
-		// Validate path stays within root and resolves symlinks securely
 		abs, _, err := pathsec.ResolveInside(root, rel)
 		if ctxErr := ctx.Err(); ctxErr != nil {
 			return ctxErr
 		}
 		if err != nil {
-			return nil // Skip paths that escape root or are invalid
+			return nil
 		}
 		if _, dup := seen[abs]; !dup {
 			seen[abs] = struct{}{}
 			results = append(results, abs)
 		}
 		return nil
-	})
+	}
+
+	var walk func(aliasDir, physicalDir string, depth int, ancestors []fs.FileInfo) error
+	walk = func(aliasDir, physicalDir string, depth int, ancestors []fs.FileInfo) error {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		if depth > maxDiscoveryDepth {
+			return fmt.Errorf("discover %q: directory depth exceeds %d", aliasDir, maxDiscoveryDepth)
+		}
+
+		entries, err := os.ReadDir(physicalDir)
+		if err != nil {
+			return nil
+		}
+		for _, entry := range entries {
+			if err := ctx.Err(); err != nil {
+				return err
+			}
+			visitedEntries++
+			if visitedEntries > maxDiscoveryEntries {
+				return fmt.Errorf("discover %q: entry limit exceeds %d", root, maxDiscoveryEntries)
+			}
+
+			aliasPath := filepath.Join(aliasDir, entry.Name())
+			physicalPath := filepath.Join(physicalDir, entry.Name())
+			info, err := os.Lstat(physicalPath)
+			if err != nil {
+				continue
+			}
+
+			if info.Mode()&fs.ModeSymlink != 0 {
+				if !followSymlinks {
+					continue
+				}
+				resolved, err := filepath.EvalSymlinks(physicalPath)
+				if err != nil || !pathWithinRoot(physicalRoot, resolved) {
+					continue
+				}
+				info, err = os.Stat(resolved)
+				if err != nil {
+					continue
+				}
+				physicalPath = resolved
+			}
+
+			if info.IsDir() {
+				if directorySeen(info, ancestors) {
+					continue
+				}
+				nextAncestors := append(append([]fs.FileInfo(nil), ancestors...), info)
+				if err := walk(aliasPath, physicalPath, depth+1, nextAncestors); err != nil {
+					return err
+				}
+				continue
+			}
+			if info.Mode().IsRegular() {
+				if err := addMatch(aliasPath); err != nil {
+					return err
+				}
+			}
+		}
+		return nil
+	}
+
+	err = walk(root, physicalRoot, 0, []fs.FileInfo{rootInfo})
 	return results, err
+}
+
+func pathWithinRoot(root, path string) bool {
+	rel, err := filepath.Rel(root, path)
+	if err != nil {
+		return false
+	}
+	return rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator))
+}
+
+func directorySeen(info fs.FileInfo, ancestors []fs.FileInfo) bool {
+	for _, ancestor := range ancestors {
+		if os.SameFile(info, ancestor) {
+			return true
+		}
+	}
+	return false
 }
 
 // matchPattern matches an exclusion against a path, supporting ** for any depth.

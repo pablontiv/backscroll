@@ -171,7 +171,7 @@ func extractClaudeMessages(ctx context.Context, rec claudeRecord) ([]models.Mess
 	}
 	ts, err := time.Parse(time.RFC3339, rec.Timestamp)
 	if err != nil {
-		ts = time.Now()
+		ts = time.Time{}
 	}
 	role := rec.Message.Role
 	origin := claudeRecordOrigin(rec.Type, role)

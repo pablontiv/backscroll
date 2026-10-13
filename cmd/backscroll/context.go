@@ -33,20 +33,11 @@ type contextCommandOptions struct {
 	before        int
 	after         int
 	maxTokens     int
-	jsonFormat    bool
-	robotFormat   bool
+	mode          outputMode
 	uuidSet       bool
 	sourcePathSet bool
 	ordinalSet    bool
 }
-
-type contextOutputFormat uint8
-
-const (
-	contextTextFormat contextOutputFormat = iota
-	contextJSONFormat
-	contextRobotFormat
-)
 
 type contextAnchorOutput struct {
 	UUID       *string `json:"uuid"`
@@ -75,6 +66,7 @@ type contextEnvelope struct {
 }
 
 func newContextCmd(stdout, stderr io.Writer) *cobra.Command {
+	var jsonFormat, robotFormat bool
 	opts := contextCommandOptions{
 		before:    contextDefaultWindow,
 		after:     contextDefaultWindow,
@@ -93,6 +85,7 @@ func newContextCmd(stdout, stderr io.Writer) *cobra.Command {
 		},
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			opts.captureSelectorFlags(cmd)
+			opts.mode = invocationOutputMode(cmd)
 			startup := startupResultFrom(cmd)
 			if startup.Config == nil {
 				return fmt.Errorf("startup configuration unavailable")
@@ -107,9 +100,10 @@ func newContextCmd(stdout, stderr io.Writer) *cobra.Command {
 	cmd.Flags().IntVar(&opts.before, "before", contextDefaultWindow, "Records before the anchor (0-50)")
 	cmd.Flags().IntVar(&opts.after, "after", contextDefaultWindow, "Records after the anchor (0-50)")
 	cmd.Flags().IntVar(&opts.maxTokens, "max-tokens", contextDefaultMaxTokens, "Maximum Picokit tokens in the complete successful payload; diagnostics are exempt (64-16384)")
-	cmd.Flags().BoolVar(&opts.jsonFormat, "json", false, "Output as JSON")
-	cmd.Flags().BoolVar(&opts.robotFormat, "robot", false, "Output as line-oriented robot data")
+	cmd.Flags().BoolVar(&jsonFormat, "json", false, "Output as JSON")
+	cmd.Flags().BoolVar(&robotFormat, "robot", false, "Output as line-oriented robot data")
 
+	describeOutputModes(cmd)
 	return cmd
 }
 
@@ -122,9 +116,6 @@ func (opts *contextCommandOptions) captureSelectorFlags(cmd *cobra.Command) {
 func validateContextRequest(opts contextCommandOptions) error {
 	if err := services.ValidateContextRequest(contextServiceRequest(opts)); err != nil {
 		return err
-	}
-	if opts.jsonFormat && opts.robotFormat {
-		return fmt.Errorf("--json and --robot are mutually exclusive")
 	}
 	return nil
 }
@@ -150,7 +141,7 @@ func runContextCommand(ctx context.Context, stdout, stderr io.Writer, cfg *confi
 
 	db, diag, err := prepareIndex(ctx, cfg, indexDataRead)
 	if diag != nil {
-		return refuseIndex(stdout, stderr, *diag, opts.jsonFormat, opts.robotFormat)
+		return refuseIndex(stdout, stderr, *diag, opts.mode)
 	}
 	if err != nil {
 		return fmt.Errorf("prepare index: %w", err)
@@ -171,12 +162,7 @@ func runContextCommand(ctx context.Context, stdout, stderr io.Writer, cfg *confi
 		}
 	}
 
-	format := contextTextFormat
-	if opts.jsonFormat {
-		format = contextJSONFormat
-	} else if opts.robotFormat {
-		format = contextRobotFormat
-	}
+	format := opts.mode
 	payload, successfulPayloadFits, err := contextSuccessfulPayloadWithinBudget(response.Records, format, request.MaxTokens)
 	if err != nil {
 		return fmt.Errorf("format context records: %w", err)
@@ -192,10 +178,10 @@ func runContextCommand(ctx context.Context, stdout, stderr io.Writer, cfg *confi
 }
 
 func writeContextDiagnostic(stdout, stderr io.Writer, code, summary string, opts contextCommandOptions) error {
-	return refuseIndex(stdout, stderr, compat.Diagnostic{Code: compat.Code(code), Summary: summary}, opts.jsonFormat, opts.robotFormat)
+	return refuseIndex(stdout, stderr, compat.Diagnostic{Code: compat.Code(code), Summary: summary}, opts.mode)
 }
 
-func contextSuccessfulPayloadWithinBudget(records []storage.ContextRecord, format contextOutputFormat, maxTokens int) ([]byte, bool, error) {
+func contextSuccessfulPayloadWithinBudget(records []storage.ContextRecord, format outputMode, maxTokens int) ([]byte, bool, error) {
 	normalized := make([]contextRecordOutput, len(records))
 	anchorIndex := -1
 	for i, record := range records {
@@ -274,17 +260,17 @@ func truncateContextText(text string) string {
 	return string(runes[:contextMaxTextRunes])
 }
 
-func renderContextPayload(envelope contextEnvelope, format contextOutputFormat) ([]byte, error) {
+func renderContextPayload(envelope contextEnvelope, format outputMode) ([]byte, error) {
 	switch format {
-	case contextJSONFormat:
+	case outputJSON:
 		payload, err := json.Marshal(envelope)
 		if err != nil {
 			return nil, err
 		}
 		return append(payload, '\n'), nil
-	case contextRobotFormat:
+	case outputRobot:
 		return []byte(renderContextRobot(envelope)), nil
-	case contextTextFormat:
+	case outputText:
 		return []byte(renderContextText(envelope)), nil
 	default:
 		return nil, fmt.Errorf("unknown context output format %d", format)

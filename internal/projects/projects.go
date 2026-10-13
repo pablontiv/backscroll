@@ -1,6 +1,8 @@
 package projects
 
 import (
+	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -39,22 +41,29 @@ type Identification struct {
 	FromRegistry bool // true iff the match came from registry.Projects (not fallback)
 }
 
-func LoadGlobalRegistry() ProjectRegistry {
-	home, _ := os.UserHomeDir()
-	path := filepath.Join(home, ".config", "backscroll", "projects.toml")
-	return loadRegistryFrom(path)
+// LoadGlobalRegistry reads the optional registry. Only a missing file is empty;
+// explicit unreadable or malformed state must not become fallback attribution.
+func LoadGlobalRegistry() (ProjectRegistry, error) {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return ProjectRegistry{}, fmt.Errorf("resolve project registry home: %w", err)
+	}
+	return loadRegistryFrom(filepath.Join(home, ".config", "backscroll", "projects.toml"))
 }
 
-func loadRegistryFrom(path string) ProjectRegistry {
+func loadRegistryFrom(path string) (ProjectRegistry, error) {
 	data, err := os.ReadFile(path)
+	if errors.Is(err, os.ErrNotExist) {
+		return ProjectRegistry{}, nil
+	}
 	if err != nil {
-		return ProjectRegistry{}
+		return ProjectRegistry{}, fmt.Errorf("read project registry %q: %w; fix its path or read permissions", path, err)
 	}
 	var reg ProjectRegistry
 	if err := toml.Unmarshal(data, &reg); err != nil {
-		return ProjectRegistry{}
+		return ProjectRegistry{}, fmt.Errorf("parse project registry %q: %w; fix the TOML configuration", path, err)
 	}
-	return reg
+	return reg, nil
 }
 
 // LoadLocalHint walks upward from cwd up to 4 directory levels looking for
@@ -78,149 +87,83 @@ func LoadLocalHint(cwd string) *ProjectHint {
 	return nil
 }
 
-// NormalizeRootEquivalence maps equivalent roots (from cross-host syncs like
-// /home/shared vs /Users/Shared) to a canonical form using the project registry.
-// It finds the longest suffix of a canonical root that appears as a contiguous
-// sequence in cwd's components. If found, cwd is remapped to use that canonical root.
-// If no equivalent is found, cwd is returned unchanged.
+// NormalizeRootEquivalence maps only explicitly configured aliases to a primary
+// root. Ambiguous matches are left unchanged; suffixes are never identity proof.
 func NormalizeRootEquivalence(cwd string, registry ProjectRegistry) string {
-	if cwd == "" {
+	identity := Identify(cwd, registry)
+	if !identity.FromRegistry {
 		return cwd
 	}
-
 	for _, p := range registry.Projects {
-		for _, canonicalRoot := range p.Roots {
-			if isCrossHostEquivalent(cwd, canonicalRoot) {
-				return remapPath(cwd, canonicalRoot)
+		if p.ID != identity.ProjectID || len(p.Roots) == 0 {
+			continue
+		}
+		for _, alias := range p.Aliases {
+			if underRoot(cwd, alias) {
+				suffix := strings.TrimPrefix(filepath.Clean(cwd), filepath.Clean(alias))
+				return filepath.Clean(p.Roots[0]) + suffix
 			}
 		}
 	}
-
 	return cwd
 }
 
-// isCrossHostEquivalent returns true if cwd and canonicalRoot refer to the same
-// logical path with different host/mount prefixes.
-// It checks if a suffix of canonicalRoot's path components appears as a contiguous
-// sequence in cwd's components, using case-insensitive comparison.
-func isCrossHostEquivalent(cwd, canonicalRoot string) bool {
-	cwdParts := strings.Split(strings.TrimPrefix(filepath.ToSlash(filepath.Clean(cwd)), "/"), "/")
-	rootParts := strings.Split(strings.TrimPrefix(filepath.ToSlash(filepath.Clean(canonicalRoot)), "/"), "/")
-
-	// Require at least 3 components in cwd and 2 in root
-	if len(cwdParts) < 3 || len(rootParts) < 2 {
+func underRoot(cwd, root string) bool {
+	if cwd == "" || root == "" || !filepath.IsAbs(cwd) || !filepath.IsAbs(root) {
 		return false
 	}
-
-	// Try tail lengths from longest to shortest (down to 2 components minimum)
-	for tailLen := len(rootParts); tailLen >= 2; tailLen-- {
-		tail := rootParts[len(rootParts)-tailLen:]
-
-		// Check if cwd_parts contains tail as a contiguous subsequence
-		for i := 0; i <= len(cwdParts)-len(tail); i++ {
-			if slicesEqualFold(cwdParts[i:i+len(tail)], tail) {
-				return true
-			}
-		}
-	}
-
-	return false
+	cwd, root = filepath.Clean(cwd), filepath.Clean(root)
+	return cwd == root || strings.HasPrefix(cwd, strings.TrimRight(root, string(filepath.Separator))+string(filepath.Separator))
 }
 
-// remapPath rewrites cwd to use canonicalRoot, preserving any trailing subpath.
-// Assumes isCrossHostEquivalent(cwd, canonicalRoot) returned true.
-func remapPath(cwd, canonicalRoot string) string {
-	cwdParts := strings.Split(strings.TrimPrefix(filepath.ToSlash(filepath.Clean(cwd)), "/"), "/")
-	rootParts := strings.Split(strings.TrimPrefix(filepath.ToSlash(filepath.Clean(canonicalRoot)), "/"), "/")
-
-	// Find the matching tail and its position in cwdParts
-	for tailLen := len(rootParts); tailLen >= 2; tailLen-- {
-		tail := rootParts[len(rootParts)-tailLen:]
-
-		for i := 0; i <= len(cwdParts)-len(tail); i++ {
-			if slicesEqualFold(cwdParts[i:i+len(tail)], tail) {
-				// Found tail at position i; extract rest (subpath after tail)
-				rest := cwdParts[i+len(tail):]
-				// Reconstruct: canonical root + rest, preserving leading /
-				parts := append(rootParts, rest...)
-				return "/" + filepath.Join(parts...)
-			}
-		}
-	}
-
-	return cwd
-}
-
-// slicesEqualFold reports whether a and b are equal under Unicode case-folding.
-func slicesEqualFold(a, b []string) bool {
-	if len(a) != len(b) {
-		return false
-	}
-	for i := range a {
-		if !strings.EqualFold(a[i], b[i]) {
-			return false
-		}
-	}
-	return true
-}
-
-// Identify resolves the canonical project for cwd.
-// Resolution order: local hint → exact root → worktree pattern → subpath → truncated suffix → unknown.
-// Paths are normalized for cross-host equivalence (e.g., /home/shared vs /Users/Shared roots).
-// FromRegistry=true only if the match came from registry.Projects (not fallback).
+// Identify resolves hints and explicit registry roots/aliases. Matches belonging
+// to different project IDs are non-matches, independent of registry file order.
 func Identify(cwd string, registry ProjectRegistry) Identification {
-	if hint := LoadLocalHint(cwd); hint != nil {
-		return Identification{ProjectID: hint.ProjectID, Confidence: ConfidenceHint, FromRegistry: false}
-	}
-
-	// Normalize cwd for cross-host equivalence
-	normalizedCwd := NormalizeRootEquivalence(cwd, registry)
-
-	// 1. Exact root match (normalizedCwd == root itself).
-	for _, p := range registry.Projects {
-		for _, root := range p.Roots {
-			if normalizedCwd == root {
-				return Identification{ProjectID: p.ID, Confidence: ConfidenceExact, FromRegistry: true}
-			}
+	if cwd != "" {
+		if hint := LoadLocalHint(cwd); hint != nil {
+			return Identification{ProjectID: hint.ProjectID, Confidence: ConfidenceHint}
 		}
 	}
-
-	// 2. Worktree pattern match — checked before subpath so worktrees get "pattern" confidence.
+	var found Identification
+	foundPriority := 0
+	ambiguous := false
 	for _, p := range registry.Projects {
+		confidence := ConfidenceUnknown
+		priority := 0
+		for _, root := range append(append([]string{}, p.Roots...), p.Aliases...) {
+			if underRoot(cwd, root) {
+				confidence = ConfidenceExact
+				if priority < 1 {
+					priority = 1
+				}
+				if filepath.Clean(cwd) == filepath.Clean(root) {
+					priority = 3
+				}
+			}
+		}
 		for _, pattern := range p.WorktreePatterns {
-			if matched, _ := filepath.Match(pattern, normalizedCwd); matched {
-				return Identification{ProjectID: p.ID, Confidence: ConfidencePattern, FromRegistry: true}
+			if cwd != "" {
+				if matched, _ := filepath.Match(pattern, filepath.Clean(cwd)); matched && priority < 3 {
+					confidence = ConfidencePattern
+					priority = 2
+				}
 			}
 		}
-	}
-
-	// 3. Subpath under a known root.
-	for _, p := range registry.Projects {
-		for _, root := range p.Roots {
-			if strings.HasPrefix(normalizedCwd, root+string(filepath.Separator)) {
-				return Identification{ProjectID: p.ID, Confidence: ConfidenceExact, FromRegistry: true}
-			}
+		if confidence == ConfidenceUnknown {
+			continue
+		}
+		if found.FromRegistry && found.ProjectID != p.ID {
+			ambiguous = true
+		}
+		if !found.FromRegistry || (found.ProjectID == p.ID && priority > foundPriority) {
+			foundPriority = priority
+			found = Identification{ProjectID: p.ID, Confidence: confidence, FromRegistry: true}
 		}
 	}
-
-	// Truncated path: normalizedCwd suffix matches a known root (leading path stripped).
-	cwdClean := strings.TrimPrefix(normalizedCwd, string(filepath.Separator))
-	for _, p := range registry.Projects {
-		for _, root := range p.Roots {
-			rootClean := strings.TrimPrefix(root, string(filepath.Separator))
-			if strings.HasSuffix(rootClean, cwdClean) || strings.HasSuffix(cwdClean, rootClean) {
-				return Identification{ProjectID: p.ID, Confidence: ConfidenceTruncated, FromRegistry: true}
-			}
-		}
+	if found.FromRegistry && !ambiguous {
+		return found
 	}
-
-	// No registry match. Try fallback identity from cwd.
-	fallbackID := DeriveFallbackID(normalizedCwd)
-	if fallbackID != "unknown" {
-		return Identification{ProjectID: fallbackID, Confidence: ConfidenceUnknown, FromRegistry: false}
-	}
-
-	return Identification{ProjectID: "unknown", Confidence: ConfidenceUnknown, FromRegistry: false}
+	return Identification{ProjectID: DeriveFallbackID(cwd), Confidence: ConfidenceUnknown}
 }
 
 func ListProjects(registry ProjectRegistry) []ProjectConfig {

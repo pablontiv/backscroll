@@ -10,9 +10,12 @@ allowed-tools:
 
 Backscroll is the primary local episodic index for coding-agent work and the source of indexed history. Run Backscroll before starting feature, bug, test, refactor, or decision work that may have history. A hit is evidence from indexed rows. An empty result is only query/index uncertainty: it does not prove the event, file, or decision never existed.
 
-Every operational command validates active manifests and attempts one incremental
-sync before executing. Session, plan, and Markdown files are ingestion inputs;
-SQLite is the perennial record used by search, context, list, patterns, status, and validate.
+Ordinary snapshot-read, metadata-read, and mutation owners validate active manifests
+and attempt one incremental sync before executing. Busy readers may follow the
+last committed snapshot; remediation (`recover`) skips preparation/pre-sync and
+syncs only after installing a replacement. See `docs/sync.md` for these exceptions.
+Session, plan, and Markdown files are ingestion inputs; SQLite is the perennial
+record used by search, context, list, patterns, status, and validate.
 Use `search` for discovery. Search publishes exact context identity with every result. For one selected result, use its opaque UUID when non-null; only when UUID is null, use its exact stored source path plus ordinal. Then use `context` for the immediate positional neighborhood. Both surfaces are database-backed.
 
 ## 1) Preflight (required)
@@ -27,7 +30,7 @@ If the binary is missing:
 ```bash
 curl -fsSL https://raw.githubusercontent.com/pablontiv/backscroll/master/install.sh | bash
 # Optional: copy shipped input presets after the binary is in PATH.
-config_dir="${BACKSCROLL_CONFIG_DIR:-${XDG_CONFIG_HOME:-$HOME/.config}}"
+config_dir="${BACKSCROLL_CONFIG_DIR:-$HOME/.config}"
 mkdir -p "$config_dir/backscroll/inputs"
 cp -n inputs/claude.inputs.toml inputs/pi.inputs.toml inputs/omp.inputs.toml inputs/opencode.inputs.toml inputs/decisions.inputs.toml inputs/codex.inputs.toml "$config_dir/backscroll/inputs/"
 ```
@@ -53,7 +56,23 @@ Input manifests are loaded only from:
 <config_dir>/backscroll/inputs/*.inputs.toml
 ```
 
-where `<config_dir>` is the OS config directory, or `BACKSCROLL_CONFIG_DIR`. The app config file is for database and embedding settings, not ingestion sources.
+where `<config_dir>` is non-empty `BACKSCROLL_CONFIG_DIR`, otherwise `$HOME/.config`
+on every OS (Windows: `<user-home>\.config`). `XDG_CONFIG_HOME`, macOS Application
+Support, and `%APPDATA%` do not select this directory. The app config file is for
+database and embedding settings, not ingestion sources.
+
+Inspect the effective database, legacy session directories, and active inputs:
+
+```bash
+backscroll config
+backscroll config --json
+```
+
+Config JSON exposes `database`, `session_dirs`, and `inputs`. `backscroll validate --json`
+checks prepared-index integrity, not the input inventory. Markdown manifests use
+`decode.format = "markdown_document"` (whole file) or `"markdown_sections"`
+(`## ` sections with whole-document fallback); see the authoritative examples
+in `docs/input-contract.md#markdown-document-inputs`.
 
 ## 4) Agent output contract
 
@@ -105,6 +124,12 @@ Token budget guidance:
 If output is truncated, treat it as evidence that more indexed data exists. Refine the query, selected source, or budget instead of abandoning the index.
 
 For explicit lexical term-overload recall, add `--relax` (for example `backscroll search --text '+violet handshake technique adaptation' --relax --robot --fields minimal --max-tokens 2000`); `+term`/quoted phrases stay protected, scope never widens, and relaxed results report `match_stage`/`dropped_terms`—this does not recover missing vocabulary.
+
+`--lexical-only` explicitly requests BM25-only retrieval. The CLI currently has
+no wired embedding provider and falls back to lexical retrieval even without
+that flag. `--similarity-threshold F` accepts finite `0..1` (default `0.3`;
+`0` disables the vector threshold) but applies only to vector results, not BM25
+or `--relax`. It does not enable semantic expansion.
 
 ## 5) Query patterns by use case
 
@@ -210,6 +235,22 @@ backscroll status
 backscroll rebuild
 ```
 
+**Stranded database recovery is operator remediation, not a recall fallback.**
+Only with explicit operator intent, inspect the plan with
+`backscroll recover --from "$STRANDED_DB" --dry-run`, then apply without
+`--dry-run`. The configured active database must already exist. Dry-run does
+not install files or synchronize inputs; apply preserves an active backup,
+installs the verified union, then syncs. A `post-recovery sync` error leaves
+the replacement installed, not automatically rolled back. Preserve the emitted
+active/backup paths and follow `docs/sync.md#recovery-runbook` for restoration.
+Migration snapshots retain two validated siblings and are not recovery backups;
+see `docs/sync.md#migration-snapshots-and-recovery-backups`.
+
+**Destructive-command boundary:** `purge` is never an automatic troubleshooting
+step. For accepted RFC3339/date-only cutoffs, exclusive UTC semantics, and
+explicit deletion instructions, consult `backscroll purge --help` and the
+operator section of `README.md`; obtain operator approval before deletion.
+
 ## 7) Token budget allocation for agents
 
 | Use case | Budget | Notes |
@@ -229,7 +270,7 @@ backscroll search "query" --all-projects --robot --fields minimal --max-tokens 2
 ## References
 
 - CLI help: `backscroll search --help`, `backscroll context --help`, `backscroll list --help`, `backscroll patterns --help`, `backscroll annotate --help`.
-- Deployable version check: `backscroll --version`; `backscroll status` also shows deployed build and index state.
+- Deployable version check: `backscroll --version` (development builds report `dev`). For exact dev provenance, inspect `go version -m "$(command -v backscroll)"` and its `vcs.revision`/`vcs.modified`. `status` reports index/config state, not version or build identity.
 - v1.4.0+ search behavior: split FTS indexes; `tool_fts` uses trigram tokenization for exact command/error matching, while `messages_fts` uses porter tokenization for prose. Select with `--content-type`.
 - Diagnostic skill: `backscroll-doctor` audits index bugs, gaps, and enhancement candidates.
 
@@ -250,9 +291,19 @@ Agent-grade census output:
 ```bash
 backscroll patterns --kind corrections --origin human --pending --batch 50 --robot
 backscroll patterns --kind commands --all-projects --robot
+backscroll patterns --kind sequences --after 2026-01-01 --before 2027-01-01 --json
 ```
 
 Interpret the complete table returned. The census did the counting; the agent's job is judgment, not sampling.
+
+`--tag` restricts every pattern kind before counting, mining, and pagination;
+sequence support/share use only eligible sessions. Sequence date bounds select
+timestamped events before mining: `--after` is inclusive (`>=`), `--before`
+exclusive (`<`). The example uses `[2026-01-01, 2027-01-01)`; `YYYY-MM-DD`
+denotes the start of the UTC date, and unknown timestamps cannot satisfy a bound.
+Patterns advertises dates only for sequences; search accepts YYYY-MM-DD.
+Context before/after are neighbor counts, not dates.
+
 
 For corrections, `--origin human|assistant|system|automation|unknown` is opt-in,
 valid only with `--kind corrections`, and filters before pagination. Use

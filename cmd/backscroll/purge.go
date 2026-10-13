@@ -18,11 +18,15 @@ func newPurgeCmd(stdout, stderr io.Writer) *cobra.Command {
 		Use:          "purge",
 		Short:        "Remove old indexed records",
 		SilenceUsage: true,
-		Long: `Purge removes all indexed records with timestamps before the specified date.
+		Long: `Purge removes indexed records strictly before the specified cutoff (exclusive).
 
-The date should be in YYYY-MM-DD format (e.g., 2024-01-15).
+Use YYYY-MM-DD for midnight UTC, or RFC3339 with Z or an explicit timezone offset.
+RFC3339 cutoffs are normalized to UTC; equal and NULL timestamps are retained.
+This is destructive and does not ask for confirmation.
 
-Example: backscroll purge --before 2024-01-01`,
+Examples:
+  backscroll purge --before 2024-01-01
+  backscroll purge --before 2024-01-01T12:30:00+02:00`,
 		Args: func(cmd *cobra.Command, args []string) error {
 			return validateCommandBeforeStartup(cmd, args, cobra.NoArgs, func() error {
 				return validatePurgeBefore(before)
@@ -37,7 +41,7 @@ Example: backscroll purge --before 2024-01-01`,
 		},
 	}
 
-	cmd.Flags().StringVar(&before, "before", "", "Delete records before this date (YYYY-MM-DD)")
+	cmd.Flags().StringVar(&before, "before", "", "Delete strictly before this UTC cutoff (exclusive; YYYY-MM-DD or RFC3339)")
 	_ = cmd.MarkFlagRequired("before")
 
 	return cmd
@@ -63,7 +67,7 @@ func runPurge(ctx context.Context, stdout, stderr io.Writer, cfg *config.Config,
 
 	db, diag, err := prepareIndex(ctx, cfg, indexMutation)
 	if diag != nil {
-		return refuseIndex(stdout, stderr, *diag, false, false)
+		return refuseIndex(stdout, stderr, *diag, outputText)
 	}
 	if err != nil {
 		return fmt.Errorf("prepare index: %w", err)
@@ -76,7 +80,9 @@ func runPurge(ctx context.Context, stdout, stderr io.Writer, cfg *config.Config,
 		return fmt.Errorf("purge records: %w", err)
 	}
 
-	_, _ = fmt.Fprintf(stdout, "Deleted %d indexed items before %s\n", deleted, before)
+	if err := writeOutput(stdout, "Deleted %d indexed items before %s\n", deleted, before); err != nil {
+		return err
+	}
 
 	return nil
 }

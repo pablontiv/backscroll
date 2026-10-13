@@ -1,8 +1,10 @@
 package projects_test
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/pablontiv/backscroll/internal/projects"
@@ -163,9 +165,14 @@ func TestLoadLocalHintWalksUp(t *testing.T) {
 }
 
 func TestLoadGlobalRegistry(t *testing.T) {
-	// Just ensure it doesn't panic; may return empty registry if file not present.
-	reg := projects.LoadGlobalRegistry()
-	_ = reg
+	t.Setenv("HOME", t.TempDir())
+	reg, err := projects.LoadGlobalRegistry()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(reg.Projects) != 0 {
+		t.Fatal("absent registry was not empty")
+	}
 }
 
 func TestListProjects(t *testing.T) {
@@ -201,8 +208,8 @@ func TestIdentifyTruncated(t *testing.T) {
 	if id.ProjectID != "myapp" {
 		t.Errorf("expected myapp, got %s", id.ProjectID)
 	}
-	if id.Confidence != projects.ConfidenceTruncated {
-		t.Logf("confidence: %s (truncated matching is heuristic)", id.Confidence)
+	if id.Confidence != projects.ConfidenceUnknown || id.FromRegistry {
+		t.Fatalf("truncated input acquired registry proof: %+v", id)
 	}
 }
 
@@ -237,7 +244,10 @@ roots = ["/home/user/myapp"]
 	}
 	t.Setenv("HOME", home)
 
-	reg := projects.LoadGlobalRegistry()
+	reg, err := projects.LoadGlobalRegistry()
+	if err != nil {
+		t.Fatal(err)
+	}
 	if len(reg.Projects) != 1 || reg.Projects[0].ID != "myapp" {
 		t.Errorf("expected myapp project, got %+v", reg.Projects)
 	}
@@ -254,9 +264,12 @@ func TestLoadGlobalRegistryInvalidTOML(t *testing.T) {
 	}
 	t.Setenv("HOME", home)
 
-	reg := projects.LoadGlobalRegistry()
+	reg, err := projects.LoadGlobalRegistry()
+	if err == nil || !strings.Contains(err.Error(), filepath.Join(cfgDir, "projects.toml")) {
+		t.Fatalf("expected actionable invalid TOML error: %v", err)
+	}
 	if len(reg.Projects) != 0 {
-		t.Errorf("expected empty registry for invalid TOML, got %+v", reg.Projects)
+		t.Fatal("error returned partial registry")
 	}
 }
 
@@ -281,7 +294,10 @@ roots = ["/tmp/myproject"]
 	t.Setenv("HOME", home)
 
 	// Load the registry (should contain myproject)
-	reg := projects.LoadGlobalRegistry()
+	reg, err := projects.LoadGlobalRegistry()
+	if err != nil {
+		t.Fatal(err)
+	}
 	if len(reg.Projects) == 0 {
 		t.Fatal("expected projects in registry")
 	}
@@ -305,8 +321,9 @@ func TestNormalizeRootEquivalence_CrossHost(t *testing.T) {
 	reg := projects.ProjectRegistry{
 		Projects: []projects.ProjectConfig{
 			{
-				ID:    "myproj",
-				Roots: []string{"/home/shared/myproject"},
+				ID:      "myproj",
+				Roots:   []string{"/home/shared/myproject"},
+				Aliases: []string{"/Users/Shared/myproject"},
 			},
 		},
 	}
@@ -338,8 +355,9 @@ func TestIdentify_CrossHostEquivalence(t *testing.T) {
 	reg := projects.ProjectRegistry{
 		Projects: []projects.ProjectConfig{
 			{
-				ID:    "myproj",
-				Roots: []string{"/home/shared/myproject"},
+				ID:      "myproj",
+				Roots:   []string{"/home/shared/myproject"},
+				Aliases: []string{"/Users/Shared/myproject"},
 			},
 		},
 	}
@@ -517,8 +535,9 @@ func TestIdentifyFallbackWithCrossHostEquiv(t *testing.T) {
 	reg := projects.ProjectRegistry{
 		Projects: []projects.ProjectConfig{
 			{
-				ID:    "myproj",
-				Roots: []string{"/home/shared/myproject"},
+				ID:      "myproj",
+				Roots:   []string{"/home/shared/myproject"},
+				Aliases: []string{"/Users/Shared/myproject"},
 			},
 		},
 	}
@@ -577,5 +596,101 @@ func TestIdentifyFromRegistry(t *testing.T) {
 	id = projects.Identify(dir, registry)
 	if id.ProjectID != "local-proj" || id.FromRegistry || id.Confidence != projects.ConfidenceHint {
 		t.Errorf("hint should have FromRegistry=false: got %#v", id)
+	}
+}
+
+func TestLoadGlobalRegistryReadFailures(t *testing.T) {
+	for _, state := range []string{"directory", "unreadable"} {
+		t.Run(state, func(t *testing.T) {
+			home := t.TempDir()
+			t.Setenv("HOME", home)
+			path := filepath.Join(home, ".config", "backscroll", "projects.toml")
+			if err := os.MkdirAll(filepath.Dir(path), 0700); err != nil {
+				t.Fatal(err)
+			}
+			if state == "directory" {
+				if err := os.Mkdir(path, 0700); err != nil {
+					t.Fatal(err)
+				}
+			} else {
+				if err := os.WriteFile(path, []byte(""), 0); err != nil {
+					t.Fatal(err)
+				}
+				if _, err := os.ReadFile(path); err == nil {
+					t.Skip("permissions bypassed by execution identity")
+				}
+			}
+			reg, err := projects.LoadGlobalRegistry()
+			if err == nil || !strings.Contains(err.Error(), path) {
+				t.Fatalf("expected actionable read error: %v", err)
+			}
+			if state == "unreadable" && !errors.Is(err, os.ErrPermission) {
+				t.Fatalf("lost permission cause: %v", err)
+			}
+			if len(reg.Projects) != 0 {
+				t.Fatal("partial registry returned")
+			}
+		})
+	}
+}
+
+func TestAbsentRegistryFallback(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	reg, err := projects.LoadGlobalRegistry()
+	if err != nil || len(reg.Projects) != 0 {
+		t.Fatalf("absent registry: %+v, %v", reg, err)
+	}
+	cwd := filepath.Join(t.TempDir(), "fallback-project")
+	id := projects.Identify(cwd, reg)
+	if id.ProjectID != "fallback-project" || id.FromRegistry {
+		t.Fatalf("fallback: %+v", id)
+	}
+}
+
+func TestRegistryRequiresExplicitRootProof(t *testing.T) {
+	reg := projects.ProjectRegistry{Projects: []projects.ProjectConfig{{ID: "registered", Roots: []string{"/home/shared/proj"}}}}
+	for _, cwd := range []string{"/unrelated/shared/proj", "/Users/Shared/proj", "shared/proj", ""} {
+		got := projects.Identify(cwd, reg)
+		if got.FromRegistry {
+			t.Errorf("%q acquired registry proof: %+v", cwd, got)
+		}
+	}
+}
+
+func TestAmbiguousRegistryNeverUsesOrder(t *testing.T) {
+	a := projects.ProjectConfig{ID: "a", Roots: []string{"/shared/proj"}}
+	b := projects.ProjectConfig{ID: "b", Roots: []string{"/shared/proj"}}
+	for _, entries := range [][]projects.ProjectConfig{{a, b}, {b, a}} {
+		got := projects.Identify("/shared/proj/src", projects.ProjectRegistry{Projects: entries})
+		if got.FromRegistry || got.ProjectID != "src" {
+			t.Fatalf("ambiguous proof: %+v", got)
+		}
+	}
+}
+
+func TestExplicitAliasesUseCanonicalRootMatching(t *testing.T) {
+	reg := projects.ProjectRegistry{Projects: []projects.ProjectConfig{{ID: "registered", Roots: []string{"/Users/Shared/proj/"}, Aliases: []string{"/home/shared/proj/"}}}}
+	for _, cwd := range []string{"/Users/Shared/proj", "/home/shared/proj", "/home/shared/proj/./src", "/Users/Shared/proj/src"} {
+		got := projects.Identify(cwd, reg)
+		if !got.FromRegistry || got.ProjectID != "registered" {
+			t.Fatalf("%s: %+v", cwd, got)
+		}
+	}
+	for _, cwd := range []string{"/home/shared/PROJ", "/home/shared/project", "/unrelated/shared/proj"} {
+		if got := projects.Identify(cwd, reg); got.FromRegistry {
+			t.Fatalf("%s: %+v", cwd, got)
+		}
+	}
+	reg.Projects = append(reg.Projects, projects.ProjectConfig{ID: "other", Aliases: []string{"/home/shared/proj"}})
+	if got := projects.Identify("/home/shared/proj", reg); got.FromRegistry || got.ProjectID != "proj" {
+		t.Fatal(got)
+	}
+}
+
+func TestExactRootWinsOverOwnWorktreePattern(t *testing.T) {
+	reg := projects.ProjectRegistry{Projects: []projects.ProjectConfig{{ID: "project", Roots: []string{"/home/shared/proj"}, WorktreePatterns: []string{"/home/shared/*"}}}}
+	got := projects.Identify("/home/shared/proj", reg)
+	if !got.FromRegistry || got.Confidence != projects.ConfidenceExact {
+		t.Fatal(got)
 	}
 }

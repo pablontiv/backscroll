@@ -31,7 +31,108 @@ validated invocation
      -> busy mutation/remediation: wait <=5s -> owner or retryable sync_in_progress
 ```
 
-The lock sidecar is an empty file that persists with mode `0600`; it is never deleted, and only the OS advisory lock on that file represents ownership. Startup coordination is local-host only and assumes a trusted local filesystem.
+The lock sidecar is an empty file that persists with mode `0600` on Unix; it is never deleted, and only the OS advisory lock on that file represents ownership. Startup coordination is local-host only and assumes a trusted local filesystem.
+
+On Unix, a pre-existing sidecar must be a regular file owned by the effective user with exactly `0600` permissions and no special mode bits. Modes `0644` and `0666` fail with `unsafe startup lock sidecar` (surfaced at startup stage `sync_lock` with the existing `migration_failed` diagnostic), without chmod, deletion, database preparation, or sync; `0600` remains valid. The portable flock API cannot chmod its held descriptor, so Backscroll rejects unsafe permissions rather than repairing a pathname. Symlinks and nonregular files are rejected; POSIX opens also refuse symlink traversal and do not block on a substituted FIFO. After acquiring the OS lock, Backscroll validates the held descriptor's mode and ownership and compares its identity with the initial sidecar and the current nonsymlink path before returning a lease. A detected replacement releases the lock and fails closed. Windows retains regular-file, symlink, and path-identity validation; POSIX mode/UID checks do not apply there, and Windows ACL/owner validation is outside C13.
+
+The parent directory must remain trusted: these checks detect acquisition-boundary replacements, not arbitrary later mutation by another process able to rename files in that directory. Do not replace or remove a sidecar while processes may be using it. To repair an unsafe mode, first stop all Backscroll processes, verify the regular file and its ownership in a trusted directory, and explicitly set its mode to `0600` before retrying.
+
+## Snapshot and recovery durability by platform
+
+Migration snapshots (including their ownership markers) and recovery destination/backup files are flushed before publication or replacement. File synchronization opens an existing file without creation or truncation: Windows uses a writable handle because `FlushFileBuffers` rejects read-only handles; Unix retains read-only handles, so readable files need not be writable. Open, sync, and close failures propagate, including permission errors; file bytes and permissions are not changed by synchronization.
+
+Directory synchronization is shared by migration snapshots and recovery. On Darwin and Linux it opens and synchronizes the directory, and **all errors propagate**, including unsupported-filesystem errors. On Windows directory synchronization is unsupported and deliberately a no-op: regular-file contents are flushed, but this primitive does **not** guarantee crash durability of directory entries or renames. Recovery verification and backup preservation still apply. This synchronization policy does not enable Windows atomic recovery replacement: the existing no-clobber move policy supports Darwin/Linux and rejects unsupported platforms before mutation.
+
+## Migration snapshots and recovery backups
+
+Before an automatic schema migration, Backscroll publishes a validated sibling
+snapshot next to the active database:
+
+```text
+<database>.snapshot-v<from>-<signature12>-to-v<to>
+```
+
+`signature12` is the first 12 hex characters of the source schema signature, not
+a file-content hash. If that name already exists, `.1`, `.2`, etc. distinguish
+later publications without overwriting it. After successful publication, pruning
+keeps the two newest validated snapshots for that active database (across
+migration versions); unrelated/unvalidated lookalikes are not ordinary retained
+snapshots. Preserve an additional copy elsewhere if longer retention is needed.
+New snapshot files and ownership markers use `0600`, temporary snapshot
+directories `0700` on systems supporting POSIX modes; Windows does not promise
+Unix permission enforcement. Keep the parent directory trusted.
+
+Recovery backups have a **different** naming and retention contract:
+`.<database-basename>.backup-<UTC>-<randomhex>` beside the active database (no
+extra leading dot if its basename already has one). They preserve the previous
+active file and applicable SQLite sidecars during recovery replacement. Recovery
+does not apply the migration two-snapshot pruning policy to these backups;
+retain them until replacement validation and operator review are complete.
+The report's actual `backup path` is authoritative, not a filename you construct.
+
+A snapshot can be inspected as a stranded recovery input with
+`backscroll recover --from "$SNAPSHOT" --dry-run`, then deliberately merged if compatible.
+That is lossless union recovery, **not rollback to the snapshot**. For exact
+restoration of an earlier active state, follow the manual restoration procedure
+below. Never overwrite an active database while a Backscroll or SQLite process
+is using it, or mix database files with sidecars from a different state.
+
+## Recovery runbook
+
+Recovery is remediation, not a missing-input discovery command:
+
+1. Stop processes that might write the stranded database; do not bypass a busy
+   startup lease. Identify the effective active path from configuration
+   (`BACKSCROLL_DATABASE_PATH` or app config). `backscroll config --json` is useful when
+   ordinary startup can open that index, but may itself fail on an incompatible
+   active index. Both the active database and one `--from` input must already
+   exist. Recovery does not create an empty active input for you.
+2. Preserve the active and stranded SQLite file sets, including any sidecars,
+   in a trusted directory. Then inspect the immutable-input plan:
+
+   ```bash
+   backscroll recover --from "$STRANDED_DB" --dry-run
+   ```
+
+   Dry-run reports shapes, row counts, duplicates/conflicts, replacement target,
+   and an intended backup naming pattern. It does not migrate either input,
+   create a replacement/backup, or sync configured sources. CLI coordination
+   still uses the startup lock sidecar; dry-run is not a guarantee of zero
+   filesystem activity. It is a point-in-time plan, not an apply reservation.
+3. Review diagnostics. Only if the lossless union is intended, apply:
+
+   ```bash
+   backscroll recover --from "$STRANDED_DB"
+   backscroll validate --json
+   backscroll status --json
+   ```
+
+   Apply re-plans under its retained lease, verifies a fresh destination,
+   preserves a verified active backup, installs the replacement, then performs
+   post-install sync. Save the actual active/backup paths and output. The
+   stranded input is not consumed. Compatibility conflicts fail rather than
+   silently choosing a conflicting row.
+4. Interpret failure by phase, not exit code alone. If stderr says
+   `recovery replacement installed at: ...` followed by `post-recovery sync`,
+   installation succeeded but subsequent sync failed. The replacement remains
+   active and the reported backup remains available; **no automatic rollback
+   occurs at this stage**. Fix the reported input/decoder/permission problem,
+   then run `backscroll status` to retry ordinary sync and `backscroll validate --json` to check the
+   prepared index. Do not blindly apply recovery again. Earlier replacement
+   failures report their phase/state; some restore the original and others
+   leave a restorable backup. Use the emitted `manual recovery backup path`
+   only when the diagnostic identifies it as restorable.
+5. For intentional exact manual restoration, stop all Backscroll/SQLite users,
+   preserve the installed active file set separately, and verify the reported
+   backup and its matching sidecars. Restore a **copy** of that backup file set
+   to the configured active path in a trusted directory, without leaving the
+   replacement's `-wal`, `-shm`, or journal beside it. Keep the original backup
+   untouched and restrict file access (POSIX `0600` where applicable). Validate
+   after restoration; ordinary startup may migrate and sync it again. If the
+   goal is to inspect the exact old bytes without that mutation, use a separate
+   copy as a dry-run recovery input first. Retire backups only after explicitly
+   accepting the recovered/restored state.
+
 
 ## Normal workflow
 
@@ -76,7 +177,7 @@ Canonical ingestion routes are user-scoped manifests:
 <config_dir>/backscroll/inputs/*.inputs.toml
 ```
 
-`<config_dir>` is the OS config directory, or `BACKSCROLL_CONFIG_DIR` when set. Backscroll does not load project-local input manifests. Application configuration in `backscroll.toml` is separate and does not define canonical ingestion routes.
+`<config_dir>` is non-empty `BACKSCROLL_CONFIG_DIR`, otherwise `$HOME/.config` on every OS (Windows: `<user-home>\.config`), not `XDG_CONFIG_HOME`, macOS Application Support, or `%APPDATA%`. Backscroll does not load project-local input manifests. Application configuration in `backscroll.toml` is separate and does not define canonical ingestion routes.
 
 A session input example:
 

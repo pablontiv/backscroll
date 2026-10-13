@@ -50,29 +50,56 @@ func sidecarPath(databasePath string) (string, error) {
 	return canonical + ".startup-sync.lock", nil
 }
 
-func validateExistingSidecar(path string) error {
-	info, err := os.Lstat(path)
-	if errors.Is(err, fs.ErrNotExist) {
-		return nil
-	}
-	if err != nil {
-		return fmt.Errorf("inspect startup lock %s: %w", path, err)
-	}
-	if info.Mode()&os.ModeSymlink != 0 || !info.Mode().IsRegular() {
+func validateSidecarInfo(path string, info os.FileInfo) error {
+	if !info.Mode().IsRegular() {
 		return fmt.Errorf("%w: %s is not a regular file", ErrUnsafeSidecar, path)
+	}
+	return validatePrivateSidecar(path, info)
+}
+
+type checkedFileLock struct {
+	*flock.Flock
+	initial os.FileInfo
+}
+
+// validateLocked checks the descriptor held by flock, not a separately opened
+// path. No chmod is attempted: the portable flock API exposes Stat, not Chmod.
+func (f *checkedFileLock) validateLocked() error {
+	opened, err := f.Stat()
+	if err != nil {
+		return fmt.Errorf("inspect locked startup sidecar: %w", err)
+	}
+	if err := validateSidecarInfo(f.Path(), opened); err != nil {
+		return err
+	}
+	current, err := os.Lstat(f.Path())
+	if err != nil {
+		return fmt.Errorf("%w: startup sidecar path changed: %v", ErrUnsafeSidecar, err)
+	}
+	if err := validateSidecarInfo(f.Path(), current); err != nil {
+		return err
+	}
+	if !os.SameFile(opened, current) || (f.initial != nil && !os.SameFile(f.initial, opened)) {
+		return fmt.Errorf("%w: startup sidecar replaced during acquisition", ErrUnsafeSidecar)
 	}
 	return nil
 }
 
-func newFileLock(databasePath string) (*flock.Flock, error) {
+func newFileLock(databasePath string) (*checkedFileLock, error) {
 	path, err := sidecarPath(databasePath)
 	if err != nil {
 		return nil, err
 	}
-	if err := validateExistingSidecar(path); err != nil {
-		return nil, err
+	initial, err := os.Lstat(path)
+	if err != nil && !errors.Is(err, fs.ErrNotExist) {
+		return nil, fmt.Errorf("inspect startup lock %s: %w", path, err)
 	}
-	return flock.New(path, flock.SetPermissions(0o600)), nil
+	if initial != nil {
+		if err := validateSidecarInfo(path, initial); err != nil {
+			return nil, err
+		}
+	}
+	return &checkedFileLock{Flock: flock.New(path, flock.SetPermissions(0o600), flock.SetFlag(sidecarOpenFlags())), initial: initial}, nil
 }
 
 func TryAcquire(databasePath string) (*Lease, bool, error) {
@@ -87,7 +114,10 @@ func TryAcquire(databasePath string) (*Lease, bool, error) {
 	if !locked {
 		return nil, false, fileLock.Close()
 	}
-	return &Lease{lock: fileLock}, true, nil
+	if err := fileLock.validateLocked(); err != nil {
+		return nil, false, errors.Join(err, fileLock.Close())
+	}
+	return &Lease{lock: fileLock.Flock}, true, nil
 }
 
 func Acquire(ctx context.Context, databasePath string, retryDelay time.Duration) (*Lease, error) {
@@ -105,7 +135,10 @@ func Acquire(ctx context.Context, databasePath string, retryDelay time.Duration)
 	if !locked {
 		return nil, errors.Join(ctx.Err(), fileLock.Close())
 	}
-	return &Lease{lock: fileLock}, nil
+	if err := fileLock.validateLocked(); err != nil {
+		return nil, errors.Join(err, fileLock.Close())
+	}
+	return &Lease{lock: fileLock.Flock}, nil
 }
 
 func (l *Lease) Release() error {

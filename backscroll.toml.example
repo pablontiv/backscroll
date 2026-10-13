@@ -13,11 +13,10 @@ rrf_k = 60
 # Input manifests do NOT live in backscroll.toml.
 # Canonical ingestion config is global/user-scoped:
 #   <config_dir>/backscroll/inputs/*.inputs.toml
-# where <config_dir> is:
-#   Linux:  ${XDG_CONFIG_HOME:-$HOME/.config}
-#   macOS:  $HOME/Library/Application Support
-#   Windows: %APPDATA%
-# or BACKSCROLL_CONFIG_DIR when set.
+# where <config_dir> is BACKSCROLL_CONFIG_DIR when non-empty, otherwise:
+#   Linux/macOS: $HOME/.config
+#   Windows:     <user-home>\.config
+# XDG_CONFIG_HOME, macOS Application Support, and %APPDATA% are not consulted.
 #
 # Copy shipped presets such as inputs/claude.inputs.toml and
 # inputs/pi.inputs.toml into that directory, preserving existing files

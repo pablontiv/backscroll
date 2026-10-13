@@ -325,6 +325,7 @@ func TestAutoSyncFailuresBlockCachedConsumers(t *testing.T) {
 		name      string
 		setup     func(t *testing.T, root string)
 		wantError string
+		preflight bool
 	}{
 		{
 			name: "discovery",
@@ -332,7 +333,8 @@ func TestAutoSyncFailuresBlockCachedConsumers(t *testing.T) {
 				writeInputManifest(t, root, "claude", root, []string{"*.jsonl"}, []string{"["})
 				writeFile(t, filepath.Join(root, "session.jsonl"), `{"type":"message","message":{"role":"user","content":"fresh"}}`+"\n")
 			},
-			wantError: "discover input",
+			wantError: "discover.exclude",
+			preflight: true,
 		},
 		{
 			name: "hash",
@@ -404,6 +406,10 @@ func TestAutoSyncFailuresBlockCachedConsumers(t *testing.T) {
 						t.Fatalf("auto-sync %s failure succeeded; stdout=%q stderr=%q", tc.name, stdout.String(), stderr.String())
 					}
 					combined := stdout.String() + stderr.String()
+					expectedCode := compat.CodeIndexStale
+					if tc.preflight {
+						expectedCode = compat.CodeMigrationFailed
+					}
 					if strings.Contains(combined, "sentinel cached") {
 						t.Fatalf("auto-sync %s failure emitted cached sentinel row: stdout=%q stderr=%q", tc.name, stdout.String(), stderr.String())
 					}
@@ -424,13 +430,16 @@ func TestAutoSyncFailuresBlockCachedConsumers(t *testing.T) {
 						if err := json.Unmarshal(stdout.Bytes(), &diag); err != nil {
 							t.Fatalf("auto-sync %s JSON diagnostic is invalid: %v stdout=%q", tc.name, err, stdout.String())
 						}
-						if diag.Code != string(compat.CodeIndexStale) {
-							t.Fatalf("auto-sync %s JSON code=%q, want %q", tc.name, diag.Code, compat.CodeIndexStale)
+						if diag.Code != string(expectedCode) {
+							t.Fatalf("auto-sync %s JSON code=%q, want %q", tc.name, diag.Code, expectedCode)
 						}
 						if !strings.Contains(diag.Summary, tc.wantError) {
 							t.Fatalf("auto-sync %s JSON summary=%q missing %q", tc.name, diag.Summary, tc.wantError)
 						}
-						if len(diag.Continuation) == 0 {
+						if tc.preflight && len(diag.Continuation) != 0 {
+							t.Fatalf("manifest error advertised index recovery: %+v", diag)
+						}
+						if !tc.preflight && len(diag.Continuation) == 0 {
 							t.Fatalf("auto-sync %s JSON continuation is empty: stdout=%q", tc.name, stdout.String())
 						}
 						if strings.Contains(stdout.String(), `"source_path"`) {
@@ -439,7 +448,7 @@ func TestAutoSyncFailuresBlockCachedConsumers(t *testing.T) {
 						return
 					}
 
-					if !strings.Contains(combined, string(compat.CodeIndexStale)) || !strings.Contains(combined, tc.wantError) {
+					if !strings.Contains(combined, string(expectedCode)) || !strings.Contains(combined, tc.wantError) {
 						t.Fatalf("missing %s diagnostic; stdout=%q stderr=%q err=%v", tc.wantError, stdout.String(), stderr.String(), err)
 					}
 				})

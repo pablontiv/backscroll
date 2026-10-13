@@ -106,8 +106,8 @@ func TestAggregateTemplatesWithDateFilter(t *testing.T) {
 
 	// Insert search items and template matches with matching timestamp
 	_, err = db.db.Exec(`
-		INSERT INTO search_items (source, source_path, ordinal, role, text, timestamp, content_type)
-		VALUES ('session', '/s1.jsonl', 0, 'user', 'error text', '2026-06-01T00:00:00Z', 'text')
+		INSERT INTO search_items (source, source_path, ordinal, role, text, timestamp, content_type, uuid)
+		VALUES ('session', '/s1.jsonl', 0, 'user', 'error text', '2026-06-01T00:00:00Z', 'text', 'u1')
 	`)
 	if err != nil {
 		t.Fatalf("insert search_items: %v", err)
@@ -439,8 +439,8 @@ func TestReresolveProjectsWithRegistryUpdate(t *testing.T) {
 	// This allows DecodeCwdFromSessionPath to extract cwd=/home/user/proj (fallback from encoded dir)
 	_, err = db.db.Exec(`
 		INSERT INTO search_items
-		(source, source_path, ordinal, role, text, uuid, project, content_type)
-		VALUES ('session', '/home/user/.claude/projects/-home-user-proj/abc123.jsonl', 0, 'user', 'text', 'u1', 'proj', 'text')
+		(source, source_path, ordinal, role, text, uuid, project, content_type, project_evidence)
+		VALUES ('session', '/home/user/.claude/projects/-home-user-proj/abc123.jsonl', 0, 'user', 'text', 'u1', 'proj', 'text', 'unknown')
 	`)
 	if err != nil {
 		t.Fatalf("insert: %v", err)

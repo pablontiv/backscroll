@@ -141,12 +141,140 @@ func TestValidateHelpDescribesStartupPreparedIndex(t *testing.T) {
 }
 
 func TestVersion(t *testing.T) {
-	out, _, err := runCmd("--version")
-	if err != nil {
-		t.Fatalf("--version error: %v", err)
+	original := version
+	t.Cleanup(func() { version = original })
+	for _, buildVersion := range []string{"dev", "v1.2.3"} {
+		t.Run(buildVersion, func(t *testing.T) {
+			version = buildVersion
+			for _, flag := range []string{"-v", "--version"} {
+				out, stderr, err := runDocContractCommand(flag)
+				if err != nil || out != "backscroll version "+buildVersion+"\n" || stderr != "" {
+					t.Fatalf("%s: stdout=%q stderr=%q err=%v", flag, out, stderr, err)
+				}
+			}
+			out, stderr, err := runDocContractCommand("--help")
+			if err != nil || stderr != "" {
+				t.Fatalf("--help: stderr=%q err=%v", stderr, err)
+			}
+			if !strings.Contains(out, "-v, --version") {
+				t.Fatalf("--help does not expose both version flags: %s", out)
+			}
+		})
 	}
-	if !strings.Contains(out, "backscroll") {
-		t.Errorf("version output missing 'backscroll': %s", out)
+}
+
+// Inject only the real command tree: no updater is constructed, staged, or applied.
+func runDocContractCommand(args ...string) (string, string, error) {
+	var stdout, stderr bytes.Buffer
+	err := runContextWithDependencies(context.Background(), &stdout, &stderr, args, runDependencies{
+		root: buildRootCmd(&stdout, &stderr),
+	})
+	return stdout.String(), stderr.String(), err
+}
+
+func TestShippedPresetCommandsExecuteAndSync(t *testing.T) {
+	presets, err := filepath.Glob(filepath.Join("..", "..", "inputs", "*.inputs.toml"))
+	if err != nil || len(presets) == 0 {
+		t.Fatalf("discover shipped presets: %v (%d files)", err, len(presets))
+	}
+	commands := 0
+	for _, preset := range presets {
+		content, err := os.ReadFile(preset)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for lineNumber, line := range strings.Split(string(content), "\n") {
+			line = strings.TrimSpace(line)
+			if !strings.HasPrefix(line, "#") {
+				continue
+			}
+			argv := strings.Fields(strings.TrimSpace(strings.TrimPrefix(line, "#")))
+			if len(argv) < 2 || argv[0] != "backscroll" {
+				continue
+			}
+			commands++
+			t.Run(fmt.Sprintf("%s:%d", filepath.Base(preset), lineNumber+1), func(t *testing.T) {
+				dbPath, source, _ := installOMPFixture(t, false)
+				out, stderr, err := runDocContractCommand(argv[1:]...)
+				if err != nil {
+					t.Fatalf("documented command %q: %v stdout=%s stderr=%s", line, err, out, stderr)
+				}
+				// Informational examples must be executable too, but do not sync.
+				if strings.Contains(line, "--help") || strings.Contains(line, "--version") || strings.Contains(line, "--skill") || argv[1] == "-v" {
+					return
+				}
+				db, err := storage.Open(dbPath)
+				if err != nil {
+					t.Fatal(err)
+				}
+				defer db.Close()
+				var indexed int
+				if err := db.DB().QueryRow("SELECT COUNT(*) FROM search_items WHERE source_path = ?", source).Scan(&indexed); err != nil {
+					t.Fatal(err)
+				}
+				if indexed == 0 {
+					t.Fatalf("documented operational command %q did not synchronize active inputs", line)
+				}
+			})
+		}
+	}
+	if commands == 0 {
+		t.Fatal("shipped presets contain no executable backscroll examples")
+	}
+}
+
+func TestPurgeHelpAndCutoffContract(t *testing.T) {
+	help, stderr, err := runDocContractCommand("purge", "--help")
+	if err != nil || stderr != "" {
+		t.Fatalf("purge help: err=%v stderr=%q", err, stderr)
+	}
+	for _, term := range []string{"YYYY-MM-DD", "RFC3339", "exclusive"} {
+		if !strings.Contains(help, term) {
+			t.Errorf("purge help does not describe %s: %s", term, help)
+		}
+	}
+	for _, cutoff := range []string{"2026-01-02T02:00:00+02:00", "2026-01-01T19:00:00-05:00"} {
+		if err := validatePurgeBefore(cutoff); err != nil {
+			t.Fatalf("RFC3339 offset cutoff %q rejected: %v", cutoff, err)
+		}
+	}
+	for _, cutoff := range []string{"2026-01-02", "2026-01-02T00:00:00Z"} {
+		t.Run(cutoff, func(t *testing.T) {
+			dbPath, cleanup := testEnv(t)
+			defer cleanup()
+			if err := validatePurgeBefore(cutoff); err != nil {
+				t.Fatalf("documented cutoff rejected: %v", err)
+			}
+			db, err := storage.Open(dbPath)
+			if err != nil {
+				t.Fatal(err)
+			}
+			for i, timestamp := range []any{"2026-01-01T23:59:59Z", "2026-01-02T00:00:00Z", "2026-01-02T00:00:01Z", nil} {
+				if _, err := db.DB().Exec(`INSERT INTO search_items (source_path, ordinal, text, role, content_type, timestamp) VALUES (?, ?, ?, 'user', 'text', ?)`, "/purge/fixture.jsonl", i, fmt.Sprintf("purge contract %d", i), timestamp); err != nil {
+					_ = db.Close()
+					t.Fatal(err)
+				}
+			}
+			if err := db.Close(); err != nil {
+				t.Fatal(err)
+			}
+			out, stderr, err := runDocContractCommand("purge", "--before", cutoff)
+			if err != nil || out != "Deleted 1 indexed items before "+cutoff+"\n" {
+				t.Fatalf("purge: stdout=%q stderr=%q err=%v", out, stderr, err)
+			}
+			db, err = storage.Open(dbPath)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer db.Close()
+			var count, equal, unknown int
+			if err := db.DB().QueryRow(`SELECT COUNT(*), SUM(timestamp = '2026-01-02T00:00:00Z'), SUM(timestamp IS NULL) FROM search_items WHERE source_path = ?`, "/purge/fixture.jsonl").Scan(&count, &equal, &unknown); err != nil {
+				t.Fatal(err)
+			}
+			if count != 3 || equal != 1 || unknown != 1 {
+				t.Fatalf("exclusive cutoff must retain equality and NULL: count=%d equal=%d NULL=%d", count, equal, unknown)
+			}
+		})
 	}
 }
 
@@ -797,14 +925,10 @@ func TestMain_AutoupdateConstructorParams(t *testing.T) {
 }
 
 func TestMain_AutoupdateHasNoEnvOptOut(t *testing.T) {
-	// newUpdater is the production wiring point — run() constructs its updater
-	// through it. Asserting EnvDisable == "" here covers the real call site, so
-	// re-adding an envDisable argument in production would fail this test. If
-	// this test instead built its own autoupdate.New(...), it would only re-test
-	// the picokit library and pass regardless of what run() does. Hermetic: no
-	// network call.
-	if got := newUpdater().EnvDisable; got != "" {
-		t.Errorf("released binary must have no env opt-out; EnvDisable = %q", got)
+	// The private backend has no EnvDisable field or runtime opt-out.
+	u := newUpdater()
+	if u.Repo != "pablontiv/backscroll" || u.Binary != "backscroll" {
+		t.Fatalf("wrong updater identity: %+v", u)
 	}
 }
 
@@ -1556,7 +1680,7 @@ func TestIntegration_SyncWithCrosshostEquivalence(t *testing.T) {
 		t.Fatalf("failed to write session: %v", err)
 	}
 
-	// Create a projects registry with ONLY /home/shared root (simulating Linux registry)
+	// Create a projects registry with a Linux root and an explicit macOS alias
 	home := t.TempDir()
 	cfgDir := filepath.Join(home, ".config", "backscroll")
 	if err := os.MkdirAll(cfgDir, 0o755); err != nil {
@@ -1566,6 +1690,7 @@ func TestIntegration_SyncWithCrosshostEquivalence(t *testing.T) {
 [[projects]]
 id = "myproj"
 roots = ["/home/shared/myproject"]
+aliases = ["/Users/Shared/myproject"]
 `
 	if err := os.WriteFile(filepath.Join(cfgDir, "projects.toml"), []byte(projectsTOML), 0o644); err != nil {
 		t.Fatalf("failed to write projects.toml: %v", err)
@@ -2263,10 +2388,10 @@ func TestRebuildProjectResolution(t *testing.T) {
 		t.Fatalf("open: %v", err)
 	}
 
-	// Insert a row with 'unknown' project from a Claude session path
+	// Seed completed parser evidence so path repair is authorized.
 	_, err = db.DB().Exec(`INSERT INTO search_items
-		(source, source_path, ordinal, role, text, timestamp, project, content_type)
-		VALUES ('session', '/Users/pones/.claude/projects/-home-user-myapp/uuid.jsonl', 0, 'user', 'text', '2026-01-01T00:00:00Z', 'unknown', 'text')`)
+		(source, source_path, ordinal, role, text, timestamp, project, content_type, project_evidence)
+		VALUES ('session', '/Users/pones/.claude/projects/-home-user-myapp/uuid.jsonl', 0, 'user', 'text', '2026-01-01T00:00:00Z', 'unknown', 'text', 'unknown')`)
 	if err != nil {
 		t.Fatalf("insert: %v", err)
 	}
@@ -2317,13 +2442,13 @@ func TestRebuildMultipleProjects(t *testing.T) {
 		t.Fatalf("open: %v", err)
 	}
 
-	// Insert rows with 'unknown' project from different Claude session paths
+	// Seed completed parser evidence for path repair across session paths.
 	_, err = db.DB().Exec(`INSERT INTO search_items
-		(source, source_path, ordinal, role, text, timestamp, project, content_type)
+		(source, source_path, ordinal, role, text, timestamp, project, content_type, project_evidence)
 		VALUES
-		('session', '/Users/pones/.claude/projects/-home-user-app1/uuid.jsonl', 0, 'user', 'text', '2026-01-01T00:00:00Z', 'unknown', 'text'),
-		('session', '/Users/pones/.claude/projects/-home-user-app2/uuid.jsonl', 0, 'user', 'text', '2026-01-01T00:00:00Z', 'unknown', 'text'),
-		('session', '/Users/pones/.claude/projects/-home-user-app1/uuid2.jsonl', 1, 'user', 'text', '2026-01-01T00:00:00Z', 'unknown', 'text')`)
+		('session', '/Users/pones/.claude/projects/-home-user-app1/uuid.jsonl', 0, 'user', 'text', '2026-01-01T00:00:00Z', 'unknown', 'text', 'unknown'),
+		('session', '/Users/pones/.claude/projects/-home-user-app2/uuid.jsonl', 0, 'user', 'text', '2026-01-01T00:00:00Z', 'unknown', 'text', 'unknown'),
+		('session', '/Users/pones/.claude/projects/-home-user-app1/uuid2.jsonl', 1, 'user', 'text', '2026-01-01T00:00:00Z', 'unknown', 'text', 'unknown')`)
 	if err != nil {
 		t.Fatalf("insert: %v", err)
 	}
@@ -2822,7 +2947,10 @@ func TestStartupDiagnosticsDoesNotAffectJSONOutput(t *testing.T) {
 	t.Setenv("BACKSCROLL_SESSION_DIRS", fixtureSession)
 	t.Setenv("BACKSCROLL_STARTUP_DIAGNOSTICS", "1")
 
-	stdout2, _, err := runCmd("list", "--json")
+	stdout2, stderr2, err := runCmd("list", "--json")
+	if !strings.Contains(stderr2, "Startup diagnostics:") {
+		t.Fatalf("missing stderr diagnostics: %s", stderr2)
+	}
 	cleanup2()
 	if err != nil {
 		t.Fatalf("list --json (with diagnostics) error: %v", err)
@@ -2855,7 +2983,10 @@ func TestStartupDiagnosticsDoesNotAffectRobotOutput(t *testing.T) {
 	t.Setenv("BACKSCROLL_SESSION_DIRS", fixtureSession)
 	t.Setenv("BACKSCROLL_STARTUP_DIAGNOSTICS", "1")
 
-	stdout2, _, err := runCmd("list", "--robot")
+	stdout2, stderr2, err := runCmd("list", "--robot")
+	if !strings.Contains(stderr2, "Startup diagnostics:") {
+		t.Fatalf("missing stderr diagnostics: %s", stderr2)
+	}
 	cleanup2()
 	if err != nil {
 		t.Fatalf("list --robot (with diagnostics) error: %v", err)

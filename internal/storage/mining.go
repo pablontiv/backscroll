@@ -119,13 +119,7 @@ func shouldMineToolLine(contentType, text string, isError bool) bool {
 // Deterministic: same input → same templates + signatures.
 func (d *Database) mineTemplatesForFile(ctx context.Context, tx *sql.Tx, file IndexedFile, miner *templates.Miner) error {
 	// Collect error-bearing messages by tool_name.
-	type errorLine struct {
-		toolName string
-		text     string
-		ordinal  int
-		uuid     string
-	}
-	var errorLines []errorLine
+	var errorLines []templateErrorLine
 
 	for _, msg := range file.Messages {
 		if err := ctx.Err(); err != nil {
@@ -147,15 +141,28 @@ func (d *Database) mineTemplatesForFile(ctx context.Context, tx *sql.Tx, file In
 			if err := ctx.Err(); err != nil {
 				return err
 			}
-			errorLines = append(errorLines, errorLine{
-				toolName: toolName,
-				text:     line,
-				ordinal:  msg.Ordinal,
-				uuid:     msg.UUID,
+			errorLines = append(errorLines, templateErrorLine{
+				text:    line,
+				ordinal: msg.Ordinal,
+				uuid:    msg.UUID,
 			})
 		}
 	}
 
+	return mineAndPersistTemplates(ctx, tx, file.SourcePath, errorLines, miner)
+}
+
+// templateErrorLine is an already-proven, adapter-selected error line. Sync and
+// backfill retain separate evidence gates; this shared path never infers errors.
+type templateErrorLine struct {
+	text    string
+	ordinal int
+	uuid    string
+}
+
+// mineAndPersistTemplates shares normalization, epoch enrichment and idempotent
+// match persistence without replacing historical counts or observation times.
+func mineAndPersistTemplates(ctx context.Context, tx *sql.Tx, sourcePath string, errorLines []templateErrorLine, miner *templates.Miner) error {
 	// Mine templates and record matches.
 	templateMap := make(map[string]*templateRecord)
 	for _, errLine := range errorLines {
@@ -179,7 +186,7 @@ func (d *Database) mineTemplatesForFile(ctx context.Context, tx *sql.Tx, file In
 		}
 		rec.matches = append(rec.matches, matchRecord{
 			uuid:       errLine.uuid,
-			sourcePath: file.SourcePath,
+			sourcePath: sourcePath,
 			ordinal:    errLine.ordinal,
 		})
 	}
@@ -197,6 +204,16 @@ func (d *Database) mineTemplatesForFile(ctx context.Context, tx *sql.Tx, file In
 		`, rec.signature, rec.normalizationVersion, rec.text, 1)
 		if err != nil {
 			return fmt.Errorf("insert template: %w", err)
+		}
+
+		// A new observation of the same signature proves the current epoch.
+		// Advance only the epoch: retained matches, counts and dates are evidence.
+		_, err = tx.ExecContext(ctx, `
+			UPDATE message_templates SET normalization_version = ?
+			WHERE signature = ? AND normalization_version < ?
+		`, rec.normalizationVersion, rec.signature, rec.normalizationVersion)
+		if err != nil {
+			return fmt.Errorf("update template normalization_version: %w", err)
 		}
 
 		// Get template ID (will succeed since we just inserted or it already existed)

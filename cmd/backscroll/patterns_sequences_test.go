@@ -148,8 +148,8 @@ func TestPatternsSequencesAllProjects(t *testing.T) {
 func TestPatternsSequencesInvalidMinSupport(t *testing.T) {
 	setupSequencesHermeticEmptyInputEnv(t)
 	stdout, stderr, err := runPatternsSequences(t, "--min-support", "-1", "--json")
-	if err != nil {
-		t.Fatalf("patterns sequences --min-support -1 unexpectedly failed: %v stdout=%q stderr=%q", err, stdout, stderr)
+	if err == nil || !strings.Contains(err.Error(), "--min-support must be >= 0") || stdout != "" {
+		t.Fatalf("patterns sequences --min-support -1 must be rejected: %v stdout=%q stderr=%q", err, stdout, stderr)
 	}
 }
 

@@ -1,5 +1,7 @@
 # Pattern Discovery: `patterns` and `annotate`
 
+`--json` and `--robot` are mutually exclusive; combined flags fail before startup side effects. Empty robot results produce zero stdout bytes, with actionable hints on stderr.
+
 Deterministic census aggregations over the indexed event store, plus the
 write surface for agent-driven classification. Together they implement the
 discovery loop designed in
@@ -26,7 +28,36 @@ Base flags for every kind: `--project` / `--all-projects`, `--tag`,
 `--limit` / `--offset`, `--json` / `--robot`. Corrections alone also accept
 `--origin human|assistant|system|automation|unknown`.
 
+### Eligibility and date bounds
+
+`--tag` applies to every kind, including corrections and sequences. A missing
+session tag yields zero candidates; partial tagging restricts support and share
+to eligible sessions. Project and tag scope apply before aggregation, mining,
+and final pagination, not to an already computed global result.
+
+Satellite metadata resolves to the indexed event's proven UUID first, even
+when retained coordinates differ. A UUID-less satellite can use path and
+ordinal only when exactly one indexed item owns that coordinate. Historical
+peers cannot multiply an event or lend it another project's scope. Tags and
+timestamps come from the resolved item; sequence session grouping and ordering
+use its canonical path and ordinal. Unscoped flat counts retain unresolved
+satellites once, but they cannot prove project/tag/date eligibility. Trends
+exclude those undated events and report the exclusion count.
+
+Every API with temporal filters uses `[after, before)`: the lower bound is
+inclusive (`>=`) and the upper bound exclusive (`<`); NULL timestamps cannot
+satisfy date bounds. The patterns CLI advertises `--after` / `--before` only
+for sequences, accepting ISO 8601 date strings. Internal command/failure and
+template APIs also honor the same bounds; this does not add flags to other
+pattern kinds. Sequence date filtering selects eligible events before mining.
+
 ### commands — what runs most
+
+Missing command heads (persisted SQL `NULL` or empty strings) are grouped together
+as `command_head: ""` in both flat and weekly output. This means unknown command
+metadata, not an inferred command; persisted values are unchanged. Normalization
+happens before grouping, ordering, and pagination, so there is only one unknown
+group per tool (and week for trends).
 
 Top `(tool_name, command_head)` pairs by frequency. The absolute top is
 usually unsurprising (Edit, Read); the informative reads are per-project
@@ -40,14 +71,45 @@ signal (`is_error` NULL) are excluded and counted. `exit_code=?` means no
 exit code was recoverable (non-Bash tools have none; Bash text is
 regex-mined and capped at 4000 runes by toolfmt).
 
+#### Failure census and weekly output compatibility (#147)
+
+Failure JSON envelopes expose `total_events`, `signalled_events` (both
+success and failure signals), and `unsignalled_events` (NULL signals), even
+when no failures exist or pagination returns no signatures. Counts use the
+same eligible project/tag/time population before pagination; total equals
+signalled plus unsignalled. Signature `count` is failure incidence, NOT
+signal coverage. The retained robot `result_N_coverage=count/signalled`
+field is a signature's incidence among signalled events, not the proportion
+of events carrying a signal.
+
+With `--trend`, each week envelope carries its own census and each signature's
+retained `signalled_events` denominator refers only to that week. The outer
+census sums all dated eligible weeks. Weeks with zero failures (or signatures
+removed by pagination) remain present with `patterns:[]`; signature pagination
+and descending week/frequency ordering are unchanged. The exclusion diagnostic
+counts ALL scoped events without timestamps, including successful and
+unsignalled events, independently of date bounds.
+
+This is an intentional output bug fix: command AND failure trend robot
+payload keys are now `week_N_result_M_<field>`, retaining `week_N=<week>`
+bucket markers and ordering. Consumers must stop relying on duplicate
+`result_M_<field>` keys. Failure robot census keys are emitted once globally
+and once per week as `week_N_total_events`, `week_N_signalled_events`, and
+`week_N_unsignalled_events`; text output displays the same counts.
+JSON census fields and zero-failure week envelopes are additive; historical
+signature fields remain available. No schema or public flags change.
+
 ### templates — recurring errors nobody named
 
 Unsupervised Drain-style templates mined from error-bearing tool output
-(`--min-support N`, default 3). Mining selects only rows with the
-`error: ` output prefix or an `is_error = 1` event, and always excludes
-tool-input serializations. Templates carry a `normalization_version`;
-when extraction logic evolves the version bumps, so counts from different
-mining epochs never silently mix.
+(`--min-support N`, default 3). Sync uses structured `is_error` proof;
+text-only backfill uses the `error: ` output prefix or a retained
+`is_error = 1` event. Both exclude tool-input serializations and share
+normalization and persistence, but backfill never invents structured proof.
+Templates carry a `normalization_version`: observing the same signature
+under current normalization advances an older row's epoch in either path,
+without replacing its identity, matches, stored count, or first/last-seen
+values. Repeated sync and backfill remain idempotent.
 
 ### corrections — process-error candidates
 
@@ -87,6 +149,16 @@ explodes combinatorially on repetitive sessions without it).
 `--limit`/`--offset` paginate the MINED patterns; the input corpus is
 never truncated.
 
+```bash
+backscroll patterns --kind sequences --after 2026-01-01 --before 2027-01-01 --json
+```
+
+Sequence `--after`/`--before` select timestamped events before mining using
+`[after, before)`: the lower bound is inclusive (`>=`), the upper exclusive (`<`).
+Use ISO 8601 bounds; `YYYY-MM-DD` denotes the start of the UTC date. Unknown
+timestamps cannot satisfy a bound. The example includes January 1, 2026 but
+excludes January 1, 2027. These CLI date filters are for sequences only.
+
 ## Trends: what grows beats what is common
 
 ```bash
@@ -120,11 +192,11 @@ fi
 #    against annotations — already-labeled candidates disappear.
 ```
 
-Before step 2, assign `UUID`, `SOURCE_PATH`, and `ORDINAL` from one selected machine-readable candidate and assign the intended free-form label to `LABEL`. A usable UUID is non-null and non-empty. The historical patterns contract can expose a legacy row as `"UUID":""` in JSON or `result_N_uuid=` in robot output; treat either form like null and use the exact published `source_path` plus `ordinal` from that same candidate. `context` is mandatory once candidate identity is known: ranked search is discovery, not an exact labeling window. It returns positional DB neighbors by stored ordinal, not a role-selected window and not raw provider records. If `context_ambiguous` is returned, do not label a guessed row; keep the diagnostic and disambiguate with a usable UUID when available. `annotate` resolves the UUID to canonical coordinates before writing and rejects conflicting `--path`/`--ordinal` inputs; re-annotating the same (message, kind) replaces the label. Labels are free-form until the post-calibration `label_enum` freeze. Crash-safety comes from the query, not from loop state: there is nothing to checkpoint.
+Before step 2, assign `UUID`, `SOURCE_PATH`, and `ORDINAL` from one selected machine-readable candidate and assign the intended free-form label to `LABEL`. A usable UUID is non-null and non-empty. The historical patterns contract can expose a legacy row as `"UUID":""` in JSON or `result_N_uuid=` in robot output; treat either form like null and use the exact published `source_path` plus `ordinal` from that same candidate. `context` is mandatory once candidate identity is known: ranked search is discovery, not an exact labeling window. It returns positional DB neighbors by stored ordinal, not a role-selected window and not raw provider records. If `context_ambiguous` is returned, do not label a guessed row; keep the diagnostic and disambiguate with a usable UUID when available. `annotate` resolves the UUID to canonical coordinates before writing and rejects conflicting `--path`/`--ordinal` inputs, including either selector supplied alone. An explicitly supplied `--ordinal` must be non-negative; omitting it with a UUID remains valid. Coordinate-only annotation uses the same exact absence and ambiguity boundary as `context`: multiple indexed rows at that coordinate are rejected before writing, even when they have distinct UUIDs. Use a usable opaque UUID to disambiguate; re-annotating the same (message, kind) replaces the label. Labels are free-form until the post-calibration `label_enum` freeze. Crash-safety comes from the query, not from loop state: there is nothing to checkpoint.
 
 ## Operating notes
 
-- Every operational command validates active manifests and attempts one incremental sync before executing. Session, plan, and Markdown files are ingestion inputs; SQLite is the perennial record used by search, context, list, patterns, status, and validate. Use search for discovery. For one selected search result, use context with its published UUID when non-null, or its exact source path plus ordinal only when UUID is null.
+- Ordinary snapshot-read, metadata-read, and mutation owners validate active manifests and attempt one incremental sync before executing. Busy readers may follow the last committed snapshot; remediation (`recover`) skips preparation/pre-sync and only syncs after installing a replacement. See [startup classes and exceptions](sync.md). Session, plan, and Markdown files are ingestion inputs; SQLite is the perennial record used by search, context, list, patterns, status, and validate. Use search for discovery. For one selected search result, use context with its published UUID when non-null, or its exact source path plus ordinal only when UUID is null.
 - Zero-result guidance goes to stderr; stdout stays clean for `--json`.
 - Robot mode on search emits `result_N_field=value` lines and escapes search string values with backslash as `\\`, carriage return as `\r`, and newline as `\n`.
 - A malformed `categories.toml` fails the command (non-zero exit) rather
@@ -137,3 +209,27 @@ Before step 2, assign `UUID`, `SOURCE_PATH`, and `ORDINAL` from one selected mac
   to its reader; unavailable or expired sources remain `unknown`. Recovery can
   enrich an `unknown` duplicate from compatible proven evidence without the
   original source; contradictory proven origins are rejected.
+
+
+## Invocation validation
+
+Patterns accepts no positional operands. `--project` and `--all-projects`
+are mutually exclusive; without either, the current-directory project is used.
+Invalid operands, scope conflicts, and numeric values are rejected before
+startup creates a database, acquires a lock, or syncs inputs.
+
+Support, batch size, limit, offset, and sequence lengths must be nonnegative.
+Confidence must be finite and in [0, 1], including both endpoints.
+Zero sequence support/lengths preserve defaults (3 occurrences, lengths 2..6);
+the effective minimum length must not exceed the effective maximum.
+Zero batch remains inactive. Pagination is defined below.
+These numeric checks apply even when a flag is irrelevant to the chosen kind.
+
+### Pagination
+
+`--limit` defaults to 20; explicit `--limit 0` is unlimited. `--offset`
+skips final ordered candidates, including with an unlimited limit. This applies
+uniformly to commands, failures (including trends), templates, corrections, and
+sequences. Sequence mining always reads the full filtered corpus before paging
+patterns. Equal-frequency candidates use logical identity tie-breaks (template
+signature, command/failure identity, or sequence lexicographic order), not row IDs.

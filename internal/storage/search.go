@@ -146,7 +146,7 @@ func (d *Database) searchTableQueryContext(ctx context.Context, ftsTable, ftsQue
 
 	// Date filters
 	if opts.After != nil {
-		whereClauses = append(whereClauses, "si.timestamp > ?")
+		whereClauses = append(whereClauses, "si.timestamp >= ?")
 		args = append(args, opts.After.Format(time.RFC3339))
 	}
 

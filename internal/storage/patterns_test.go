@@ -690,8 +690,8 @@ func TestAggregateFailuresTrendDateFilter(t *testing.T) {
 	if len(results) != 1 || results[0].ToolName != "Bash" {
 		t.Errorf("date filter failed: want 1 Bash result before 2026-07-01, got %+v", results)
 	}
-	if excluded != 1 {
-		t.Errorf("excluded count: want 1 is_error=1 NULL-timestamp row (success should not count), got %d", excluded)
+	if excluded != 2 {
+		t.Errorf("excluded count: want 2 eligible NULL-timestamp events (failure and success), got %d", excluded)
 	}
 }
 

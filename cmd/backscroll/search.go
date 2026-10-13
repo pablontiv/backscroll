@@ -66,6 +66,9 @@ protected. All scope filters remain fixed; no OR or semantic expansion is used.`
 		Args: func(cmd *cobra.Command, args []string) error {
 			return validateCommandBeforeStartup(cmd, args, cobra.MaximumNArgs(1), func() error {
 				query := searchQuery(text, args)
+				if err := validateSearchNumbers(maxTokens, similarityThreshold); err != nil {
+					return err
+				}
 				_, _, err := validateAndParseSearchRequest(query, fields, contentType, after, before, limit, offset, relax)
 				if err != nil {
 					return err
@@ -83,20 +86,20 @@ protected. All scope filters remain fixed; no OR or semantic expansion is used.`
 			if startup.Config == nil {
 				return fmt.Errorf("startup configuration unavailable")
 			}
-			return runSearch(cmd.Context(), stdout, stderr, startup.Config, query, project, allProjects, jsonFormat, robotFormat,
+			return runSearch(cmd.Context(), stdout, stderr, startup.Config, query, project, allProjects, invocationOutputMode(cmd),
 				source, sourcePath, after, before, role, limit, offset, contentType, tag,
 				fields, maxTokens, lexicalOnly, similarityThreshold, relax)
 		},
 	}
 
-	cmd.Flags().StringVar(&project, "project", "", "Filter to project")
+	cmd.Flags().StringVar(&project, "project", "", "Filter to project (mutually exclusive with --all-projects)")
 	cmd.Flags().BoolVar(&allProjects, "all-projects", false, "Search all projects")
 	cmd.Flags().BoolVar(&jsonFormat, "json", false, "Output as JSON")
 	cmd.Flags().BoolVar(&robotFormat, "robot", false, "Output in robot format")
 	cmd.Flags().StringVar(&source, "source", "", "Filter by source type")
 	cmd.Flags().StringVar(&sourcePath, "source-path", "", "Filter by source path (exact, SQL LIKE pattern, or * glob)")
-	cmd.Flags().StringVar(&after, "after", "", "Filter after date (YYYY-MM-DD)")
-	cmd.Flags().StringVar(&before, "before", "", "Filter before date (YYYY-MM-DD)")
+	cmd.Flags().StringVar(&after, "after", "", "Filter on or after date (inclusive YYYY-MM-DD)")
+	cmd.Flags().StringVar(&before, "before", "", "Filter before date (exclusive YYYY-MM-DD)")
 	cmd.Flags().StringVar(&role, "role", "", "Filter by message role")
 	cmd.Flags().IntVar(&limit, "limit", 20, "Result limit")
 	cmd.Flags().IntVar(&offset, "offset", 0, "Result offset")
@@ -106,9 +109,11 @@ protected. All scope filters remain fixed; no OR or semantic expansion is used.`
 	cmd.Flags().IntVar(&maxTokens, "max-tokens", 0, "Max tokens in output (0=unlimited)")
 	cmd.Flags().BoolVar(&lexicalOnly, "lexical-only", false, "Use BM25 only, skip vector search")
 	cmd.Flags().BoolVar(&relax, "relax", false, "Lexical-only recall: after zero rows, drop low-IDF terms within the same scope (+term protects a term); ignores vector similarity thresholds")
-	cmd.Flags().Float64Var(&similarityThreshold, "similarity-threshold", 0.3, "Minimum cosine similarity for vector results (0=no threshold)")
+	cmd.Flags().Float64Var(&similarityThreshold, "similarity-threshold", 0.3, "Minimum cosine similarity for vector results (finite 0..1; 0=no threshold)")
 	cmd.Flags().StringVar(&text, "text", "", "Search text (v2 preferred grammar)")
 
+	cmd.MarkFlagsMutuallyExclusive("project", "all-projects")
+	describeOutputModes(cmd)
 	return cmd
 }
 
@@ -162,7 +167,7 @@ func validateAndParseSearchRequest(query, fields, contentType, after, before str
 
 func runSearch(ctx context.Context, stdout, stderr io.Writer, cfg *config.Config,
 	query string,
-	project string, allProjects bool, jsonFormat, robotFormat bool,
+	project string, allProjects bool, mode outputMode,
 	source, sourcePath, after, before, role string,
 	limit, offset int, contentType, tag string,
 	fields string, maxTokens int,
@@ -180,7 +185,7 @@ func runSearch(ctx context.Context, stdout, stderr io.Writer, cfg *config.Config
 
 	db, diag, err := prepareIndex(ctx, cfg, indexDataRead)
 	if diag != nil {
-		return refuseIndex(stdout, stderr, *diag, jsonFormat, robotFormat)
+		return refuseIndex(stdout, stderr, *diag, mode)
 	}
 	if err != nil {
 		return fmt.Errorf("prepare index: %w", err)
@@ -229,9 +234,9 @@ func runSearch(ctx context.Context, stdout, stderr io.Writer, cfg *config.Config
 
 	// Determine output format
 	format := picokitoutput.FormatText
-	if jsonFormat {
+	if mode == outputJSON {
 		format = picokitoutput.FormatJSON
-	} else if robotFormat {
+	} else if mode == outputRobot {
 		format = picokitoutput.FormatRobot
 	}
 

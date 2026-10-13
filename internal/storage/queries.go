@@ -207,7 +207,7 @@ type SessionEntry struct {
 type ListOptions struct {
 	Project     string // filter to project
 	AllProjects bool   // if true, ignore Project filter
-	Order       string // e.g., "timestamp:desc", "timestamp:asc" (default: no ordering)
+	Order       string // e.g., "timestamp:desc", "timestamp:asc" (default: timestamp:desc)
 	Limit       int    // result limit (0 = no limit)
 	Offset      int    // result offset
 	After       *time.Time
@@ -233,7 +233,7 @@ func (d *Database) ListItemsV2(opts ListOptions) ([]SessionEntry, error) {
 
 	// Date filters
 	if opts.After != nil {
-		query += " AND si.timestamp > ?"
+		query += " AND si.timestamp >= ?"
 		args = append(args, opts.After.Format(time.RFC3339))
 	}
 	if opts.Before != nil {
@@ -245,22 +245,15 @@ func (d *Database) ListItemsV2(opts ListOptions) ([]SessionEntry, error) {
 		GROUP BY si.source_path, si.project
 	`
 
-	// Apply ordering
-	if opts.Order != "" {
-		if strings.HasPrefix(opts.Order, "timestamp:desc") {
-			query += " ORDER BY ts DESC"
-		} else if strings.HasPrefix(opts.Order, "timestamp:asc") {
-			query += " ORDER BY ts ASC"
-		}
+	switch opts.Order {
+	case "", "timestamp:desc":
+		query += " ORDER BY ts DESC, si.source_path ASC, si.project ASC"
+	case "timestamp:asc":
+		query += " ORDER BY ts ASC, si.source_path ASC, si.project ASC"
+	default:
+		return nil, fmt.Errorf("invalid order %q: expected timestamp:desc or timestamp:asc", opts.Order)
 	}
-
-	// Apply limit/offset
-	if opts.Limit > 0 {
-		query += fmt.Sprintf(" LIMIT %d", opts.Limit)
-	}
-	if opts.Offset > 0 {
-		query += fmt.Sprintf(" OFFSET %d", opts.Offset)
-	}
+	query, args = appendPagination(query, args, opts.Limit, opts.Offset)
 
 	rows, err := d.db.Query(query, args...)
 	if err != nil {
@@ -476,7 +469,7 @@ func (d *Database) Validate() error {
 		return fmt.Errorf("found %d orphaned search_items", orphans)
 	}
 
-	return nil
+	return d.validateFTSMembership()
 }
 
 // Purge deletes records older than the specified date.
@@ -503,7 +496,7 @@ func (d *Database) Purge(before string) (int64, error) {
 	// Find source_paths to delete
 	rows, err := tx.Query(`
 		SELECT DISTINCT source_path FROM search_items
-		WHERE timestamp < ?
+		WHERE julianday(timestamp) < julianday(?)
 	`, beforeStr)
 	if err != nil {
 		return 0, fmt.Errorf("find items to purge: %w", err)
@@ -524,7 +517,7 @@ func (d *Database) Purge(before string) (int64, error) {
 	if _, err := tx.Exec(`
 		DELETE FROM template_matches
 		WHERE (source_path, ordinal) IN (
-			SELECT source_path, ordinal FROM search_items WHERE timestamp < ?
+			SELECT source_path, ordinal FROM search_items WHERE julianday(timestamp) < julianday(?)
 		)
 	`, beforeStr); err != nil {
 		return 0, fmt.Errorf("delete template_matches: %w", err)
@@ -534,7 +527,7 @@ func (d *Database) Purge(before string) (int64, error) {
 	if _, err := tx.Exec(`
 		DELETE FROM tool_events
 		WHERE (source_path, ordinal) IN (
-			SELECT source_path, ordinal FROM search_items WHERE timestamp < ?
+			SELECT source_path, ordinal FROM search_items WHERE julianday(timestamp) < julianday(?)
 		)
 	`, beforeStr); err != nil {
 		return 0, fmt.Errorf("delete tool_events: %w", err)
@@ -545,7 +538,7 @@ func (d *Database) Purge(before string) (int64, error) {
 	if _, err := tx.Exec(`
 		DELETE FROM correction_signals
 		WHERE (source_path, ordinal) IN (
-			SELECT source_path, ordinal FROM search_items WHERE timestamp < ?
+			SELECT source_path, ordinal FROM search_items WHERE julianday(timestamp) < julianday(?)
 		)
 	`, beforeStr); err != nil {
 		return 0, fmt.Errorf("delete correction_signals: %w", err)
@@ -556,7 +549,7 @@ func (d *Database) Purge(before string) (int64, error) {
 	if _, err := tx.Exec(`
 		DELETE FROM annotations
 		WHERE (source_path, ordinal) IN (
-			SELECT source_path, ordinal FROM search_items WHERE timestamp < ?
+			SELECT source_path, ordinal FROM search_items WHERE julianday(timestamp) < julianday(?)
 		)
 	`, beforeStr); err != nil {
 		return 0, fmt.Errorf("delete annotations: %w", err)
@@ -565,7 +558,7 @@ func (d *Database) Purge(before string) (int64, error) {
 	// Delete from search_items
 	result, err := tx.Exec(`
 		DELETE FROM search_items
-		WHERE timestamp < ?
+		WHERE julianday(timestamp) < julianday(?)
 	`, beforeStr)
 	if err != nil {
 		return 0, fmt.Errorf("delete search_items: %w", err)
@@ -702,8 +695,8 @@ type TemplateQueryOpts struct {
 	MinSupport int
 	Project    string
 	Tag        string // filter by session_tags.tag
-	After      string // RFC3339 timestamp
-	Before     string // RFC3339 timestamp
+	After      string // inclusive RFC3339 lower bound
+	Before     string // exclusive RFC3339 upper bound
 }
 
 // TemplateRow is a result from AggregateTemplates.
@@ -740,55 +733,13 @@ func (d *Database) AggregateTemplates(opts TemplateQueryOpts) ([]TemplateRow, er
 			GROUP_CONCAT(DISTINCT tm.item_uuid) as uuids
 		FROM message_templates mt
 		LEFT JOIN template_matches tm ON tm.template_id = mt.id
-		LEFT JOIN search_items si ON si.source_path = tm.source_path AND si.ordinal = tm.ordinal
+		LEFT JOIN search_items si ON si.id = ` + patternItemID("tm.item_uuid", "tm.source_path", "tm.ordinal") + `
+		WHERE 1=1
 	`
-	args := []interface{}{}
+	filter, args := patternEligibility(opts.Project, opts.Tag, opts.After, opts.Before)
+	query += filter
 
-	whereAdded := false
-	if opts.Project != "" {
-		query += ` WHERE si.project = ?`
-		args = append(args, opts.Project)
-		whereAdded = true
-	}
-
-	if opts.Tag != "" {
-		if whereAdded {
-			query += ` AND tm.source_path IN (
-				SELECT DISTINCT search_items.source_path FROM search_items
-				JOIN session_tags ON search_items.source_path = session_tags.source_path
-				WHERE session_tags.tag = ?
-			)`
-		} else {
-			query += ` WHERE tm.source_path IN (
-				SELECT DISTINCT search_items.source_path FROM search_items
-				JOIN session_tags ON search_items.source_path = session_tags.source_path
-				WHERE session_tags.tag = ?
-			)`
-			whereAdded = true
-		}
-		args = append(args, opts.Tag)
-	}
-
-	if opts.After != "" {
-		if whereAdded {
-			query += ` AND si.timestamp > ?`
-		} else {
-			query += ` WHERE si.timestamp > ?`
-			whereAdded = true
-		}
-		args = append(args, opts.After)
-	}
-
-	if opts.Before != "" {
-		if whereAdded {
-			query += ` AND si.timestamp < ?`
-		} else {
-			query += ` WHERE si.timestamp < ?`
-		}
-		args = append(args, opts.Before)
-	}
-
-	query += ` GROUP BY mt.id HAVING cnt >= ? ORDER BY cnt DESC`
+	query += ` GROUP BY mt.id HAVING cnt >= ? ORDER BY cnt DESC, mt.signature ASC`
 	args = append(args, minSupport)
 
 	rows, err := d.db.Query(query, args...)
@@ -825,6 +776,7 @@ func (d *Database) AggregateTemplates(opts TemplateQueryOpts) ([]TemplateRow, er
 
 // CorrectionAggOpts filters and paginates correction aggregation.
 type CorrectionAggOpts struct {
+	Tag           string // filter eligible sessions before aggregation and pagination
 	Project       string
 	Origin        models.MessageOrigin
 	MinConfidence float64
@@ -862,22 +814,9 @@ func (d *Database) AggregateCorrections(opts CorrectionAggOpts) ([]CorrectionCan
 			COALESCE(si.uuid, ''),
 			si.origin
 		FROM correction_signals cs
-		JOIN search_items si ON (
-			(NULLIF(cs.item_uuid, '') IS NOT NULL AND si.uuid = cs.item_uuid)
-			OR (
-				NULLIF(cs.item_uuid, '') IS NULL
-				AND cs.source_path = si.source_path
-				AND cs.ordinal = si.ordinal
-				AND NOT EXISTS (
-					SELECT 1
-					FROM search_items peer
-					WHERE peer.source_path = si.source_path
-						AND peer.ordinal = si.ordinal
-						AND peer.id <> si.id
-				)
-			)
-		)
+		JOIN search_items si ON si.id = ` + patternItemID("cs.item_uuid", "cs.source_path", "cs.ordinal") + `
 	`
+
 	if opts.PendingOnly {
 		query += `
 		LEFT JOIN annotations a ON (
@@ -889,16 +828,12 @@ func (d *Database) AggregateCorrections(opts CorrectionAggOpts) ([]CorrectionCan
 	}
 
 	query += `WHERE si.source = 'session'`
-	var args []interface{}
-
+	filter, args := patternEligibility(opts.Project, opts.Tag, "", "")
+	query += filter
 	if opts.PendingOnly {
 		query += ` AND a.id IS NULL`
 	}
 
-	if opts.Project != "" {
-		query += " AND si.project = ?"
-		args = append(args, opts.Project)
-	}
 	if opts.Origin != "" {
 		query += " AND si.origin = ?"
 		args = append(args, opts.Origin)
@@ -910,14 +845,7 @@ func (d *Database) AggregateCorrections(opts CorrectionAggOpts) ([]CorrectionCan
 	`
 	args = append(args, opts.MinConfidence)
 
-	if opts.Limit > 0 {
-		query += ` LIMIT ?`
-		args = append(args, opts.Limit)
-		if opts.Offset > 0 {
-			query += ` OFFSET ?`
-			args = append(args, opts.Offset)
-		}
-	}
+	query, args = appendPagination(query, args, opts.Limit, opts.Offset)
 
 	rows, err := d.db.Query(query, args...)
 	if err != nil {
@@ -948,63 +876,73 @@ func (d *Database) AggregateCorrections(opts CorrectionAggOpts) ([]CorrectionCan
 // UpsertAnnotation inserts or replaces an annotation for a message.
 // Resolves the target message to canonical (source_path, ordinal) coordinates.
 // If uuid is provided, resolves from uuid; otherwise uses source_path+ordinal.
-// If both are provided and differ, returns error (no write).
-// Returns error early if message not found (no write on validation failure).
+// Each supplied coordinate must match the UUID, even when supplied alone.
+// Shares context's typed absence/ambiguity errors; rejection never writes.
 func (d *Database) UpsertAnnotation(itemUUID, sourcePath string, ordinal int, kind, label string) error {
-	var resolvedPath string
-	var resolvedOrdinal int
+	// Preserve the legacy -1 absence sentinel for existing callers.
+	if ordinal == -1 {
+		return d.UpsertAnnotationWithOrdinal(itemUUID, sourcePath, nil, kind, label)
+	}
+	return d.UpsertAnnotationWithOrdinal(itemUUID, sourcePath, &ordinal, kind, label)
+}
 
-	// Resolve canonical coordinates
+// UpsertAnnotationWithOrdinal distinguishes an omitted ordinal (nil) from an
+// explicitly supplied value. Explicit negative ordinals never reach a write.
+func (d *Database) UpsertAnnotationWithOrdinal(itemUUID, sourcePath string, suppliedOrdinal *int, kind, label string) error {
+	ordinal := -1
+	if suppliedOrdinal != nil {
+		ordinal = *suppliedOrdinal
+		if ordinal < 0 {
+			return fmt.Errorf("ordinal must be non-negative when supplied")
+		}
+	}
+	q := ContextRecordQuery{}
 	if itemUUID != "" {
-		// Resolve from uuid
-		if err := d.db.QueryRow("SELECT source_path, ordinal FROM search_items WHERE uuid = ?", itemUUID).Scan(&resolvedPath, &resolvedOrdinal); err != nil {
-			if err == sql.ErrNoRows {
-				return fmt.Errorf("message not found: uuid=%q", itemUUID)
-			}
-			return fmt.Errorf("resolve uuid %q: %w", itemUUID, err)
-		}
-
-		// If caller also provided path/ordinal, validate they match
-		if sourcePath != "" && ordinal >= 0 {
-			if resolvedPath != sourcePath || resolvedOrdinal != ordinal {
-				return fmt.Errorf("uuid and path/ordinal refer to different messages: uuid=%q resolved to (%q,%d), caller provided (%q,%d)", itemUUID, resolvedPath, resolvedOrdinal, sourcePath, ordinal)
-			}
-		}
+		q.UUID = &itemUUID
 	} else if sourcePath != "" && ordinal >= 0 {
-		// Resolve from source_path+ordinal and validate message exists
-		var uuid sql.NullString
-		if err := d.db.QueryRow("SELECT uuid FROM search_items WHERE source_path = ? AND ordinal = ?", sourcePath, ordinal).Scan(&uuid); err != nil {
-			if err == sql.ErrNoRows {
-				return fmt.Errorf("message not found: source_path=%q ordinal=%d", sourcePath, ordinal)
-			}
-			return fmt.Errorf("resolve source_path %q ordinal %d: %w", sourcePath, ordinal, err)
-		}
-		resolvedPath = sourcePath
-		resolvedOrdinal = ordinal
-		if uuid.Valid {
-			itemUUID = uuid.String
-		}
+		q.SourcePath = &sourcePath
+		n := int64(ordinal)
+		q.Ordinal = &n
 	} else {
 		return fmt.Errorf("must provide either --uuid or both --path and --ordinal")
 	}
-
-	// Upsert with RESOLVED coordinates: INSERT OR REPLACE with current timestamp
-	now := time.Now().Format(time.RFC3339)
-	_, err := d.db.Exec(`
+	// Resolve and write in one transaction, using the same exact boundary as context.
+	tx, err := d.db.BeginTx(context.Background(), nil)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = tx.Rollback() }()
+	anchor, err := resolveContextRecordAnchor(context.Background(), tx, q)
+	if err != nil {
+		// Keep annotation diagnostics at its public resolution boundary while
+		// preserving shared context error identity through wrapping.
+		if itemUUID != "" {
+			return fmt.Errorf("resolve uuid %q: %w", itemUUID, err)
+		}
+		return fmt.Errorf("resolve source_path %q ordinal %d: %w", sourcePath, ordinal, err)
+	}
+	if itemUUID != "" && ((sourcePath != "" && sourcePath != anchor.sourcePath) || (ordinal >= 0 && int64(ordinal) != anchor.ordinal)) {
+		return fmt.Errorf("uuid and path/ordinal refer to different messages: uuid=%q resolved to (%q,%d), caller provided (%q,%d)", itemUUID, anchor.sourcePath, anchor.ordinal, sourcePath, ordinal)
+	}
+	_, err = tx.Exec(`
 		INSERT OR REPLACE INTO annotations
 		(item_uuid, source_path, ordinal, kind, label, source, created_at)
 		VALUES (?, ?, ?, ?, ?, 'agent', ?)
-	`, itemUUID, resolvedPath, resolvedOrdinal, kind, label, now)
-	return err
+	`, anchor.uuid.String, anchor.sourcePath, anchor.ordinal, kind, label, time.Now().Format(time.RFC3339))
+	if err != nil {
+		return err
+	}
+	return tx.Commit()
 }
 
 // LoadSequencesOpts specifies filters for loading tool sequences.
 type LoadSequencesOpts struct {
+	Tag     string // filter eligible sessions before mining
 	Project string // if set, filter to this project
-	After   string // ISO 8601 date, exclusive lower bound (tool_events.timestamp > After)
-	Before  string // ISO 8601 date, exclusive upper bound (tool_events.timestamp < Before)
-	Limit   int    // max sequences to return (0 = no limit)
-	Offset  int    // skip first N sequences
+	After   string // ISO 8601 date, inclusive lower bound (indexed timestamp >= After)
+	Before  string // ISO 8601 date, exclusive upper bound (indexed timestamp < Before)
+	Limit   int    // ignored: paginate mined patterns, never the input corpus
+	Offset  int    // ignored: paginate mined patterns, never the input corpus
 }
 
 // LoadToolSequences loads tool sequences for PrefixSpan mining.
@@ -1015,34 +953,9 @@ func (d *Database) LoadToolSequences(opts LoadSequencesOpts) ([]sequences.Sequen
 		return nil, fmt.Errorf("load categories: %w", err)
 	}
 
-	// Build SQL with filters
-	query := `
-		SELECT source_path, tool_name, command_head
-		FROM tool_events
-		WHERE 1=1
-	`
-	var args []interface{}
-
-	if opts.Project != "" {
-		query += ` AND source_path IN (
-			SELECT DISTINCT source_path FROM search_items WHERE project = ?
-		)`
-		args = append(args, opts.Project)
-	}
-
-	if opts.After != "" {
-		query += ` AND (SELECT timestamp FROM search_items WHERE search_items.source_path = tool_events.source_path
-			AND search_items.ordinal = tool_events.ordinal LIMIT 1) > ?`
-		args = append(args, opts.After)
-	}
-
-	if opts.Before != "" {
-		query += ` AND (SELECT timestamp FROM search_items WHERE search_items.source_path = tool_events.source_path
-			AND search_items.ordinal = tool_events.ordinal LIMIT 1) < ?`
-		args = append(args, opts.Before)
-	}
-
-	query += ` ORDER BY source_path, ordinal ASC`
+	cte, args := eligibleToolEvents(opts.Project, opts.Tag, opts.After, opts.Before)
+	query := cte + `SELECT session_path, tool_name, command_head
+		FROM eligible_tool_events ORDER BY session_path, session_ordinal ASC, id ASC`
 
 	rows, err := d.db.Query(query, args...)
 	if err != nil {
@@ -1321,14 +1234,16 @@ func (d *Database) ReresolveProjects(ctx context.Context, resolver func(sourcePa
 }
 
 // ReresolveProjectsContext resolves unknown project labels in deterministic
-// source-path order. Cancellation rolls back the complete resolution set.
+// source-path order. NULL evidence remains reserved for pending native replay,
+// including unavailable sources; path repair cannot establish parser completion.
+// Cancellation rolls back the complete resolution set.
 func (d *Database) ReresolveProjectsContext(ctx context.Context, resolver func(sourcePath string) string) (resolvedPaths int64, retErr error) {
 	if err := ctx.Err(); err != nil {
 		return 0, err
 	}
 	rows, err := d.db.QueryContext(ctx, `
 		SELECT DISTINCT source_path FROM search_items
-		WHERE project = 'unknown' OR project IS NULL
+		WHERE (project = 'unknown' OR project IS NULL) AND project_evidence IN ('unknown','path_fallback')
 		ORDER BY source_path ASC
 	`)
 	if err != nil {
@@ -1388,7 +1303,7 @@ func (d *Database) ReresolveProjectsContext(ctx context.Context, resolver func(s
 			continue
 		}
 		if _, err := tx.ExecContext(ctx, `
-			UPDATE search_items SET project = ? WHERE source_path = ?
+			UPDATE search_items SET project = ? WHERE source_path = ? AND project_evidence IN ('unknown','path_fallback')
 		`, resolvedID, sourcePath); err != nil {
 			if ctxErr := ctx.Err(); ctxErr != nil {
 				return 0, ctxErr
@@ -1414,7 +1329,9 @@ func (d *Database) ReresolveProjectsWithRegistry(ctx context.Context, registry p
 }
 
 // ReresolveProjectsWithRegistryContext corrects fallback project labels using
-// registry matches. Cancellation rolls back all updates from this call.
+// registry matches only after parser completion (non-NULL evidence). Both the
+// candidate query and transactional update guard pending native replay per row.
+// Cancellation rolls back all updates from this call.
 func (d *Database) ReresolveProjectsWithRegistryContext(ctx context.Context, registry projects.ProjectRegistry) (updatedPaths int64, retErr error) {
 	if err := ctx.Err(); err != nil {
 		return 0, err
@@ -1425,7 +1342,7 @@ func (d *Database) ReresolveProjectsWithRegistryContext(ctx context.Context, reg
 	rows, err := d.db.QueryContext(ctx, `
 		SELECT DISTINCT si.source_path, si.project
 		FROM search_items si
-		WHERE si.project IS NOT NULL
+		WHERE si.project IS NOT NULL AND si.project_evidence IN ('unknown','path_fallback')
 		ORDER BY si.source_path ASC, si.project ASC
 	`)
 	if err != nil {
@@ -1481,30 +1398,50 @@ func (d *Database) ReresolveProjectsWithRegistryContext(ctx context.Context, reg
 		if err := ctx.Err(); err != nil {
 			return 0, err
 		}
-		cwd := projects.DecodeCwdFromSessionPath(path.path)
+		cwd := projects.DecodeCwdCandidateFromSessionPath(path.path)
 		if cwd == "" {
 			continue
 		}
-		cwd = projects.NormalizeRootEquivalence(cwd, registry)
 		identity := projects.Identify(cwd, registry)
 		if err := ctx.Err(); err != nil {
 			return 0, err
 		}
-		if !identity.FromRegistry || identity.ProjectID == path.project {
+		if !identity.FromRegistry {
 			continue
 		}
 		if _, err := tx.ExecContext(ctx, `
-			UPDATE search_items SET project = ? WHERE source_path = ?
+			UPDATE search_items SET project = ?, project_evidence = 'registry' WHERE source_path = ? AND project_evidence IN ('unknown','path_fallback')
 		`, identity.ProjectID, path.path); err != nil {
 			if ctxErr := ctx.Err(); ctxErr != nil {
 				return 0, ctxErr
 			}
 			return 0, fmt.Errorf("update source_path %s: %w", path.path, err)
 		}
-		updatedPaths++
+		if identity.ProjectID != path.project {
+			updatedPaths++
+		}
 	}
 	if err := gate.commit(); err != nil {
 		return 0, fmt.Errorf("commit registry re-resolution transaction: %w", err)
 	}
 	return updatedPaths, nil
+}
+
+// PendingProjectEvidencePathsContext returns historical rows that can acquire
+// native cwd proof by reparsing configured, surviving sources.
+func (d *Database) PendingProjectEvidencePathsContext(ctx context.Context) ([]string, error) {
+	rows, err := d.db.QueryContext(ctx, "SELECT DISTINCT source_path FROM search_items WHERE project_evidence IS NULL ORDER BY source_path")
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var paths []string
+	for rows.Next() {
+		var path string
+		if err := rows.Scan(&path); err != nil {
+			return nil, err
+		}
+		paths = append(paths, path)
+	}
+	return paths, rows.Err()
 }

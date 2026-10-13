@@ -4,9 +4,12 @@ Backscroll owns the perennial corpus and supported CLI query surfaces. A downstr
 
 ## Supported operational boundary
 
-Every operational command validates active manifests and attempts one incremental
-sync before executing. Session, plan, and Markdown files are ingestion inputs;
-SQLite is the perennial record used by search, context, list, patterns, status, and validate.
+Ordinary snapshot-read, metadata-read, and mutation owners validate active manifests
+and attempt one incremental sync before executing. Busy readers may follow the
+last committed snapshot; remediation (`recover`) skips preparation/pre-sync and
+syncs only after installing a replacement. See [startup classes and exceptions](sync.md).
+Session, plan, and Markdown files are ingestion inputs; SQLite is the perennial
+record used by search, context, list, patterns, status, and validate.
 Use `search` for ranked discovery. Every search result publishes exact context selectors: `uuid`, `source_path`, and `ordinal` in minimal JSON (`UUID`, `FilePath`, and `Ordinal` in full JSON), or `result_N_uuid`, `result_N_filepath`, and `result_N_ordinal` in robot output. For the selected result, use its opaque UUID when non-null; only when UUID is null, fall back to its exact stored source path plus ordinal.
 
 Use diagnostics at the start of an audit run:
@@ -15,6 +18,16 @@ Use diagnostics at the start of an audit run:
 backscroll status --json
 backscroll validate --json
 ```
+
+After startup, validation reads the persistent index without repairing it. It
+compares posting-backed FTS document membership against canonical `search_items`
+routing: text/code/reasoning in `messages_fts`, tools in `tool_fts`. Empty or
+tokenizer-ineligible text (including tools shorter than three characters) does
+not require postings. SQLite tokenization and comparison use transaction-local
+TEMP scratch tables, rolled back after validation. Missing or unexpected document
+diagnostics identify the index, count, and first row ID and recommend
+`backscroll rebuild`; JSON retains the existing `valid: false`/`error` envelope.
+This membership check is not a full token-by-token posting integrity check.
 
 Then query through the database-backed CLI surfaces:
 

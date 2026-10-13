@@ -40,6 +40,10 @@ func PlanRecovery(inputs []RecoveryInput) (RecoveryPlan, []Diagnostic, error) {
 				diagnostics = append(diagnostics, uninterpretablePlanDiagnostic(inputIndex, rowIndex, record, fmt.Errorf("invalid message origin %q", record.Origin)))
 				continue
 			}
+			if !models.ValidProjectEvidence(record.ProjectEvidence) {
+				diagnostics = append(diagnostics, uninterpretablePlanDiagnostic(inputIndex, rowIndex, record, fmt.Errorf("invalid project evidence %q", record.ProjectEvidence)))
+				continue
+			}
 			identity, err := identityOf(record)
 			if err != nil {
 				diagnostics = append(diagnostics, uninterpretablePlanDiagnostic(inputIndex, rowIndex, record, err))
@@ -88,6 +92,7 @@ func PlanRecovery(inputs []RecoveryInput) (RecoveryPlan, []Diagnostic, error) {
 			originConflict := false
 			for _, occurrence := range occurrences {
 				record.SearchEcho = record.SearchEcho || occurrence.record.SearchEcho
+				record.ProjectEvidence = mergeProjectEvidence(record.ProjectEvidence, occurrence.record.ProjectEvidence)
 				merged, ok := mergeMessageOrigins(record.Origin, occurrence.record.Origin)
 				if !ok {
 					originConflict = true
@@ -303,4 +308,34 @@ func pointerEvidence(value *string) string {
 		return "<nil>"
 	}
 	return fmt.Sprintf("%q", *value)
+}
+
+func projectProofRank(value string) int {
+	switch value {
+	case "native_cwd":
+		return 3
+	case "registry":
+		return 2
+	case "path_fallback":
+		return 1
+	}
+	return 0
+}
+
+// mergeProjectEvidence keeps attribution precedence separate from completion.
+// Neither unknown nor pending proves a cwd. Without parser epoch/availability
+// evidence, an unknown duplicate cannot certify that pending replay completed.
+// Actual attribution proof retains its existing precedence and is never erased.
+func mergeProjectEvidence(left, right string) string {
+	leftRank, rightRank := projectProofRank(left), projectProofRank(right)
+	if leftRank > rightRank {
+		return left
+	}
+	if rightRank > leftRank {
+		return right
+	}
+	if leftRank == 0 && (left == "" || right == "") {
+		return ""
+	}
+	return left
 }

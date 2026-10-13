@@ -223,14 +223,19 @@ func insertRecoveryDestinationRecord(ctx context.Context, tx *sql.Tx, r models.I
 	if origin != models.OriginUnknown {
 		originVersion = CurrentOriginVersion
 	}
+	// NULL preserves pending parser replay; explicit unknown preserves completion.
+	var projectProof any
+	if r.ProjectEvidence != "" {
+		projectProof = r.ProjectEvidence
+	}
 	_, err = tx.ExecContext(ctx, `
 		INSERT INTO search_items
 			(source, source_path, ordinal, role, origin, text, timestamp, uuid, project,
-			 content_type, extraction_version, was_interrupted, search_echo, origin_version)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, NULL, ?, ?)
+			 content_type, extraction_version, was_interrupted, search_echo, origin_version, project_evidence)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, NULL, ?, ?, ?)
 	`, r.Source, r.SourcePath, r.Ordinal, r.Role, origin, r.Text,
 		recoveryDestinationNullableString(r.Timestamp), recoveryDestinationUUIDValue(r.UUID),
-		recoveryDestinationNullableString(r.Project), r.ContentType, r.SearchEcho, originVersion)
+		recoveryDestinationNullableString(r.Project), r.ContentType, r.SearchEcho, originVersion, projectProof)
 	if err != nil {
 		return fmt.Errorf("insert search_items: %w", err)
 	}
@@ -400,18 +405,22 @@ func verifyRecoveryDestinationOrigins(ctx context.Context, q compat.Queryer, pla
 
 		var gotOrigin models.MessageOrigin
 		var gotVersion sql.NullInt64
+		var gotProof string
 		if record.UUID != nil && *record.UUID != "" {
 			err = q.QueryRowContext(ctx, `
-				SELECT origin, origin_version FROM search_items WHERE uuid = ?
-			`, *record.UUID).Scan(&gotOrigin, &gotVersion)
+				SELECT origin, origin_version, COALESCE(project_evidence, '') FROM search_items WHERE uuid = ?
+			`, *record.UUID).Scan(&gotOrigin, &gotVersion, &gotProof)
 		} else {
 			err = q.QueryRowContext(ctx, `
-				SELECT origin, origin_version FROM search_items
+				SELECT origin, origin_version, COALESCE(project_evidence, '') FROM search_items
 				WHERE source_path = ? AND ordinal = ? AND COALESCE(uuid, '') = ''
-			`, record.SourcePath, record.Ordinal).Scan(&gotOrigin, &gotVersion)
+			`, record.SourcePath, record.Ordinal).Scan(&gotOrigin, &gotVersion, &gotProof)
 		}
 		if err != nil {
 			return fmt.Errorf("read destination origin for record %d: %w", i, err)
+		}
+		if gotProof != record.ProjectEvidence {
+			return fmt.Errorf("destination project_evidence for record %d = %q, want %q", i, gotProof, record.ProjectEvidence)
 		}
 		if gotOrigin != wantOrigin {
 			return fmt.Errorf("destination origin for record %d = %q, want %q", i, gotOrigin, wantOrigin)

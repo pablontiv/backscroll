@@ -8,6 +8,8 @@ import (
 	"github.com/pablontiv/backscroll/internal/projects"
 )
 
+// Repair fixtures explicitly mark parser completion as unknown; NULL is reserved
+// for pending native replay and is tested in project_proof_test.go.
 func TestReresolveProjects_NoUnknownRows(t *testing.T) {
 	db, err := Open(filepath.Join(t.TempDir(), "test.db"))
 	if err != nil {
@@ -17,8 +19,8 @@ func TestReresolveProjects_NoUnknownRows(t *testing.T) {
 
 	// Insert a row with a known project
 	_, err = db.db.Exec(`INSERT INTO search_items
-		(source, source_path, ordinal, role, text, timestamp, project, content_type)
-		VALUES ('session', '/p/s1.jsonl', 0, 'user', 'text', '2026-01-01T00:00:00Z', 'known', 'text')`)
+		(source, source_path, ordinal, role, text, timestamp, project, content_type, project_evidence)
+		VALUES ('session', '/p/s1.jsonl', 0, 'user', 'text', '2026-01-01T00:00:00Z', 'known', 'text', 'unknown')`)
 	if err != nil {
 		t.Fatalf("insert: %v", err)
 	}
@@ -43,10 +45,10 @@ func TestReresolveProjects_ResolveUnknown(t *testing.T) {
 
 	// Insert rows with 'unknown' project
 	_, err = db.db.Exec(`INSERT INTO search_items
-		(source, source_path, ordinal, role, text, timestamp, project, content_type)
-		VALUES ('session', '/p/s1.jsonl', 0, 'user', 'text', '2026-01-01T00:00:00Z', 'unknown', 'text'),
-		       ('session', '/p/s1.jsonl', 1, 'user', 'text', '2026-01-01T00:00:00Z', 'unknown', 'text'),
-		       ('session', '/p/s2.jsonl', 0, 'user', 'text', '2026-01-01T00:00:00Z', 'unknown', 'text')`)
+		(source, source_path, ordinal, role, text, timestamp, project, content_type, project_evidence)
+		VALUES ('session', '/p/s1.jsonl', 0, 'user', 'text', '2026-01-01T00:00:00Z', 'unknown', 'text', 'unknown'),
+		       ('session', '/p/s1.jsonl', 1, 'user', 'text', '2026-01-01T00:00:00Z', 'unknown', 'text', 'unknown'),
+		       ('session', '/p/s2.jsonl', 0, 'user', 'text', '2026-01-01T00:00:00Z', 'unknown', 'text', 'unknown')`)
 	if err != nil {
 		t.Fatalf("insert: %v", err)
 	}
@@ -104,8 +106,8 @@ func TestReresolveProjects_EmptyResolver(t *testing.T) {
 
 	// Insert rows with 'unknown' project
 	_, err = db.db.Exec(`INSERT INTO search_items
-		(source, source_path, ordinal, role, text, timestamp, project, content_type)
-		VALUES ('session', '/p/s1.jsonl', 0, 'user', 'text', '2026-01-01T00:00:00Z', 'unknown', 'text')`)
+		(source, source_path, ordinal, role, text, timestamp, project, content_type, project_evidence)
+		VALUES ('session', '/p/s1.jsonl', 0, 'user', 'text', '2026-01-01T00:00:00Z', 'unknown', 'text', 'unknown')`)
 	if err != nil {
 		t.Fatalf("insert: %v", err)
 	}
@@ -141,8 +143,8 @@ func TestReresolveProjects_ResolverReturnsUnknown(t *testing.T) {
 
 	// Insert rows with 'unknown' project
 	_, err = db.db.Exec(`INSERT INTO search_items
-		(source, source_path, ordinal, role, text, timestamp, project, content_type)
-		VALUES ('session', '/p/s1.jsonl', 0, 'user', 'text', '2026-01-01T00:00:00Z', 'unknown', 'text')`)
+		(source, source_path, ordinal, role, text, timestamp, project, content_type, project_evidence)
+		VALUES ('session', '/p/s1.jsonl', 0, 'user', 'text', '2026-01-01T00:00:00Z', 'unknown', 'text', 'unknown')`)
 	if err != nil {
 		t.Fatalf("insert: %v", err)
 	}
@@ -168,8 +170,8 @@ func TestReresolveProjects_WithNULLProject(t *testing.T) {
 
 	// Insert rows with NULL project
 	_, err = db.db.Exec(`INSERT INTO search_items
-		(source, source_path, ordinal, role, text, timestamp, project, content_type)
-		VALUES ('session', '/p/s1.jsonl', 0, 'user', 'text', '2026-01-01T00:00:00Z', NULL, 'text')`)
+		(source, source_path, ordinal, role, text, timestamp, project, content_type, project_evidence)
+		VALUES ('session', '/p/s1.jsonl', 0, 'user', 'text', '2026-01-01T00:00:00Z', NULL, 'text', 'unknown')`)
 	if err != nil {
 		t.Fatalf("insert: %v", err)
 	}
@@ -207,8 +209,8 @@ func TestReresolveProjectsWithRegistry_EmptyRegistry(t *testing.T) {
 	sessionPath := "/Users/pones/.claude/sessions/2026-07-17T12-00-00_mycode.jsonl"
 	_, err = db.db.Exec(`
 		INSERT INTO search_items
-		(source, source_path, ordinal, role, text, uuid, project, content_type)
-		VALUES ('session', ?, 0, 'user', 'test', 'u1', ?, 'text')
+		(source, source_path, ordinal, role, text, uuid, project, content_type, project_evidence)
+		VALUES ('session', ?, 0, 'user', 'test', 'u1', ?, 'text', 'unknown')
 	`, sessionPath, fallbackID)
 	if err != nil {
 		t.Fatalf("insert session: %v", err)
@@ -251,8 +253,8 @@ func TestReresolveProjectsWithRegistry_NoNullProjects(t *testing.T) {
 	// Insert sessions with no project (NULL)
 	_, err = db.db.Exec(`
 		INSERT INTO search_items
-		(source, source_path, ordinal, role, text, content_type)
-		VALUES ('session', '/p/s1.jsonl', 0, 'user', 'text', 'text')
+		(source, source_path, ordinal, role, text, content_type, project_evidence)
+		VALUES ('session', '/p/s1.jsonl', 0, 'user', 'text', 'text', 'unknown')
 	`)
 	if err != nil {
 		t.Fatalf("insert: %v", err)
@@ -281,8 +283,8 @@ func TestReresolveProjectsWithRegistry_NoDecodeablePathsSkipped(t *testing.T) {
 	// Insert sessions with paths that cannot be decoded (no /.claude/projects/ marker)
 	_, err = db.db.Exec(`
 		INSERT INTO search_items
-		(source, source_path, ordinal, role, text, uuid, project, content_type)
-		VALUES ('session', '/some/path.jsonl', 0, 'user', 'text', 'u1', 'fallback-proj', 'text')
+		(source, source_path, ordinal, role, text, uuid, project, content_type, project_evidence)
+		VALUES ('session', '/some/path.jsonl', 0, 'user', 'text', 'u1', 'fallback-proj', 'text', 'unknown')
 	`)
 	if err != nil {
 		t.Fatalf("insert: %v", err)
@@ -311,9 +313,9 @@ func TestReresolveProjectsWithRegistry_SkipFallbackOnly(t *testing.T) {
 	// Insert sessions with non-registry projects (fallback-only IDs)
 	_, err = db.db.Exec(`
 		INSERT INTO search_items
-		(source, source_path, ordinal, role, text, uuid, project, content_type)
-		VALUES ('session', '/home/user/mycode/file.jsonl', 0, 'user', 'text', 'u1', 'mycode', 'text'),
-		       ('session', '/home/user/mycode/file.jsonl', 1, 'user', 'text', 'u2', 'mycode', 'text')
+		(source, source_path, ordinal, role, text, uuid, project, content_type, project_evidence)
+		VALUES ('session', '/home/user/mycode/file.jsonl', 0, 'user', 'text', 'u1', 'mycode', 'text', 'unknown'),
+		       ('session', '/home/user/mycode/file.jsonl', 1, 'user', 'text', 'u2', 'mycode', 'text', 'unknown')
 	`)
 	if err != nil {
 		t.Fatalf("insert: %v", err)
@@ -359,8 +361,8 @@ func TestReresolveProjectsWithRegistry_ContextHandling(t *testing.T) {
 	// Insert a row with a valid project
 	_, err = db.db.Exec(`
 		INSERT INTO search_items
-		(source, source_path, ordinal, role, text, uuid, project, content_type)
-		VALUES ('session', '/some/path.jsonl', 0, 'user', 'text', 'u1', 'proj1', 'text')
+		(source, source_path, ordinal, role, text, uuid, project, content_type, project_evidence)
+		VALUES ('session', '/some/path.jsonl', 0, 'user', 'text', 'u1', 'proj1', 'text', 'unknown')
 	`)
 	if err != nil {
 		t.Fatalf("insert: %v", err)

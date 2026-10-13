@@ -387,7 +387,7 @@ func TestRunSearchTextBudgetBoundary(t *testing.T) {
 		t.Helper()
 		var stdout, stderr bytes.Buffer
 		err := runSearch(context.Background(), &stdout, &stderr, cfg,
-			"presentselector", "", true, false, false,
+			"presentselector", "", true, outputText,
 			"", "", "", "", "", 20, 0, "text", "",
 			"minimal", maxTokens, true, 0.3, false)
 		if err != nil {

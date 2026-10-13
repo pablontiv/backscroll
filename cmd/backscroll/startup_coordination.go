@@ -49,7 +49,7 @@ func newStartupCoordinatorWithSyncService(syncService *startupSyncService) *star
 	}
 }
 
-func (c *startupCoordinator) coordinate(ctx context.Context, cfg *config.Config, progress io.Writer, class startupCommandClass) startupResult {
+func (c *startupCoordinator) coordinate(ctx context.Context, cfg *config.Config, progress io.Writer, class startupCommandClass) (result startupResult) {
 	if err := ctx.Err(); err != nil {
 		return canceledStartupResult(cfg, startupStageSyncLock, err)
 	}
@@ -57,11 +57,30 @@ func (c *startupCoordinator) coordinate(ctx context.Context, cfg *config.Config,
 	timing := startupPhaseTiming{measured: c.syncService.diagnostics}
 	var lockStart time.Time
 	if timing.measured {
-		lockStart = time.Now()
+		timing.report, _ = ctx.Value(startupDiagnosticsContextKey{}).(*startupDiagnostics)
+		if timing.report == nil {
+			timing.report = c.syncService.newDiagnostics()
+		}
+		lockStart = timing.report.now()
+		if !timing.report.policyOwned {
+			defer func() {
+				if class != startupRemediation || result.Failure != nil {
+					timing.report.render(startupDiagnosticsWriter(ctx, progress))
+				}
+			}()
+		}
 	}
 
 	lease, acquired, err := c.tryAcquire(cfg.DatabasePath)
+	if timing.measured {
+		timing.LockAcquisitionTime = timing.report.now().Sub(lockStart)
+		timing.report.lock, timing.report.hasLock = timing.LockAcquisitionTime, true
+	}
+
 	if ctxErr := ctx.Err(); ctxErr != nil {
+		if timing.measured {
+			timing.report.failedPhase = "Lock Acquisition"
+		}
 		result := canceledStartupResult(cfg, startupStageSyncLock, ctxErr)
 		if acquired {
 			return ownedStartupFailureResult(cfg, class, lease, result.Failure)
@@ -69,11 +88,10 @@ func (c *startupCoordinator) coordinate(ctx context.Context, cfg *config.Config,
 		return result
 	}
 
-	if timing.measured && acquired && lockStart != (time.Time{}) {
-		timing.LockAcquisitionTime = time.Since(lockStart)
-	}
-
 	if err != nil {
+		if timing.measured {
+			timing.report.failedPhase = "Lock Acquisition"
+		}
 		return startupLockFailure(cfg, err)
 	}
 	if acquired {
@@ -82,6 +100,15 @@ func (c *startupCoordinator) coordinate(ctx context.Context, cfg *config.Config,
 
 	switch class {
 	case startupSnapshotRead:
+		if timing.measured {
+			start := timing.report.now()
+			result = c.concurrentSnapshotResult(ctx, cfg)
+			timing.report.prepare, timing.report.hasPrepare = timing.report.now().Sub(start), true
+			if result.Failure != nil {
+				timing.report.failedPhase = "Index Prepare"
+			}
+			return result
+		}
 		return c.concurrentSnapshotResult(ctx, cfg)
 	case startupMetadataRead:
 		return startupResult{
@@ -95,17 +122,17 @@ func (c *startupCoordinator) coordinate(ctx context.Context, cfg *config.Config,
 		waitCtx, cancel := context.WithTimeout(ctx, c.mutationWait)
 		defer cancel()
 
-		if timing.measured {
-			lockStart = time.Now()
-		}
-
 		lease, err := c.acquire(waitCtx, cfg.DatabasePath, startupLockRetry)
 
-		if timing.measured && lockStart != (time.Time{}) {
-			timing.LockAcquisitionTime = time.Since(lockStart)
+		if timing.measured {
+			timing.LockAcquisitionTime = timing.report.now().Sub(lockStart)
+			timing.report.lock, timing.report.hasLock = timing.LockAcquisitionTime, true
 		}
 
 		if err != nil {
+			if timing.measured {
+				timing.report.failedPhase = "Lock Acquisition"
+			}
 			if errors.Is(err, context.DeadlineExceeded) && ctx.Err() == nil {
 				return startupResult{Config: cfg, Failure: syncInProgressFailure(
 					"startup sync remains active after 5s; retry the command", err,
@@ -129,7 +156,7 @@ func (c *startupCoordinator) runOwned(ctx context.Context, cfg *config.Config, p
 
 	var indexPrepareStart time.Time
 	if timing.measured {
-		indexPrepareStart = time.Now()
+		indexPrepareStart = timing.report.now()
 	}
 
 	db, diag, err := c.prepareIndex(ctx, cfg, indexMutation)
@@ -137,14 +164,18 @@ func (c *startupCoordinator) runOwned(ctx context.Context, cfg *config.Config, p
 		err = closeIndexDB(db, err)
 	}
 
-	if timing.measured && indexPrepareStart != (time.Time{}) {
-		timing.IndexPrepareTime = time.Since(indexPrepareStart)
+	if timing.measured {
+		timing.IndexPrepareTime = timing.report.now().Sub(indexPrepareStart)
+		timing.report.prepare, timing.report.hasPrepare = timing.IndexPrepareTime, true
 	}
 
 	if ctxErr := ctx.Err(); ctxErr != nil && diag == nil && err == nil {
 		err = ctxErr
 	}
 	if diag != nil || err != nil {
+		if timing.measured {
+			timing.report.failedPhase = "Index Prepare"
+		}
 		d := compat.Diagnostic{Code: compat.CodeMigrationFailed, Summary: "prepare index failed"}
 		if diag != nil {
 			d = *diag

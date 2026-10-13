@@ -22,6 +22,27 @@ func writeClaudeFixture(t *testing.T, lines string) string {
 	return p
 }
 
+func TestClaudeReaderUnknownTimestampIsDeterministic(t *testing.T) {
+	for _, timestamp := range []string{"", "not-a-time"} {
+		line := `{"type":"user","timestamp":"` + timestamp + `","message":{"role":"user","content":"unknown time"}}` + "\n"
+		path := writeClaudeFixture(t, line)
+		first, err := (&ClaudeReader{}).Parse(context.Background(), path, input_config.InputDefinition{})
+		if err != nil {
+			t.Fatal(err)
+		}
+		second, err := (&ClaudeReader{}).Parse(context.Background(), path, input_config.InputDefinition{})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(first.Records) != 1 || len(second.Records) != 1 {
+			t.Fatalf("records = %+v / %+v", first.Records, second.Records)
+		}
+		if !first.Records[0].Timestamp.IsZero() || first.Records[0].Timestamp != second.Records[0].Timestamp {
+			t.Fatalf("timestamp = %s / %s, want stable unknown", first.Records[0].Timestamp, second.Records[0].Timestamp)
+		}
+	}
+}
+
 func TestClaudeReader_TextAndCwd(t *testing.T) {
 	line := `{"type":"user","timestamp":"2024-01-01T00:00:00Z","cwd":"/home/me/proj","message":{"role":"user","content":"hello world"}}` + "\n"
 	p := writeClaudeFixture(t, line)

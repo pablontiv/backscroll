@@ -17,9 +17,12 @@ func newValidateCmd(stdout, stderr io.Writer) *cobra.Command {
 
 	cmd := &cobra.Command{
 		Use:          "validate",
+		Args:         cobra.NoArgs,
 		Short:        "Validate the index integrity",
 		SilenceUsage: true,
-		Long: `Validate checks the integrity of the SQLite index by verifying:
+		Long: `This command accepts no positional operands.
+
+Validate checks the integrity of the SQLite index by verifying:
 - Required tables exist
 - FTS5 virtual table is set up correctly
 - No orphaned records exist
@@ -34,7 +37,7 @@ second sync.`,
 			if startup.Config == nil {
 				return fmt.Errorf("startup configuration unavailable")
 			}
-			return runValidate(cmd.Context(), stdout, stderr, startup.Config, jsonFormat)
+			return runValidate(cmd.Context(), stdout, stderr, startup.Config, invocationOutputMode(cmd))
 		},
 	}
 
@@ -43,10 +46,10 @@ second sync.`,
 	return cmd
 }
 
-func runValidate(ctx context.Context, stdout, stderr io.Writer, cfg *config.Config, jsonFormat bool) (retErr error) {
+func runValidate(ctx context.Context, stdout, stderr io.Writer, cfg *config.Config, output outputMode) (retErr error) {
 	db, diag, err := prepareIndex(ctx, cfg, indexDataRead)
 	if diag != nil {
-		return refuseDiagnostics(stdout, stderr, []compat.Diagnostic{*diag}, jsonFormat)
+		return refuseDiagnostics(stdout, stderr, []compat.Diagnostic{*diag}, output == outputJSON)
 	}
 	if err != nil {
 		return fmt.Errorf("prepare index: %w", err)
@@ -63,25 +66,35 @@ func runValidate(ctx context.Context, stdout, stderr io.Writer, cfg *config.Conf
 			return fmt.Errorf("inspect recovery diagnostics: %w", inspectErr)
 		}
 		if len(diagnostics) > 0 {
-			return refuseDiagnostics(stdout, stderr, diagnostics, jsonFormat)
+			return refuseDiagnostics(stdout, stderr, diagnostics, output == outputJSON)
 		}
-		if jsonFormat {
+		if output == outputJSON {
 			if encodeErr := json.NewEncoder(stdout).Encode(map[string]any{"valid": false, "error": err.Error()}); encodeErr != nil {
 				return encodeErr
 			}
 			return err
 		}
-		_, _ = fmt.Fprintf(stdout, "❌ Validation failed: %v\n", err)
+		if err := writeOutput(stdout, "❌ Validation failed: %v\n", err); err != nil {
+			return err
+		}
 		return err
 	}
 
-	if jsonFormat {
+	if output == outputJSON {
 		return json.NewEncoder(stdout).Encode(map[string]any{"valid": true, "database_exists": true})
 	}
-	_, _ = fmt.Fprintf(stdout, "✓ Index validation passed\n")
-	_, _ = fmt.Fprintf(stdout, "✓ All required tables exist\n")
-	_, _ = fmt.Fprintf(stdout, "✓ FTS5 virtual table is set up correctly\n")
-	_, _ = fmt.Fprintf(stdout, "✓ No orphaned records found\n")
+	if err := writeOutput(stdout, "✓ Index validation passed\n"); err != nil {
+		return err
+	}
+	if err := writeOutput(stdout, "✓ All required tables exist\n"); err != nil {
+		return err
+	}
+	if err := writeOutput(stdout, "✓ FTS5 virtual table is set up correctly\n"); err != nil {
+		return err
+	}
+	if err := writeOutput(stdout, "✓ No orphaned records found\n"); err != nil {
+		return err
+	}
 
 	return nil
 }

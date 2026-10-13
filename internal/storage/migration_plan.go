@@ -13,7 +13,6 @@ import (
 	"sort"
 	"strconv"
 	"strings"
-	"syscall"
 
 	"github.com/pablontiv/backscroll/internal/compat"
 )
@@ -529,6 +528,7 @@ var migrationPlanDispatch = map[compat.MigrationStep]migrationApplier{
 	{Version: 14, Name: "V14 file metadata prefilter"}:                                   applyV14,
 	{Version: 15, Name: "V15 search echo provenance"}:                                    applyV15,
 	{Version: 16, Name: "V16 parser-backed message origin"}:                              applyV16,
+	{Version: 17, Name: "V17 project attribution evidence"}:                              applyV17,
 }
 
 func planStartsFromEmptySchema(plan compat.MigrationPlan) bool {
@@ -573,31 +573,14 @@ func supportsPOSIXModes() bool {
 }
 
 func fsyncPath(path string) error {
-	file, err := os.Open(path)
-	if err != nil {
-		return fmt.Errorf("open for fsync %s: %w", path, err)
-	}
-	defer file.Close()
-	if err := file.Sync(); err != nil {
+	if err := SyncFile(path); err != nil {
 		return fmt.Errorf("fsync %s: %w", path, err)
 	}
 	return nil
 }
 
 func fsyncDirectory(path string) error {
-	if runtime.GOOS == "windows" {
-		return nil
-	}
-	file, err := os.Open(path)
-	if err != nil {
-		return fmt.Errorf("open directory for fsync %s: %w", path, err)
-	}
-	defer file.Close()
-	if err := file.Sync(); err != nil {
-		message := strings.ToLower(err.Error())
-		if errors.Is(err, syscall.EINVAL) || errors.Is(err, syscall.ENOTSUP) || errors.Is(err, syscall.EOPNOTSUPP) || strings.Contains(message, "not supported") {
-			return nil
-		}
+	if err := SyncDirectory(path); err != nil {
 		return fmt.Errorf("fsync directory %s: %w", path, err)
 	}
 	return nil
@@ -983,3 +966,15 @@ const sqlV14 = `
 ALTER TABLE indexed_files ADD COLUMN file_size INTEGER;
 ALTER TABLE indexed_files ADD COLUMN file_mtime TEXT;
 `
+
+const sqlV17 = `
+ALTER TABLE search_items ADD COLUMN project_evidence TEXT
+ CHECK(project_evidence IN ('unknown','path_fallback','registry','native_cwd'));
+`
+
+func applyV17(ctx context.Context, tx *sql.Tx, _ compat.SchemaShape) error {
+	if _, err := tx.ExecContext(ctx, sqlV17); err != nil {
+		return fmt.Errorf("apply v17 project evidence: %w", err)
+	}
+	return recordMigration(ctx, tx, 17, "V17 project attribution evidence", sqlV17, "record migration v17")
+}

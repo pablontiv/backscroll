@@ -2,6 +2,7 @@ package services
 
 import (
 	"context"
+	"database/sql"
 	"errors"
 	"path/filepath"
 	"reflect"
@@ -511,4 +512,104 @@ func newQueryServiceTestFixture(t *testing.T) QueryService {
 		t.Fatal(err)
 	}
 	return QueryService{DB: db}
+}
+
+func TestQueryServiceAnnotationIdentityParity(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "identity.db")
+	db, err := storage.Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	raw, err := sql.Open("sqlite", path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer raw.Close()
+	for _, u := range []string{"opaque one", "opaque two"} {
+		if _, err := raw.Exec(`INSERT INTO search_items(source,source_path,ordinal,role,text,content_type,uuid) VALUES ('session','/duplicate',7,'user','hello','text',?)`, u); err != nil {
+			t.Fatal(err)
+		}
+	}
+	service := QueryService{DB: db}
+	p := "/duplicate"
+	n := int64(7)
+	absent := "absent"
+	u := "opaque two"
+	for _, c := range []struct {
+		r    ContextRequest
+		want error
+	}{
+		{ContextRequest{SourcePath: &p, Ordinal: &n, MaxTokens: DefaultContextMaxTokens}, storage.ErrContextRecordAmbiguous},
+		{ContextRequest{UUID: &absent, MaxTokens: DefaultContextMaxTokens}, storage.ErrContextRecordNotFound},
+	} {
+		_, err := service.Context(context.Background(), c.r)
+		if !errors.Is(err, c.want) {
+			t.Fatalf("context: %v", err)
+		}
+		uuid, path, ordinal := "", "", -1
+		if c.r.UUID != nil {
+			uuid = *c.r.UUID
+		} else {
+			path, ordinal = *c.r.SourcePath, int(*c.r.Ordinal)
+		}
+		if err := db.UpsertAnnotation(uuid, path, ordinal, "correction", "rejected"); !errors.Is(err, c.want) {
+			t.Fatalf("annotation: %v", err)
+		}
+	}
+	response, err := service.Context(context.Background(), ContextRequest{UUID: &u, MaxTokens: DefaultContextMaxTokens})
+	if err != nil || len(response.Records) != 1 || response.Records[0].SourcePath != p || response.Records[0].Ordinal != n {
+		t.Fatalf("UUID context: %+v %v", response, err)
+	}
+	if err := db.UpsertAnnotation(u, "", -1, "correction", "reviewed"); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestQueryServiceExplicitNegativeAnnotationSelector(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "negative.db")
+	db, err := storage.Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	if err := db.SyncFiles([]storage.IndexedFile{{SourcePath: "/canonical", Source: "session", Hash: "fixture", Messages: []storage.IndexedMessage{{UUID: "opaque", Ordinal: 7, Role: "user", Text: "fixture", ContentType: "text"}}}}); err != nil {
+		t.Fatal(err)
+	}
+	raw, err := sql.Open("sqlite", path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer raw.Close()
+	if err := db.UpsertAnnotationWithOrdinal("opaque", "", nil, "correction", "original"); err != nil {
+		t.Fatal(err)
+	}
+	snapshot := func() string {
+		var state string
+		if err := raw.QueryRow(`SELECT json_group_array(json_array(id,item_uuid,source_path,ordinal,kind,label,source,created_at)) FROM annotations`).Scan(&state); err != nil {
+			t.Fatal(err)
+		}
+		return state
+	}
+	service := QueryService{DB: db}
+	uuid := "opaque"
+	before := snapshot()
+	for _, n := range []int{-1, -2} {
+		ordinal := int64(n)
+		if _, err := service.Context(context.Background(), ContextRequest{UUID: &uuid, Ordinal: &ordinal, MaxTokens: DefaultContextMaxTokens}); err == nil {
+			t.Errorf("context accepted explicit extra %d", n)
+		}
+		if err := db.UpsertAnnotationWithOrdinal(uuid, "", &n, "correction", "rejected"); err == nil {
+			t.Errorf("annotation accepted explicit %d", n)
+		}
+		if snapshot() != before {
+			t.Errorf("explicit %d changed annotation state", n)
+		}
+	}
+	if _, err := service.Context(context.Background(), ContextRequest{UUID: &uuid, MaxTokens: DefaultContextMaxTokens}); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.UpsertAnnotationWithOrdinal(uuid, "", nil, "correction", "accepted"); err != nil {
+		t.Fatal(err)
+	}
 }

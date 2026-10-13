@@ -39,8 +39,14 @@ type Config struct {
 }
 
 // Load loads the configuration from files and environment variables.
-// Resolution order: ./backscroll.toml -> ~/.config/backscroll/config.toml -> env vars -> defaults
+// Precedence (highest first): environment, local backscroll.toml, global config, defaults.
 func Load() (*Config, error) {
+	return LoadValidated("")
+}
+
+// LoadValidated resolves configuration and rejects legacy tables from the same
+// bytes used for merging. Each application config pathname is opened once.
+func LoadValidated(inputsDir string) (*Config, error) {
 	cfg := &Config{
 		DatabasePath: defaultDatabasePath(),
 		SessionDirs:  []string{"."},
@@ -52,15 +58,18 @@ func Load() (*Config, error) {
 		},
 	}
 
-	// Load global config from ~/.config/backscroll/config.toml
-	globalPath := globalConfigPath()
-	if err := loadConfigFile(globalPath, cfg); err != nil && !os.IsNotExist(err) {
-		return nil, fmt.Errorf("failed to load global config: %w", err)
+	var legacyFiles []LegacySourcesFile
+	for _, file := range []struct{ path, label string }{{globalConfigPath(), "global"}, {"./backscroll.toml", "local"}} {
+		legacy, err := loadConfigFileSnapshot(file.path, cfg)
+		if err != nil && !os.IsNotExist(err) {
+			return nil, fmt.Errorf("failed to load %s config: %w", file.label, err)
+		}
+		if legacy != nil {
+			legacyFiles = append(legacyFiles, *legacy)
+		}
 	}
-
-	// Load local config from ./backscroll.toml (overrides global)
-	if err := loadConfigFile("./backscroll.toml", cfg); err != nil && !os.IsNotExist(err) {
-		return nil, fmt.Errorf("failed to load local config: %w", err)
+	if len(legacyFiles) > 0 {
+		return nil, &LegacySourcesError{Files: legacyFiles, InputsDir: inputsDir}
 	}
 
 	// Override with environment variables
@@ -89,15 +98,32 @@ func Load() (*Config, error) {
 
 // loadConfigFile loads and merges a TOML configuration file.
 func loadConfigFile(path string, cfg *Config) error {
+	_, err := loadConfigFileSnapshot(path, cfg)
+	return err
+}
+
+func loadConfigFileSnapshot(path string, cfg *Config) (*LegacySourcesFile, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
-		return err
+		return nil, err
 	}
 
-	// First, unmarshal into a temporary config to detect what was explicitly set
-	var tempCfg Config
-	if err := toml.Unmarshal(data, &tempCfg); err != nil {
-		return fmt.Errorf("failed to parse %s: %w", path, err)
+	// A pointer distinguishes an absent sources key from even an empty table.
+	var parsed struct {
+		DatabasePath string          `toml:"database_path"`
+		SessionDirs  []string        `toml:"session_dirs"`
+		SessionDir   string          `toml:"session_dir"`
+		Sources      *SourcesConfig  `toml:"sources"`
+		Embedding    EmbeddingConfig `toml:"embedding"`
+	}
+	if err := toml.Unmarshal(data, &parsed); err != nil {
+		return nil, fmt.Errorf("failed to parse %s: %w", path, err)
+	}
+	tempCfg := Config{DatabasePath: parsed.DatabasePath, SessionDirs: parsed.SessionDirs, SessionDir: parsed.SessionDir, Embedding: parsed.Embedding}
+	var legacy *LegacySourcesFile
+	if parsed.Sources != nil {
+		tempCfg.Sources = *parsed.Sources
+		legacy = &LegacySourcesFile{Path: path, Keys: legacySourcesKeys(parsed.Sources)}
 	}
 
 	// Now merge into cfg, being careful about what was explicitly set
@@ -151,7 +177,7 @@ func loadConfigFile(path string, cfg *Config) error {
 		cfg.Embedding.TopK = tempCfg.Embedding.TopK
 	}
 
-	return nil
+	return legacy, nil
 }
 
 // DiscoverSessionDirs returns immediate subdirectories of ~/.claude/projects/

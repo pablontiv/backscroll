@@ -1,0 +1,64 @@
+package main
+
+import (
+	"bytes"
+	"database/sql"
+	"os/exec"
+	"path/filepath"
+	"strings"
+	"testing"
+)
+
+// Exercise the actual dev binary's manifest discovery, startup sync, and index
+// writes with a live WAL writer, not a fake reader or synthetic watermark.
+func TestOpenCodeSnapshotStartupSmoke(t *testing.T) {
+	e := newQueryEchoE2E(t)
+	root := e.addReaderManifest("opencode", "opencode")
+	source := openOpenCodeFixture(t, filepath.Join(root, "opencode.db"))
+	defer source.Close()
+	if _, err := source.Exec("PRAGMA journal_mode=WAL; PRAGMA wal_autocheckpoint=0"); err != nil {
+		t.Fatal(err)
+	}
+	insertOpenCodeToolPart(t, source, "native", 1767225600000, map[string]any{"type": "text", "text": "original orchard"})
+	e.environment = append(e.environment, "BACKSCROLL_STARTUP_DIAGNOSTICS=1")
+	startup := func() string {
+		t.Helper()
+		command := exec.Command(e.binary, "status")
+		command.Dir = e.root
+		command.Env = e.environment
+		var stderr bytes.Buffer
+		command.Stderr = &stderr
+		if out, err := command.Output(); err != nil {
+			t.Fatalf("startup: %v\n%s\n%s", err, out, stderr.String())
+		}
+		return stderr.String()
+	}
+	startup()
+	index, err := sql.Open("sqlite", "file:"+e.database+"?mode=ro")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer index.Close()
+	assertContent := func(want string) {
+		t.Helper()
+		var got string
+		if err := index.QueryRow("SELECT text FROM search_items WHERE source_path=?", filepath.Join(root, "opencode.db")).Scan(&got); err != nil {
+			t.Fatal(err)
+		}
+		if got != want {
+			t.Fatalf("indexed text = %q, want %q", got, want)
+		}
+	}
+	assertContent("original orchard")
+	if _, err := source.Exec(`UPDATE part SET data='{"type":"text","text":"changed orchard"}' WHERE id='p-native'`); err != nil {
+		t.Fatal(err)
+	}
+	startup()
+	assertContent("changed orchard")
+	diagnostics := startup()
+	if !strings.Contains(diagnostics, "Parsing:         0s") {
+		t.Fatalf("unchanged snapshot was parsed:\n%s", diagnostics)
+	}
+	assertContent("changed orchard")
+	t.Log("actual startup: initial content indexed; committed part-only WAL edit indexed; unchanged second run skipped parsing")
+}

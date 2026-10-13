@@ -8,7 +8,6 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/pablontiv/backscroll/internal/config"
-	"github.com/pablontiv/backscroll/internal/input_config"
 )
 
 func newConfigCmd(stdout, stderr io.Writer) *cobra.Command {
@@ -16,9 +15,12 @@ func newConfigCmd(stdout, stderr io.Writer) *cobra.Command {
 
 	cmd := &cobra.Command{
 		Use:          "config",
+		Args:         cobra.NoArgs,
 		Short:        "Show effective configuration and input manifests",
 		SilenceUsage: true,
-		Long: `Config displays the effective configuration, including:
+		Long: `This command accepts no positional operands.
+
+Config displays the effective configuration, including:
 - Database path
 - Session directories
 - Active inputs (from declarative manifest or legacy session_dirs)
@@ -30,7 +32,7 @@ Use --json to output as JSON.`,
 			if startup.Config == nil {
 				return fmt.Errorf("startup configuration unavailable")
 			}
-			return runConfig(stdout, stderr, startup.Config, jsonFormat)
+			return runConfig(stdout, stderr, startup.Config, startup.inputs, invocationOutputMode(cmd))
 		},
 	}
 
@@ -39,15 +41,14 @@ Use --json to output as JSON.`,
 	return cmd
 }
 
-func runConfig(stdout, stderr io.Writer, cfg *config.Config, jsonFormat bool) error {
-	// Resolve active inputs
-	defs, mode, err := input_config.ActiveInputs(cfg.SessionDirs)
-	if err != nil {
-		return fmt.Errorf("resolve inputs: %w", err)
+func runConfig(stdout, stderr io.Writer, cfg *config.Config, snapshot *inputSnapshot, output outputMode) error {
+	if snapshot == nil {
+		return fmt.Errorf("startup input snapshot unavailable")
 	}
+	defs, mode := cloneInputDefinitions(snapshot.definitions), snapshot.mode
 
 	// Format output
-	if jsonFormat {
+	if output == outputJSON {
 		// JSON output with both config and inputs
 		inputSummaries := make([]map[string]interface{}, len(defs))
 		for i, def := range defs {
@@ -75,24 +76,48 @@ func runConfig(stdout, stderr io.Writer, cfg *config.Config, jsonFormat bool) er
 		}
 	} else {
 		// Text output
-		_, _ = fmt.Fprintf(stdout, "Backscroll Configuration\n")
-		_, _ = fmt.Fprintf(stdout, "========================\n\n")
-
-		_, _ = fmt.Fprintf(stdout, "Database:\n")
-		_, _ = fmt.Fprintf(stdout, "  Path: %s\n\n", cfg.DatabasePath)
-
-		_, _ = fmt.Fprintf(stdout, "Session Directories:\n")
-		for _, dir := range cfg.SessionDirs {
-			_, _ = fmt.Fprintf(stdout, "  - %s\n", dir)
+		if err := writeOutput(stdout, "Backscroll Configuration\n"); err != nil {
+			return err
+		}
+		if err := writeOutput(stdout, "========================\n\n"); err != nil {
+			return err
 		}
 
-		_, _ = fmt.Fprintf(stdout, "\nInputs (%s):\n", mode)
+		if err := writeOutput(stdout, "Database:\n"); err != nil {
+			return err
+		}
+		if err := writeOutput(stdout, "  Path: %s\n\n", cfg.DatabasePath); err != nil {
+			return err
+		}
+
+		if err := writeOutput(stdout, "Session Directories:\n"); err != nil {
+			return err
+		}
+		for _, dir := range cfg.SessionDirs {
+			if err := writeOutput(stdout, "  - %s\n", dir); err != nil {
+				return err
+			}
+		}
+
+		if err := writeOutput(stdout, "\nInputs (%s):\n", mode); err != nil {
+			return err
+		}
 		for _, def := range defs {
-			_, _ = fmt.Fprintf(stdout, "  id:      %s\n", def.ID)
-			_, _ = fmt.Fprintf(stdout, "  format:  %s\n", def.Decode.Format)
-			_, _ = fmt.Fprintf(stdout, "  include: %v\n", def.Discover.Include)
-			_, _ = fmt.Fprintf(stdout, "  exclude: %v\n", def.Discover.Exclude)
-			_, _ = fmt.Fprintln(stdout)
+			if err := writeOutput(stdout, "  id:      %s\n", def.ID); err != nil {
+				return err
+			}
+			if err := writeOutput(stdout, "  format:  %s\n", def.Decode.Format); err != nil {
+				return err
+			}
+			if err := writeOutput(stdout, "  include: %v\n", def.Discover.Include); err != nil {
+				return err
+			}
+			if err := writeOutput(stdout, "  exclude: %v\n", def.Discover.Exclude); err != nil {
+				return err
+			}
+			if _, err := fmt.Fprintln(stdout); err != nil {
+				return fmt.Errorf("write output: %w", err)
+			}
 		}
 	}
 

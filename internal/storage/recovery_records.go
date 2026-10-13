@@ -118,6 +118,40 @@ func readCanonicalSearchItems(ctx context.Context, q compat.Queryer) ([]models.I
 		}
 	}
 
+	var hasProjectEvidence int
+	if err := q.QueryRowContext(ctx, `SELECT COUNT(*) FROM pragma_table_info('search_items') WHERE name = 'project_evidence'`).Scan(&hasProjectEvidence); err != nil {
+		return nil, nil, err
+	}
+	if hasProjectEvidence != 0 {
+		proofRows, err := q.QueryContext(ctx, "SELECT COALESCE(project_evidence, '') FROM search_items ORDER BY source_path, ordinal, id")
+		if err != nil {
+			return nil, nil, err
+		}
+		i := 0
+		for proofRows.Next() {
+			if i >= len(records) {
+				proofRows.Close()
+				return nil, uninterpretableRecoveryRowDiagnostic(), nil
+			}
+			if err := proofRows.Scan(&records[i].ProjectEvidence); err != nil {
+				proofRows.Close()
+				return nil, nil, err
+			}
+			if !models.ValidProjectEvidence(records[i].ProjectEvidence) {
+				proofRows.Close()
+				return nil, uninterpretableRecoveryRowDiagnostic(), nil
+			}
+			i++
+		}
+		err = proofRows.Err()
+		proofRows.Close()
+		if err != nil {
+			return nil, nil, err
+		}
+		if i != len(records) {
+			return nil, uninterpretableRecoveryRowDiagnostic(), nil
+		}
+	}
 	for i := range records {
 		records[i].Origin = models.OriginUnknown
 	}

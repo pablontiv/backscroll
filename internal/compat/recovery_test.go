@@ -459,3 +459,49 @@ func assertDiagnosticSummariesContain(t *testing.T, diagnostics []Diagnostic, pa
 		}
 	}
 }
+
+// Completion is not attribution proof: without a parser epoch comparison,
+// a completed unknown duplicate cannot consume another copy's replay marker.
+func TestPlanRecoveryProjectProofAndPendingDuplicateMatrix(t *testing.T) {
+	states := []string{"", "unknown", "path_fallback", "registry", "native_cwd"}
+	wants := [][]string{
+		{"", "", "path_fallback", "registry", "native_cwd"},
+		{"", "unknown", "path_fallback", "registry", "native_cwd"},
+		{"path_fallback", "path_fallback", "path_fallback", "registry", "native_cwd"},
+		{"registry", "registry", "registry", "registry", "native_cwd"},
+		{"native_cwd", "native_cwd", "native_cwd", "native_cwd", "native_cwd"},
+	}
+	for i, left := range states {
+		for j, right := range states {
+			t.Run(fmt.Sprintf("%q/%q", left, right), func(t *testing.T) {
+				a, b := recordWithUUID(uuidA, "/same/path", 0), recordWithUUID(uuidA, "/same/path", 0)
+				a.ProjectEvidence, b.ProjectEvidence = left, right
+				plan, diagnostics, err := PlanRecovery([]RecoveryInput{recoveryInput("active", 17, a), recoveryInput("stranded", 17, b)})
+				if err != nil || len(diagnostics) != 0 || len(plan.Records) != 1 || plan.ExactDuplicates != 1 {
+					t.Fatalf("plan=%+v diagnostics=%+v err=%v", plan, diagnostics, err)
+				}
+				if got := plan.Records[0].Record.ProjectEvidence; got != wants[i][j] {
+					t.Fatalf("merged evidence=%q want %q", got, wants[i][j])
+				}
+			})
+		}
+	}
+}
+
+func TestPlanRecoveryContradictoryProjectPayloadRemainsConflict(t *testing.T) {
+	for _, left := range []string{"", "unknown", "path_fallback", "registry", "native_cwd"} {
+		for _, right := range []string{"", "unknown", "path_fallback", "registry", "native_cwd"} {
+			t.Run(fmt.Sprintf("%q/%q", left, right), func(t *testing.T) {
+				a, b := recordWithUUID(uuidA, "/same/path", 0), recordWithUUID(uuidA, "/same/path", 0)
+				leftLabel, rightLabel := "first-label", "contradictory-label"
+				a.Project, b.Project = &leftLabel, &rightLabel
+				a.ProjectEvidence, b.ProjectEvidence = left, right
+				plan, diagnostics, err := PlanRecovery([]RecoveryInput{recoveryInput("active", 17, a), recoveryInput("stranded", 17, b)})
+				if err != nil || len(plan.Records) != 0 || len(diagnostics) != 2 {
+					t.Fatalf("plan=%+v diagnostics=%+v err=%v", plan, diagnostics, err)
+				}
+				assertDiagnosticCounts(t, diagnostics, map[Code]int{CodeRecoveryConflict: 2})
+			})
+		}
+	}
+}

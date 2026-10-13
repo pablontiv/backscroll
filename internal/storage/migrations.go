@@ -25,11 +25,12 @@ func newDatabaseMigrations() []migrationApplier {
 		applyV5, applyV6, applyV7, applyV8,
 		applyV9, applyV10, applyV11, applyV12,
 		applyV13, applyV14, applyV15, applyV16,
+		applyV17,
 	}
 }
 
 // setupNewDatabaseSchema initializes a private, newly created database. All
-// schema objects and migration records from V1 through V16 are committed as a
+// schema objects and migration records from V1 through V17 are committed as a
 // single unit. Existing databases still migrate through OpenCompatible.
 func (d *Database) setupNewDatabaseSchema(ctx context.Context, migrations []migrationApplier) (err error) {
 	tx, err := d.db.BeginTx(ctx, nil)

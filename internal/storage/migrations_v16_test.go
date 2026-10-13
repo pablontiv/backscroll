@@ -35,8 +35,8 @@ func TestV16MigrationAddsConstrainedMessageOrigin(t *testing.T) {
 	if err != nil || diag != nil {
 		t.Fatalf("inspect v15 error=%v diagnostic=%+v", err, diag)
 	}
-	if len(plan.Steps) != 1 || plan.Steps[0] != (compat.MigrationStep{Version: 16, Name: "V16 parser-backed message origin"}) {
-		t.Fatalf("v15 migration plan = %+v, want only v16", plan.Steps)
+	if len(plan.Steps) != 2 || plan.Steps[0] != (compat.MigrationStep{Version: 16, Name: "V16 parser-backed message origin"}) {
+		t.Fatalf("v15 migration plan = %+v, want v16 and v17", plan.Steps)
 	}
 	if err := applyMigrationPlanForTest(context.Background(), db, plan); err != nil {
 		t.Fatalf("apply v16: %v", err)

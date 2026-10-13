@@ -378,9 +378,6 @@ func TestOMPFilteredPatternConsumersAfterReasoningChange(t *testing.T) {
 				if format == "--json" && !strings.Contains(empty, `"trends":[]`) {
 					t.Fatalf("empty trend contract: %s", empty)
 				}
-				if format == "" && !strings.Contains(empty, "No patterns found") {
-					t.Fatalf("empty text contract: %s", empty)
-				}
 			}
 		}
 	}

@@ -21,9 +21,12 @@ func newStatusCmd(stdout, stderr io.Writer) *cobra.Command {
 
 	cmd := &cobra.Command{
 		Use:          "status",
+		Args:         cobra.NoArgs,
 		Short:        "Show index status and configuration",
 		SilenceUsage: true,
-		Long: `Status displays information about the backscroll index, including:
+		Long: `This command accepts no positional operands.
+
+Status displays information about the backscroll index, including:
 - Database path and size
 - Number of indexed files and messages
 - Last indexing timestamp
@@ -36,7 +39,7 @@ Startup preflight may sync before status runs; status itself only reads current 
 			if startup.Config == nil {
 				return fmt.Errorf("startup configuration unavailable")
 			}
-			return runStatus(cmd.Context(), stdout, stderr, startup.Config, jsonFormat)
+			return runStatus(cmd.Context(), stdout, stderr, startup.Config, startup.inputs, invocationOutputMode(cmd))
 		},
 	}
 
@@ -45,10 +48,13 @@ Startup preflight may sync before status runs; status itself only reads current 
 	return cmd
 }
 
-func runStatus(ctx context.Context, stdout, stderr io.Writer, cfg *config.Config, jsonFormat bool) (retErr error) {
+func runStatus(ctx context.Context, stdout, stderr io.Writer, cfg *config.Config, snapshot *inputSnapshot, output outputMode) (retErr error) {
+	if snapshot == nil {
+		return fmt.Errorf("startup input snapshot unavailable")
+	}
 	db, diag, err := prepareIndex(ctx, cfg, indexDataRead)
 	if diag != nil {
-		return refuseDiagnostics(stdout, stderr, []compat.Diagnostic{*diag}, jsonFormat)
+		return refuseDiagnostics(stdout, stderr, []compat.Diagnostic{*diag}, output == outputJSON)
 	}
 	if err != nil {
 		return fmt.Errorf("prepare index: %w", err)
@@ -62,8 +68,16 @@ func runStatus(ctx context.Context, stdout, stderr io.Writer, cfg *config.Config
 	}
 	stats := response.Stats
 
-	// Resolve active inputs for status display
-	activeInputNames, usingDeclarative := resolveInputsForStatus(cfg.SessionDirs)
+	// Render the same definitions used by preflight and startup sync.
+	activeInputNames := []string{}
+	usingDeclarative := snapshot.mode == input_config.ModeDeclarative
+	if usingDeclarative {
+		for _, def := range snapshot.definitions {
+			if def.ID != "" {
+				activeInputNames = append(activeInputNames, def.ID)
+			}
+		}
+	}
 
 	// Get database file size after startup has prepared the canonical database.
 	fileInfo, err := os.Stat(cfg.DatabasePath)
@@ -73,7 +87,7 @@ func runStatus(ctx context.Context, stdout, stderr io.Writer, cfg *config.Config
 	dbSize := fileInfo.Size()
 
 	// Format output
-	if jsonFormat {
+	if output == outputJSON {
 		// JSON output
 		data := map[string]interface{}{
 			"database": map[string]interface{}{
@@ -101,54 +115,72 @@ func runStatus(ctx context.Context, stdout, stderr io.Writer, cfg *config.Config
 		}
 	} else {
 		// Text output
-		_, _ = fmt.Fprintf(stdout, "Backscroll Status\n")
-		_, _ = fmt.Fprintf(stdout, "=================\n\n")
-
-		_, _ = fmt.Fprintf(stdout, "Database:\n")
-		_, _ = fmt.Fprintf(stdout, "  Path: %s\n", cfg.DatabasePath)
-		_, _ = fmt.Fprintf(stdout, "  Size: %.2f MB\n", float64(dbSize)/1024/1024)
-
-		_, _ = fmt.Fprintf(stdout, "\nIndex:\n")
-		_, _ = fmt.Fprintf(stdout, "  Files indexed:    %d\n", stats.TotalFiles)
-		_, _ = fmt.Fprintf(stdout, "  Messages indexed: %d\n", stats.TotalMessages)
-		_, _ = fmt.Fprintf(stdout, "  Chunks stored:    %d\n", stats.TotalChunks)
-		_, _ = fmt.Fprintf(stdout, "  Embeddings:       %d\n", stats.TotalEmbeddings)
-		_, _ = fmt.Fprintf(stdout, "  Vectors stored:   %d\n", stats.TotalVectors)
-		if !stats.IndexedAt.IsZero() {
-			_, _ = fmt.Fprintf(stdout, "  Last indexed:     %s\n", stats.IndexedAt.Format("2006-01-02 15:04:05 MST"))
+		if err := writeOutput(stdout, "Backscroll Status\n"); err != nil {
+			return err
+		}
+		if err := writeOutput(stdout, "=================\n\n"); err != nil {
+			return err
 		}
 
-		_, _ = fmt.Fprintf(stdout, "\nConfiguration:\n")
+		if err := writeOutput(stdout, "Database:\n"); err != nil {
+			return err
+		}
+		if err := writeOutput(stdout, "  Path: %s\n", cfg.DatabasePath); err != nil {
+			return err
+		}
+		if err := writeOutput(stdout, "  Size: %.2f MB\n", float64(dbSize)/1024/1024); err != nil {
+			return err
+		}
+
+		if err := writeOutput(stdout, "\nIndex:\n"); err != nil {
+			return err
+		}
+		if err := writeOutput(stdout, "  Files indexed:    %d\n", stats.TotalFiles); err != nil {
+			return err
+		}
+		if err := writeOutput(stdout, "  Messages indexed: %d\n", stats.TotalMessages); err != nil {
+			return err
+		}
+		if err := writeOutput(stdout, "  Chunks stored:    %d\n", stats.TotalChunks); err != nil {
+			return err
+		}
+		if err := writeOutput(stdout, "  Embeddings:       %d\n", stats.TotalEmbeddings); err != nil {
+			return err
+		}
+		if err := writeOutput(stdout, "  Vectors stored:   %d\n", stats.TotalVectors); err != nil {
+			return err
+		}
+		if !stats.IndexedAt.IsZero() {
+			if err := writeOutput(stdout, "  Last indexed:     %s\n", stats.IndexedAt.Format("2006-01-02 15:04:05 MST")); err != nil {
+				return err
+			}
+		}
+
+		if err := writeOutput(stdout, "\nConfiguration:\n"); err != nil {
+			return err
+		}
 		if usingDeclarative {
-			_, _ = fmt.Fprintf(stdout, "  Inputs: %d active (declarative)\n", len(activeInputNames))
+			if err := writeOutput(stdout, "  Inputs: %d active (declarative)\n", len(activeInputNames)); err != nil {
+				return err
+			}
 			for _, name := range activeInputNames {
-				_, _ = fmt.Fprintf(stdout, "    - %s\n", name)
+				if err := writeOutput(stdout, "    - %s\n", name); err != nil {
+					return err
+				}
 			}
 		} else {
-			_, _ = fmt.Fprintf(stdout, "  Inputs: legacy (session_dirs)\n")
+			if err := writeOutput(stdout, "  Inputs: legacy (session_dirs)\n"); err != nil {
+				return err
+			}
 			for _, dir := range cfg.SessionDirs {
-				_, _ = fmt.Fprintf(stdout, "    - %s\n", dir)
+				if err := writeOutput(stdout, "    - %s\n", dir); err != nil {
+					return err
+				}
 			}
 		}
 	}
 
 	return nil
-}
-
-// resolveInputsForStatus returns the list of active input IDs and whether
-// declarative inputs (*.inputs.toml) are in use.
-func resolveInputsForStatus(sessionDirs []string) ([]string, bool) {
-	defs, mode, err := input_config.ActiveInputs(sessionDirs)
-	if err != nil || mode != input_config.ModeDeclarative {
-		return []string{}, false
-	}
-	names := make([]string, 0, len(defs))
-	for _, d := range defs {
-		if d.ID != "" {
-			names = append(names, d.ID)
-		}
-	}
-	return names, true
 }
 
 func recoveryDiagnosticsForIndex(ctx context.Context, db *storage.Database, activePath string) ([]compat.Diagnostic, error) {

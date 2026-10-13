@@ -5,6 +5,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -50,7 +51,7 @@ func TestSidecarCreatedPrivateAndPersists(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got := info.Mode().Perm(); got != 0o600 {
+	if got := info.Mode().Perm(); runtime.GOOS != "windows" && got != 0o600 {
 		t.Fatalf("permissions=%#o want 0600", got)
 	}
 	if err := lease.Release(); err != nil {
@@ -136,5 +137,89 @@ func TestTryAcquireMissingParentReturnsErrorAndDoesNotCreateDirectory(t *testing
 	}
 	if _, statErr := os.Stat(missingParent); !errors.Is(statErr, os.ErrNotExist) {
 		t.Fatalf("missing parent stat error=%v want not exist", statErr)
+	}
+}
+
+// Stage replacements at exact acquisition boundaries without timing-dependent
+// goroutines or production hooks. validateLocked uses flock's held descriptor.
+func TestSidecarReplacementDuringAcquisition(t *testing.T) {
+	for _, stage := range []string{"before_open", "after_open"} {
+		for _, kind := range []string{"private", "public", "symlink", "directory"} {
+			t.Run(stage+"/"+kind, func(t *testing.T) {
+				if runtime.GOOS == "windows" && kind == "public" {
+					t.Skip("POSIX modes do not describe Windows ACLs")
+				}
+				db := filepath.Join(t.TempDir(), "index.db")
+				path := db + ".startup-sync.lock"
+				if err := os.WriteFile(path, nil, 0o600); err != nil {
+					t.Fatal(err)
+				}
+				lock, err := newFileLock(db)
+				if err != nil {
+					t.Fatal(err)
+				}
+				defer lock.Close()
+				if stage == "after_open" {
+					if locked, err := lock.TryLock(); err != nil || !locked {
+						t.Fatalf("locked=%v err=%v", locked, err)
+					}
+				}
+				if err := os.Rename(path, path+".original"); err != nil {
+					t.Fatal(err)
+				}
+				switch kind {
+				case "private", "public":
+					mode := os.FileMode(0o600)
+					if kind == "public" {
+						mode = 0o666
+					}
+					if err := os.WriteFile(path, nil, mode); err != nil {
+						t.Fatal(err)
+					}
+					if err := os.Chmod(path, mode); err != nil {
+						t.Fatal(err)
+					}
+				case "symlink":
+					if err := os.Symlink(path+".original", path); err != nil {
+						t.Fatal(err)
+					}
+				case "directory":
+					if err := os.Mkdir(path, 0o700); err != nil {
+						t.Fatal(err)
+					}
+				}
+				opened := stage == "after_open"
+				if stage == "before_open" {
+					locked, err := lock.TryLock()
+					if err != nil && kind != "symlink" && kind != "directory" {
+						t.Fatalf("unexpected open failure: %v", err)
+					}
+					if err == nil && !locked {
+						t.Fatal("replacement unexpectedly busy")
+					}
+					opened = err == nil && locked
+				}
+				if opened {
+					if err := lock.validateLocked(); !errors.Is(err, ErrUnsafeSidecar) {
+						t.Fatalf("validation=%v", err)
+					}
+				}
+				if err := lock.Close(); err != nil {
+					t.Fatal(err)
+				}
+				// The rejected descriptor must not leave the original inode locked.
+				originalDB := db + ".original-db"
+				if err := os.Rename(path+".original", originalDB+".startup-sync.lock"); err != nil {
+					t.Fatal(err)
+				}
+				lease, locked, err := TryAcquire(originalDB)
+				if err != nil || !locked {
+					t.Fatalf("original still locked: %v %v", locked, err)
+				}
+				if err := lease.Release(); err != nil {
+					t.Fatal(err)
+				}
+			})
+		}
 	}
 }

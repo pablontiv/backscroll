@@ -65,6 +65,9 @@ Use --json, --robot for output formats.`,
 				if err := validatePatternsRequest(kind, project, allProjects, limit, offset, trend); err != nil {
 					return err
 				}
+				if err := validatePatternsNumbers(minSupport, minConfidence, batch, minLength, maxLength); err != nil {
+					return err
+				}
 				if err := validatePatternsOrigin(kind, origin); err != nil {
 					return err
 				}
@@ -81,23 +84,23 @@ Use --json, --robot for output formats.`,
 				return fmt.Errorf("startup configuration unavailable")
 			}
 			return runPatterns(cmd.Context(), stdout, stderr, startup.Config, kind, project, allProjects, tag, limit, offset,
-				jsonFormat, robotFormat, minSupport, minConfidence, pending, batch,
+				invocationOutputMode(cmd), minSupport, minConfidence, pending, batch,
 				minLength, maxLength, after, before, trend, origin)
 		},
 	}
 
 	cmd.Flags().StringVar(&kind, "kind", "", "Aggregation kind (required: commands|failures|templates|sequences|corrections)")
-	cmd.Flags().StringVar(&project, "project", "", "Filter to single project")
+	cmd.Flags().StringVar(&project, "project", "", "Filter to single project (mutually exclusive with --all-projects)")
 	cmd.Flags().BoolVar(&allProjects, "all-projects", false, "Query across all projects (default: project inferred from current working directory)")
 	cmd.Flags().StringVar(&tag, "tag", "", "Filter by session tag")
-	cmd.Flags().IntVar(&limit, "limit", 20, "Result limit")
+	cmd.Flags().IntVar(&limit, "limit", 20, "Result limit (0 = unlimited)")
 	cmd.Flags().IntVar(&offset, "offset", 0, "Result offset")
-	cmd.Flags().IntVar(&minSupport, "min-support", 3, "Minimum template/sequence occurrence count")
-	cmd.Flags().IntVar(&minLength, "min-length", 2, "Minimum sequence pattern length (for --kind sequences, default 2)")
-	cmd.Flags().IntVar(&maxLength, "max-length", 6, "Maximum sequence pattern length (for --kind sequences, default 6; prevents combinatorial explosion)")
-	cmd.Flags().Float64Var(&minConfidence, "min-confidence", 0.6, "Minimum detector confidence (for --kind corrections)")
-	cmd.Flags().StringVar(&after, "after", "", "Filter after date (ISO 8601, for --kind sequences)")
-	cmd.Flags().StringVar(&before, "before", "", "Filter before date (ISO 8601, for --kind sequences)")
+	cmd.Flags().IntVar(&minSupport, "min-support", 3, "Minimum template/sequence occurrence count (>=0; sequences: 0=default 3)")
+	cmd.Flags().IntVar(&minLength, "min-length", 2, "Minimum sequence pattern length (for --kind sequences, >=0; 0=default 2)")
+	cmd.Flags().IntVar(&maxLength, "max-length", 6, "Maximum sequence pattern length (for --kind sequences, >=0; 0=default 6; prevents combinatorial explosion)")
+	cmd.Flags().Float64Var(&minConfidence, "min-confidence", 0.6, "Minimum detector confidence (finite 0..1; for --kind corrections)")
+	cmd.Flags().StringVar(&after, "after", "", "Filter on or after date (inclusive ISO 8601, for --kind sequences)")
+	cmd.Flags().StringVar(&before, "before", "", "Filter before date (exclusive ISO 8601, for --kind sequences)")
 	cmd.Flags().BoolVar(&jsonFormat, "json", false, "Output as JSON")
 	cmd.Flags().BoolVar(&robotFormat, "robot", false, "Output in robot format")
 	cmd.Flags().BoolVar(&pending, "pending", false, "Only corrections without a 'correction' annotation (checkpoint resume)")
@@ -107,6 +110,8 @@ Use --json, --robot for output formats.`,
 
 	cmd.MarkFlagRequired("kind")
 
+	cmd.MarkFlagsMutuallyExclusive("project", "all-projects")
+	describeOutputModes(cmd)
 	return cmd
 }
 
@@ -148,7 +153,7 @@ func validatePatternsOrigin(kind, origin string) error {
 
 func runPatterns(ctx context.Context, stdout, stderr io.Writer, cfg *config.Config,
 	kind string, project string, allProjects bool, tag string,
-	limit, offset int, jsonFormat, robotFormat bool, minSupport int, minConfidence float64, pending bool, batch int,
+	limit, offset int, mode outputMode, minSupport int, minConfidence float64, pending bool, batch int,
 	minLength, maxLength int, after, before string, trend bool, origin string) (retErr error) {
 
 	if err := validatePatternsRequest(kind, project, allProjects, limit, offset, trend); err != nil {
@@ -165,7 +170,7 @@ func runPatterns(ctx context.Context, stdout, stderr io.Writer, cfg *config.Conf
 
 	db, diag, err := prepareIndex(ctx, cfg, indexDataRead)
 	if diag != nil {
-		return refuseIndex(stdout, stderr, *diag, jsonFormat, robotFormat)
+		return refuseIndex(stdout, stderr, *diag, mode)
 	}
 	if err != nil {
 		return fmt.Errorf("prepare index: %w", err)
@@ -194,10 +199,14 @@ func runPatterns(ctx context.Context, stdout, stderr io.Writer, cfg *config.Conf
 			}
 
 			if len(results) == 0 {
-				if !jsonFormat && !robotFormat {
-					_, _ = fmt.Fprintf(stdout, "No patterns found. Try --min-support <lower> or --min-length <lower>.\n")
-				} else if jsonFormat {
-					_, _ = fmt.Fprintf(stdout, "{\"count\":0,\"kind\":\"commands\",\"trends\":[]}\n")
+				if mode == outputText {
+					if err := writeOutput(stdout, "No patterns found. Try --min-support <lower> or --min-length <lower>.\n"); err != nil {
+						return err
+					}
+				} else if mode == outputJSON {
+					if err := writeOutput(stdout, "{\"count\":0,\"kind\":\"commands\",\"trends\":[]}\n"); err != nil {
+						return err
+					}
 				}
 				writeSearchHints(stderr, allProjects, true)
 				return nil
@@ -213,7 +222,7 @@ func runPatterns(ctx context.Context, stdout, stderr io.Writer, cfg *config.Conf
 				weekMap[r.Week] = append(weekMap[r.Week], r)
 			}
 
-			if jsonFormat {
+			if mode == outputJSON {
 				type trendBucket struct {
 					Week     string                         `json:"week"`
 					Patterns []storage.CommandPatternWeekly `json:"patterns"`
@@ -230,26 +239,48 @@ func runPatterns(ctx context.Context, stdout, stderr io.Writer, cfg *config.Conf
 				if err := json.NewEncoder(stdout).Encode(data); err != nil {
 					return fmt.Errorf("encode JSON: %w", err)
 				}
-			} else if robotFormat {
-				_, _ = fmt.Fprintf(stdout, "*** Trends ***\n")
+			} else if mode == outputRobot {
+				if err := writeOutput(stdout, "*** Trends ***\n"); err != nil {
+					return err
+				}
 				for weekIdx, w := range weeks {
-					_, _ = fmt.Fprintf(stdout, "week_%d=%s\n", weekIdx, w)
+					if err := writeOutput(stdout, "week_%d=%s\n", weekIdx, w); err != nil {
+						return err
+					}
 					for i, p := range weekMap[w] {
-						_, _ = fmt.Fprintf(stdout, "result_%d_tool_name=%s\n", i, p.ToolName)
-						_, _ = fmt.Fprintf(stdout, "result_%d_command_head=%s\n", i, p.CommandHead)
-						_, _ = fmt.Fprintf(stdout, "result_%d_count=%d\n", i, p.Count)
+						if err := writeOutput(stdout, "week_%d_result_%d_tool_name=%s\n", weekIdx, i, p.ToolName); err != nil {
+							return err
+						}
+						if err := writeOutput(stdout, "week_%d_result_%d_command_head=%s\n", weekIdx, i, p.CommandHead); err != nil {
+							return err
+						}
+						if err := writeOutput(stdout, "week_%d_result_%d_count=%d\n", weekIdx, i, p.Count); err != nil {
+							return err
+						}
 					}
 				}
-				_, _ = fmt.Fprintf(stdout, "*** Total: %d patterns ***\n", len(results))
+				if err := writeOutput(stdout, "*** Total: %d patterns ***\n", len(results)); err != nil {
+					return err
+				}
 			} else {
-				_, _ = fmt.Fprintf(stdout, "Trends in Commands (Week-over-Week)\n")
-				_, _ = fmt.Fprintf(stdout, "==================================\n\n")
+				if err := writeOutput(stdout, "Trends in Commands (Week-over-Week)\n"); err != nil {
+					return err
+				}
+				if err := writeOutput(stdout, "==================================\n\n"); err != nil {
+					return err
+				}
 				for _, w := range weeks {
-					_, _ = fmt.Fprintf(stdout, "%s\n", w)
-					for i, p := range weekMap[w] {
-						_, _ = fmt.Fprintf(stdout, "  %d. %s %s (%d times)\n", i+1, p.ToolName, p.CommandHead, p.Count)
+					if err := writeOutput(stdout, "%s\n", w); err != nil {
+						return err
 					}
-					_, _ = fmt.Fprintf(stdout, "\n")
+					for i, p := range weekMap[w] {
+						if err := writeOutput(stdout, "  %d. %s %s (%d times)\n", i+1, p.ToolName, p.CommandHead, p.Count); err != nil {
+							return err
+						}
+					}
+					if err := writeOutput(stdout, "\n"); err != nil {
+						return err
+					}
 				}
 			}
 		} else {
@@ -259,16 +290,20 @@ func runPatterns(ctx context.Context, stdout, stderr io.Writer, cfg *config.Conf
 			}
 
 			if len(results) == 0 {
-				if !jsonFormat && !robotFormat {
-					_, _ = fmt.Fprintf(stdout, "No patterns found.\n")
-				} else if jsonFormat {
-					_, _ = fmt.Fprintf(stdout, "{\"count\":0,\"patterns\":[]}\n")
+				if mode == outputText {
+					if err := writeOutput(stdout, "No patterns found.\n"); err != nil {
+						return err
+					}
+				} else if mode == outputJSON {
+					if err := writeOutput(stdout, "{\"count\":0,\"patterns\":[]}\n"); err != nil {
+						return err
+					}
 				}
 				writeSearchHints(stderr, allProjects, true)
 				return nil
 			}
 
-			if jsonFormat {
+			if mode == outputJSON {
 				data := map[string]interface{}{
 					"count":    len(results),
 					"kind":     "commands",
@@ -277,160 +312,41 @@ func runPatterns(ctx context.Context, stdout, stderr io.Writer, cfg *config.Conf
 				if err := json.NewEncoder(stdout).Encode(data); err != nil {
 					return fmt.Errorf("encode JSON: %w", err)
 				}
-			} else if robotFormat {
-				_, _ = fmt.Fprintf(stdout, "*** Commands ***\n")
-				for i, p := range results {
-					_, _ = fmt.Fprintf(stdout, "result_%d_tool_name=%s\n", i, p.ToolName)
-					_, _ = fmt.Fprintf(stdout, "result_%d_command_head=%s\n", i, p.CommandHead)
-					_, _ = fmt.Fprintf(stdout, "result_%d_count=%d\n", i, p.Count)
+			} else if mode == outputRobot {
+				if err := writeOutput(stdout, "*** Commands ***\n"); err != nil {
+					return err
 				}
-				_, _ = fmt.Fprintf(stdout, "*** Total: %d patterns ***\n", len(results))
-			} else {
-				_, _ = fmt.Fprintf(stdout, "Top Commands\n")
-				_, _ = fmt.Fprintf(stdout, "============\n\n")
 				for i, p := range results {
-					_, _ = fmt.Fprintf(stdout, "%d. %s %s (%d times)\n", i+1, p.ToolName, p.CommandHead, p.Count)
+					if err := writeOutput(stdout, "result_%d_tool_name=%s\n", i, p.ToolName); err != nil {
+						return err
+					}
+					if err := writeOutput(stdout, "result_%d_command_head=%s\n", i, p.CommandHead); err != nil {
+						return err
+					}
+					if err := writeOutput(stdout, "result_%d_count=%d\n", i, p.Count); err != nil {
+						return err
+					}
+				}
+				if err := writeOutput(stdout, "*** Total: %d patterns ***\n", len(results)); err != nil {
+					return err
+				}
+			} else {
+				if err := writeOutput(stdout, "Top Commands\n"); err != nil {
+					return err
+				}
+				if err := writeOutput(stdout, "============\n\n"); err != nil {
+					return err
+				}
+				for i, p := range results {
+					if err := writeOutput(stdout, "%d. %s %s (%d times)\n", i+1, p.ToolName, p.CommandHead, p.Count); err != nil {
+						return err
+					}
 				}
 			}
 		}
 
 	} else if kind == "failures" {
-		if trend {
-			var excluded int
-			results, err := db.AggregateFailuresTrend(opts, &excluded)
-			if err != nil {
-				return fmt.Errorf("aggregate failures trend: %w", err)
-			}
-
-			if excluded > 0 {
-				_, _ = fmt.Fprintf(stderr, "trend: %d events excluded (no timestamp)\n", excluded)
-			}
-
-			if len(results) == 0 {
-				if !jsonFormat && !robotFormat {
-					_, _ = fmt.Fprintf(stdout, "No patterns found. Try --min-support <lower> or --min-length <lower>.\n")
-				} else if jsonFormat {
-					_, _ = fmt.Fprintf(stdout, "{\"count\":0,\"kind\":\"failures\",\"trends\":[]}\n")
-				}
-				writeSearchHints(stderr, allProjects, true)
-				return nil
-			}
-
-			// Group results by week for text/json output
-			weekMap := make(map[string][]storage.FailurePatternWeekly)
-			var weeks []string
-			for _, r := range results {
-				if _, exists := weekMap[r.Week]; !exists {
-					weeks = append(weeks, r.Week)
-				}
-				weekMap[r.Week] = append(weekMap[r.Week], r)
-			}
-
-			if jsonFormat {
-				type trendBucket struct {
-					Week     string                         `json:"week"`
-					Patterns []storage.FailurePatternWeekly `json:"patterns"`
-				}
-				var trends []trendBucket
-				for _, w := range weeks {
-					trends = append(trends, trendBucket{Week: w, Patterns: weekMap[w]})
-				}
-				data := map[string]interface{}{
-					"count":  len(results),
-					"kind":   "failures",
-					"trends": trends,
-				}
-				if err := json.NewEncoder(stdout).Encode(data); err != nil {
-					return fmt.Errorf("encode JSON: %w", err)
-				}
-			} else if robotFormat {
-				_, _ = fmt.Fprintf(stdout, "*** Trends ***\n")
-				for weekIdx, w := range weeks {
-					_, _ = fmt.Fprintf(stdout, "week_%d=%s\n", weekIdx, w)
-					for i, p := range weekMap[w] {
-						exitCodeStr := "?"
-						if p.ExitCode != nil {
-							exitCodeStr = fmt.Sprintf("%d", *p.ExitCode)
-						}
-						_, _ = fmt.Fprintf(stdout, "result_%d_tool_name=%s\n", i, p.ToolName)
-						_, _ = fmt.Fprintf(stdout, "result_%d_is_error=%v\n", i, p.IsError)
-						_, _ = fmt.Fprintf(stdout, "result_%d_exit_code=%s\n", i, exitCodeStr)
-						_, _ = fmt.Fprintf(stdout, "result_%d_count=%d\n", i, p.Count)
-						_, _ = fmt.Fprintf(stdout, "result_%d_coverage=%d/%d\n", i, p.Count, p.SignalledEvents)
-					}
-				}
-				_, _ = fmt.Fprintf(stdout, "*** Total: %d patterns ***\n", len(results))
-			} else {
-				_, _ = fmt.Fprintf(stdout, "Trends in Failures (Week-over-Week)\n")
-				_, _ = fmt.Fprintf(stdout, "===================================\n\n")
-				for _, w := range weeks {
-					_, _ = fmt.Fprintf(stdout, "%s\n", w)
-					for i, p := range weekMap[w] {
-						exitCodeStr := "?"
-						if p.ExitCode != nil {
-							exitCodeStr = fmt.Sprintf("%d", *p.ExitCode)
-						}
-						_, _ = fmt.Fprintf(stdout, "  %d. %s (is_error=%v, exit_code=%s) — %d occurrences\n",
-							i+1, p.ToolName, p.IsError, exitCodeStr, p.Count)
-					}
-					_, _ = fmt.Fprintf(stdout, "\n")
-				}
-			}
-		} else {
-			results, err := db.AggregateFailures(opts)
-			if err != nil {
-				return fmt.Errorf("aggregate failures: %w", err)
-			}
-
-			if len(results) == 0 {
-				if !jsonFormat && !robotFormat {
-					_, _ = fmt.Fprintf(stdout, "No failure patterns found.\n")
-				} else if jsonFormat {
-					_, _ = fmt.Fprintf(stdout, "{\"count\":0,\"patterns\":[]}\n")
-				}
-				writeSearchHints(stderr, allProjects, true)
-				return nil
-			}
-
-			if jsonFormat {
-				data := map[string]interface{}{
-					"count":    len(results),
-					"kind":     "failures",
-					"patterns": results,
-				}
-				if err := json.NewEncoder(stdout).Encode(data); err != nil {
-					return fmt.Errorf("encode JSON: %w", err)
-				}
-			} else if robotFormat {
-				_, _ = fmt.Fprintf(stdout, "*** Failures ***\n")
-				for i, p := range results {
-					exitCodeStr := "?"
-					if p.ExitCode != nil {
-						exitCodeStr = fmt.Sprintf("%d", *p.ExitCode)
-					}
-					_, _ = fmt.Fprintf(stdout, "result_%d_tool_name=%s\n", i, p.ToolName)
-					_, _ = fmt.Fprintf(stdout, "result_%d_is_error=%v\n", i, p.IsError)
-					_, _ = fmt.Fprintf(stdout, "result_%d_exit_code=%s\n", i, exitCodeStr)
-					_, _ = fmt.Fprintf(stdout, "result_%d_count=%d\n", i, p.Count)
-					_, _ = fmt.Fprintf(stdout, "result_%d_coverage=%d/%d\n", i, p.Count, p.SignalledEvents)
-				}
-				_, _ = fmt.Fprintf(stdout, "*** Total: %d patterns ***\n", len(results))
-			} else {
-				_, _ = fmt.Fprintf(stdout, "Failure Patterns\n")
-				_, _ = fmt.Fprintf(stdout, "================\n\n")
-				if len(results) > 0 {
-					_, _ = fmt.Fprintf(stdout, "Signalled events (with error signal): %d\n\n", results[0].SignalledEvents)
-				}
-				for i, p := range results {
-					exitCodeStr := "?"
-					if p.ExitCode != nil {
-						exitCodeStr = fmt.Sprintf("%d", *p.ExitCode)
-					}
-					_, _ = fmt.Fprintf(stdout, "%d. %s (is_error=%v, exit_code=%s) — %d occurrences\n",
-						i+1, p.ToolName, p.IsError, exitCodeStr, p.Count)
-				}
-			}
-		}
+		return renderFailurePatterns(stdout, stderr, db, opts, trend, mode == outputJSON, mode == outputRobot, allProjects)
 
 	} else if kind == "templates" {
 		templateOpts := storage.TemplateQueryOpts{
@@ -444,10 +360,14 @@ func runPatterns(ctx context.Context, stdout, stderr io.Writer, cfg *config.Conf
 		}
 
 		if len(results) == 0 {
-			if !jsonFormat && !robotFormat {
-				_, _ = fmt.Fprintf(stdout, "No templates found.\n")
-			} else if jsonFormat {
-				_, _ = fmt.Fprintf(stdout, "{\"count\":0,\"patterns\":[]}\n")
+			if mode == outputText {
+				if err := writeOutput(stdout, "No templates found.\n"); err != nil {
+					return err
+				}
+			} else if mode == outputJSON {
+				if err := writeOutput(stdout, "{\"count\":0,\"patterns\":[]}\n"); err != nil {
+					return err
+				}
 			}
 			writeSearchHints(stderr, allProjects, true)
 			return nil
@@ -457,16 +377,16 @@ func runPatterns(ctx context.Context, stdout, stderr io.Writer, cfg *config.Conf
 		if offset > len(results) {
 			offset = len(results)
 		}
-		if limit <= 0 {
-			limit = 20
+		end := len(results)
+		if limit > 0 && limit < len(results)-offset {
+			end = offset + limit
 		}
-		end := offset + limit
 		if end > len(results) {
 			end = len(results)
 		}
 		results = results[offset:end]
 
-		if jsonFormat {
+		if mode == outputJSON {
 			data := map[string]interface{}{
 				"count":    len(results),
 				"kind":     "templates",
@@ -475,24 +395,50 @@ func runPatterns(ctx context.Context, stdout, stderr io.Writer, cfg *config.Conf
 			if err := json.NewEncoder(stdout).Encode(data); err != nil {
 				return fmt.Errorf("encode JSON: %w", err)
 			}
-		} else if robotFormat {
-			_, _ = fmt.Fprintf(stdout, "*** Templates ***\n")
-			for i, r := range results {
-				_, _ = fmt.Fprintf(stdout, "result_%d_template_id=%d\n", i, r.TemplateID)
-				_, _ = fmt.Fprintf(stdout, "result_%d_template=%q\n", i, r.TemplateText)
-				_, _ = fmt.Fprintf(stdout, "result_%d_occurrence_count=%d\n", i, r.OccurrenceCount)
-				_, _ = fmt.Fprintf(stdout, "result_%d_normalization_version=%d\n", i, r.NormalizationVersion)
+		} else if mode == outputRobot {
+			if err := writeOutput(stdout, "*** Templates ***\n"); err != nil {
+				return err
 			}
-			_, _ = fmt.Fprintf(stdout, "*** Total: %d patterns ***\n", len(results))
+			for i, r := range results {
+				if err := writeOutput(stdout, "result_%d_template_id=%d\n", i, r.TemplateID); err != nil {
+					return err
+				}
+				if err := writeOutput(stdout, "result_%d_template=%q\n", i, r.TemplateText); err != nil {
+					return err
+				}
+				if err := writeOutput(stdout, "result_%d_occurrence_count=%d\n", i, r.OccurrenceCount); err != nil {
+					return err
+				}
+				if err := writeOutput(stdout, "result_%d_normalization_version=%d\n", i, r.NormalizationVersion); err != nil {
+					return err
+				}
+			}
+			if err := writeOutput(stdout, "*** Total: %d patterns ***\n", len(results)); err != nil {
+				return err
+			}
 		} else {
-			_, _ = fmt.Fprintf(stdout, "Found %d templates (min_support=%d):\n\n", len(results), minSupport)
+			if err := writeOutput(stdout, "Found %d templates (min_support=%d):\n\n", len(results), minSupport); err != nil {
+				return err
+			}
 			for i, row := range results {
-				_, _ = fmt.Fprintf(stdout, "%d. [%s]\n", i+1, row.Signature[:8])
-				_, _ = fmt.Fprintf(stdout, "   Text: %s\n", row.TemplateText)
-				_, _ = fmt.Fprintf(stdout, "   Occurrences: %d\n", row.OccurrenceCount)
-				_, _ = fmt.Fprintf(stdout, "   Normalization: v%d\n", row.NormalizationVersion)
-				_, _ = fmt.Fprintf(stdout, "   Projects: %v\n", row.ProjectsAffected)
-				_, _ = fmt.Fprintf(stdout, "   Sample UUIDs: %v\n\n", row.SampleUUIDs)
+				if err := writeOutput(stdout, "%d. [%s]\n", i+1, row.Signature[:8]); err != nil {
+					return err
+				}
+				if err := writeOutput(stdout, "   Text: %s\n", row.TemplateText); err != nil {
+					return err
+				}
+				if err := writeOutput(stdout, "   Occurrences: %d\n", row.OccurrenceCount); err != nil {
+					return err
+				}
+				if err := writeOutput(stdout, "   Normalization: v%d\n", row.NormalizationVersion); err != nil {
+					return err
+				}
+				if err := writeOutput(stdout, "   Projects: %v\n", row.ProjectsAffected); err != nil {
+					return err
+				}
+				if err := writeOutput(stdout, "   Sample UUIDs: %v\n\n", row.SampleUUIDs); err != nil {
+					return err
+				}
 			}
 		}
 
@@ -503,6 +449,7 @@ func runPatterns(ctx context.Context, stdout, stderr io.Writer, cfg *config.Conf
 		}
 
 		correctionOpts := storage.CorrectionAggOpts{
+			Tag:           tag,
 			Project:       project,
 			Origin:        models.MessageOrigin(origin),
 			MinConfidence: minConfidence,
@@ -516,10 +463,14 @@ func runPatterns(ctx context.Context, stdout, stderr io.Writer, cfg *config.Conf
 		}
 
 		if len(results) == 0 {
-			if !jsonFormat && !robotFormat {
-				_, _ = fmt.Fprintf(stdout, "No correction candidates found.\n")
-			} else if jsonFormat {
-				_, _ = fmt.Fprintf(stdout, "{\"count\":0,\"kind\":\"corrections\",\"patterns\":[]}\n")
+			if mode == outputText {
+				if err := writeOutput(stdout, "No correction candidates found.\n"); err != nil {
+					return err
+				}
+			} else if mode == outputJSON {
+				if err := writeOutput(stdout, "{\"count\":0,\"kind\":\"corrections\",\"patterns\":[]}\n"); err != nil {
+					return err
+				}
 			}
 			if pending {
 				_, _ = fmt.Fprintf(stderr, "hint: no pending corrections. All candidates have been annotated, or use --pending=false to view all.\n")
@@ -529,7 +480,7 @@ func runPatterns(ctx context.Context, stdout, stderr io.Writer, cfg *config.Conf
 			return nil
 		}
 
-		if jsonFormat {
+		if mode == outputJSON {
 			data := map[string]interface{}{
 				"count":    len(results),
 				"kind":     "corrections",
@@ -538,32 +489,66 @@ func runPatterns(ctx context.Context, stdout, stderr io.Writer, cfg *config.Conf
 			if err := json.NewEncoder(stdout).Encode(data); err != nil {
 				return fmt.Errorf("encode JSON: %w", err)
 			}
-		} else if robotFormat {
-			_, _ = fmt.Fprintf(stdout, "*** Corrections ***\n")
+		} else if mode == outputRobot {
+			if err := writeOutput(stdout, "*** Corrections ***\n"); err != nil {
+				return err
+			}
 			for i, c := range results {
-				_, _ = fmt.Fprintf(stdout, "result_%d_uuid=%s\n", i, c.UUID)
-				_, _ = fmt.Fprintf(stdout, "result_%d_source_path=%s\n", i, c.SourcePath)
-				_, _ = fmt.Fprintf(stdout, "result_%d_ordinal=%d\n", i, c.Ordinal)
-				_, _ = fmt.Fprintf(stdout, "result_%d_detectors=%s\n", i, strings.Join(c.Detectors, ","))
-				_, _ = fmt.Fprintf(stdout, "result_%d_max_confidence=%.2f\n", i, c.MaxConfidence)
-				_, _ = fmt.Fprintf(stdout, "result_%d_text_snippet=%q\n", i, c.TextSnippet)
+				if err := writeOutput(stdout, "result_%d_uuid=%s\n", i, c.UUID); err != nil {
+					return err
+				}
+				if err := writeOutput(stdout, "result_%d_source_path=%s\n", i, c.SourcePath); err != nil {
+					return err
+				}
+				if err := writeOutput(stdout, "result_%d_ordinal=%d\n", i, c.Ordinal); err != nil {
+					return err
+				}
+				if err := writeOutput(stdout, "result_%d_detectors=%s\n", i, strings.Join(c.Detectors, ",")); err != nil {
+					return err
+				}
+				if err := writeOutput(stdout, "result_%d_max_confidence=%.2f\n", i, c.MaxConfidence); err != nil {
+					return err
+				}
+				if err := writeOutput(stdout, "result_%d_text_snippet=%q\n", i, c.TextSnippet); err != nil {
+					return err
+				}
 				if origin != "" {
-					_, _ = fmt.Fprintf(stdout, "result_%d_origin=%s\n", i, c.Origin)
+					if err := writeOutput(stdout, "result_%d_origin=%s\n", i, c.Origin); err != nil {
+						return err
+					}
 				}
 			}
-			_, _ = fmt.Fprintf(stdout, "*** Total: %d patterns ***\n", len(results))
+			if err := writeOutput(stdout, "*** Total: %d patterns ***\n", len(results)); err != nil {
+				return err
+			}
 		} else {
-			_, _ = fmt.Fprintf(stdout, "Correction Candidates\n")
-			_, _ = fmt.Fprintf(stdout, "====================\n\n")
+			if err := writeOutput(stdout, "Correction Candidates\n"); err != nil {
+				return err
+			}
+			if err := writeOutput(stdout, "====================\n\n"); err != nil {
+				return err
+			}
 			for i, c := range results {
-				_, _ = fmt.Fprintf(stdout, "%d. UUID: %s\n", i+1, c.UUID)
-				_, _ = fmt.Fprintf(stdout, "   Source: %s (ordinal %d)\n", c.SourcePath, c.Ordinal)
-				_, _ = fmt.Fprintf(stdout, "   Detectors: %s (max confidence: %.2f)\n", strings.Join(c.Detectors, ", "), c.MaxConfidence)
-				_, _ = fmt.Fprintf(stdout, "   Text: %s\n", c.TextSnippet)
-				if origin != "" {
-					_, _ = fmt.Fprintf(stdout, "   Origin: %s\n", c.Origin)
+				if err := writeOutput(stdout, "%d. UUID: %s\n", i+1, c.UUID); err != nil {
+					return err
 				}
-				_, _ = fmt.Fprintln(stdout)
+				if err := writeOutput(stdout, "   Source: %s (ordinal %d)\n", c.SourcePath, c.Ordinal); err != nil {
+					return err
+				}
+				if err := writeOutput(stdout, "   Detectors: %s (max confidence: %.2f)\n", strings.Join(c.Detectors, ", "), c.MaxConfidence); err != nil {
+					return err
+				}
+				if err := writeOutput(stdout, "   Text: %s\n", c.TextSnippet); err != nil {
+					return err
+				}
+				if origin != "" {
+					if err := writeOutput(stdout, "   Origin: %s\n", c.Origin); err != nil {
+						return err
+					}
+				}
+				if _, err := fmt.Fprintln(stdout); err != nil {
+					return fmt.Errorf("write output: %w", err)
+				}
 			}
 		}
 
@@ -581,6 +566,7 @@ func runPatterns(ctx context.Context, stdout, stderr io.Writer, cfg *config.Conf
 
 		// Limit/Offset paginate mined patterns below, never the input corpus.
 		seqs, err := db.LoadToolSequences(storage.LoadSequencesOpts{
+			Tag:     tag,
 			Project: project,
 			After:   after,
 			Before:  before,
@@ -605,10 +591,14 @@ func runPatterns(ctx context.Context, stdout, stderr io.Writer, cfg *config.Conf
 			patterns = patterns[:limit]
 		}
 		if len(patterns) == 0 {
-			if !jsonFormat && !robotFormat {
-				_, _ = fmt.Fprintf(stdout, "No patterns found. Try --min-support <lower> or --min-length <lower>.\n")
-			} else if jsonFormat {
-				_, _ = fmt.Fprintf(stdout, "{\"count\":0,\"kind\":\"sequences\",\"patterns\":[]}\n")
+			if mode == outputText {
+				if err := writeOutput(stdout, "No patterns found. Try --min-support <lower> or --min-length <lower>.\n"); err != nil {
+					return err
+				}
+			} else if mode == outputJSON {
+				if err := writeOutput(stdout, "{\"count\":0,\"kind\":\"sequences\",\"patterns\":[]}\n"); err != nil {
+					return err
+				}
 			}
 			writeSearchHints(stderr, allProjects, true)
 			return nil
@@ -616,7 +606,7 @@ func runPatterns(ctx context.Context, stdout, stderr io.Writer, cfg *config.Conf
 
 		// Format results
 		totalSessions := len(seqs)
-		if jsonFormat {
+		if mode == outputJSON {
 			type sequencePattern struct {
 				Pattern string `json:"pattern"`
 				Support int    `json:"support"`
@@ -639,23 +629,43 @@ func runPatterns(ctx context.Context, stdout, stderr io.Writer, cfg *config.Conf
 			if err := json.NewEncoder(stdout).Encode(data); err != nil {
 				return fmt.Errorf("encode JSON: %w", err)
 			}
-		} else if robotFormat {
-			_, _ = fmt.Fprintf(stdout, "*** Sequences ***\n")
-			for i, p := range patterns {
-				share := float64(p.Support) * 100.0 / float64(totalSessions)
-				_, _ = fmt.Fprintf(stdout, "result_%d_pattern=%s\n", i, strings.Join(p.Items, " → "))
-				_, _ = fmt.Fprintf(stdout, "result_%d_support=%d\n", i, p.Support)
-				_, _ = fmt.Fprintf(stdout, "result_%d_share=%.1f%%\n", i, share)
+		} else if mode == outputRobot {
+			if err := writeOutput(stdout, "*** Sequences ***\n"); err != nil {
+				return err
 			}
-			_, _ = fmt.Fprintf(stdout, "*** Total: %d patterns ***\n", len(patterns))
-		} else {
-			_, _ = fmt.Fprintf(stdout, "Frequent Tool Sequences (exploratory)\n")
-			_, _ = fmt.Fprintf(stdout, "======================================\n\n")
-			_, _ = fmt.Fprintf(stdout, "Total sessions analyzed: %d\n\n", totalSessions)
 			for i, p := range patterns {
 				share := float64(p.Support) * 100.0 / float64(totalSessions)
-				_, _ = fmt.Fprintf(stdout, "%d. %s\n", i+1, strings.Join(p.Items, " → "))
-				_, _ = fmt.Fprintf(stdout, "   Support: %d sessions (%.1f%%)\n\n", p.Support, share)
+				if err := writeOutput(stdout, "result_%d_pattern=%s\n", i, strings.Join(p.Items, " → ")); err != nil {
+					return err
+				}
+				if err := writeOutput(stdout, "result_%d_support=%d\n", i, p.Support); err != nil {
+					return err
+				}
+				if err := writeOutput(stdout, "result_%d_share=%.1f%%\n", i, share); err != nil {
+					return err
+				}
+			}
+			if err := writeOutput(stdout, "*** Total: %d patterns ***\n", len(patterns)); err != nil {
+				return err
+			}
+		} else {
+			if err := writeOutput(stdout, "Frequent Tool Sequences (exploratory)\n"); err != nil {
+				return err
+			}
+			if err := writeOutput(stdout, "======================================\n\n"); err != nil {
+				return err
+			}
+			if err := writeOutput(stdout, "Total sessions analyzed: %d\n\n", totalSessions); err != nil {
+				return err
+			}
+			for i, p := range patterns {
+				share := float64(p.Support) * 100.0 / float64(totalSessions)
+				if err := writeOutput(stdout, "%d. %s\n", i+1, strings.Join(p.Items, " → ")); err != nil {
+					return err
+				}
+				if err := writeOutput(stdout, "   Support: %d sessions (%.1f%%)\n\n", p.Support, share); err != nil {
+					return err
+				}
 			}
 		}
 	}

@@ -74,7 +74,7 @@ func TestRebuildRunnerCancellationPrefixes(t *testing.T) {
 					}
 					return 0, phase("fallback")
 				},
-				loadRegistry: func() projects.ProjectRegistry { return projects.ProjectRegistry{} },
+				loadRegistry: func() (projects.ProjectRegistry, error) { return projects.ProjectRegistry{}, nil },
 				reresolveProjectsWithRegistryContext: func(_ *storage.Database, got context.Context, _ projects.ProjectRegistry) (int64, error) {
 					if got != ctx {
 						t.Fatal("registry did not receive command context")
@@ -126,7 +126,7 @@ func TestRebuildRunnerSuccessGoldenAndWriterErrors(t *testing.T) {
 			reresolveProjectsContext: func(*storage.Database, context.Context, func(string) string) (int64, error) {
 				return 7, nil
 			},
-			loadRegistry: func() projects.ProjectRegistry { return projects.ProjectRegistry{} },
+			loadRegistry: func() (projects.ProjectRegistry, error) { return projects.ProjectRegistry{}, nil },
 			reresolveProjectsWithRegistryContext: func(*storage.Database, context.Context, projects.ProjectRegistry) (int64, error) {
 				return 8, nil
 			},
@@ -240,8 +240,8 @@ func TestRebuildRunnersParallelIsolation(t *testing.T) {
 			reresolveProjectsContext: func(*storage.Database, context.Context, func(string) string) (int64, error) {
 				return fallback, nil
 			},
-			loadRegistry: func() projects.ProjectRegistry {
-				return projects.ProjectRegistry{Projects: []projects.ProjectConfig{{ID: name}}}
+			loadRegistry: func() (projects.ProjectRegistry, error) {
+				return projects.ProjectRegistry{Projects: []projects.ProjectConfig{{ID: name}}}, nil
 			},
 			reresolveProjectsWithRegistryContext: func(_ *storage.Database, _ context.Context, got projects.ProjectRegistry) (int64, error) {
 				if len(got.Projects) != 1 || got.Projects[0].ID != name {

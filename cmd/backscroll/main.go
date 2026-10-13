@@ -9,7 +9,7 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/pablontiv/picokit/autoupdate"
+	"github.com/pablontiv/backscroll/internal/autoupdate"
 	"github.com/spf13/cobra"
 )
 
@@ -66,8 +66,8 @@ func diagnosticAlreadyRendered(err error) bool {
 }
 
 // newUpdater is the single wiring point for autoupdate. It is called with no
-// envDisable argument, so no environment variable can disable a released binary
-// — the only exemption is version=="dev", which picokit applies intrinsically.
+// runtime opt-out argument, so no environment variable can disable a released binary
+// — the only exemption is version=="dev", applied by the private backend.
 // run() and the wiring test both go through here, so the test covers the real
 // call site rather than a copy of it.
 func newUpdater() *autoupdate.Updater {
@@ -75,25 +75,30 @@ func newUpdater() *autoupdate.Updater {
 }
 
 type runDependencies struct {
-	applyStaged   func() error
-	fetchAndStage func(context.Context, string) error
-	root          *cobra.Command
-	stagingWait   time.Duration
+	applyStaged        func() error
+	applyStagedContext func(context.Context) error
+	joinFetch          bool
+	fetchAndStage      func(context.Context, string) error
+	root               *cobra.Command
+	stagingWait        time.Duration
+	stagingTimer       func(time.Duration) (<-chan time.Time, func())
 }
 
 func newRunDependencies(stdout, stderr io.Writer) runDependencies {
 	u := newUpdater()
 	u.CurrentVersion = version
+	return updaterRunDependencies(u, buildRootCmd(stdout, stderr))
+}
+
+// updaterRunDependencies is the production adapter, also exercised with safe
+// HTTP/filesystem/reexec boundaries in tests.
+func updaterRunDependencies(u *autoupdate.Updater, root *cobra.Command) runDependencies {
 	return runDependencies{
-		applyStaged: u.ApplyStagedIfAvailable,
-		// Picokit's fetch API is not context-aware. Its HTTP client bounds the
-		// operation, so cancellation detaches this residual worker rather than
-		// claiming to stop the underlying network operation immediately.
-		fetchAndStage: func(_ context.Context, currentVersion string) error {
-			return u.FetchAndStage(currentVersion)
-		},
-		root:        buildRootCmd(stdout, stderr),
-		stagingWait: autoupdateStagingWait,
+		applyStagedContext: u.ApplyStagedContext,
+		joinFetch:          true,
+		fetchAndStage:      u.FetchAndStage,
+		root:               root,
+		stagingWait:        autoupdateStagingWait,
 	}
 }
 
@@ -103,7 +108,17 @@ func run(stdout, stderr io.Writer, args []string) error {
 	return runContext(context.Background(), stdout, stderr, args)
 }
 
-func runContext(ctx context.Context, stdout, stderr io.Writer, args []string) error {
+func runContext(ctx context.Context, stdout, stderr io.Writer, args []string) (retErr error) {
+	// Cobra's help callback cannot return an error. Preserve failures at the
+	// public run boundary even when a framework output branch discards them.
+	output := &requiredOutputWriter{Writer: stdout}
+	stdout = output
+	defer func() {
+		if retErr == nil && output.err != nil {
+			retErr = fmt.Errorf("write output: %w", output.err)
+		}
+	}()
+
 	// The skill is informational, self-contained output. Validate and handle its
 	// global option before constructing the updater or command tree, while
 	// preserving arguments after the POSIX -- separator as command literals.
@@ -120,6 +135,15 @@ func runContext(ctx context.Context, stdout, stderr io.Writer, args []string) er
 }
 
 func runContextWithDependencies(ctx context.Context, stdout, stderr io.Writer, args []string, deps runDependencies) error {
+	// Keep the informational fast path identical for production and injected runs.
+	printSkill, err := validateSkillInvocation(args)
+	if err != nil {
+		return err
+	}
+	if printSkill {
+		_, err := io.WriteString(stdout, embeddedBackscrollSkill)
+		return err
+	}
 	root := deps.root
 	if root == nil {
 		root = buildRootCmd(stdout, stderr)
@@ -128,40 +152,109 @@ func runContextWithDependencies(ctx context.Context, stdout, stderr io.Writer, a
 	if stagingWait <= 0 {
 		stagingWait = autoupdateStagingWait
 	}
-	if deps.applyStaged != nil {
-		_ = deps.applyStaged()
-	}
-
-	// A buffered completion notification prevents a detached worker from ever
-	// blocking when the caller has already returned. The channel is also closed
-	// so completion remains observable after the buffered value is consumed.
-	staged := make(chan struct{}, 1)
-	go func() {
-		defer close(staged)
-		if deps.fetchAndStage != nil {
-			_ = deps.fetchAndStage(ctx, version)
+	newTimer := deps.stagingTimer
+	if newTimer == nil {
+		newTimer = func(d time.Duration) (<-chan time.Time, func()) {
+			timer := time.NewTimer(d)
+			return timer.C, func() { timer.Stop() }
 		}
-		staged <- struct{}{}
-	}()
-
+	}
+	warn := func(err error) {
+		if err != nil {
+			_, _ = fmt.Fprintf(stderr, "warning: autoupdate: %s\n", err)
+		}
+	}
+	fetchContext, cancelFetch := context.WithCancel(ctx)
+	defer cancelFetch()
+	var staged chan error
+	// Cobra calls Args after parsing/command selection and before any pre-run.
+	// Required flags and groups normally run AFTER pre-run; move their first
+	// check here so neither updating nor ordinary startup can precede validation.
+	// Wrap each executable command, not just the root's persistent hook: child
+	// hooks may override that hook. Help is informational even though Runnable.
+	root.InitDefaultHelpCmd()
+	root.InitDefaultCompletionCmd(args...)
+	var install func(*cobra.Command)
+	install = func(cmd *cobra.Command) {
+		if cmd.Runnable() && cmd.Name() != "help" {
+			original := cmd.Args
+			cmd.Args = func(cmd *cobra.Command, args []string) error {
+				if original != nil {
+					if err := original(cmd, args); err != nil {
+						return err
+					}
+				} else if err := cobra.ArbitraryArgs(cmd, args); err != nil {
+					return err
+				}
+				if err := validateRequiredFlagsAndGroups(cmd); err != nil {
+					return err
+				}
+				if ctx.Err() != nil {
+					return nil // startup/handler retains cancellation ownership
+				}
+				if staged == nil {
+					if deps.applyStagedContext != nil {
+						applyErr := deps.applyStagedContext(ctx)
+						if ctx.Err() == nil {
+							warn(applyErr)
+						}
+					} else if deps.applyStaged != nil {
+						warn(deps.applyStaged())
+					}
+					staged = make(chan error, 1)
+					go func(done chan<- error) {
+						var err error
+						if deps.fetchAndStage != nil {
+							err = deps.fetchAndStage(fetchContext, version)
+						}
+						// Only this caller writes warnings; detached completion
+						// never touches writers and cannot block on delivery.
+						done <- err
+					}(staged)
+				}
+				return nil
+			}
+		}
+		for _, child := range cmd.Commands() {
+			install(child)
+		}
+	}
+	install(root)
 	if indexPolicyMachineArgs(args) {
 		root.SilenceUsage = true
 	}
 	root.SetArgs(args)
-	if err := root.ExecuteContext(ctx); err != nil {
-		return err
+	commandErr := root.ExecuteContext(ctx)
+	if staged == nil {
+		return commandErr
 	}
-
-	// Wait for staging to complete so short-lived commands don't kill the
-	// download before it finishes. Cancellation returns the caller promptly but
-	// the production Picokit fetch can remain as a bounded detached worker.
-	timer := time.NewTimer(stagingWait)
-	waitErr := waitForStaging(ctx, staged, timer.C)
-	if !timer.Stop() {
+	timeout, stop := newTimer(stagingWait)
+	defer stop()
+	completed := false
+	var waitErr error
+	if ctx.Err() != nil {
+		waitErr = ctx.Err()
+	} else {
 		select {
-		case <-timer.C:
-		default:
+		case fetchErr := <-staged:
+			completed = true
+			if ctx.Err() == nil {
+				warn(fetchErr)
+			}
+		case <-timeout:
+			if ctx.Err() == nil {
+				warn(fmt.Errorf("staging did not complete within 10s"))
+			}
+		case <-ctx.Done():
 		}
+		waitErr = ctx.Err()
+	}
+	if deps.joinFetch && !completed {
+		cancelFetch()
+		<-staged
+	}
+	if commandErr != nil {
+		return commandErr
 	}
 	return waitErr
 }

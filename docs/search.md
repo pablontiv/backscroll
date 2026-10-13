@@ -21,14 +21,26 @@ backscroll search "artifact literal" --source-path "*/session.jsonl" --robot
 | Flag | Description |
 | ------ | ------------- |
 | `--project <NAME>` | Filter results to a specific project |
+| `--after <YYYY-MM-DD>` | Include timestamps on or after the date (inclusive) |
+| `--before <YYYY-MM-DD>` | Include timestamps strictly before the date (exclusive) |
 | `--json` | Output as a JSON array |
 | `--robot` | Output compact `result_N_field=value` lines |
 | `--fields minimal\|full` | Field set to include (default: `minimal`) |
 | `--max-tokens <N>` | Approximate token budget for text and robot output; JSON is not contractually truncated |
 | `--source-path <PATH_OR_PATTERN>` | Filter a normal text query by indexed `source_path`; exact paths or `*`/SQL `LIKE` patterns |
 | `--relax` | Opt in to bounded lexical term dropping after zero rows; all scope filters stay fixed |
+| `--lexical-only` | Force BM25-only search; skip vector retrieval |
+| `--similarity-threshold <F>` | Finite `0..1` vector cosine threshold (default `0.3`; `0` disables it); not a BM25 filter |
+
+The CLI has no wired embedding provider, so search currently falls back to
+lexical retrieval even without `--lexical-only`. `--similarity-threshold` only
+affects vector candidates when a provider is available; it does not filter
+BM25 results and is ignored by lexical `--relax`. Neither flag enables
+semantic expansion in the deployed CLI.
 
 ## Output Formats
+
+`--json` and `--robot` are mutually exclusive; combined flags fail before startup side effects. Empty robot results produce zero stdout bytes, with actionable hints on stderr.
 
 ### Text (default)
 
@@ -279,3 +291,21 @@ Regression owners: `cmd/backscroll/search_relaxation_test.go` (native input-to-o
 |------|---------|
 | `0` | Search completed (results may be empty) |
 | `1` | Error (database not found, query failure) |
+
+
+## Invocation validation
+
+Search retains one optional positional query (or `--text`); other operational
+commands accept no positional operands. Search, list, and patterns reject
+simultaneous `--project` and `--all-projects` rather than overriding a scope.
+Their independent default scope remains unchanged.
+
+Before startup, search requires a finite `--similarity-threshold` in [0, 1]
+(0 still means no threshold) and nonnegative `--max-tokens` (0 is unlimited).
+List requires nonnegative `--recent`, `--limit`, and `--offset`.
+List defaults to 20 results; explicit `--limit 0` or `--recent 0` is unlimited.
+`--recent` cannot be combined with explicit `--limit` or `--order`;
+`--offset` applies after ordering, including with an unlimited limit.
+Invalid invocations do not prepare the index, create the startup lock, or sync inputs.
+Simultaneous `--json` and `--robot` is rejected before startup; the selected
+output mode remains fixed for the invocation.

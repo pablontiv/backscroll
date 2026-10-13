@@ -734,8 +734,10 @@ func newStaleSyncDiagnosticDB(t *testing.T) string {
 		t.Fatalf("mkdir input root: %v", err)
 	}
 	setIndexPolicyEnv(t, dbPath, t.TempDir())
-	writeInputManifest(t, root, "claude", root, []string{"["}, nil)
-	writeFile(t, filepath.Join(root, "session.jsonl"), `{"type":"message","message":{"role":"user","content":"fresh"}}`+"\n")
+	writeInputManifest(t, root, "claude", root, []string{"*.jsonl"}, nil)
+	writeFile(t, filepath.Join(root, "session.jsonl"),
+		`{"type":"user","uuid":"stale-duplicate","timestamp":"2026-01-01T00:00:00Z","message":{"role":"user","content":"fresh one"}}`+"\n"+
+			`{"type":"user","uuid":"stale-duplicate","timestamp":"2026-01-01T00:00:01Z","message":{"role":"user","content":"fresh two"}}`+"\n")
 	return dbPath
 }
 

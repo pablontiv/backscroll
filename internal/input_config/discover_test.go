@@ -231,25 +231,56 @@ func TestDiscover_AcceptsTildeExpansion(t *testing.T) {
 	}
 }
 
-func TestDiscoverFiles_followSymlinks(t *testing.T) {
+func TestDiscoverFiles_followDirectorySymlinksWithinRoot(t *testing.T) {
 	dir := t.TempDir()
-	real := mkfile(t, dir, "real/session.jsonl")
-	link := filepath.Join(dir, "link")
-	if err := os.Symlink(filepath.Dir(real), link); err != nil {
+	_ = mkfile(t, dir, "real/session.jsonl")
+	if err := os.Symlink("real", filepath.Join(dir, "linked")); err != nil {
 		t.Skip("symlinks not supported:", err)
+	}
+	if err := os.Symlink("../real", filepath.Join(dir, "real", "cycle")); err != nil {
+		t.Fatal(err)
 	}
 
 	cfg := DiscoverConfig{
-		Roots:          []string{dir},
-		Include:        []string{"**/*.jsonl"},
-		FollowSymlinks: true,
+		Roots:   []string{dir},
+		Include: []string{"linked/*.jsonl"},
 	}
 	files, err := DiscoverFiles(cfg)
 	if err != nil {
+		t.Fatalf("DiscoverFiles without following links: %v", err)
+	}
+	if len(files) != 0 {
+		t.Fatalf("FollowSymlinks=false returned %v, want no linked files", files)
+	}
+
+	cfg.FollowSymlinks = true
+	files, err = DiscoverFiles(cfg)
+	if err != nil {
+		t.Fatalf("DiscoverFiles following links: %v", err)
+	}
+	want := filepath.Join(dir, "linked", "session.jsonl")
+	if len(files) != 1 || files[0] != want {
+		t.Fatalf("DiscoverFiles following links = %v, want [%s]", files, want)
+	}
+}
+
+func TestDiscoverFiles_followDirectorySymlinksRejectsEscapes(t *testing.T) {
+	dir := t.TempDir()
+	outside := t.TempDir()
+	_ = mkfile(t, outside, "outside.jsonl")
+	if err := os.Symlink(outside, filepath.Join(dir, "linked")); err != nil {
+		t.Skip("symlinks not supported:", err)
+	}
+
+	files, err := DiscoverFiles(DiscoverConfig{
+		Roots:          []string{dir},
+		Include:        []string{"linked/*.jsonl"},
+		FollowSymlinks: true,
+	})
+	if err != nil {
 		t.Fatalf("DiscoverFiles: %v", err)
 	}
-	// Should find files through symlinks when FollowSymlinks is true
-	if len(files) == 0 {
-		t.Error("expected to find files when following symlinks")
+	if len(files) != 0 {
+		t.Fatalf("outside-root symlink returned %v, want no files", files)
 	}
 }
