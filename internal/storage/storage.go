@@ -10,11 +10,11 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
-
-	_ "modernc.org/sqlite"
+	"time"
 
 	"github.com/pablontiv/backscroll/internal/compat"
 	"github.com/pablontiv/backscroll/internal/embedding"
+	"modernc.org/sqlite"
 )
 
 // Database represents a SQLite database connection with FTS5 support.
@@ -241,26 +241,48 @@ func openWriteConnectionWithPragmasContext(ctx context.Context, path string, mig
 	// mode=rw prevents an existing canonical database that disappears during
 	// open from being silently replaced by a new empty database.
 	// DSN pragmas initialize every physical connection, including pool replacements.
+	// busy_timeout must run before journal_mode: concurrent first-open winners can
+	// still hold the schema lock while followers configure WAL.
 	query := url.Values{
 		"mode":    {"rw"},
-		"_pragma": {fmt.Sprintf("journal_mode(%s)", journalMode), fmt.Sprintf("synchronous(%s)", synchronous), "busy_timeout(5000)", "foreign_keys(1)"},
+		"_pragma": {"busy_timeout(5000)", fmt.Sprintf("journal_mode(%s)", journalMode), fmt.Sprintf("synchronous(%s)", synchronous), "foreign_keys(1)"},
 	}
 	if migrationImmediate {
 		query.Set("_txlock", "immediate")
 	}
 	dsn := sqliteFileDSN(canonicalPath, query)
-	db, err := sql.Open("sqlite", dsn)
-	if err != nil {
-		return nil, fmt.Errorf("opening database %s: %w", canonicalPath, err)
-	}
+	retryUntil := time.Now().Add(5 * time.Second)
+	for {
+		db, err := sql.Open("sqlite", dsn)
+		if err != nil {
+			return nil, fmt.Errorf("opening database %s: %w", canonicalPath, err)
+		}
 
-	// Test the connection using the caller's cancellation scope.
-	if err := db.PingContext(ctx); err != nil {
-		_ = db.Close()
-		return nil, contextIdentityError(ctx, fmt.Errorf("ping database %s: %w", canonicalPath, err))
-	}
+		// Test the connection using the caller's cancellation scope. SQLite does
+		// not invoke busy_timeout for every journal-mode lock conflict, so retry
+		// initial SQLITE_BUSY failures while concurrent openers finish setup.
+		if err := db.PingContext(ctx); err == nil {
+			return &Database{db: db, path: canonicalPath}, nil
+		} else {
+			_ = db.Close()
+			if !sqliteBusy(err) || !time.Now().Before(retryUntil) {
+				return nil, contextIdentityError(ctx, fmt.Errorf("ping database %s: %w", canonicalPath, err))
+			}
+		}
 
-	return &Database{db: db, path: canonicalPath}, nil
+		timer := time.NewTimer(10 * time.Millisecond)
+		select {
+		case <-ctx.Done():
+			timer.Stop()
+			return nil, contextIdentityError(ctx, fmt.Errorf("ping database %s: %w", canonicalPath, ctx.Err()))
+		case <-timer.C:
+		}
+	}
+}
+
+func sqliteBusy(err error) bool {
+	var sqliteErr *sqlite.Error
+	return errors.As(err, &sqliteErr) && sqliteErr.Code() == 5
 }
 
 func OpenCompatible(ctx context.Context, path string) (*Database, *compat.Diagnostic, error) {
