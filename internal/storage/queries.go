@@ -1323,7 +1323,7 @@ func (d *Database) ReresolveProjectsContext(ctx context.Context, resolver func(s
 	}
 	rows, err := d.db.QueryContext(ctx, `
 		SELECT DISTINCT source_path FROM search_items
-		WHERE project = 'unknown' OR project IS NULL
+		WHERE (project = 'unknown' OR project IS NULL) AND COALESCE(project_evidence,'unknown') IN ('unknown','path_fallback')
 		ORDER BY source_path ASC
 	`)
 	if err != nil {
@@ -1383,7 +1383,7 @@ func (d *Database) ReresolveProjectsContext(ctx context.Context, resolver func(s
 			continue
 		}
 		if _, err := tx.ExecContext(ctx, `
-			UPDATE search_items SET project = ? WHERE source_path = ?
+			UPDATE search_items SET project = ? WHERE source_path = ? AND COALESCE(project_evidence,'unknown') IN ('unknown','path_fallback')
 		`, resolvedID, sourcePath); err != nil {
 			if ctxErr := ctx.Err(); ctxErr != nil {
 				return 0, ctxErr
@@ -1420,7 +1420,7 @@ func (d *Database) ReresolveProjectsWithRegistryContext(ctx context.Context, reg
 	rows, err := d.db.QueryContext(ctx, `
 		SELECT DISTINCT si.source_path, si.project
 		FROM search_items si
-		WHERE si.project IS NOT NULL
+		WHERE si.project IS NOT NULL AND COALESCE(si.project_evidence,'unknown') IN ('unknown','path_fallback')
 		ORDER BY si.source_path ASC, si.project ASC
 	`)
 	if err != nil {
@@ -1476,30 +1476,50 @@ func (d *Database) ReresolveProjectsWithRegistryContext(ctx context.Context, reg
 		if err := ctx.Err(); err != nil {
 			return 0, err
 		}
-		cwd := projects.DecodeCwdFromSessionPath(path.path)
+		cwd := projects.DecodeCwdCandidateFromSessionPath(path.path)
 		if cwd == "" {
 			continue
 		}
-		cwd = projects.NormalizeRootEquivalence(cwd, registry)
 		identity := projects.Identify(cwd, registry)
 		if err := ctx.Err(); err != nil {
 			return 0, err
 		}
-		if !identity.FromRegistry || identity.ProjectID == path.project {
+		if !identity.FromRegistry {
 			continue
 		}
 		if _, err := tx.ExecContext(ctx, `
-			UPDATE search_items SET project = ? WHERE source_path = ?
+			UPDATE search_items SET project = ?, project_evidence = 'registry' WHERE source_path = ? AND COALESCE(project_evidence,'unknown') IN ('unknown','path_fallback')
 		`, identity.ProjectID, path.path); err != nil {
 			if ctxErr := ctx.Err(); ctxErr != nil {
 				return 0, ctxErr
 			}
 			return 0, fmt.Errorf("update source_path %s: %w", path.path, err)
 		}
-		updatedPaths++
+		if identity.ProjectID != path.project {
+			updatedPaths++
+		}
 	}
 	if err := gate.commit(); err != nil {
 		return 0, fmt.Errorf("commit registry re-resolution transaction: %w", err)
 	}
 	return updatedPaths, nil
+}
+
+// PendingProjectEvidencePathsContext returns historical rows that can acquire
+// native cwd proof by reparsing configured, surviving sources.
+func (d *Database) PendingProjectEvidencePathsContext(ctx context.Context) ([]string, error) {
+	rows, err := d.db.QueryContext(ctx, "SELECT DISTINCT source_path FROM search_items WHERE project_evidence IS NULL ORDER BY source_path")
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var paths []string
+	for rows.Next() {
+		var path string
+		if err := rows.Scan(&path); err != nil {
+			return nil, err
+		}
+		paths = append(paths, path)
+	}
+	return paths, rows.Err()
 }

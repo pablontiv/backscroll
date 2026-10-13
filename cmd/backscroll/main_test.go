@@ -1556,7 +1556,7 @@ func TestIntegration_SyncWithCrosshostEquivalence(t *testing.T) {
 		t.Fatalf("failed to write session: %v", err)
 	}
 
-	// Create a projects registry with ONLY /home/shared root (simulating Linux registry)
+	// Create a projects registry with a Linux root and an explicit macOS alias
 	home := t.TempDir()
 	cfgDir := filepath.Join(home, ".config", "backscroll")
 	if err := os.MkdirAll(cfgDir, 0o755); err != nil {
@@ -1566,6 +1566,7 @@ func TestIntegration_SyncWithCrosshostEquivalence(t *testing.T) {
 [[projects]]
 id = "myproj"
 roots = ["/home/shared/myproject"]
+aliases = ["/Users/Shared/myproject"]
 `
 	if err := os.WriteFile(filepath.Join(cfgDir, "projects.toml"), []byte(projectsTOML), 0o644); err != nil {
 		t.Fatalf("failed to write projects.toml: %v", err)

@@ -75,3 +75,20 @@ func decodeEncodedPath(encoded string) string {
 	decoded := "/" + strings.ReplaceAll(trimmed, "-", "/")
 	return decoded
 }
+
+// DecodeCwdCandidateFromSessionPath returns the full slash-decoded candidate
+// for registry comparison, not the basename used by the legacy fallback API.
+// This is path-derived evidence, never native structured cwd proof.
+func DecodeCwdCandidateFromSessionPath(sourcePath string) string {
+	const marker = "/.claude/projects/"
+	idx := strings.Index(sourcePath, marker)
+	if idx < 0 {
+		return ""
+	}
+	tail := sourcePath[idx+len(marker):]
+	end := strings.IndexByte(tail, '/')
+	if end <= 0 {
+		return ""
+	}
+	return decodeEncodedPath(tail[:end])
+}

@@ -194,3 +194,35 @@ fallback identities because a registry could not be read.
 The Go API is `projects.LoadGlobalRegistry() (ProjectRegistry, error)`: only
 `os.ErrNotExist` returns an empty registry with a nil error. Scope, ingestion, and
 rebuild callers propagate all other failures before project identification.
+
+## Project identity registry
+
+Project identity is configured separately in `$HOME/.config/backscroll/projects.toml`
+(on every host; this registry path is not changed by `BACKSCROLL_CONFIG_DIR`):
+
+```toml
+[[projects]]
+id = "my-project"
+roots = ["/Users/Shared/my-project"]
+aliases = ["/home/shared/my-project"]
+```
+
+Roots and aliases use the same absolute, case-sensitive, cleaned path matching:
+the root itself and its descendants match, but sibling prefixes do not.
+Aliases explicitly authorize cross-host identity; shared path suffixes, case
+folding, and truncated relative paths do not. Existing explicit
+`worktree_patterns` and local `.backscroll/project.toml` hints remain supported.
+If different project IDs match a path, registry attribution is withheld,
+regardless of file order. Without a match, the sanitized cwd basename is used
+(or `unknown` when no usable basename exists).
+
+Migration v17 stores project evidence independently of the label. A reader's
+native structured cwd attribution survives source expiry, repeated ingestion,
+and rebuild without changing UUID, text, or row identity. Registry repair may
+change only historical unknown or path-fallback attribution. Historical rows
+default to pending unknown evidence (`NULL`); a label alone cannot prove its original source.
+A completed parser pass closes unprovable retained rows as `unknown`, without
+changing their label or repeatedly consuming the maintenance budget.
+Available configured sources replay under the shared 200-path startup budget
+to recover native proof; expired historical sources cannot acquire that proof.
+Recovery carries existing project evidence into the replacement index.

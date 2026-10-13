@@ -208,8 +208,8 @@ func TestIdentifyTruncated(t *testing.T) {
 	if id.ProjectID != "myapp" {
 		t.Errorf("expected myapp, got %s", id.ProjectID)
 	}
-	if id.Confidence != projects.ConfidenceTruncated {
-		t.Logf("confidence: %s (truncated matching is heuristic)", id.Confidence)
+	if id.Confidence != projects.ConfidenceUnknown || id.FromRegistry {
+		t.Fatalf("truncated input acquired registry proof: %+v", id)
 	}
 }
 
@@ -321,8 +321,9 @@ func TestNormalizeRootEquivalence_CrossHost(t *testing.T) {
 	reg := projects.ProjectRegistry{
 		Projects: []projects.ProjectConfig{
 			{
-				ID:    "myproj",
-				Roots: []string{"/home/shared/myproject"},
+				ID:      "myproj",
+				Roots:   []string{"/home/shared/myproject"},
+				Aliases: []string{"/Users/Shared/myproject"},
 			},
 		},
 	}
@@ -354,8 +355,9 @@ func TestIdentify_CrossHostEquivalence(t *testing.T) {
 	reg := projects.ProjectRegistry{
 		Projects: []projects.ProjectConfig{
 			{
-				ID:    "myproj",
-				Roots: []string{"/home/shared/myproject"},
+				ID:      "myproj",
+				Roots:   []string{"/home/shared/myproject"},
+				Aliases: []string{"/Users/Shared/myproject"},
 			},
 		},
 	}
@@ -533,8 +535,9 @@ func TestIdentifyFallbackWithCrossHostEquiv(t *testing.T) {
 	reg := projects.ProjectRegistry{
 		Projects: []projects.ProjectConfig{
 			{
-				ID:    "myproj",
-				Roots: []string{"/home/shared/myproject"},
+				ID:      "myproj",
+				Roots:   []string{"/home/shared/myproject"},
+				Aliases: []string{"/Users/Shared/myproject"},
 			},
 		},
 	}
@@ -641,5 +644,53 @@ func TestAbsentRegistryFallback(t *testing.T) {
 	id := projects.Identify(cwd, reg)
 	if id.ProjectID != "fallback-project" || id.FromRegistry {
 		t.Fatalf("fallback: %+v", id)
+	}
+}
+
+func TestRegistryRequiresExplicitRootProof(t *testing.T) {
+	reg := projects.ProjectRegistry{Projects: []projects.ProjectConfig{{ID: "registered", Roots: []string{"/home/shared/proj"}}}}
+	for _, cwd := range []string{"/unrelated/shared/proj", "/Users/Shared/proj", "shared/proj", ""} {
+		got := projects.Identify(cwd, reg)
+		if got.FromRegistry {
+			t.Errorf("%q acquired registry proof: %+v", cwd, got)
+		}
+	}
+}
+
+func TestAmbiguousRegistryNeverUsesOrder(t *testing.T) {
+	a := projects.ProjectConfig{ID: "a", Roots: []string{"/shared/proj"}}
+	b := projects.ProjectConfig{ID: "b", Roots: []string{"/shared/proj"}}
+	for _, entries := range [][]projects.ProjectConfig{{a, b}, {b, a}} {
+		got := projects.Identify("/shared/proj/src", projects.ProjectRegistry{Projects: entries})
+		if got.FromRegistry || got.ProjectID != "src" {
+			t.Fatalf("ambiguous proof: %+v", got)
+		}
+	}
+}
+
+func TestExplicitAliasesUseCanonicalRootMatching(t *testing.T) {
+	reg := projects.ProjectRegistry{Projects: []projects.ProjectConfig{{ID: "registered", Roots: []string{"/Users/Shared/proj/"}, Aliases: []string{"/home/shared/proj/"}}}}
+	for _, cwd := range []string{"/Users/Shared/proj", "/home/shared/proj", "/home/shared/proj/./src", "/Users/Shared/proj/src"} {
+		got := projects.Identify(cwd, reg)
+		if !got.FromRegistry || got.ProjectID != "registered" {
+			t.Fatalf("%s: %+v", cwd, got)
+		}
+	}
+	for _, cwd := range []string{"/home/shared/PROJ", "/home/shared/project", "/unrelated/shared/proj"} {
+		if got := projects.Identify(cwd, reg); got.FromRegistry {
+			t.Fatalf("%s: %+v", cwd, got)
+		}
+	}
+	reg.Projects = append(reg.Projects, projects.ProjectConfig{ID: "other", Aliases: []string{"/home/shared/proj"}})
+	if got := projects.Identify("/home/shared/proj", reg); got.FromRegistry || got.ProjectID != "proj" {
+		t.Fatal(got)
+	}
+}
+
+func TestExactRootWinsOverOwnWorktreePattern(t *testing.T) {
+	reg := projects.ProjectRegistry{Projects: []projects.ProjectConfig{{ID: "project", Roots: []string{"/home/shared/proj"}, WorktreePatterns: []string{"/home/shared/*"}}}}
+	got := projects.Identify("/home/shared/proj", reg)
+	if !got.FromRegistry || got.Confidence != projects.ConfidenceExact {
+		t.Fatal(got)
 	}
 }

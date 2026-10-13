@@ -39,12 +39,13 @@ type IndexedMessage struct {
 
 // IndexedFile represents a file to be synced into the database.
 type IndexedFile struct {
-	SourcePath string
-	Source     string // "session", "plan", "ke", "decision", etc.
-	Hash       string
-	Project    string
-	Messages   []IndexedMessage
-	Tags       []string // only used for sessions
+	SourcePath      string
+	Source          string // "session", "plan", "ke", "decision", etc.
+	Hash            string
+	Project         string
+	ProjectEvidence string
+	Messages        []IndexedMessage
+	Tags            []string // only used for sessions
 	// Metadata for v14 prefilter
 	FileSize  *int64  // populated by sync_helpers.go if available
 	FileMtime *string // populated by sync_helpers.go if available; RFC3339 format
@@ -311,8 +312,8 @@ func (d *Database) SyncFilesContext(ctx context.Context, files []IndexedFile) (r
 			if !perennial || msg.UUID == "" || !existingUUIDs[msg.UUID] {
 				_, err := tx.ExecContext(ctx, `
 					INSERT INTO search_items
-					(source, source_path, ordinal, role, origin, text, timestamp, uuid, project, content_type, extraction_version, was_interrupted, search_echo, origin_version)
-					VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+					(source, source_path, ordinal, role, origin, text, timestamp, uuid, project, content_type, extraction_version, was_interrupted, search_echo, origin_version, project_evidence)
+					VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 				`,
 					file.Source,
 					file.SourcePath,
@@ -328,6 +329,7 @@ func (d *Database) SyncFilesContext(ctx context.Context, files []IndexedFile) (r
 					msg.WasInterrupted,
 					msg.SearchEcho,
 					CurrentOriginVersion,
+					projectEvidence(file.ProjectEvidence),
 				)
 				if err != nil {
 					return fmt.Errorf("insert search_item for %s: %w", file.SourcePath, err)
@@ -339,6 +341,12 @@ func (d *Database) SyncFilesContext(ctx context.Context, files []IndexedFile) (r
 			// a later paired result may also supply positive evidence. Never erase
 			// previously proven linkage when a partial source no longer has the call.
 			if perennial {
+				if _, err := tx.ExecContext(ctx, `UPDATE search_items SET project = ?, project_evidence = ?
+     WHERE source_path = ? AND uuid = ? AND text = ? AND content_type = ?
+     AND COALESCE(project_evidence,'unknown') IN ('unknown','path_fallback') AND ? IN ('path_fallback','registry','native_cwd')`,
+					file.Project, projectEvidence(file.ProjectEvidence), file.SourcePath, msg.UUID, msg.Text, msg.ContentType, projectEvidence(file.ProjectEvidence)); err != nil {
+					return fmt.Errorf("enrich project proof for %s: %w", file.SourcePath, err)
+				}
 				if _, err := tx.ExecContext(ctx, `UPDATE search_items SET search_echo = ?
 					WHERE source_path = ? AND uuid = ? AND text = ? AND content_type = ?
 					AND (search_echo IS NULL OR (search_echo = 0 AND ? = 1))`,
@@ -494,6 +502,14 @@ func (d *Database) SyncFilesContext(ctx context.Context, files []IndexedFile) (r
 				ToolName:       im.ToolName,
 				IsError:        im.IsError,
 				WasInterrupted: im.WasInterrupted,
+			}
+		}
+
+		// A successful parser pass closes pending historical evidence without
+		// inventing proof for retained identities no longer present in the source.
+		if file.ProjectEvidence != "" {
+			if _, err := tx.ExecContext(ctx, "UPDATE search_items SET project_evidence='unknown' WHERE source_path=? AND project_evidence IS NULL", file.SourcePath); err != nil {
+				return fmt.Errorf("close project evidence for %s: %w", file.SourcePath, err)
 			}
 		}
 
@@ -711,4 +727,13 @@ func (d *Database) GetFileMetadataContext(ctx context.Context) (map[string]FileM
 	}
 
 	return metadata, nil
+}
+
+// Empty evidence represents historical/unspecified attribution, never a guess
+// from the current label.
+func projectEvidence(value string) string {
+	if value == "" {
+		return "unknown"
+	}
+	return value
 }

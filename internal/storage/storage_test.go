@@ -203,7 +203,7 @@ func TestOpenReadOnly(t *testing.T) {
 	defer cleanup()
 
 	// Close the write connection
-	dbPath := filepath.Join(os.TempDir(), "test_readonly.db")
+	dbPath := filepath.Join(t.TempDir(), "test_readonly.db")
 	_ = db.Close()
 
 	// Create a fresh database for read-only test

@@ -983,3 +983,15 @@ const sqlV14 = `
 ALTER TABLE indexed_files ADD COLUMN file_size INTEGER;
 ALTER TABLE indexed_files ADD COLUMN file_mtime TEXT;
 `
+
+const sqlV17 = `
+ALTER TABLE search_items ADD COLUMN project_evidence TEXT
+ CHECK(project_evidence IN ('unknown','path_fallback','registry','native_cwd'));
+`
+
+func applyV17(ctx context.Context, tx *sql.Tx, _ compat.SchemaShape) error {
+	if _, err := tx.ExecContext(ctx, sqlV17); err != nil {
+		return fmt.Errorf("apply v17 project evidence: %w", err)
+	}
+	return recordMigration(ctx, tx, 17, "V17 project attribution evidence", sqlV17, "record migration v17")
+}

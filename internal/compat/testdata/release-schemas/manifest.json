@@ -635,6 +635,14 @@
       "AppliedVersion": 16,
       "HasSourceMetadata": false,
       "Provenance": "Migration v16 applied to the retained v15 fixture; adds parser-backed message origin with an explicit historical unknown fallback."
+    },
+    {
+      "Fixture": "v17.sql",
+      "ProvenanceSHA256": "8a1d6d6f2290cf548a04446bec0d36a7f6cad05ff2e8ad1031787a33806a20e3",
+      "Signature": "sha256:43064b24bb0fd14870f15be6b14e4bf86e8acc019b506109e9fab44fe8ef9c49",
+      "AppliedVersion": 17,
+      "HasSourceMetadata": false,
+      "Provenance": "Migration v17 applied to retained v16 fixture; project attribution evidence defaults historical records to unknown."
     }
   ]
 }

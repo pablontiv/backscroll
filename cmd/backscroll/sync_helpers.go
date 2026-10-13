@@ -503,6 +503,11 @@ func (s *startupSyncService) syncWithProgress(ctx context.Context, cfg *config.C
 	if err != nil {
 		return fmt.Errorf("discover pending message origins: %w", err)
 	}
+	projectPaths, err := db.PendingProjectEvidencePathsContext(ctx)
+	if err != nil {
+		return fmt.Errorf("discover project proof paths: %w", err)
+	}
+	originPaths = append(originPaths, projectPaths...)
 	const replayParsesCap = 200
 
 	// Build reader registry
@@ -679,6 +684,13 @@ func (s *startupSyncService) syncWithProgress(ctx context.Context, cfg *config.C
 			identPath = ref
 		}
 		ident := projects.Identify(identPath, registry)
+		evidence := "path_fallback"
+		if ident.FromRegistry {
+			evidence = "registry"
+		}
+		if pf.Cwd != "" && (reader.Name() == "claude" || reader.Name() == "pi" || reader.Name() == "codex" || reader.Name() == "omp" || reader.Name() == "opencode") {
+			evidence = "native_cwd"
+		}
 		if err := ctx.Err(); err != nil {
 			return err
 		}
@@ -721,14 +733,15 @@ func (s *startupSyncService) syncWithProgress(ctx context.Context, cfg *config.C
 		}
 
 		indexedFiles = append(indexedFiles, storage.IndexedFile{
-			SourcePath: ref,
-			Source:     def.Source,
-			Hash:       indexedHash,
-			Project:    ident.ProjectID,
-			Messages:   indexedMsgs,
-			Tags:       sessionTags.Tags(),
-			FileSize:   fileSize,
-			FileMtime:  fileMtime,
+			SourcePath:      ref,
+			Source:          def.Source,
+			Hash:            indexedHash,
+			Project:         ident.ProjectID,
+			ProjectEvidence: evidence,
+			Messages:        indexedMsgs,
+			Tags:            sessionTags.Tags(),
+			FileSize:        fileSize,
+			FileMtime:       fileMtime,
 		})
 	}
 
