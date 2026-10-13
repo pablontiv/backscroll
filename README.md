@@ -338,5 +338,7 @@ completed, the command returns its normal result with a timeout warning.
 Cancellation returns promptly without reporting a fabricated network failure;
 all fetch requests are context-aware and canceled on cancellation or the staging cap,
 with a 60s HTTP timeout per request. The private backend preserves the pinned picokit
-release format while returning errors upstream swallowed; see
+Apache v1.0.0 release format while returning errors upstream swallowed; cancellation
+and the cap join bounded extraction/publication cleanup before return, with unique
+synced temporary files and conservative byte limits; see
 [`internal/autoupdate/README.md`](internal/autoupdate/README.md).

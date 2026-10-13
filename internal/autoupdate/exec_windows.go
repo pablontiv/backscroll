@@ -3,7 +3,6 @@
 package autoupdate
 
 import (
-	"errors"
 	"os"
 	"os/exec"
 )
@@ -11,14 +10,7 @@ import (
 // Windows cannot overwrite a running executable: move it aside, install the
 // prepared copy, and restore it if installation fails.
 func atomicReplace(dest, src string) error {
-	backup := dest + ".old"
-	if err := os.Rename(dest, backup); err != nil {
-		return err
-	}
-	if err := os.Rename(src, dest); err != nil {
-		return errors.Join(err, os.Rename(backup, dest))
-	}
-	return os.Remove(backup)
+	return replaceWindows(dest, src, windowsReplaceOps{os.Rename, os.Remove})
 }
 func platformExec(path string) error {
 	cmd := exec.Command(path, os.Args[1:]...)
@@ -31,3 +23,5 @@ func platformExec(path string) error {
 	os.Exit(0)
 	return nil
 }
+
+func cleanupBackup(dest string) { _ = os.Remove(dest + ".old") }

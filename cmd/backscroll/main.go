@@ -75,11 +75,13 @@ func newUpdater() *autoupdate.Updater {
 }
 
 type runDependencies struct {
-	applyStaged   func() error
-	fetchAndStage func(context.Context, string) error
-	root          *cobra.Command
-	stagingWait   time.Duration
-	stagingTimer  func(time.Duration) (<-chan time.Time, func())
+	applyStaged        func() error
+	applyStagedContext func(context.Context) error
+	joinFetch          bool
+	fetchAndStage      func(context.Context, string) error
+	root               *cobra.Command
+	stagingWait        time.Duration
+	stagingTimer       func(time.Duration) (<-chan time.Time, func())
 }
 
 func newRunDependencies(stdout, stderr io.Writer) runDependencies {
@@ -92,10 +94,11 @@ func newRunDependencies(stdout, stderr io.Writer) runDependencies {
 // HTTP/filesystem/reexec boundaries in tests.
 func updaterRunDependencies(u *autoupdate.Updater, root *cobra.Command) runDependencies {
 	return runDependencies{
-		applyStaged:   u.ApplyStagedIfAvailable,
-		fetchAndStage: u.FetchAndStage,
-		root:          root,
-		stagingWait:   autoupdateStagingWait,
+		applyStagedContext: u.ApplyStagedContext,
+		joinFetch:          true,
+		fetchAndStage:      u.FetchAndStage,
+		root:               root,
+		stagingWait:        autoupdateStagingWait,
 	}
 }
 
@@ -190,7 +193,12 @@ func runContextWithDependencies(ctx context.Context, stdout, stderr io.Writer, a
 					return nil // startup/handler retains cancellation ownership
 				}
 				if staged == nil {
-					if deps.applyStaged != nil {
+					if deps.applyStagedContext != nil {
+						applyErr := deps.applyStagedContext(ctx)
+						if ctx.Err() == nil {
+							warn(applyErr)
+						}
+					} else if deps.applyStaged != nil {
 						warn(deps.applyStaged())
 					}
 					staged = make(chan error, 1)
@@ -222,12 +230,14 @@ func runContextWithDependencies(ctx context.Context, stdout, stderr io.Writer, a
 	}
 	timeout, stop := newTimer(stagingWait)
 	defer stop()
+	completed := false
 	var waitErr error
 	if ctx.Err() != nil {
 		waitErr = ctx.Err()
 	} else {
 		select {
 		case fetchErr := <-staged:
+			completed = true
 			if ctx.Err() == nil {
 				warn(fetchErr)
 			}
@@ -238,6 +248,10 @@ func runContextWithDependencies(ctx context.Context, stdout, stderr io.Writer, a
 		case <-ctx.Done():
 		}
 		waitErr = ctx.Err()
+	}
+	if deps.joinFetch && !completed {
+		cancelFetch()
+		<-staged
 	}
 	if commandErr != nil {
 		return commandErr

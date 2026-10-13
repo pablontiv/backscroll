@@ -21,8 +21,6 @@ import (
 	"strconv"
 	"strings"
 	"time"
-
-	"github.com/pablontiv/picokit/hashfile"
 )
 
 // Options supplies explicit boundaries for deterministic, installation-safe
@@ -43,6 +41,7 @@ type Updater struct {
 	replace                      func(string, string) error
 	exec                         func(string) error
 	githubAPI, githubDLBase      string
+	publish                      func(context.Context, string, io.Reader, os.FileMode) error
 }
 
 func New(repo, binary string, options ...Options) *Updater {
@@ -66,7 +65,7 @@ func New(repo, binary string, options ...Options) *Updater {
 		o.Exec = platformExec
 	}
 	return &Updater{Repo: repo, Binary: binary, httpClient: o.HTTPClient, cacheDir: o.CacheDir, executable: o.Executable, replace: o.Replace, exec: o.Exec,
-		githubAPI: "https://api.github.com/repos/" + repo + "/releases/latest", githubDLBase: "https://github.com/" + repo + "/releases/download/"}
+		publish: writeAtomic, githubAPI: "https://api.github.com/repos/" + repo + "/releases/latest", githubDLBase: "https://github.com/" + repo + "/releases/download/"}
 }
 
 func (u *Updater) binaryName() string {
@@ -83,7 +82,11 @@ func (u *Updater) archiveName(tag string) string {
 	return fmt.Sprintf("%s_%s_%s_%s%s", u.Binary, strings.TrimPrefix(tag, "v"), runtime.GOOS, runtime.GOARCH, ext)
 }
 
-func (u *Updater) download(ctx context.Context, url string) ([]byte, error) {
+func (u *Updater) download(ctx context.Context, url string, limits ...int64) ([]byte, error) {
+	limit := maxArchiveBytes
+	if len(limits) > 0 {
+		limit = limits[0]
+	}
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 	if err != nil {
 		return nil, err
@@ -96,7 +99,7 @@ func (u *Updater) download(ctx context.Context, url string) ([]byte, error) {
 		_ = resp.Body.Close()
 		return nil, fmt.Errorf("download %s: status %d", url, resp.StatusCode)
 	}
-	body, err := io.ReadAll(resp.Body)
+	body, err := readBounded(ctx, resp.Body, limit, "HTTP body")
 	closeErr := resp.Body.Close()
 	if err != nil {
 		return nil, fmt.Errorf("download %s: %w", url, err)
@@ -111,12 +114,15 @@ func (u *Updater) FetchAndStage(ctx context.Context, current string) error {
 	if current == "dev" {
 		return nil
 	}
-	body, err := u.download(ctx, u.githubAPI)
+	body, err := u.download(ctx, u.githubAPI, maxLatestBytes)
 	if err != nil {
 		return err
 	}
 	var release struct {
 		Tag string `json:"tag_name"`
+	}
+	if err = ctx.Err(); err != nil {
+		return err
 	}
 	if err = json.Unmarshal(body, &release); err != nil {
 		return fmt.Errorf("release response: %w", err)
@@ -135,12 +141,19 @@ func (u *Updater) FetchAndStage(ctx context.Context, current string) error {
 	if err != nil {
 		return fmt.Errorf("cache directory: %w", err)
 	}
+	if err := stagingDirectory(ctx, cache, []string{u.Binary, "staged", release.Tag}, false); err != nil {
+		return fmt.Errorf("staging directory: %w", err)
+	}
 	dest := filepath.Join(cache, u.Binary, "staged", release.Tag, u.binaryName())
-	if info, statErr := os.Stat(dest); statErr == nil {
+	if info, statErr := os.Lstat(dest); statErr == nil {
 		if !info.Mode().IsRegular() {
 			return fmt.Errorf("staged binary is not a regular file: %s", dest)
 		}
-		return nil
+		f, err := openRegular(dest)
+		if err != nil {
+			return err
+		}
+		return f.Close()
 	} else if !errors.Is(statErr, os.ErrNotExist) {
 		return fmt.Errorf("staged binary: %w", statErr)
 	}
@@ -150,12 +163,15 @@ func (u *Updater) FetchAndStage(ctx context.Context, current string) error {
 	if err != nil {
 		return err
 	}
-	checksums, err := u.download(ctx, base+"checksums.txt")
+	checksums, err := u.download(ctx, base+"checksums.txt", maxChecksumBytes)
 	if err != nil {
 		return err
 	}
 	expected := ""
 	for _, line := range strings.Split(string(checksums), "\n") {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
 		fields := strings.Fields(line)
 		if len(fields) == 2 && fields[1] == archive {
 			expected = fields[0]
@@ -165,29 +181,39 @@ func (u *Updater) FetchAndStage(ctx context.Context, current string) error {
 	if expected == "" {
 		return fmt.Errorf("checksum not found for %s", archive)
 	}
-	sum := sha256.Sum256(data)
-	if hex.EncodeToString(sum[:]) != expected {
+	sum := sha256.New()
+	if _, err := io.Copy(sum, contextReader{ctx, bytes.NewReader(data)}); err != nil {
+		return err
+	}
+	if hex.EncodeToString(sum.Sum(nil)) != expected {
 		return fmt.Errorf("SHA256 mismatch for %s", archive)
 	}
 	if err = ctx.Err(); err != nil {
 		return err
 	}
-	if err = os.MkdirAll(filepath.Dir(dest), 0755); err != nil {
+	if err = stagingDirectory(ctx, cache, []string{u.Binary, "staged", release.Tag}, true); err != nil {
 		return fmt.Errorf("staging directory: %w", err)
 	}
 	if runtime.GOOS == "windows" {
-		return u.extractZip(data, dest)
+		return u.extractZipContext(ctx, data, dest)
 	}
-	return u.extractTar(data, dest)
+	return u.extractTarContext(ctx, data, dest)
 }
 
 func (u *Updater) extractTar(data []byte, dest string) error {
-	gz, err := gzip.NewReader(bytes.NewReader(data))
+	return u.extractTarContext(context.Background(), data, dest)
+}
+func (u *Updater) extractTarContext(ctx context.Context, data []byte, dest string) error {
+	return u.extractTarBounded(ctx, data, dest, maxExpandedBytes, maxExecutableBytes)
+}
+func (u *Updater) extractTarBounded(ctx context.Context, data []byte, dest string, scanLimit, targetLimit int64) error {
+	gz, err := gzip.NewReader(contextReader{ctx, bytes.NewReader(data)})
 	if err != nil {
 		return fmt.Errorf("gzip: %w", err)
 	}
 	defer gz.Close()
-	tr := tar.NewReader(gz)
+	expanded := &byteBudget{gz, scanLimit, "expanded archive"}
+	tr := tar.NewReader(contextReader{ctx, expanded})
 	for {
 		h, err := tr.Next()
 		if err == io.EOF {
@@ -200,25 +226,39 @@ func (u *Updater) extractTar(data []byte, dest string) error {
 			if h.Typeflag != tar.TypeReg && h.Typeflag != tar.TypeRegA {
 				return fmt.Errorf("binary is not a regular archive member")
 			}
-			payload, err := io.ReadAll(tr)
+			if h.Size > targetLimit {
+				return fmt.Errorf("executable exceeds byte limit")
+			}
+			payload, err := readBounded(ctx, tr, targetLimit, "executable")
 			if err != nil {
 				return fmt.Errorf("tar binary: %w", err)
 			}
 			// Validate the gzip footer before publishing a staged executable.
-			if _, err := io.Copy(io.Discard, gz); err != nil {
+			if _, err := io.Copy(io.Discard, contextReader{ctx, expanded}); err != nil {
 				return fmt.Errorf("gzip payload: %w", err)
 			}
-			return hashfile.WriteAtomic(dest, bytes.NewReader(payload), 0755)
+			return u.publish(ctx, dest, bytes.NewReader(payload), 0755)
 		}
 	}
 	return fmt.Errorf("binary %s not found in archive", u.binaryName())
 }
 func (u *Updater) extractZip(data []byte, dest string) error {
-	zr, err := zip.NewReader(bytes.NewReader(data), int64(len(data)))
+	return u.extractZipContext(context.Background(), data, dest)
+}
+func (u *Updater) extractZipContext(ctx context.Context, data []byte, dest string) error {
+	zr, err := zip.NewReader(contextReaderAt{ctx, bytes.NewReader(data)}, int64(len(data)))
 	if err != nil {
 		return fmt.Errorf("zip: %w", err)
 	}
+	var expanded uint64
 	for _, f := range zr.File {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		if f.UncompressedSize64 > uint64(maxExpandedBytes)-expanded {
+			return fmt.Errorf("expanded archive exceeds byte limit")
+		}
+		expanded += f.UncompressedSize64
 		if filepath.Base(f.Name) != u.binaryName() {
 			continue
 		}
@@ -229,12 +269,16 @@ func (u *Updater) extractZip(data []byte, dest string) error {
 		if err != nil {
 			return err
 		}
-		err = hashfile.WriteAtomic(dest, reader, 0755)
+		payload, readErr := readBounded(ctx, reader, maxExecutableBytes, "executable")
+		err = readErr
 		closeErr := reader.Close()
 		if err != nil {
 			return err
 		}
-		return closeErr
+		if closeErr != nil {
+			return closeErr
+		}
+		return u.publish(ctx, dest, bytes.NewReader(payload), 0755)
 	}
 	return fmt.Errorf("binary %s not found in zip", u.binaryName())
 }

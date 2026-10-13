@@ -155,7 +155,9 @@ Apply/fetch failures warn nonfatally on stderr; stdout/JSON/robot are unchanged.
 After execution staging waits up to 10s, then warns if incomplete without changing
 command success. Dev builds remain exempt by identity; cancellation returns promptly
 and cancels context-aware fetch requests, also bounded by a 60s HTTP timeout per
-request. The private updater retains valid staged candidates when applying fails;
+request. Cancellation/the cap joins bounded backend cleanup before returning.
+Private staging uses unique synced temporary files and conservative byte limits.
+The private updater retains valid staged candidates when applying fails;
 see `internal/autoupdate/README.md` for the release-format contract.
 
 Remove downloaded archives, the side-by-side candidate directory, and the smoke

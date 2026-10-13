@@ -1,0 +1,7 @@
+Release-contract attribution: github.com/pablontiv/picokit v1.0.0
+Copyright Pablo Ontiveros
+Apache License, Version 2.0 (see repository LICENSE).
+
+Backscroll's private updater preserves the Apache release's public discovery,
+archive/checksum, staging, version-comparison, and platform execution semantics,
+with the safety/error-visibility divergences documented in README.md.
