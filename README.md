@@ -329,11 +329,14 @@ Commits follow [Conventional Commits](https://www.conventionalcommits.org/) (`ty
 Autoupdate is mandatory for valid executable release commands; there is no runtime
 opt-out. It starts after command/flag/argument validation and before startup/index
 work. Invalid invocations, help, version, and `--skill` never apply, fetch, or wait.
-Plain `go build` produces a `dev` identity, exempt in picokit.
+Plain `go build` produces a `dev` identity, exempt in the private updater backend.
 
 Apply and completed fetch failures emit one concise `warning: autoupdate: ...` on
 stderr without failing the command or changing stdout/JSON/robot output. Successful
 updates are silent. After command execution, staging waits up to 10s; if it has not
 completed, the command returns its normal result with a timeout warning.
 Cancellation returns promptly without reporting a fabricated network failure;
-picokit's non-context-aware fetch may finish detached (60s HTTP timeout per request).
+all fetch requests are context-aware and canceled on cancellation or the staging cap,
+with a 60s HTTP timeout per request. The private backend preserves the pinned picokit
+release format while returning errors upstream swallowed; see
+[`internal/autoupdate/README.md`](internal/autoupdate/README.md).

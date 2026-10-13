@@ -154,7 +154,9 @@ again. Help, version, invalid invocations, and `--skill` do not apply or fetch.
 Apply/fetch failures warn nonfatally on stderr; stdout/JSON/robot are unchanged.
 After execution staging waits up to 10s, then warns if incomplete without changing
 command success. Dev builds remain exempt by identity; cancellation returns promptly
-while a detached picokit fetch remains bounded by its 60s HTTP timeout per request.
+and cancels context-aware fetch requests, also bounded by a 60s HTTP timeout per
+request. The private updater retains valid staged candidates when applying fails;
+see `internal/autoupdate/README.md` for the release-format contract.
 
 Remove downloaded archives, the side-by-side candidate directory, and the smoke
 directory when testing is complete:

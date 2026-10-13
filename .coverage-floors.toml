@@ -1,6 +1,7 @@
 default = 85
 packages = [
   "cmd/backscroll",
+  "internal/autoupdate",
   "internal/chunking",
   "internal/config",
   "internal/embedding",

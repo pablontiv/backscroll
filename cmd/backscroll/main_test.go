@@ -797,14 +797,10 @@ func TestMain_AutoupdateConstructorParams(t *testing.T) {
 }
 
 func TestMain_AutoupdateHasNoEnvOptOut(t *testing.T) {
-	// newUpdater is the production wiring point — run() constructs its updater
-	// through it. Asserting EnvDisable == "" here covers the real call site, so
-	// re-adding an envDisable argument in production would fail this test. If
-	// this test instead built its own autoupdate.New(...), it would only re-test
-	// the picokit library and pass regardless of what run() does. Hermetic: no
-	// network call.
-	if got := newUpdater().EnvDisable; got != "" {
-		t.Errorf("released binary must have no env opt-out; EnvDisable = %q", got)
+	// The private backend has no EnvDisable field or runtime opt-out.
+	u := newUpdater()
+	if u.Repo != "pablontiv/backscroll" || u.Binary != "backscroll" {
+		t.Fatalf("wrong updater identity: %+v", u)
 	}
 }
 

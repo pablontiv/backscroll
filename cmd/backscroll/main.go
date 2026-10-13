@@ -9,7 +9,7 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/pablontiv/picokit/autoupdate"
+	"github.com/pablontiv/backscroll/internal/autoupdate"
 	"github.com/spf13/cobra"
 )
 
@@ -66,8 +66,8 @@ func diagnosticAlreadyRendered(err error) bool {
 }
 
 // newUpdater is the single wiring point for autoupdate. It is called with no
-// envDisable argument, so no environment variable can disable a released binary
-// — the only exemption is version=="dev", which picokit applies intrinsically.
+// runtime opt-out argument, so no environment variable can disable a released binary
+// — the only exemption is version=="dev", applied by the private backend.
 // run() and the wiring test both go through here, so the test covers the real
 // call site rather than a copy of it.
 func newUpdater() *autoupdate.Updater {
@@ -85,16 +85,17 @@ type runDependencies struct {
 func newRunDependencies(stdout, stderr io.Writer) runDependencies {
 	u := newUpdater()
 	u.CurrentVersion = version
+	return updaterRunDependencies(u, buildRootCmd(stdout, stderr))
+}
+
+// updaterRunDependencies is the production adapter, also exercised with safe
+// HTTP/filesystem/reexec boundaries in tests.
+func updaterRunDependencies(u *autoupdate.Updater, root *cobra.Command) runDependencies {
 	return runDependencies{
-		applyStaged: u.ApplyStagedIfAvailable,
-		// Picokit's fetch API is not context-aware. Its HTTP client bounds the
-		// operation, so cancellation detaches this residual worker rather than
-		// claiming to stop the underlying network operation immediately.
-		fetchAndStage: func(_ context.Context, currentVersion string) error {
-			return u.FetchAndStage(currentVersion)
-		},
-		root:        buildRootCmd(stdout, stderr),
-		stagingWait: autoupdateStagingWait,
+		applyStaged:   u.ApplyStagedIfAvailable,
+		fetchAndStage: u.FetchAndStage,
+		root:          root,
+		stagingWait:   autoupdateStagingWait,
 	}
 }
 
@@ -160,6 +161,8 @@ func runContextWithDependencies(ctx context.Context, stdout, stderr io.Writer, a
 			_, _ = fmt.Fprintf(stderr, "warning: autoupdate: %s\n", err)
 		}
 	}
+	fetchContext, cancelFetch := context.WithCancel(ctx)
+	defer cancelFetch()
 	var staged chan error
 	// Cobra calls Args after parsing/command selection and before any pre-run.
 	// Required flags and groups normally run AFTER pre-run; move their first
@@ -194,7 +197,7 @@ func runContextWithDependencies(ctx context.Context, stdout, stderr io.Writer, a
 					go func(done chan<- error) {
 						var err error
 						if deps.fetchAndStage != nil {
-							err = deps.fetchAndStage(ctx, version)
+							err = deps.fetchAndStage(fetchContext, version)
 						}
 						// Only this caller writes warnings; detached completion
 						// never touches writers and cannot block on delivery.
