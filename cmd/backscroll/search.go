@@ -66,6 +66,9 @@ protected. All scope filters remain fixed; no OR or semantic expansion is used.`
 		Args: func(cmd *cobra.Command, args []string) error {
 			return validateCommandBeforeStartup(cmd, args, cobra.MaximumNArgs(1), func() error {
 				query := searchQuery(text, args)
+				if err := validateSearchNumbers(maxTokens, similarityThreshold); err != nil {
+					return err
+				}
 				_, _, err := validateAndParseSearchRequest(query, fields, contentType, after, before, limit, offset, relax)
 				if err != nil {
 					return err
@@ -89,7 +92,7 @@ protected. All scope filters remain fixed; no OR or semantic expansion is used.`
 		},
 	}
 
-	cmd.Flags().StringVar(&project, "project", "", "Filter to project")
+	cmd.Flags().StringVar(&project, "project", "", "Filter to project (mutually exclusive with --all-projects)")
 	cmd.Flags().BoolVar(&allProjects, "all-projects", false, "Search all projects")
 	cmd.Flags().BoolVar(&jsonFormat, "json", false, "Output as JSON")
 	cmd.Flags().BoolVar(&robotFormat, "robot", false, "Output in robot format")
@@ -106,9 +109,10 @@ protected. All scope filters remain fixed; no OR or semantic expansion is used.`
 	cmd.Flags().IntVar(&maxTokens, "max-tokens", 0, "Max tokens in output (0=unlimited)")
 	cmd.Flags().BoolVar(&lexicalOnly, "lexical-only", false, "Use BM25 only, skip vector search")
 	cmd.Flags().BoolVar(&relax, "relax", false, "Lexical-only recall: after zero rows, drop low-IDF terms within the same scope (+term protects a term); ignores vector similarity thresholds")
-	cmd.Flags().Float64Var(&similarityThreshold, "similarity-threshold", 0.3, "Minimum cosine similarity for vector results (0=no threshold)")
+	cmd.Flags().Float64Var(&similarityThreshold, "similarity-threshold", 0.3, "Minimum cosine similarity for vector results (finite 0..1; 0=no threshold)")
 	cmd.Flags().StringVar(&text, "text", "", "Search text (v2 preferred grammar)")
 
+	cmd.MarkFlagsMutuallyExclusive("project", "all-projects")
 	return cmd
 }
 

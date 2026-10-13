@@ -279,3 +279,18 @@ Regression owners: `cmd/backscroll/search_relaxation_test.go` (native input-to-o
 |------|---------|
 | `0` | Search completed (results may be empty) |
 | `1` | Error (database not found, query failure) |
+
+
+## Invocation validation
+
+Search retains one optional positional query (or `--text`); other operational
+commands accept no positional operands. Search, list, and patterns reject
+simultaneous `--project` and `--all-projects` rather than overriding a scope.
+Their independent default scope remains unchanged.
+
+Before startup, search requires a finite `--similarity-threshold` in [0, 1]
+(0 still means no threshold) and nonnegative `--max-tokens` (0 is unlimited).
+List requires nonnegative `--recent`, `--limit`, and `--offset`; zero recent
+means all sessions and zero limit means no limit. Invalid invocations do not
+prepare the index, create the startup lock, or sync inputs. Output-mode
+precedence and payloads are unchanged.

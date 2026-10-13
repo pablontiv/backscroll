@@ -146,3 +146,18 @@ Before step 2, assign `UUID`, `SOURCE_PATH`, and `ORDINAL` from one selected mac
   to its reader; unavailable or expired sources remain `unknown`. Recovery can
   enrich an `unknown` duplicate from compatible proven evidence without the
   original source; contradictory proven origins are rejected.
+
+
+## Invocation validation
+
+Patterns accepts no positional operands. `--project` and `--all-projects`
+are mutually exclusive; without either, the current-directory project is used.
+Invalid operands, scope conflicts, and numeric values are rejected before
+startup creates a database, acquires a lock, or syncs inputs.
+
+Support, batch size, limit, offset, and sequence lengths must be nonnegative.
+Confidence must be finite and in [0, 1], including both endpoints.
+Zero sequence support/lengths preserve defaults (3 occurrences, lengths 2..6);
+the effective minimum length must not exceed the effective maximum.
+Zero batch remains inactive, and zero limit retains existing command behavior.
+These numeric checks apply even when a flag is irrelevant to the chosen kind.

@@ -120,19 +120,26 @@ func TestListProjectScopeAcrossLegacyAndV2(t *testing.T) {
 	setupListScopeFixture(t)
 
 	tests := []struct {
-		name string
-		args []string
-		want []string
+		name    string
+		args    []string
+		want    []string
+		wantErr bool
 	}{
 		{name: "implicit cwd legacy", args: []string{"list", "--json"}, want: []string{"/scope/a.jsonl"}},
 		{name: "implicit cwd v2", args: []string{"list", "--json", "--limit", "10"}, want: []string{"/scope/a.jsonl"}},
 		{name: "explicit project", args: []string{"list", "--json", "--project", "project-b"}, want: []string{"/scope/b.jsonl"}},
 		{name: "all projects", args: []string{"list", "--json", "--all-projects"}, want: []string{"/scope/a.jsonl", "/scope/b.jsonl"}},
-		{name: "all projects wins", args: []string{"list", "--json", "--project", "project-a", "--all-projects", "--limit", "10"}, want: []string{"/scope/a.jsonl", "/scope/b.jsonl"}},
+		{name: "conflicting scopes rejected", args: []string{"list", "--json", "--project", "project-a", "--all-projects", "--limit", "10"}, wantErr: true},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
 			stdout, stderr, err := runCmd(tc.args...)
+			if tc.wantErr {
+				if err == nil || !strings.Contains(err.Error(), "all-projects") || stdout != "" {
+					t.Fatalf("scope conflict: stdout=%q error=%v", stdout, err)
+				}
+				return
+			}
 			if err != nil {
 				t.Fatalf("run: %v\nstderr=%s", err, stderr)
 			}

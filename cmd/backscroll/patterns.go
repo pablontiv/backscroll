@@ -65,6 +65,9 @@ Use --json, --robot for output formats.`,
 				if err := validatePatternsRequest(kind, project, allProjects, limit, offset, trend); err != nil {
 					return err
 				}
+				if err := validatePatternsNumbers(minSupport, minConfidence, batch, minLength, maxLength); err != nil {
+					return err
+				}
 				if err := validatePatternsOrigin(kind, origin); err != nil {
 					return err
 				}
@@ -87,15 +90,15 @@ Use --json, --robot for output formats.`,
 	}
 
 	cmd.Flags().StringVar(&kind, "kind", "", "Aggregation kind (required: commands|failures|templates|sequences|corrections)")
-	cmd.Flags().StringVar(&project, "project", "", "Filter to single project")
+	cmd.Flags().StringVar(&project, "project", "", "Filter to single project (mutually exclusive with --all-projects)")
 	cmd.Flags().BoolVar(&allProjects, "all-projects", false, "Query across all projects (default: project inferred from current working directory)")
 	cmd.Flags().StringVar(&tag, "tag", "", "Filter by session tag")
 	cmd.Flags().IntVar(&limit, "limit", 20, "Result limit")
 	cmd.Flags().IntVar(&offset, "offset", 0, "Result offset")
-	cmd.Flags().IntVar(&minSupport, "min-support", 3, "Minimum template/sequence occurrence count")
-	cmd.Flags().IntVar(&minLength, "min-length", 2, "Minimum sequence pattern length (for --kind sequences, default 2)")
-	cmd.Flags().IntVar(&maxLength, "max-length", 6, "Maximum sequence pattern length (for --kind sequences, default 6; prevents combinatorial explosion)")
-	cmd.Flags().Float64Var(&minConfidence, "min-confidence", 0.6, "Minimum detector confidence (for --kind corrections)")
+	cmd.Flags().IntVar(&minSupport, "min-support", 3, "Minimum template/sequence occurrence count (>=0; sequences: 0=default 3)")
+	cmd.Flags().IntVar(&minLength, "min-length", 2, "Minimum sequence pattern length (for --kind sequences, >=0; 0=default 2)")
+	cmd.Flags().IntVar(&maxLength, "max-length", 6, "Maximum sequence pattern length (for --kind sequences, >=0; 0=default 6; prevents combinatorial explosion)")
+	cmd.Flags().Float64Var(&minConfidence, "min-confidence", 0.6, "Minimum detector confidence (finite 0..1; for --kind corrections)")
 	cmd.Flags().StringVar(&after, "after", "", "Filter after date (ISO 8601, for --kind sequences)")
 	cmd.Flags().StringVar(&before, "before", "", "Filter before date (ISO 8601, for --kind sequences)")
 	cmd.Flags().BoolVar(&jsonFormat, "json", false, "Output as JSON")
@@ -107,6 +110,7 @@ Use --json, --robot for output formats.`,
 
 	cmd.MarkFlagRequired("kind")
 
+	cmd.MarkFlagsMutuallyExclusive("project", "all-projects")
 	return cmd
 }
 

@@ -21,9 +21,12 @@ func newStatusCmd(stdout, stderr io.Writer) *cobra.Command {
 
 	cmd := &cobra.Command{
 		Use:          "status",
+		Args:         cobra.NoArgs,
 		Short:        "Show index status and configuration",
 		SilenceUsage: true,
-		Long: `Status displays information about the backscroll index, including:
+		Long: `This command accepts no positional operands.
+
+Status displays information about the backscroll index, including:
 - Database path and size
 - Number of indexed files and messages
 - Last indexing timestamp

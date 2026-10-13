@@ -15,9 +15,12 @@ func newConfigCmd(stdout, stderr io.Writer) *cobra.Command {
 
 	cmd := &cobra.Command{
 		Use:          "config",
+		Args:         cobra.NoArgs,
 		Short:        "Show effective configuration and input manifests",
 		SilenceUsage: true,
-		Long: `Config displays the effective configuration, including:
+		Long: `This command accepts no positional operands.
+
+Config displays the effective configuration, including:
 - Database path
 - Session directories
 - Active inputs (from declarative manifest or legacy session_dirs)

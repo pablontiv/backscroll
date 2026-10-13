@@ -17,9 +17,12 @@ func newValidateCmd(stdout, stderr io.Writer) *cobra.Command {
 
 	cmd := &cobra.Command{
 		Use:          "validate",
+		Args:         cobra.NoArgs,
 		Short:        "Validate the index integrity",
 		SilenceUsage: true,
-		Long: `Validate checks the integrity of the SQLite index by verifying:
+		Long: `This command accepts no positional operands.
+
+Validate checks the integrity of the SQLite index by verifying:
 - Required tables exist
 - FTS5 virtual table is set up correctly
 - No orphaned records exist

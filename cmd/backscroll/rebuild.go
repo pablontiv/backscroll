@@ -84,9 +84,12 @@ func newRebuildCmd(stdout, stderr io.Writer, runner *rebuildRunner) *cobra.Comma
 	}
 	cmd := &cobra.Command{
 		Use:          "rebuild",
+		Args:         cobra.NoArgs,
 		Short:        "Rebuild the FTS search indexes from the database",
 		SilenceUsage: true,
-		Long: `Rebuild re-derives the FTS search indexes from the database itself and
+		Long: `This command accepts no positional operands.
+
+Rebuild re-derives the FTS search indexes from the database itself and
 operates on the index synchronized at command startup. It never deletes indexed
 content: sessions whose source files have expired from disk are preserved (the
 database is the perennial event store). Use 'purge' to delete data explicitly.`,

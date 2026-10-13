@@ -44,6 +44,9 @@ Use --json to output as JSON.`,
 				}
 				return nil
 			}, func() error {
+				if err := validateListNumbers(recent, limit, offset); err != nil {
+					return err
+				}
 				resolved, err := effectiveProject(project, allProjects)
 				if err == nil {
 					project = resolved
@@ -61,7 +64,7 @@ Use --json to output as JSON.`,
 		},
 	}
 
-	cmd.Flags().StringVar(&project, "project", "", "Filter to project")
+	cmd.Flags().StringVar(&project, "project", "", "Filter to project (mutually exclusive with --all-projects)")
 	cmd.Flags().BoolVar(&allProjects, "all-projects", false, "List sessions across all projects")
 	cmd.Flags().IntVar(&recent, "recent", 20, "Show N most recent sessions (0 = all)")
 	cmd.Flags().BoolVar(&jsonFormat, "json", false, "Output as JSON")
@@ -70,6 +73,7 @@ Use --json to output as JSON.`,
 	cmd.Flags().IntVar(&limit, "limit", 0, "Result limit (0 = no limit)")
 	cmd.Flags().IntVar(&offset, "offset", 0, "Result offset")
 
+	cmd.MarkFlagsMutuallyExclusive("project", "all-projects")
 	return cmd
 }
 
