@@ -6,7 +6,9 @@ El archivo `.claude/skills/backscroll/SKILL.md` es un shim de descubrimiento. El
 
 `backscroll skill` imprime las instrucciones autoritativas en stdout. `backscroll --skill` conserva los mismos bytes por compatibilidad. Ambos comandos dejan stderr vacío cuando terminan correctamente. Ambos comandos omiten la configuración, SQLite, la sincronización y la actualización automática.
 
-## Destinos compatibles
+## Plataformas y destinos compatibles
+
+`backscroll skill --install` y `backscroll skill --restore` admiten macOS y Linux. Windows rechaza ambas operaciones antes de modificar archivos o directorios.
 
 La instalación gestiona estas entradas:
 

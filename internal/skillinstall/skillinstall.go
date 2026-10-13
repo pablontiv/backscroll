@@ -365,12 +365,6 @@ func restoreWithDependencies(home, receiptPath, approval string, deps dependenci
 		return RestoreResult{}, err
 	}
 	state := filepath.Join(canonical, statePath)
-	lock, err := acquireLock(state)
-	if err != nil {
-		return RestoreResult{}, err
-	}
-	defer func() { err = errors.Join(err, lock.close()) }()
-
 	path, err := absolutePath(receiptPath)
 	if err != nil {
 		return RestoreResult{}, err
@@ -378,6 +372,12 @@ func restoreWithDependencies(home, receiptPath, approval string, deps dependenci
 	if filepath.Base(path) != "receipt.json" || filepath.Dir(filepath.Dir(path)) != state {
 		return RestoreResult{}, errors.New("receipt must belong to this home's installation state")
 	}
+
+	lock, err := acquireLock(state)
+	if err != nil {
+		return RestoreResult{}, err
+	}
+	defer func() { err = errors.Join(err, lock.close()) }()
 	info, err := os.Lstat(path)
 	if err != nil {
 		return RestoreResult{}, fmt.Errorf("inspect receipt: %w", err)

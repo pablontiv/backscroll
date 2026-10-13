@@ -111,6 +111,44 @@ func TestSkillInvalidArgumentsHaveNoEffects(t *testing.T) {
 	}
 }
 
+func TestSkillRestoreOutsideStateHasNoEffects(t *testing.T) {
+	rootDir := t.TempDir()
+	home := filepath.Join(rootDir, "home")
+	if err := os.Mkdir(home, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("HOME", home)
+	t.Setenv("BACKSCROLL_CONFIG_DIR", filepath.Join(rootDir, "config"))
+	t.Setenv("BACKSCROLL_DATABASE_PATH", filepath.Join(rootDir, "database", "index.db"))
+
+	before, err := directoryTree(t, rootDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var stdout, stderr bytes.Buffer
+	code := realMain(&stdout, &stderr, []string{
+		"skill", "--restore", filepath.Join(rootDir, "outside", "receipt.json"),
+		"--approve", strings.Repeat("a", 64), "--home", home,
+	})
+	if code != 1 {
+		t.Fatalf("skill --restore exit code = %d, want 1", code)
+	}
+	if stdout.Len() != 0 {
+		t.Fatalf("skill --restore stdout = %q, want empty", stdout.String())
+	}
+	const wantError = "receipt must belong to this home's installation state\n"
+	if stderr.String() != wantError {
+		t.Fatalf("skill --restore stderr = %q, want %q", stderr.String(), wantError)
+	}
+	after, err := directoryTree(t, rootDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(after, before) {
+		t.Fatalf("skill --restore created filesystem entries: before=%v after=%v", before, after)
+	}
+}
+
 func TestSkillInstallIdempotenceAndRestore(t *testing.T) {
 	rootDir := t.TempDir()
 	t.Cleanup(func() { makeTreeRemovable(rootDir) })
