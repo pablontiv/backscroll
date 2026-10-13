@@ -117,6 +117,9 @@ func startupResultFrom(cmd *cobra.Command) startupResult {
 }
 
 func (c *startupCoordinator) defaultStartupPolicy(ctx context.Context, progress io.Writer, class startupCommandClass) startupResult {
+	if c.syncService.diagnostics {
+		ctx = context.WithValue(ctx, startupDiagnosticsContextKey{}, c.syncService.newDiagnostics())
+	}
 	if err := ctx.Err(); err != nil {
 		return startupResult{Failure: &startupFailure{Stage: startupStageInputDir, Cause: err, Diagnostic: compat.Diagnostic{Code: compat.CodeMigrationFailed, Summary: err.Error()}}}
 	}
@@ -227,8 +230,12 @@ query merges both by rank position (RRF).`,
 				return err
 			}
 			class, _ := startupCommandClassFor(cmd)
-			result := policy(cmd.Context(), startupProgressWriter(cmd, stderr), class)
-			ctx := context.WithValue(cmd.Context(), startupContextKey{}, result)
+			ctx := cmd.Context()
+			if syncService.diagnostics {
+				ctx = context.WithValue(ctx, startupDiagnosticsWriterKey{}, stderr)
+			}
+			result := policy(ctx, startupProgressWriter(cmd, stderr), class)
+			ctx = context.WithValue(cmd.Context(), startupContextKey{}, result)
 			if result.inputs != nil {
 				ctx = context.WithValue(ctx, inputSnapshotKey{}, result.inputs)
 			}

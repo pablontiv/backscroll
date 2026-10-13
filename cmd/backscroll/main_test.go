@@ -2822,7 +2822,10 @@ func TestStartupDiagnosticsDoesNotAffectJSONOutput(t *testing.T) {
 	t.Setenv("BACKSCROLL_SESSION_DIRS", fixtureSession)
 	t.Setenv("BACKSCROLL_STARTUP_DIAGNOSTICS", "1")
 
-	stdout2, _, err := runCmd("list", "--json")
+	stdout2, stderr2, err := runCmd("list", "--json")
+	if !strings.Contains(stderr2, "Startup diagnostics:") {
+		t.Fatalf("missing stderr diagnostics: %s", stderr2)
+	}
 	cleanup2()
 	if err != nil {
 		t.Fatalf("list --json (with diagnostics) error: %v", err)
@@ -2855,7 +2858,10 @@ func TestStartupDiagnosticsDoesNotAffectRobotOutput(t *testing.T) {
 	t.Setenv("BACKSCROLL_SESSION_DIRS", fixtureSession)
 	t.Setenv("BACKSCROLL_STARTUP_DIAGNOSTICS", "1")
 
-	stdout2, _, err := runCmd("list", "--robot")
+	stdout2, stderr2, err := runCmd("list", "--robot")
+	if !strings.Contains(stderr2, "Startup diagnostics:") {
+		t.Fatalf("missing stderr diagnostics: %s", stderr2)
+	}
 	cleanup2()
 	if err != nil {
 		t.Fatalf("list --robot (with diagnostics) error: %v", err)

@@ -40,6 +40,7 @@ func contentHashesEqual(readerName, persistedHash, observedHash string) bool {
 
 type startupSyncService struct {
 	diagnostics        bool
+	now                func() time.Time
 	open               func(context.Context, string) (*storage.Database, error)
 	activeInputs       func([]string) ([]input_config.InputDefinition, input_config.InputMode, error)
 	loadGlobalRegistry func() (projects.ProjectRegistry, error)
@@ -51,6 +52,7 @@ type startupSyncService struct {
 func newStartupSyncService() *startupSyncService {
 	return &startupSyncService{
 		diagnostics: diagnosticsEnabled(),
+		now:         time.Now,
 		open: func(ctx context.Context, path string) (*storage.Database, error) {
 			db, diag, err := storage.OpenCompatible(ctx, path)
 			if diag != nil {
@@ -77,6 +79,7 @@ type startupPhaseTiming struct {
 	LockAcquisitionTime time.Duration
 	IndexPrepareTime    time.Duration
 	measured            bool
+	report              *startupDiagnostics
 }
 
 func newDefaultAutoSyncRegistry() *readers.Registry {
@@ -437,9 +440,13 @@ func (s *startupSyncService) sync(ctx context.Context, cfg *config.Config, progr
 
 func (s *startupSyncService) syncWithProgress(ctx context.Context, cfg *config.Config, progress io.Writer, timing startupPhaseTiming) (retErr error) {
 	diag := s.diagnostics
-	var startTime time.Time
-	if diag {
-		startTime = time.Now()
+	report := timing.report
+	standalone := report == nil
+	if diag && standalone {
+		report = s.newDiagnostics()
+		report.lock = timing.LockAcquisitionTime
+		report.prepare = timing.IndexPrepareTime
+		report.hasLock, report.hasPrepare = timing.measured, timing.measured
 	}
 
 	registry, err := s.loadGlobalRegistry()
@@ -519,7 +526,7 @@ func (s *startupSyncService) syncWithProgress(ctx context.Context, cfg *config.C
 
 		var discoveryStart time.Time
 		if diag {
-			discoveryStart = time.Now()
+			discoveryStart = s.now()
 		}
 		refs, err := reader.Discover(ctx, def)
 		if err != nil {
@@ -529,7 +536,7 @@ func (s *startupSyncService) syncWithProgress(ctx context.Context, cfg *config.C
 			return err
 		}
 		if diag {
-			discoveryTime += time.Since(discoveryStart)
+			discoveryTime += s.now().Sub(discoveryStart)
 		}
 		for _, ref := range refs {
 			if err := ctx.Err(); err != nil {
@@ -556,7 +563,7 @@ func (s *startupSyncService) syncWithProgress(ctx context.Context, cfg *config.C
 
 		var metadataStart time.Time
 		if diag {
-			metadataStart = time.Now()
+			metadataStart = s.now()
 		}
 		if usesFileMetadataPrefilter(reader) && exists && existingMeta.Size != nil && existingMeta.Mtime != nil &&
 			existingMeta.LastIndexed != nil {
@@ -570,12 +577,12 @@ func (s *startupSyncService) syncWithProgress(ctx context.Context, cfg *config.C
 			return err
 		}
 		if diag {
-			metadataTime += time.Since(metadataStart)
+			metadataTime += s.now().Sub(metadataStart)
 		}
 
 		var hashingStart time.Time
 		if diag {
-			hashingStart = time.Now()
+			hashingStart = s.now()
 		}
 		if state.hash == "" {
 			state.hash, err = reader.Hash(ctx, ref)
@@ -595,7 +602,7 @@ func (s *startupSyncService) syncWithProgress(ctx context.Context, cfg *config.C
 			filesSkipped++
 		}
 		if diag {
-			hashingTime += time.Since(hashingStart)
+			hashingTime += s.now().Sub(hashingStart)
 		}
 
 		state.naturalParse = !exists || !contentHashesEqual(reader.Name(), existingMeta.Hash, state.hash)
@@ -638,7 +645,7 @@ func (s *startupSyncService) syncWithProgress(ctx context.Context, cfg *config.C
 
 		var parsingStart time.Time
 		if diag {
-			parsingStart = time.Now()
+			parsingStart = s.now()
 		}
 		pf, err := reader.Parse(ctx, ref, def)
 		if err != nil {
@@ -648,7 +655,7 @@ func (s *startupSyncService) syncWithProgress(ctx context.Context, cfg *config.C
 			return err
 		}
 		if diag {
-			parsingTime += time.Since(parsingStart)
+			parsingTime += s.now().Sub(parsingStart)
 		}
 
 		// Use session cwd for project identification; fall back to file path if cwd is empty
@@ -713,7 +720,7 @@ func (s *startupSyncService) syncWithProgress(ctx context.Context, cfg *config.C
 	// Phase 5: Database
 	var databaseStart time.Time
 	if diag {
-		databaseStart = time.Now()
+		databaseStart = s.now()
 	}
 
 	// Sync all files
@@ -773,33 +780,14 @@ func (s *startupSyncService) syncWithProgress(ctx context.Context, cfg *config.C
 	}
 
 	if diag {
-		databaseTime := time.Since(databaseStart)
-		totalTime := time.Since(startTime)
-
-		// Report diagnostics
-		_, _ = fmt.Fprintf(progress, "\nStartup diagnostics:\n")
-		if timing.measured {
-			_, _ = fmt.Fprintf(progress, "  Lock Acquisition:%v\n", timing.LockAcquisitionTime)
-			_, _ = fmt.Fprintf(progress, "  Index Prepare:   %v\n", timing.IndexPrepareTime)
+		report.sync = true
+		report.discovery, report.metadata = discoveryTime, metadataTime
+		report.hashing, report.parsing = hashingTime, parsingTime
+		report.database = s.now().Sub(databaseStart)
+		report.bytesHashed, report.filesHashed, report.filesSkipped = bytesHashed, filesHashed, filesSkipped
+		if standalone {
+			report.render(progress)
 		}
-		_, _ = fmt.Fprintf(progress, "  Discovery:       %v\n", discoveryTime)
-		_, _ = fmt.Fprintf(progress, "  Metadata:        %v (%d files checked)\n", metadataTime, filesHashed+filesSkipped)
-		_, _ = fmt.Fprintf(progress, "  Hashing:         %v (%d files hashed, %d files skipped, %.1f MB)\n",
-			hashingTime, filesHashed, filesSkipped, float64(bytesHashed)/(1024*1024))
-		_, _ = fmt.Fprintf(progress, "  Parsing:         %v\n", parsingTime)
-		_, _ = fmt.Fprintf(progress, "  Database:        %v\n", databaseTime)
-
-		// Calculate unattributed time
-		measuredTime := discoveryTime + metadataTime + hashingTime + parsingTime + databaseTime
-		if timing.measured {
-			measuredTime += timing.LockAcquisitionTime + timing.IndexPrepareTime
-		}
-		unattributedTime := totalTime - measuredTime
-		if unattributedTime > 0 {
-			_, _ = fmt.Fprintf(progress, "  Unattributed:    %v (I/O, config load, other OS overhead; page-cache sensitive)\n", unattributedTime)
-		}
-
-		_, _ = fmt.Fprintf(progress, "  Total:           %v\n", totalTime)
 	}
 
 	return nil

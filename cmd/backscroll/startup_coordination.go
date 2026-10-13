@@ -49,7 +49,7 @@ func newStartupCoordinatorWithSyncService(syncService *startupSyncService) *star
 	}
 }
 
-func (c *startupCoordinator) coordinate(ctx context.Context, cfg *config.Config, progress io.Writer, class startupCommandClass) startupResult {
+func (c *startupCoordinator) coordinate(ctx context.Context, cfg *config.Config, progress io.Writer, class startupCommandClass) (result startupResult) {
 	if err := ctx.Err(); err != nil {
 		return canceledStartupResult(cfg, startupStageSyncLock, err)
 	}
@@ -57,20 +57,35 @@ func (c *startupCoordinator) coordinate(ctx context.Context, cfg *config.Config,
 	timing := startupPhaseTiming{measured: c.syncService.diagnostics}
 	var lockStart time.Time
 	if timing.measured {
-		lockStart = time.Now()
+		timing.report, _ = ctx.Value(startupDiagnosticsContextKey{}).(*startupDiagnostics)
+		if timing.report == nil {
+			timing.report = c.syncService.newDiagnostics()
+		}
+		lockStart = timing.report.now()
+		defer func() {
+			// Recovery owns emission through its handler and post-install sync.
+			if class != startupRemediation || result.Failure != nil {
+				writer := progress
+				if diagnosticWriter, ok := ctx.Value(startupDiagnosticsWriterKey{}).(io.Writer); ok {
+					writer = diagnosticWriter
+				}
+				timing.report.render(writer)
+			}
+		}()
 	}
 
 	lease, acquired, err := c.tryAcquire(cfg.DatabasePath)
+	if timing.measured {
+		timing.LockAcquisitionTime = timing.report.now().Sub(lockStart)
+		timing.report.lock, timing.report.hasLock = timing.LockAcquisitionTime, true
+	}
+
 	if ctxErr := ctx.Err(); ctxErr != nil {
 		result := canceledStartupResult(cfg, startupStageSyncLock, ctxErr)
 		if acquired {
 			return ownedStartupFailureResult(cfg, class, lease, result.Failure)
 		}
 		return result
-	}
-
-	if timing.measured && acquired && lockStart != (time.Time{}) {
-		timing.LockAcquisitionTime = time.Since(lockStart)
 	}
 
 	if err != nil {
@@ -82,6 +97,12 @@ func (c *startupCoordinator) coordinate(ctx context.Context, cfg *config.Config,
 
 	switch class {
 	case startupSnapshotRead:
+		if timing.measured {
+			start := timing.report.now()
+			result = c.concurrentSnapshotResult(ctx, cfg)
+			timing.report.prepare, timing.report.hasPrepare = timing.report.now().Sub(start), true
+			return result
+		}
 		return c.concurrentSnapshotResult(ctx, cfg)
 	case startupMetadataRead:
 		return startupResult{
@@ -95,14 +116,11 @@ func (c *startupCoordinator) coordinate(ctx context.Context, cfg *config.Config,
 		waitCtx, cancel := context.WithTimeout(ctx, c.mutationWait)
 		defer cancel()
 
-		if timing.measured {
-			lockStart = time.Now()
-		}
-
 		lease, err := c.acquire(waitCtx, cfg.DatabasePath, startupLockRetry)
 
-		if timing.measured && lockStart != (time.Time{}) {
-			timing.LockAcquisitionTime = time.Since(lockStart)
+		if timing.measured {
+			timing.LockAcquisitionTime = timing.report.now().Sub(lockStart)
+			timing.report.lock, timing.report.hasLock = timing.LockAcquisitionTime, true
 		}
 
 		if err != nil {
@@ -129,7 +147,7 @@ func (c *startupCoordinator) runOwned(ctx context.Context, cfg *config.Config, p
 
 	var indexPrepareStart time.Time
 	if timing.measured {
-		indexPrepareStart = time.Now()
+		indexPrepareStart = timing.report.now()
 	}
 
 	db, diag, err := c.prepareIndex(ctx, cfg, indexMutation)
@@ -137,8 +155,9 @@ func (c *startupCoordinator) runOwned(ctx context.Context, cfg *config.Config, p
 		err = closeIndexDB(db, err)
 	}
 
-	if timing.measured && indexPrepareStart != (time.Time{}) {
-		timing.IndexPrepareTime = time.Since(indexPrepareStart)
+	if timing.measured {
+		timing.IndexPrepareTime = timing.report.now().Sub(indexPrepareStart)
+		timing.report.prepare, timing.report.hasPrepare = timing.IndexPrepareTime, true
 	}
 
 	if ctxErr := ctx.Err(); ctxErr != nil && diag == nil && err == nil {

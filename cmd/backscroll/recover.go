@@ -36,6 +36,9 @@ func newRecoverCmd(stdout, stderr io.Writer, syncService *startupSyncService, ex
 		},
 		RunE: func(cmd *cobra.Command, args []string) error {
 			startup := startupResultFrom(cmd)
+			if startup.timing.report != nil {
+				defer startup.timing.report.render(stderr)
+			}
 			cfg := startup.Config
 			if cfg == nil {
 				loaded, err := config.Load()
