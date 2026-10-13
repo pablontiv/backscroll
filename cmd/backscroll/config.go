@@ -8,7 +8,6 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/pablontiv/backscroll/internal/config"
-	"github.com/pablontiv/backscroll/internal/input_config"
 )
 
 func newConfigCmd(stdout, stderr io.Writer) *cobra.Command {
@@ -30,7 +29,7 @@ Use --json to output as JSON.`,
 			if startup.Config == nil {
 				return fmt.Errorf("startup configuration unavailable")
 			}
-			return runConfig(stdout, stderr, startup.Config, jsonFormat)
+			return runConfig(stdout, stderr, startup.Config, startup.inputs, jsonFormat)
 		},
 	}
 
@@ -39,12 +38,11 @@ Use --json to output as JSON.`,
 	return cmd
 }
 
-func runConfig(stdout, stderr io.Writer, cfg *config.Config, jsonFormat bool) error {
-	// Resolve active inputs
-	defs, mode, err := input_config.ActiveInputs(cfg.SessionDirs)
-	if err != nil {
-		return fmt.Errorf("resolve inputs: %w", err)
+func runConfig(stdout, stderr io.Writer, cfg *config.Config, snapshot *inputSnapshot, jsonFormat bool) error {
+	if snapshot == nil {
+		return fmt.Errorf("startup input snapshot unavailable")
 	}
+	defs, mode := cloneInputDefinitions(snapshot.definitions), snapshot.mode
 
 	// Format output
 	if jsonFormat {

@@ -105,7 +105,25 @@ include = ["**/*.md"]
 format = "markdown_document"
 ```
 
-Malformed TOML fails with an error that includes the manifest path. An active input whose `decode.format` has no registered reader fails operational startup with an actionable error. Missing discovery roots are skipped so presets can coexist on machines that only have some supported tools installed. The current TOML loader ignores unrecognized fields; those fields do not configure or extend dedicated readers.
+Application files and input manifests are read once per invocation. Legacy
+`[sources]` (including an empty table) is rejected from the same application
+bytes used for precedence resolution. Startup discovery, ingestion, and `config`
+output reuse the validated input snapshot, even if a pathname is replaced later.
+There is no atomic filesystem transaction across separate configuration files.
+
+Each manifest requires `version = 1`. Active inputs require a non-empty `id`,
+at least one non-empty discovery root, and at least one non-empty include
+pattern. Include and exclude patterns are syntax-checked in full, even when no
+root or file exists. An omitted/empty `source` defaults to `session` (other labels
+are unrestricted); an omitted/empty `decode.format` defaults to `claude`.
+Unknown readers, invalid patterns, missing required fields, and malformed TOML
+fail before the startup lock, index preparation, or database writes. Diagnostics
+identify the manifest and offending field; definition errors also identify the
+input. Inactive definitions do not undergo active-input semantic validation,
+but their file must still have valid TOML and version 1. Missing discovery roots
+remain tolerated. Unrecognized TOML fields are ignored, not reader extensions.
+Help and version bypass configuration. Recovery still skips ordinary index
+preparation and pre-handler sync; apply reuses the snapshot for post-install sync.
 
 ## Common commands
 
@@ -122,12 +140,14 @@ backscroll search --text "migration plan" --all-projects
 backscroll list --order timestamp:desc --limit 20
 ```
 
-Every operational command validates active manifests and attempts one incremental
-sync before executing. Session, plan, and Markdown files are ingestion inputs;
+Operational commands validate active manifests before startup side effects.
+Owners attempt one incremental sync before executing (except recovery);
+read-safe followers use the last committed snapshot, and busy `config` followers
+print the validated configuration without opening the database. Session, plan, and Markdown files are ingestion inputs;
 SQLite is the perennial record used by search, list, patterns, status, and validate.
 Use `--source-path` on search as a filter, paired with query text, for database-backed retrieval scoped to a known input path.
 
-There is no public `inputs` or `sync` command. Manifest TOML is loaded during command preflight; reader resolution and discovery happen during mandatory startup sync, and failures block the requested command. Use `backscroll rebuild` only after startup sync has prepared the database; the handler re-derives FTS and other derived data from the perennial database and performs no second sync. It is not a replacement for correcting manifest errors.
+There is no public `inputs` or `sync` command. Manifest TOML, semantic fields, glob syntax, and reader names are validated during preflight; discovery uses that same snapshot during owner startup sync. Failures block the requested command. Use `backscroll rebuild` only after startup sync has prepared the database; the handler re-derives FTS and other derived data from the perennial database and performs no second sync. It is not a replacement for correcting manifest errors.
 
 See [the input manifest contract](input-contract.md) for the supported fields and registered decoders. For downstream audit consumers, see the [downstream audit integration contract](audit-integration.md).
 

@@ -66,15 +66,15 @@ format = "claude"
 
 | Field | Type | Use |
 | --- | ---: | --- |
-| `version` | integer | Manifest contract version. Shipped manifests use `1`. |
+| `version` | integer | Required manifest contract version: exactly `1`. |
 | `inputs` | array | Ordered `[[inputs]]` definitions. |
 
 ### `[[inputs]]`
 
 | Field | Type | Use |
 | --- | ---: | --- |
-| `id` | string | Stable name shown in configuration and diagnostics. |
-| `source` | string | Semantic source stored in SQLite, such as `session`, `plan`, `decision`, or `ke`. |
+| `id` | string | Required non-empty name for active inputs, shown in configuration and diagnostics. |
+| `source` | string | Arbitrary semantic label stored in SQLite; absent/empty defaults to `session`. |
 | `active` | bool | Only active definitions participate in ingestion. Set it explicitly. |
 
 `source` is not the provider or decoder name. Claude, Pi, OMP, OpenCode, and Codex
@@ -84,8 +84,8 @@ conversation inputs all use `source = "session"`.
 
 | Field | Type | Use |
 | --- | ---: | --- |
-| `roots` | array of strings | Files or directories to scan. `~` is expanded. |
-| `include` | array of strings | Glob patterns relative to each root; `**` is supported. |
+| `roots` | array of strings | Active inputs require at least one non-empty root. `~` is expanded. |
+| `include` | array of strings | Active inputs require at least one non-empty pattern; `**` is supported. |
 | `exclude` | array of strings | Glob patterns to skip. |
 | `follow_symlinks` | bool | Follow symlinks when true; false in shipped presets. |
 
@@ -96,10 +96,15 @@ outside the configured root.
 
 | Field | Type | Use |
 | --- | ---: | --- |
-| `format` | string | Registered decoder: `claude`, `pi`, `omp`, `opencode`, `codex`, `markdown_document`, or `markdown_sections`. |
+| `format` | string | Registered decoder: `claude`, `pi`, `omp`, `opencode`, `codex`, `markdown_document`, or `markdown_sections`; absent/empty defaults to `claude`. |
 | `index_reasoning` | bool | Pi/OMP/Codex opt-in for readable reasoning blocks; false by default. |
 
-An active input with an unregistered decoder fails startup with an actionable
+Include and exclude glob syntax is checked for every segment before discovery,
+even for missing roots or patterns that would match no files. Empty patterns are
+invalid. Inactive definitions skip active-input semantic checks.
+
+An active input with an unregistered decoder fails before startup side effects
+with an actionable
 `no reader registered for format ...` error. Adding a new format requires a
 reader implementation and registration; a manifest alone cannot define a new
 provider schema.
@@ -445,15 +450,26 @@ readers index text; they do not parse YAML frontmatter into structured metadata.
 ## Loading and failure behavior
 
 - Malformed TOML fails with the manifest path in the error.
-- Unsupported decoder names fail when operational startup resolves the active
-  reader; cached results are not returned after that sync failure.
+- Unsupported versions, invalid glob patterns, missing required active-input
+  fields, and unsupported decoder names fail before acquiring a startup lock,
+  preparing the index, or opening/writing the database. Diagnostics include the
+  manifest path and field (and input identity for definition errors).
+- Application configuration and manifests are read once per invocation;
+  validation, discovery, ingestion, and `config` output reuse that snapshot.
+  Replacing a config pathname after validation cannot change that invocation.
+  Separate files are not read as one atomic filesystem transaction.
+- Help and version remain independent of configuration. Recovery retains its
+  ordinary index-prepare and pre-handler-sync exemption; apply uses the same
+  validated snapshot for post-install sync.
 - Missing discovery roots yield no files so presets for absent tools can coexist.
 - The current TOML loader ignores unrecognized fields. That permissiveness is
   not an extension mechanism: ignored fields do not alter reader behavior.
 - Manifests cannot run shell commands or external processes.
 
-Every operational command validates the active configuration, attempts one
-incremental sync, and then queries the perennial SQLite record. Use
+Every operational command validates the active configuration before startup side
+effects. Owners attempt one incremental sync except recovery; read-safe followers
+use the last committed SQLite snapshot, and busy `config` followers print the
+validated configuration without opening the database. Use
 `backscroll config` to inspect resolved manifests and `backscroll validate
 --json` to inspect index health.
 

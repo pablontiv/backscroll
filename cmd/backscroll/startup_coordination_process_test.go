@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -82,7 +83,17 @@ func TestStartupCoordinationHelperProcess(t *testing.T) {
 		return nil
 	}
 	coordinator.syncService.activeInputs = func([]string) ([]input_config.InputDefinition, input_config.InputMode, error) {
-		return nil, input_config.ModeLegacy, syncHook()
+		return nil, input_config.ModeLegacy, nil
+	}
+
+	// Count/block actual sync under the owner's lease, not preflight manifest
+	// resolution (which is now intentionally shared by owners and followers).
+	open := coordinator.syncService.open
+	coordinator.syncService.open = func(ctx context.Context, path string) (*storage.Database, error) {
+		if err := syncHook(); err != nil {
+			return nil, err
+		}
+		return open(ctx, path)
 	}
 
 	argvJSON := os.Getenv("BACKSCROLL_HELPER_ARGV")

@@ -1,5 +1,7 @@
 package input_config
 
+import "fmt"
+
 // InputFile represents a parsed *.inputs.toml file.
 type InputFile struct {
 	Version int               `toml:"version"`
@@ -8,11 +10,13 @@ type InputFile struct {
 
 // InputDefinition is a single [[inputs]] entry.
 type InputDefinition struct {
-	ID       string         `toml:"id"`
-	Source   string         `toml:"source"`
-	Active   bool           `toml:"active"`
-	Discover DiscoverConfig `toml:"discover"`
-	Decode   DecodeConfig   `toml:"decode"`
+	manifestPath  string
+	manifestIndex int
+	ID            string         `toml:"id"`
+	Source        string         `toml:"source"`
+	Active        bool           `toml:"active"`
+	Discover      DiscoverConfig `toml:"discover"`
+	Decode        DecodeConfig   `toml:"decode"`
 }
 
 // DiscoverConfig controls which files are discovered for this input.
@@ -27,4 +31,12 @@ type DiscoverConfig struct {
 type DecodeConfig struct {
 	Format         string `toml:"format"`          // Registered reader name; see docs/input-contract.md
 	IndexReasoning bool   `toml:"index_reasoning"` // Pi/OMP/Codex: opt-in to index readable reasoning blocks
+}
+
+// Location identifies a definition without exposing provenance in the manifest format.
+func (d InputDefinition) Location() string {
+	if d.manifestPath == "" {
+		return d.ID
+	}
+	return fmt.Sprintf("%s inputs[%d] (id %q)", d.manifestPath, d.manifestIndex, d.ID)
 }

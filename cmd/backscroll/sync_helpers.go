@@ -415,6 +415,15 @@ func (s *startupSyncService) sync(ctx context.Context, cfg *config.Config, progr
 	if err := ctx.Err(); err != nil {
 		return err
 	}
+	// Standalone sync callers resolve before opening the database too. Startup
+	// and post-recovery sync reuse the already validated invocation snapshot.
+	if inputSnapshotFrom(ctx) == nil {
+		snapshot, err := s.resolveInputSnapshot(cfg)
+		if err != nil {
+			return fmt.Errorf("resolve inputs: %w", err)
+		}
+		ctx = context.WithValue(ctx, inputSnapshotKey{}, snapshot)
+	}
 	var bufferedProgress bytes.Buffer
 	if err := s.syncWithProgress(ctx, cfg, &bufferedProgress, timing); err != nil {
 		return err
@@ -478,11 +487,8 @@ func (s *startupSyncService) syncWithProgress(ctx context.Context, cfg *config.C
 	// Build reader registry
 	reg := s.newRegistry()
 
-	// Resolve active inputs
-	defs, _, err := s.activeInputs(cfg.SessionDirs)
-	if err != nil {
-		return fmt.Errorf("resolve inputs: %w", err)
-	}
+	// Use exactly the definitions validated before startup side effects.
+	defs := cloneInputDefinitions(inputSnapshotFrom(ctx).definitions)
 	if err := ctx.Err(); err != nil {
 		return err
 	}

@@ -1,12 +1,9 @@
 package config
 
 import (
-	"fmt"
 	"os"
 	"sort"
 	"strings"
-
-	"github.com/pelletier/go-toml/v2"
 )
 
 // LegacySourcesFile describes one config file containing an unsupported [sources] table.
@@ -79,25 +76,11 @@ func ValidateNoLegacySources(inputsDir string) error {
 }
 
 func legacySourcesInFile(path string) (*LegacySourcesFile, error) {
-	data, err := os.ReadFile(path)
-	if err != nil {
-		if os.IsNotExist(err) {
-			return nil, nil
-		}
-		return nil, fmt.Errorf("read %s: %w", path, err)
-	}
-
-	var envelope struct {
-		Sources *SourcesConfig `toml:"sources"`
-	}
-	if err := toml.Unmarshal(data, &envelope); err != nil {
-		return nil, fmt.Errorf("parse %s: %w", path, err)
-	}
-	if envelope.Sources == nil {
+	file, err := loadConfigFileSnapshot(path, &Config{})
+	if os.IsNotExist(err) {
 		return nil, nil
 	}
-
-	return &LegacySourcesFile{Path: path, Keys: legacySourcesKeys(envelope.Sources)}, nil
+	return file, err
 }
 
 func legacySourcesKeys(sources *SourcesConfig) []string {
