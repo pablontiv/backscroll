@@ -6,7 +6,7 @@ import (
 )
 
 func TestCorrectionsEndToEnd(t *testing.T) {
-	// Full cycle: sync -> detectors fire -> aggregate -> purge
+	// Full cycle: sync -> detectors fire -> aggregate
 
 	db, err := Open(filepath.Join(t.TempDir(), "test.db"))
 	if err != nil {
@@ -57,18 +57,6 @@ func TestCorrectionsEndToEnd(t *testing.T) {
 
 	t.Logf("Aggregated %d candidates", len(candidates))
 
-	// Purge old entries
-	if _, err := db.Purge("2026-01-02"); err != nil {
-		t.Fatalf("purge: %v", err)
-	}
-
-	// Verify corrections are gone
-	if err := db.db.QueryRow("SELECT COUNT(*) FROM correction_signals").Scan(&n); err != nil {
-		t.Fatalf("query after purge: %v", err)
-	}
-	if n != 0 {
-		t.Errorf("expected corrections purged, %d remain", n)
-	}
 }
 
 func TestCorrectionsIdempotent(t *testing.T) {

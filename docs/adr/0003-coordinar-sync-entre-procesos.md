@@ -34,7 +34,7 @@ El sidecar permanecerá en disco y nunca se borrará. Su existencia no represent
 Los comandos se clasificarán explícitamente:
 
 - read-safe: `search`, `list`, `patterns`, `status`, `validate`, `config`;
-- mutation: `annotate`, `purge`, `rebuild`, `recover`.
+- mutation: `annotate`, `rebuild`, `recover`.
 
 Un follower mutante esperará hasta cinco segundos por el lock. Si no lo adquiere, fallará con diagnóstico reintentable y no ejecutará su handler. Cuando lo adquiere, conservará el lock durante preparación, sync y handler. `recover` conservará ownership durante reemplazo, verificación y post-install sync.
 

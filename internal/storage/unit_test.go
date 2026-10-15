@@ -344,15 +344,6 @@ func TestSearchWithSourceFilter(t *testing.T) {
 	_ = results
 }
 
-func TestPurgeInvalidDate(t *testing.T) {
-	db, cleanup := newTestDB(t)
-	defer cleanup()
-	_, err := db.Purge("not-a-date")
-	if err == nil {
-		t.Error("expected error for invalid date, got nil")
-	}
-}
-
 func TestSyncFilesNonSessionSource(t *testing.T) {
 	db, cleanup := newTestDB(t)
 	defer cleanup()
@@ -728,52 +719,6 @@ func TestQueryIndexedRecordsReturnsCanonicalModel(t *testing.T) {
 	if nullGot[0].ContentType != "text" {
 		t.Errorf("ContentType = %q, want default text", nullGot[0].ContentType)
 	}
-}
-
-func TestPurgeWithISODateFormat(t *testing.T) {
-	db, cleanup := newTestDB(t)
-	defer cleanup()
-
-	// Sync old and new data
-	if err := db.SyncFiles([]IndexedFile{
-		{
-			SourcePath: "/old/session.jsonl",
-			Source:     "session",
-			Hash:       "h-old",
-			Project:    "test",
-			Tags:       []string{"old-tag"},
-			Messages: []IndexedMessage{
-				{Ordinal: 0, Role: "user", Text: "old message content", UUID: getTestUUID(), Timestamp: "2019-06-01T00:00:00Z", ContentType: "text"},
-			},
-		},
-		{
-			SourcePath: "/new/session.jsonl",
-			Source:     "session",
-			Hash:       "h-new",
-			Project:    "test",
-			Messages: []IndexedMessage{
-				{Ordinal: 0, Role: "user", Text: "new message content", UUID: getTestUUID(), Timestamp: "2024-01-01T00:00:00Z", ContentType: "text"},
-			},
-		},
-	}); err != nil {
-		t.Fatal(err)
-	}
-
-	// Purge with ISO date format (exercises the RFC3339-fail → ISO-success path)
-	deleted, err := db.Purge("2020-01-01")
-	if err != nil {
-		t.Fatalf("Purge ISO date: %v", err)
-	}
-	if deleted == 0 {
-		t.Error("expected at least 1 record deleted")
-	}
-
-	// Purge with RFC3339 format (exercises the direct RFC3339-success path with real deletions)
-	deleted2, err := db.Purge("2025-01-01T00:00:00Z")
-	if err != nil {
-		t.Fatalf("Purge RFC3339: %v", err)
-	}
-	_ = deleted2
 }
 
 func TestListSessionsAfterSync(t *testing.T) {
@@ -1418,73 +1363,6 @@ func TestHybridSearchWithAllProjectsFilter(t *testing.T) {
 	}
 }
 
-// TestPurgeWithMultiplePaths covers the multi-path deletion logic
-func TestPurgeWithMultiplePaths(t *testing.T) {
-	db, cleanup := newTestDB(t)
-	defer cleanup()
-
-	now := time.Now()
-	oldTime := now.Add(-100 * 24 * time.Hour)
-
-	// Sync files with different ages
-	if err := db.SyncFiles([]IndexedFile{
-		{
-			SourcePath: "/old/s1.jsonl",
-			Source:     "session",
-			Hash:       "h1",
-			Project:    "test",
-			Tags:       []string{"old"},
-			Messages: []IndexedMessage{
-				{Ordinal: 0, Role: "user", Text: "old1", UUID: getTestUUID(), Timestamp: oldTime.Format(time.RFC3339), ContentType: "text"},
-			},
-		},
-		{
-			SourcePath: "/old/s2.jsonl",
-			Source:     "session",
-			Hash:       "h2",
-			Project:    "test",
-			Tags:       []string{"old"},
-			Messages: []IndexedMessage{
-				{Ordinal: 0, Role: "user", Text: "old2", UUID: getTestUUID(), Timestamp: oldTime.Format(time.RFC3339), ContentType: "text"},
-			},
-		},
-		{
-			SourcePath: "/new/s3.jsonl",
-			Source:     "session",
-			Hash:       "h3",
-			Project:    "test",
-			Messages: []IndexedMessage{
-				{Ordinal: 0, Role: "user", Text: "new", UUID: getTestUUID(), Timestamp: now.Format(time.RFC3339), ContentType: "text"},
-			},
-		},
-	}); err != nil {
-		t.Fatalf("SyncFiles: %v", err)
-	}
-
-	// Purge old records
-	purgeTime := now.Add(-50 * 24 * time.Hour)
-	deleted, err := db.Purge(purgeTime.Format(time.RFC3339))
-	if err != nil {
-		t.Fatalf("Purge: %v", err)
-	}
-	if deleted != 2 {
-		t.Errorf("expected 2 deleted, got %d", deleted)
-	}
-
-	// Verify old files are deleted from indexed_files
-	var count int
-	_ = db.DB().QueryRow("SELECT COUNT(*) FROM indexed_files WHERE path = ?", "/old/s1.jsonl").Scan(&count)
-	if count != 0 {
-		t.Error("old indexed_files should be deleted")
-	}
-
-	// Verify new file remains
-	_ = db.DB().QueryRow("SELECT COUNT(*) FROM indexed_files WHERE path = ?", "/new/s3.jsonl").Scan(&count)
-	if count != 1 {
-		t.Error("new indexed_files should remain")
-	}
-}
-
 // TestValidateSucceedsOnCleanDB checks validation passes on clean state
 func TestValidateSucceedsOnCleanDB(t *testing.T) {
 	db, cleanup := newTestDB(t)
@@ -1913,37 +1791,6 @@ func TestQueryIndexedRecordsLimitAndOffset(t *testing.T) {
 	}
 }
 
-// TestPurgeWithoutTimestamps covers records without timestamps
-func TestPurgeWithoutTimestamps(t *testing.T) {
-	db, cleanup := newTestDB(t)
-	defer cleanup()
-
-	// Sync without timestamps (timestamp will be empty string/NULL)
-	if err := db.SyncFiles([]IndexedFile{
-		{
-			SourcePath: "/test/notimestamp.jsonl",
-			Source:     "session",
-			Hash:       "h1",
-			Project:    "test",
-			Messages: []IndexedMessage{
-				{Ordinal: 0, Role: "user", Text: "no timestamp", UUID: getTestUUID(), ContentType: "text"},
-			},
-		},
-	}); err != nil {
-		t.Fatalf("SyncFiles: %v", err)
-	}
-
-	// Purge with an old date — records with NULL/empty timestamp might still be deleted
-	// depending on SQL NULL comparison semantics
-	oldDate := time.Now().Add(-1000 * 24 * time.Hour)
-	deleted, err := db.Purge(oldDate.Format(time.RFC3339))
-	if err != nil {
-		t.Fatalf("Purge: %v", err)
-	}
-	// Just verify it succeeds; deleted count depends on NULL handling
-	_ = deleted
-}
-
 // TestGetFileHashesIterationError covers rows.Err() path
 func TestGetFileHashesMultiple(t *testing.T) {
 	db, cleanup := newTestDB(t)
@@ -2136,49 +1983,6 @@ func TestRefreshStopwordsMultipleCalls(t *testing.T) {
 		t.Fatalf("loadStopwords: %v", err)
 	}
 	_ = stopwords
-}
-
-// TestPurgeRowsAffected covers the RowsAffected path
-func TestPurgeRowsAffectedTracking(t *testing.T) {
-	db, cleanup := newTestDB(t)
-	defer cleanup()
-
-	now := time.Now()
-	oldTime := now.Add(-100 * 24 * time.Hour)
-
-	// Sync with old and new data
-	if err := db.SyncFiles([]IndexedFile{
-		{
-			SourcePath: "/old/s1.jsonl",
-			Source:     "session",
-			Hash:       "h1",
-			Project:    "test",
-			Messages: []IndexedMessage{
-				{Ordinal: 0, Role: "user", Text: "old msg", UUID: getTestUUID(), Timestamp: oldTime.Format(time.RFC3339), ContentType: "text"},
-			},
-		},
-		{
-			SourcePath: "/new/s2.jsonl",
-			Source:     "session",
-			Hash:       "h2",
-			Project:    "test",
-			Messages: []IndexedMessage{
-				{Ordinal: 0, Role: "user", Text: "new msg", UUID: getTestUUID(), Timestamp: now.Format(time.RFC3339), ContentType: "text"},
-			},
-		},
-	}); err != nil {
-		t.Fatalf("SyncFiles: %v", err)
-	}
-
-	// Purge and check RowsAffected is tracked
-	purgeTime := now.Add(-50 * 24 * time.Hour)
-	deleted, err := db.Purge(purgeTime.Format(time.RFC3339))
-	if err != nil {
-		t.Fatalf("Purge: %v", err)
-	}
-	if deleted < 0 {
-		t.Errorf("RowsAffected should be non-negative, got %d", deleted)
-	}
 }
 
 // TestValidateAllTablesMissing would need direct DB manipulation; skip for now
@@ -2569,55 +2373,6 @@ func TestOptimizeFTSAfterSync(t *testing.T) {
 	// Optimize
 	if err := db.OptimizeFTS(); err != nil {
 		t.Fatalf("OptimizeFTS: %v", err)
-	}
-}
-
-// TestPurgeRowCountError path (rows.Err after rows.Next)
-func TestPurgeWithSessionDeletion(t *testing.T) {
-	db, cleanup := newTestDB(t)
-	defer cleanup()
-
-	now := time.Now()
-	oldTime := now.Add(-200 * 24 * time.Hour)
-
-	// Sync multiple messages in one file
-	if err := db.SyncFiles([]IndexedFile{
-		{
-			SourcePath: "/test/old.jsonl",
-			Source:     "session",
-			Hash:       "h1",
-			Project:    "test",
-			Tags:       []string{"old"},
-			Messages: []IndexedMessage{
-				{Ordinal: 0, Role: "user", Text: "msg1", UUID: getTestUUID(), Timestamp: oldTime.Format(time.RFC3339), ContentType: "text"},
-				{Ordinal: 1, Role: "assistant", Text: "msg2", UUID: getTestUUID(), Timestamp: oldTime.Format(time.RFC3339), ContentType: "text"},
-			},
-		},
-	}); err != nil {
-		t.Fatalf("SyncFiles: %v", err)
-	}
-
-	// Purge should delete all items and the indexed_files entry
-	purgeTime := now.Add(-100 * 24 * time.Hour)
-	deleted, err := db.Purge(purgeTime.Format(time.RFC3339))
-	if err != nil {
-		t.Fatalf("Purge: %v", err)
-	}
-	if deleted < 2 {
-		t.Errorf("expected at least 2 deletions, got %d", deleted)
-	}
-
-	// Verify indexed_files was deleted
-	var count int
-	_ = db.DB().QueryRow("SELECT COUNT(*) FROM indexed_files WHERE path = ?", "/test/old.jsonl").Scan(&count)
-	if count != 0 {
-		t.Error("indexed_files entry should be deleted")
-	}
-
-	// Verify session_tags was deleted
-	_ = db.DB().QueryRow("SELECT COUNT(*) FROM session_tags WHERE source_path = ?", "/test/old.jsonl").Scan(&count)
-	if count != 0 {
-		t.Error("session_tags should be deleted")
 	}
 }
 

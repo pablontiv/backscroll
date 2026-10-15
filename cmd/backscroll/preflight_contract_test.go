@@ -16,7 +16,7 @@ func TestInvalidInvocationBeforeStartup(t *testing.T) {
 		args []string
 		want string
 	}{}
-	for _, command := range []string{"status", "validate", "rebuild", "config", "list", "context", "annotate", "recover", "purge", "patterns"} {
+	for _, command := range []string{"status", "validate", "rebuild", "config", "list", "context", "annotate", "recover", "patterns"} {
 		cases = append(cases, struct {
 			args []string
 			want string

@@ -70,7 +70,7 @@ See [Exact Context Retrieval](context.md) for the complete output schema and mac
 
 ## Perennial and recovery behavior
 
-`context` reads only `search_items` in SQLite. It does not parse source files, require an `indexed_files` row, or fall back to raw source. Indexed rows remain queryable after source files expire unless `purge` removes them explicitly. Compatible rows retained or installed by recovery use the same query path.
+`context` reads only `search_items` in SQLite. It does not parse source files, require an `indexed_files` row, or fall back to raw source. Indexed rows remain queryable after source files expire because the perennial store has no deletion path. Compatible rows retained or installed by recovery use the same query path.
 
 `list` remains a session/document summary surface. It does not accept message-level selectors or filters. `search` discovers candidate records. `context` returns an exact anchor-relative window.
 

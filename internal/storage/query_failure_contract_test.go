@@ -158,13 +158,6 @@ func TestDisposedIndexConsumersReportFailure(t *testing.T) {
 		"sync": func() error {
 			return db.SyncFiles([]IndexedFile{{SourcePath: "/omp", Source: "session", Hash: "hash", Messages: []IndexedMessage{{UUID: uuid, Text: "retained", ContentType: "text"}}}})
 		},
-		"purge": func() error {
-			n, e := db.Purge("2026-01-01")
-			if n != 0 {
-				t.Errorf("deleted: %d", n)
-			}
-			return e
-		},
 		"rebuild":  db.RebuildFTS,
 		"optimize": db.OptimizeFTS,
 		"backfill": func() error {

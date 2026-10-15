@@ -67,7 +67,7 @@ func TestProductionUpdaterInvalidMatrixUntouched(t *testing.T) {
 	old := version
 	version = "v1.0.0"
 	defer func() { version = old }()
-	for _, args := range [][]string{{"--help"}, {"--version"}, {"--skill"}, {"unknown"}, {"purge", "--no-sync"}, {"annotate"}, {"search", "--limit=-1"}, {"context"}} {
+	for _, args := range [][]string{{"--help"}, {"--version"}, {"--skill"}, {"unknown"}, {"annotate"}, {"search", "--limit=-1"}, {"context"}} {
 		t.Run(strings.Join(args, " "), func(t *testing.T) {
 			var out, errOut bytes.Buffer
 			var calls atomic.Int32

@@ -120,7 +120,7 @@ func TestSyncFilesWithNonErrorMessages(t *testing.T) {
 }
 
 func TestSyncFilesWipeReloadOrphans(t *testing.T) {
-	// Wipe-reload should delete orphaned template_matches for purged rows
+	// Wipe-reload should delete orphaned template_matches for replaced rows
 	db, err := Open(filepath.Join(t.TempDir(), "test.db"))
 	if err != nil {
 		t.Fatal(err)

@@ -20,7 +20,6 @@ func TestEveryOperationalCommandHasApprovedStartupClass(t *testing.T) {
 		"validate": startupSnapshotRead,
 		"config":   startupMetadataRead,
 		"annotate": startupMutation,
-		"purge":    startupMutation,
 		"rebuild":  startupMutation,
 		"recover":  startupRemediation,
 	}

@@ -243,7 +243,7 @@ input still has `exclude = []` keep that behavior until they intentionally add
 the `**/run-*/session.jsonl` exclusion and companion definition above, or
 explicitly refresh the shipped preset. Excluding a path later is not retroactive:
 rows already indexed remain in the perennial SQLite store, and `rebuild` does
-not remove them. Use the explicit `purge` command for retention-based deletion.
+not remove them. The perennial store has no deletion path.
 
 ## Complete OMP example
 
