@@ -18,6 +18,7 @@ import (
 // bounded search_echo backlog. That makes the query-time fallback observable
 // while a surviving source is still waiting for its owner sync.
 func TestZeroValuedCodexExecCommandEchoExcludedBeforeReplay(t *testing.T) {
+	t.Parallel()
 	e := newQueryEchoE2E(t)
 	e.writeRecord("target.jsonl", "target", "target", 0, "violet handshake quartz marker", false)
 	for i := 0; i < 4; i++ {
@@ -109,6 +110,7 @@ func TestZeroValuedCodexExecCommandEchoExcludedBeforeReplay(t *testing.T) {
 // Pre-#80 Codex writes stored search_echo=0 (not NULL). Hash-stable reopen must
 // still reparse those surviving sources so call_id pairing can mark results.
 func TestStaleZeroSearchEchoReplaysOnHashStableReopen(t *testing.T) {
+	t.Parallel()
 	e := newQueryEchoE2E(t)
 	e.writeCoreProse()
 	baseline := e.searchJSON(queryEchoText, "", 20)

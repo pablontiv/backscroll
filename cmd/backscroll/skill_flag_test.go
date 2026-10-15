@@ -5,7 +5,6 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"runtime"
 	"strings"
 	"testing"
 )
@@ -128,16 +127,8 @@ func TestValidateSkillInvocationHonorsPOSIXSeparator(t *testing.T) {
 }
 
 func TestDevBinarySkillEntryPoint(t *testing.T) {
-	buildDir := t.TempDir()
-	binary := filepath.Join(buildDir, "backscroll")
-	if runtime.GOOS == "windows" {
-		binary += ".exe"
-	}
-	build := exec.Command("go", "build", "-buildvcs=false", "-o", binary, ".")
-	buildOutput, err := build.CombinedOutput()
-	if err != nil {
-		t.Fatalf("build dev binary: %v\n%s", err, buildOutput)
-	}
+	t.Parallel()
+	binary := builtTestBinary(t)
 
 	runtimeRoot := t.TempDir()
 	badConfig := filepath.Join(runtimeRoot, "config-is-a-file")

@@ -8,6 +8,7 @@ import (
 
 // Exercise the production API on a real temporary database, including read-only validation.
 func TestValidateFTSMembershipReadOnly(t *testing.T) {
+	t.Parallel()
 	for _, corruption := range []string{"healthy", "missing prose", "missing tool", "tool in prose", "prose in tool", "generic rebuild", "orphan posting"} {
 		t.Run(corruption, func(t *testing.T) {
 			path := filepath.Join(t.TempDir(), "index.db")

@@ -145,6 +145,7 @@ func echoParityCorpus(t *testing.T) []echoParityFixture {
 // the unfiltered page predicate, the --relax unfiltered IDF count, and the
 // requeue detection in PendingSearchEchoPaths.
 func TestEchoExclusionThreeWayParity(t *testing.T) {
+	t.Parallel()
 	db, cleanup := newTestDB(t)
 	t.Cleanup(cleanup)
 

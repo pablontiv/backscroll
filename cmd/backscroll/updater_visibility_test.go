@@ -35,6 +35,7 @@ func TestUpdaterInvalidInvocationsDoNoWork(t *testing.T) {
 }
 
 func TestUpdaterValidationAndWarnings(t *testing.T) {
+	t.Parallel()
 	for _, failed := range []bool{false, true} {
 		t.Run(string(rune('0'+btoi(failed))), func(t *testing.T) {
 			var out, errOut bytes.Buffer
@@ -90,6 +91,7 @@ func btoi(b bool) int {
 }
 
 func TestUpdaterRequiredAndFlagGroupsBeforeStartup(t *testing.T) {
+	t.Parallel()
 	for _, group := range []bool{false, true} {
 		var apply atomic.Int32
 		root := &cobra.Command{Use: "root", Run: func(*cobra.Command, []string) { t.Fatal("handler ran") }, PersistentPreRun: func(*cobra.Command, []string) { t.Fatal("startup ran") }}
@@ -108,6 +110,7 @@ func TestUpdaterRequiredAndFlagGroupsBeforeStartup(t *testing.T) {
 }
 
 func TestUpdaterStagingCap(t *testing.T) {
+	t.Parallel()
 	release := make(chan struct{})
 	exited := make(chan struct{})
 	tick := make(chan time.Time, 1)
@@ -123,7 +126,8 @@ func TestUpdaterStagingCap(t *testing.T) {
 // A completed fetch cancellation is not a network failure, even when completion
 // and cancellation are both ready when the command returns.
 func TestUpdaterCanceledCompletionIsSilent(t *testing.T) {
-	for i := 0; i < 100; i++ {
+	t.Parallel()
+	for range 100 {
 		ctx, cancel := context.WithCancel(context.Background())
 		done := make(chan struct{})
 		var out, errOut bytes.Buffer
@@ -136,6 +140,7 @@ func TestUpdaterCanceledCompletionIsSilent(t *testing.T) {
 }
 
 func TestUpdaterMachineOutputUnchanged(t *testing.T) {
+	t.Parallel()
 	for _, format := range []string{"json", "robot"} {
 		var baseline bytes.Buffer
 		var wantErr bytes.Buffer
@@ -156,6 +161,7 @@ func TestUpdaterMachineOutputUnchanged(t *testing.T) {
 }
 
 func TestUpdaterRejectedArgsDoNoWork(t *testing.T) {
+	t.Parallel()
 	var apply, fetch atomic.Int32
 	rejected := errors.New("rejected Args")
 	root := &cobra.Command{Use: "root", Args: func(*cobra.Command, []string) error { return rejected }, Run: func(*cobra.Command, []string) { t.Fatal("handler ran") }}
@@ -166,6 +172,7 @@ func TestUpdaterRejectedArgsDoNoWork(t *testing.T) {
 }
 
 func TestUpdaterGeneratedCompletionCommand(t *testing.T) {
+	t.Parallel()
 	var out, errOut bytes.Buffer
 	var apply, fetch atomic.Int32
 	root := &cobra.Command{Use: "root"}

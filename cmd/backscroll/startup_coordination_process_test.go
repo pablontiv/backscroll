@@ -109,29 +109,45 @@ func TestStartupCoordinationHelperProcess(t *testing.T) {
 	}
 	os.Exit(0)
 }
+func coordinationPolicyEnv(t *testing.T, dbPath string) []string {
+	t.Helper()
+	emptyInputs := filepath.Join(t.TempDir(), "empty-inputs")
+	if err := os.MkdirAll(emptyInputs, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	return []string{
+		"HOME=" + t.TempDir(),
+		"BACKSCROLL_CONFIG_DIR=" + t.TempDir(),
+		"BACKSCROLL_DATABASE_PATH=" + dbPath,
+		"BACKSCROLL_SESSION_DIRS=" + emptyInputs,
+	}
+}
 
 func TestStartupCoordinationSingleFlightSnapshotFollowers(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	dbPath := filepath.Join(dir, "index.db")
 	seedStartupCoordinationDB(t, dbPath)
-	setIndexPolicyEnv(t, dbPath, t.TempDir())
+	policyEnv := coordinationPolicyEnv(t, dbPath)
 
 	counter := filepath.Join(dir, "sync-counter.txt")
 	ready := filepath.Join(dir, "owner-ready")
 	release := filepath.Join(dir, "owner-release")
 	owner := startCoordinationChild(t, []string{"status", "--json"},
-		"BACKSCROLL_SYNC_COUNTER="+counter,
-		"BACKSCROLL_SYNC_READY="+ready,
-		"BACKSCROLL_SYNC_RELEASE="+release,
-		"BACKSCROLL_SYNC_BLOCK=1",
+		append(policyEnv,
+			"BACKSCROLL_SYNC_COUNTER="+counter,
+			"BACKSCROLL_SYNC_READY="+ready,
+			"BACKSCROLL_SYNC_RELEASE="+release,
+			"BACKSCROLL_SYNC_BLOCK=1",
+		)...,
 	)
 	waitForPath(t, ready, 2*time.Second)
 
 	search := startCoordinationChild(t, []string{"search", startupCoordinationSeedText, "--all-projects", "--json"},
-		"BACKSCROLL_SYNC_COUNTER="+counter,
+		append(policyEnv, "BACKSCROLL_SYNC_COUNTER="+counter)...,
 	)
 	status := startCoordinationChild(t, []string{"status", "--json"},
-		"BACKSCROLL_SYNC_COUNTER="+counter,
+		append(policyEnv, "BACKSCROLL_SYNC_COUNTER="+counter)...,
 	)
 	requireChildSuccess(t, search, 2*time.Second)
 	requireChildSuccess(t, status, 2*time.Second)
@@ -148,25 +164,27 @@ func TestStartupCoordinationSingleFlightSnapshotFollowers(t *testing.T) {
 }
 
 func TestStartupCoordinationMutationTimeoutNoSideEffect(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	dbPath := filepath.Join(dir, "index.db")
 	seedStartupCoordinationDB(t, dbPath)
-	setIndexPolicyEnv(t, dbPath, t.TempDir())
+	policyEnv := coordinationPolicyEnv(t, dbPath)
 
 	counter := filepath.Join(dir, "sync-counter.txt")
 	ready := filepath.Join(dir, "owner-ready")
 	release := filepath.Join(dir, "owner-release")
 	owner := startCoordinationChild(t, []string{"status", "--json"},
-		"BACKSCROLL_SYNC_COUNTER="+counter,
-		"BACKSCROLL_SYNC_READY="+ready,
-		"BACKSCROLL_SYNC_RELEASE="+release,
-		"BACKSCROLL_SYNC_BLOCK=1",
+		append(policyEnv,
+			"BACKSCROLL_SYNC_COUNTER="+counter,
+			"BACKSCROLL_SYNC_READY="+ready,
+			"BACKSCROLL_SYNC_RELEASE="+release,
+			"BACKSCROLL_SYNC_BLOCK=1",
+		)...,
 	)
 	waitForPath(t, ready, 2*time.Second)
 
 	annotate := startCoordinationChild(t, []string{"annotate", "--uuid", startupCoordinationSeedUUID, "--kind", "correction", "--label", "should-not-write"},
-		"BACKSCROLL_SYNC_COUNTER="+counter,
-		"BACKSCROLL_MUTATION_WAIT=150ms",
+		append(policyEnv, "BACKSCROLL_SYNC_COUNTER="+counter, "BACKSCROLL_MUTATION_WAIT=150ms")...,
 	)
 	err := waitForChild(t, annotate, 2*time.Second)
 	if err == nil {
@@ -188,25 +206,28 @@ func TestStartupCoordinationMutationTimeoutNoSideEffect(t *testing.T) {
 }
 
 func TestStartupCoordinationRemediationWaitsForOwner(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	dbPath := filepath.Join(dir, "index.db")
 	seedStartupCoordinationDB(t, dbPath)
-	setIndexPolicyEnv(t, dbPath, t.TempDir())
+	policyEnv := coordinationPolicyEnv(t, dbPath)
 
 	counter := filepath.Join(dir, "sync-counter.txt")
 	ready := filepath.Join(dir, "owner-ready")
 	release := filepath.Join(dir, "owner-release")
 
 	owner := startCoordinationChild(t, []string{"status", "--json"},
-		"BACKSCROLL_SYNC_COUNTER="+counter,
-		"BACKSCROLL_SYNC_READY="+ready,
-		"BACKSCROLL_SYNC_RELEASE="+release,
-		"BACKSCROLL_SYNC_BLOCK=1",
+		append(policyEnv,
+			"BACKSCROLL_SYNC_COUNTER="+counter,
+			"BACKSCROLL_SYNC_READY="+ready,
+			"BACKSCROLL_SYNC_RELEASE="+release,
+			"BACKSCROLL_SYNC_BLOCK=1",
+		)...,
 	)
 	waitForPath(t, ready, 10*time.Second)
 
 	blocked := startCoordinationChild(t, []string{"recover", "--from", dbPath, "--dry-run"},
-		"BACKSCROLL_MUTATION_WAIT=100ms",
+		append(policyEnv, "BACKSCROLL_MUTATION_WAIT=100ms")...,
 	)
 	if err := waitForChild(t, blocked, 10*time.Second); err == nil {
 		t.Fatal("busy remediation unexpectedly succeeded")
@@ -221,7 +242,7 @@ func TestStartupCoordinationRemediationWaitsForOwner(t *testing.T) {
 	}
 	requireChildSuccess(t, owner, 10*time.Second)
 
-	retry := startCoordinationChild(t, []string{"recover", "--from", dbPath, "--dry-run"})
+	retry := startCoordinationChild(t, []string{"recover", "--from", dbPath, "--dry-run"}, policyEnv...)
 	requireChildSuccess(t, retry, 10*time.Second)
 	if !strings.Contains(retry.stdout.String(), "recovery dry run") {
 		t.Fatalf("retry stdout=%q", retry.stdout.String())
@@ -230,25 +251,28 @@ func TestStartupCoordinationRemediationWaitsForOwner(t *testing.T) {
 }
 
 func TestStartupCoordinationCrashRecovery(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	dbPath := filepath.Join(dir, "index.db")
 	seedStartupCoordinationDB(t, dbPath)
-	setIndexPolicyEnv(t, dbPath, t.TempDir())
+	policyEnv := coordinationPolicyEnv(t, dbPath)
 
 	counter := filepath.Join(dir, "sync-counter.txt")
 	ready := filepath.Join(dir, "owner-ready")
 	owner := startCoordinationChild(t, []string{"status", "--json"},
-		"BACKSCROLL_SYNC_COUNTER="+counter,
-		"BACKSCROLL_SYNC_READY="+ready,
-		"BACKSCROLL_SYNC_RELEASE="+filepath.Join(dir, "never-release"),
-		"BACKSCROLL_SYNC_BLOCK=1",
+		append(policyEnv,
+			"BACKSCROLL_SYNC_COUNTER="+counter,
+			"BACKSCROLL_SYNC_READY="+ready,
+			"BACKSCROLL_SYNC_RELEASE="+filepath.Join(dir, "never-release"),
+			"BACKSCROLL_SYNC_BLOCK=1",
+		)...,
 	)
 	waitForPath(t, ready, 2*time.Second)
 	killChildAndWait(t, owner, 2*time.Second)
 	assertCounterLines(t, counter, 1)
 
 	replacement := startCoordinationChild(t, []string{"status", "--json"},
-		"BACKSCROLL_SYNC_COUNTER="+counter,
+		append(policyEnv, "BACKSCROLL_SYNC_COUNTER="+counter)...,
 	)
 	requireChildSuccess(t, replacement, 5*time.Second)
 	assertStatusJSONHasSeed(t, replacement.stdout.String())
@@ -260,9 +284,10 @@ func TestStartupCoordinationCrashRecovery(t *testing.T) {
 }
 
 func TestStartupCoordinationMetadataFollowerMissingDB(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	dbPath := filepath.Join(dir, "missing.db")
-	setIndexPolicyEnv(t, dbPath, t.TempDir())
+	policyEnv := coordinationPolicyEnv(t, dbPath)
 
 	lease, acquired, err := startuplock.TryAcquire(dbPath)
 	if err != nil {
@@ -279,7 +304,7 @@ func TestStartupCoordinationMetadataFollowerMissingDB(t *testing.T) {
 
 	counter := filepath.Join(dir, "sync-counter.txt")
 	configChild := startCoordinationChild(t, []string{"config", "--json"},
-		"BACKSCROLL_SYNC_COUNTER="+counter,
+		append(policyEnv, "BACKSCROLL_SYNC_COUNTER="+counter)...,
 	)
 	requireChildSuccess(t, configChild, 2*time.Second)
 	assertConfigJSONPath(t, configChild.stdout.String(), dbPath)

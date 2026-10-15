@@ -37,6 +37,7 @@ type queryEchoE2E struct {
 }
 
 func TestDirectBackscrollSearchEchoesDoNotCrowdUnfilteredRecall(t *testing.T) {
+	t.Parallel()
 	e := newQueryEchoE2E(t)
 	corePaths := e.writeCoreProse()
 	e.run("status", "--json")
@@ -107,6 +108,7 @@ func TestDirectBackscrollSearchEchoesDoNotCrowdUnfilteredRecall(t *testing.T) {
 }
 
 func TestDirectBackscrollSearchEchoesRefillToolCandidateWindow(t *testing.T) {
+	t.Parallel()
 	e := newQueryEchoE2E(t)
 	query := "overflow scarlet zebra"
 	// The legitimate command is deliberately the longest (weakest bm25) match so
@@ -167,7 +169,6 @@ func newQueryEchoE2E(t *testing.T) *queryEchoE2E {
 		filepath.Join(root, "xdg-data"),
 		filepath.Join(root, "xdg-cache"),
 		filepath.Join(root, "xdg-state"),
-		filepath.Join(root, "go-cache"),
 		filepath.Join(root, "go-tmp"),
 	} {
 		if err := os.MkdirAll(path, 0o700); err != nil {
@@ -175,23 +176,7 @@ func newQueryEchoE2E(t *testing.T) *queryEchoE2E {
 		}
 	}
 
-	repoRoot, err := filepath.Abs(filepath.Join("..", ".."))
-	if err != nil {
-		t.Fatal(err)
-	}
-	binary := filepath.Join(root, "backscroll")
-	build := exec.Command("go", "build", "-mod=readonly", "-buildvcs=false", "-ldflags", "-X main.version=dev", "-o", binary, "./cmd/backscroll/")
-	build.Dir = repoRoot
-	build.Env = queryEchoOverrideEnv(os.Environ(), map[string]string{
-		"GOCACHE":     filepath.Join(root, "go-cache"),
-		"GOPROXY":     "off",
-		"GOTELEMETRY": "off",
-		"GOTMPDIR":    filepath.Join(root, "go-tmp"),
-		"TMPDIR":      filepath.Join(root, "go-tmp"),
-	})
-	if output, err := build.CombinedOutput(); err != nil {
-		t.Fatalf("build actual Backscroll CLI: %v\n%s", err, output)
-	}
+	binary := builtTestBinary(t)
 
 	config := filepath.Join(root, "config")
 	fixtures := filepath.Join(root, "fixtures")

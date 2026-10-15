@@ -10,6 +10,7 @@ import (
 )
 
 func TestPairedEchoV14UpgradeReparsesUnchangedFiles(t *testing.T) {
+	t.Parallel()
 	e := newQueryEchoE2E(t)
 	e.writeCoreProse()
 	baseline := queryEchoShape(e.searchJSON(queryEchoText, "", 20))
@@ -103,6 +104,7 @@ func TestPairedEchoV14UpgradeReparsesUnchangedFiles(t *testing.T) {
 }
 
 func TestPairedEchoControlsKeepIdenticalUnrelatedOutputs(t *testing.T) {
+	t.Parallel()
 	e := newQueryEchoE2E(t)
 	e.writeCoreProse()
 	output := e.run("search", "--text", queryEchoText, "--all-projects", "--robot", "--fields", "minimal", "--max-tokens", "0", "--limit", "2")

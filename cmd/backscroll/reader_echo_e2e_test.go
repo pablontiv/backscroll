@@ -18,6 +18,7 @@ import (
 // robot output as the paired result, never a hand-authored imitation.
 
 func TestCodexDirectSearchEchoesDoNotCrowdUnfilteredRecall(t *testing.T) {
+	t.Parallel()
 	for _, tc := range []struct {
 		name string
 		call func(id, command string) map[string]any
@@ -32,6 +33,7 @@ func TestCodexDirectSearchEchoesDoNotCrowdUnfilteredRecall(t *testing.T) {
 		}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
 			e := newQueryEchoE2E(t)
 			e.writeCoreProse()
 			baseline := e.searchJSON(queryEchoText, "", 20)
@@ -52,6 +54,7 @@ func TestCodexDirectSearchEchoesDoNotCrowdUnfilteredRecall(t *testing.T) {
 }
 
 func TestOpenCodeDirectSearchEchoesDoNotCrowdUnfilteredRecall(t *testing.T) {
+	t.Parallel()
 	e := newQueryEchoE2E(t)
 	e.writeCoreProse()
 	baseline := e.searchJSON(queryEchoText, "", 20)
@@ -78,6 +81,7 @@ func TestOpenCodeDirectSearchEchoesDoNotCrowdUnfilteredRecall(t *testing.T) {
 // Negative controls: the same readers must keep unrelated commands with
 // identical output, and Codex shell argv that is not the exact direct form.
 func TestCodexAndOpenCodeEchoNegativeControlsRemainSearchable(t *testing.T) {
+	t.Parallel()
 	e := newQueryEchoE2E(t)
 	query := "unrelated tool compass"
 	codexRoot := e.addReaderManifest("codex", "codex")

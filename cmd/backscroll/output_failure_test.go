@@ -14,6 +14,7 @@ import (
 
 	"github.com/pablontiv/backscroll/internal/compat"
 	"github.com/pablontiv/backscroll/internal/config"
+	"github.com/pablontiv/backscroll/internal/input_config"
 	"github.com/pablontiv/backscroll/internal/models"
 	"github.com/pablontiv/backscroll/internal/recovery"
 	"github.com/pablontiv/backscroll/internal/storage"
@@ -67,10 +68,41 @@ func seedOutputBranches(t *testing.T, path string) {
 	}
 }
 
+func requiredOutputFixture(t *testing.T, path string) startupPolicyFunc {
+	t.Helper()
+	sessionDir := filepath.Join(filepath.Dir(path), "empty-inputs")
+	if err := os.MkdirAll(sessionDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	cfg := &config.Config{DatabasePath: path, SessionDirs: []string{sessionDir}, SessionDirsExplicit: true}
+	result := startupResult{
+		Config: cfg,
+		inputs: &inputSnapshot{
+			definitions: []input_config.InputDefinition{input_config.SessionDirsToManifest(cfg.SessionDirs)},
+			mode:        input_config.ModeLegacy,
+		},
+	}
+	return func(context.Context, io.Writer, startupCommandClass) startupResult {
+		return result
+	}
+}
+
+func executeRequiredOutput(policy startupPolicyFunc, stdout, stderr io.Writer, args []string) error {
+	root := buildRootCmdWithDependencies(stdout, stderr, policy, newStartupSyncService(), nil)
+	return runContextWithDependencies(context.Background(), stdout, stderr, args, runDependencies{root: root})
+}
+
+func executeRequiredOutputHandler(policy startupPolicyFunc, stdout, stderr io.Writer, args []string) error {
+	root := buildRootCmdWithDependencies(stdout, stderr, policy, newStartupSyncService(), nil)
+	root.SetArgs(args)
+	return root.Execute()
+}
+
 // Removing any required-write error check must turn a subtest red. Exercise
-// the public run path, real SQLite queries and all output modes, not serializers
-// in isolation. Empty text/robot search deliberately emits no stdout payload.
+// real command handlers, SQLite queries, all output modes, and the injected run
+// boundary against one prepared startup fixture per population state.
 func TestRequiredOutputFailures(t *testing.T) {
+	t.Parallel()
 	// Captured from audited HEAD eeb9e8f before changing production writes.
 	// Isolated paths and dynamic status size are normalized; seeded metadata is stable.
 	goldens := map[string]string{}
@@ -85,10 +117,20 @@ func TestRequiredOutputFailures(t *testing.T) {
 	}
 	for _, populated := range []bool{false, true} {
 		t.Run(fmt.Sprintf("populated=%t", populated), func(t *testing.T) {
-			path, _ := testEnv(t)
+			dir := t.TempDir()
+			path := filepath.Join(dir, "test.db")
 			if populated {
 				seedOutputBranches(t, path)
+			} else {
+				db, err := storage.Open(path)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if err := db.Close(); err != nil {
+					t.Fatal(err)
+				}
 			}
+			policy := requiredOutputFixture(t, path)
 			commands := [][]string{{"config"}, {"status"}, {"validate"}, {"list", "--all-projects"}, {"search", "--text", "database", "--all-projects"}}
 			for _, kind := range []string{"commands", "failures", "templates", "corrections", "sequences"} {
 				commands = append(commands, []string{"patterns", "--kind", kind, "--all-projects", "--min-support", "1"})
@@ -111,8 +153,9 @@ func TestRequiredOutputFailures(t *testing.T) {
 						args = append(args, mode)
 					}
 					t.Run(strings.Join(args, " "), func(t *testing.T) {
+						t.Parallel()
 						good := &outputFailureWriter{}
-						if err := run(good, io.Discard, args); err != nil {
+						if err := executeRequiredOutput(policy, good, io.Discard, args); err != nil {
 							t.Fatal(err)
 						}
 						key := fmt.Sprintf("%t/%s", populated, strings.Join(args, " "))
@@ -141,18 +184,16 @@ func TestRequiredOutputFailures(t *testing.T) {
 						}
 						for failAt := 1; failAt <= good.calls; failAt++ {
 							bad := &outputFailureWriter{failAt: failAt}
-							root := buildRootCmd(bad, io.Discard)
-							root.SetArgs(args)
-							if err := root.Execute(); !errors.Is(err, errRequiredOutput) {
+							if err := executeRequiredOutputHandler(policy, bad, io.Discard, args); !errors.Is(err, errRequiredOutput) {
 								t.Errorf("handler write %d/%d: want output error, got %v", failAt, good.calls, err)
 							}
-							if err := run(&outputFailureWriter{failAt: failAt}, io.Discard, args); !errors.Is(err, errRequiredOutput) {
+							if err := executeRequiredOutput(policy, &outputFailureWriter{failAt: failAt}, io.Discard, args); !errors.Is(err, errRequiredOutput) {
 								t.Errorf("run write %d: %v", failAt, err)
 							}
 						}
 						// Stderr hints and progress are advisory, not required payload writes.
 						var again bytes.Buffer
-						if err := run(&again, &outputFailureWriter{failAt: 1}, args); err != nil {
+						if err := executeRequiredOutput(policy, &again, &outputFailureWriter{failAt: 1}, args); err != nil {
 							t.Fatal(err)
 						}
 						if again.String() != good.String() {

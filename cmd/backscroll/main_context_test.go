@@ -19,6 +19,7 @@ func runWithTestDependencies(ctx context.Context, args []string, deps runDepende
 }
 
 func TestRunBackgroundWrapperCompatibility(t *testing.T) {
+	t.Parallel()
 	for _, tc := range []struct {
 		name string
 		args []string
@@ -48,6 +49,7 @@ func TestRunBackgroundWrapperCompatibility(t *testing.T) {
 }
 
 func TestRunContextDependenciesAreNilSafe(t *testing.T) {
+	t.Parallel()
 	var root *cobra.Command
 	var apply func() error
 	var fetch func(context.Context, string) error
@@ -64,6 +66,7 @@ func TestRunContextDependenciesAreNilSafe(t *testing.T) {
 }
 
 func TestRunContextCancellationReachesStartupAndHandler(t *testing.T) {
+	t.Parallel()
 	t.Run("startup", func(t *testing.T) {
 		ctx, cancel := context.WithCancel(context.Background())
 		cancel()
@@ -140,6 +143,7 @@ func TestRunContextCancellationReachesStartupAndHandler(t *testing.T) {
 }
 
 func TestRunContextCanceledStagingWorkerExits(t *testing.T) {
+	t.Parallel()
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
@@ -186,6 +190,7 @@ func TestRunContextCanceledStagingWorkerExits(t *testing.T) {
 }
 
 func TestRunContextStillWaitsForSuccessfulStaging(t *testing.T) {
+	t.Parallel()
 	fetchStarted := make(chan struct{})
 	releaseFetch := make(chan struct{})
 	commandDone := make(chan struct{})
@@ -233,6 +238,7 @@ func (l *countingStartupLease) Release() error {
 }
 
 func TestRunContextCancellationReleasesCommandLease(t *testing.T) {
+	t.Parallel()
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 

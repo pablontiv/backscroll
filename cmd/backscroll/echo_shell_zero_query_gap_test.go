@@ -24,6 +24,7 @@ import (
 // ingested by the actual Codex reader, its serialized shape is asserted, and
 // only then is search_echo forced back to 0 to reproduce the pre-#80 state.
 func TestZeroValuedCodexShellEchoExcludedBeforeReplay(t *testing.T) {
+	t.Parallel()
 	e := newQueryEchoE2E(t)
 	e.writeRecord("target.jsonl", "target", "target", 0, "violet handshake quartz marker", false)
 	for i := 0; i < 4; i++ {

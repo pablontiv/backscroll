@@ -12,6 +12,7 @@ import (
 // A failed append must not publish its new hash, partially enrich a retained
 // call, or leave satellites that consumers could mistake for committed events.
 func TestOMPPerennialAppendStorageFailuresAreAtomic(t *testing.T) {
+	t.Parallel()
 	for _, tc := range []struct{ table, operation, condition string }{
 		{"search_items", "INSERT", "NEW.source_path='/omp'"},
 		{"search_items", "UPDATE", "NEW.source_path='/omp' AND NEW.search_echo=1"},

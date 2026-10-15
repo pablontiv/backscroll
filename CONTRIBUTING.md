@@ -35,17 +35,10 @@ Run `just --list` to see all available recipes. Key ones:
 1. Fork the repository
 2. Create a feature branch from `main`
 3. Make your changes
-4. Run `just check` and `just test`
+4. Run `just check` and `just ci`
 5. Commit using [Conventional Commits](https://www.conventionalcommits.org/)
 6. Open a Pull Request
-7. Before closing the pull request, require a passing candidate for its current
-   head SHA and smoke-test that candidate locally, side by side with the stable
-   installation, against a transactionally consistent copy of the local database
-
-Every pull request receives an automatic candidate build. Follow the
-[PR candidate artifact runbook](docs/runbooks/pr-candidate.md) to verify and
-smoke-test it without exposing the live database or replacing the stable binary.
-A new candidate is required after every pull request synchronization.
+7. Require a passing `candidate` check for the pull request's current head SHA
 
 After merge, install and verify the resulting stable release. Never install or
 verify a development (`dev`) build.

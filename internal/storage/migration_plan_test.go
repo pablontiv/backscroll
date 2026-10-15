@@ -16,6 +16,7 @@ import (
 )
 
 func TestEveryCatalogFixtureReachesCurrentSemanticHead(t *testing.T) {
+	t.Parallel()
 	catalog, err := compat.LoadCatalog()
 	if err != nil {
 		t.Fatal(err)
