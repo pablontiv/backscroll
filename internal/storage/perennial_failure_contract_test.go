@@ -12,6 +12,7 @@ import (
 // Expired input files cannot repair a partial derived-data write. Abort at
 // each persistent stage and verify retry converges without publishing progress.
 func TestExpiredSessionBackfillRejectionIsAtomic(t *testing.T) {
+	t.Parallel()
 	for _, tc := range []struct{ table, operation string }{
 		{"message_templates", "INSERT"}, {"message_templates", "UPDATE"}, {"template_matches", "INSERT"}, {"template_matches", "DELETE"}, {"message_templates", "DELETE"}, {"correction_signals", "DELETE"}, {"correction_signals", "INSERT"}, {"tool_events", "INSERT"},
 	} {

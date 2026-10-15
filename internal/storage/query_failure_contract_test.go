@@ -296,6 +296,7 @@ func fmtBool(b bool) string {
 }
 
 func TestStatsOptionalTablesDoNotHideMandatoryIndexFailure(t *testing.T) {
+	t.Parallel()
 	for _, missing := range []string{"chunks", "embedding_metadata", "search_items"} {
 		t.Run(missing, func(t *testing.T) {
 			db, err := Open(filepath.Join(t.TempDir(), "stats.db"))

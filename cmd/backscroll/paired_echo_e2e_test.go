@@ -11,6 +11,7 @@ import (
 
 // Exercise the real command's output, not a hand-authored imitation of robot text.
 func TestPairedBackscrollSearchResultsDoNotCrowdRecall(t *testing.T) {
+	t.Parallel()
 	e := newQueryEchoE2E(t)
 	paths := e.writeCoreProse()
 	baseline := e.searchJSON(queryEchoText, "", 20)

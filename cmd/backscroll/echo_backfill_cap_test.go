@@ -9,6 +9,7 @@ import (
 )
 
 func TestEchoProvenanceBackfillDrainsAtMost200UnchangedFiles(t *testing.T) {
+	t.Parallel()
 	e := newQueryEchoE2E(t)
 	oldTime := time.Now().Add(-24 * time.Hour)
 	for i := 0; i < 201; i++ {

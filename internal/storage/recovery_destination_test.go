@@ -17,6 +17,7 @@ import (
 )
 
 func TestPublishedGoLineagesUpgradeLosslessly(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	catalog, err := compat.LoadCatalog()
 	if err != nil {
@@ -496,6 +497,7 @@ func TestRecoveryDestinationIndependentVerificationRejectsTamper(t *testing.T) {
 }
 
 func TestRecoveryDestinationVerificationRejectsInvalidRecoveredAccounting(t *testing.T) {
+	t.Parallel()
 	cases := []struct {
 		name   string
 		mutate string

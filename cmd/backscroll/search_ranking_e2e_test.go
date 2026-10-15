@@ -17,6 +17,7 @@ import (
 // when the term appears in most documents FTS5 clamps IDF to ~0, every match
 // ties near -0.000, and the inversion hides behind the tie.
 func TestSearchRanksStrongestBM25MatchFirst(t *testing.T) {
+	t.Parallel()
 	e := newQueryEchoE2E(t)
 	filler := strings.Repeat("filler alpha beta gamma delta ", 60)
 

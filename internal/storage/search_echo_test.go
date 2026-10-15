@@ -352,6 +352,7 @@ func TestEchoProvenanceDoesNotAffectProse(t *testing.T) {
 // hand-written string — so it exercises the same storage path the production
 // ingest uses.
 func TestPendingSearchEchoPathsRequeuesCodexShellRoundTrip(t *testing.T) {
+	t.Parallel()
 	db, err := Open(filepath.Join(t.TempDir(), "index.db"))
 	if err != nil {
 		t.Fatal(err)

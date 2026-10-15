@@ -61,6 +61,7 @@ func TestStartupCoordinatorsIsolateDependencies(t *testing.T) {
 }
 
 func TestCoordinateStartupImmediateOwnerSnapshotSyncsAndReleasesBeforeResult(t *testing.T) {
+	t.Parallel()
 	coordinator := newStartupCoordinator()
 	lease := &fakeStartupLease{}
 	syncCalls := 0
@@ -92,6 +93,7 @@ func TestCoordinateStartupImmediateOwnerSnapshotSyncsAndReleasesBeforeResult(t *
 }
 
 func TestCoordinateStartupImmediateOwnerMutationSyncsAndRetainsLease(t *testing.T) {
+	t.Parallel()
 	coordinator := newStartupCoordinator()
 	lease := &fakeStartupLease{}
 	syncCalls := 0
@@ -120,6 +122,7 @@ func TestCoordinateStartupImmediateOwnerMutationSyncsAndRetainsLease(t *testing.
 }
 
 func TestCoordinateStartupImmediateRemediationRetainsLeaseWithoutPrepareOrSync(t *testing.T) {
+	t.Parallel()
 	coordinator := newStartupCoordinator()
 	lease := &fakeStartupLease{}
 	coordinator.tryAcquire = func(string) (startupLease, bool, error) { return lease, true, nil }
@@ -146,6 +149,7 @@ func TestCoordinateStartupImmediateRemediationRetainsLeaseWithoutPrepareOrSync(t
 }
 
 func TestCoordinateStartupBusySnapshotUsesCompatibleReadOnlySnapshot(t *testing.T) {
+	t.Parallel()
 	coordinator := newStartupCoordinator()
 	dbPath := seedCompatibleStartupDB(t)
 	cfg := &config.Config{DatabasePath: dbPath}
@@ -175,6 +179,7 @@ func TestCoordinateStartupBusySnapshotUsesCompatibleReadOnlySnapshot(t *testing.
 }
 
 func TestCoordinateStartupBusyMetadataSkipsReadPreparationWhenDatabaseMissing(t *testing.T) {
+	t.Parallel()
 	coordinator := newStartupCoordinator()
 	prepareCalls := 0
 	coordinator.tryAcquire = func(string) (startupLease, bool, error) { return nil, false, nil }
@@ -196,6 +201,7 @@ func TestCoordinateStartupBusyMetadataSkipsReadPreparationWhenDatabaseMissing(t 
 }
 
 func TestCoordinateStartupBusyMutationAcquiresWithinWaitAndBecomesOwner(t *testing.T) {
+	t.Parallel()
 	coordinator := newStartupCoordinator()
 	lease := &fakeStartupLease{}
 	syncCalls := 0
@@ -230,6 +236,7 @@ func TestCoordinateStartupBusyMutationAcquiresWithinWaitAndBecomesOwner(t *testi
 }
 
 func TestCoordinateStartupBusyRemediationAcquiresAndBypassesPrepareSync(t *testing.T) {
+	t.Parallel()
 	coordinator := newStartupCoordinator()
 	lease := &fakeStartupLease{}
 	coordinator.tryAcquire = func(string) (startupLease, bool, error) { return nil, false, nil }
@@ -261,6 +268,7 @@ func TestCoordinateStartupBusyRemediationAcquiresAndBypassesPrepareSync(t *testi
 }
 
 func TestCoordinateStartupBusyMutationDeadlineReturnsSyncInProgressWithoutContinuation(t *testing.T) {
+	t.Parallel()
 	for _, class := range []startupCommandClass{startupMutation, startupRemediation} {
 		t.Run(string(class), func(t *testing.T) {
 			coordinator := newStartupCoordinator()
@@ -292,6 +300,7 @@ func TestCoordinateStartupBusyMutationDeadlineReturnsSyncInProgressWithoutContin
 }
 
 func TestCoordinateStartupLockIOErrorIsSyncLockFailureNotContention(t *testing.T) {
+	t.Parallel()
 	coordinator := newStartupCoordinator()
 	lockErr := errors.New("lock sidecar I/O failed")
 	coordinator.tryAcquire = func(string) (startupLease, bool, error) { return nil, false, lockErr }
@@ -313,6 +322,7 @@ func TestCoordinateStartupLockIOErrorIsSyncLockFailureNotContention(t *testing.T
 }
 
 func TestCoordinateStartupOwnerFailureLeaseRetentionByCommandClass(t *testing.T) {
+	t.Parallel()
 	for _, tc := range []struct {
 		name         string
 		class        startupCommandClass
@@ -394,6 +404,7 @@ func seedCompatibleStartupDB(t *testing.T) string {
 }
 
 func TestCoordinateStartupRejectsPublicSidecarBeforeDatabasePreparation(t *testing.T) {
+	t.Parallel()
 	if runtime.GOOS == "windows" {
 		t.Skip("POSIX modes do not describe Windows ACLs")
 	}

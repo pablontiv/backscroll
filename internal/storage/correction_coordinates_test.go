@@ -8,6 +8,7 @@ import (
 // Exercise the production maintenance APIs against a real temporary database.
 // Detector keys are slice positions; only loaded messages own persisted coordinates.
 func TestCorrectionMaintenancePreservesPersistedCoordinates(t *testing.T) {
+	t.Parallel()
 	for _, mode := range []string{"backfill", "rederive"} {
 		for _, identity := range []string{"uuid", "uuid-less", "ambiguous-uuid-less"} {
 			t.Run(mode+"/"+identity, func(t *testing.T) {

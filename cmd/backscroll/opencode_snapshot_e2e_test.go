@@ -12,6 +12,7 @@ import (
 // Exercise the actual dev binary's manifest discovery, startup sync, and index
 // writes with a live WAL writer, not a fake reader or synthetic watermark.
 func TestOpenCodeSnapshotStartupSmoke(t *testing.T) {
+	t.Parallel()
 	e := newQueryEchoE2E(t)
 	root := e.addReaderManifest("opencode", "opencode")
 	source := openOpenCodeFixture(t, filepath.Join(root, "opencode.db"))

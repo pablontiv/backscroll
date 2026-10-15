@@ -73,6 +73,7 @@ func (r *originReplayClaudeReader) Parse(ctx context.Context, path string, def i
 }
 
 func TestOriginParserSyncReplayIsBoundedAndConverges(t *testing.T) {
+	t.Parallel()
 	tmp := t.TempDir()
 	liveRoot := filepath.Join(tmp, "live")
 	if err := os.MkdirAll(liveRoot, 0o700); err != nil {

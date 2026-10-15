@@ -3,9 +3,7 @@ package storage
 import (
 	"encoding/json"
 	"fmt"
-	"strings"
 	"testing"
-	"time"
 
 	"github.com/pablontiv/backscroll/internal/models"
 	"github.com/pablontiv/backscroll/internal/readers"
@@ -435,13 +433,26 @@ func TestEchoBoundaryCasesThreeWayParity(t *testing.T) {
 }
 
 func TestRecallFrequencyUnfilteredSQLMatchesGoScan(t *testing.T) {
+	t.Parallel()
 	db, cleanup := newTestDB(t)
 	t.Cleanup(cleanup)
 
-	const n = 8000
-	filler := strings.Repeat("lorem output line about build errors and paths /usr/local/share ", 24)
-	msgs := make([]IndexedMessage, n)
-	for i := 0; i < n; i++ {
+	// Exceed the historical 5,000-row shortcut without inflating every FTS row
+	// with unrelated prose; this test protects parity, not throughput.
+	const n = 6000
+	const filler = " ordinary output"
+	tx, err := db.db.Begin()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = tx.Rollback() }()
+	insert, err := tx.Prepare(`INSERT INTO search_items
+		(source, source_path, ordinal, role, text, uuid, content_type, search_echo)
+		VALUES ('session', '/mix.jsonl', ?, 'assistant', ?, ?, 'tool', ?)`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for i := range n {
 		text := "Bash command=rg commonterm /tmp\n" + filler
 		echo := false
 		if i%20 == 0 {
@@ -453,14 +464,14 @@ func TestRecallFrequencyUnfilteredSQLMatchesGoScan(t *testing.T) {
 			text = "Bash command=backscroll search --text commonterm\n" + filler
 			echo = true
 		}
-		msgs[i] = IndexedMessage{
-			Ordinal: i, UUID: fmt.Sprintf("mix-%d", i), Role: "assistant",
-			ContentType: "tool", Text: text, SearchEcho: echo,
+		if _, err := insert.Exec(i, text, fmt.Sprintf("mix-%d", i), echo); err != nil {
+			t.Fatal(err)
 		}
 	}
-	if err := db.SyncFiles([]IndexedFile{{
-		SourcePath: "/mix.jsonl", Source: "session", Hash: "mix", Messages: msgs,
-	}}); err != nil {
+	if err := insert.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err := tx.Commit(); err != nil {
 		t.Fatal(err)
 	}
 
@@ -480,23 +491,6 @@ func TestRecallFrequencyUnfilteredSQLMatchesGoScan(t *testing.T) {
 	if sqlCount != want {
 		t.Fatalf("unfiltered IDF=%d, want %d non-echo rows", sqlCount, want)
 	}
-
-	const rounds = 5
-	sqlStart := time.Now()
-	for i := 0; i < rounds; i++ {
-		if _, err := db.recallFrequency(term, ""); err != nil {
-			t.Fatal(err)
-		}
-	}
-	sqlElapsed := time.Since(sqlStart) / rounds
-	goStart := time.Now()
-	for i := 0; i < rounds; i++ {
-		if _, err := recallFrequencyGoScan(db, term); err != nil {
-			t.Fatal(err)
-		}
-	}
-	goElapsed := time.Since(goStart) / rounds
-	t.Logf("unfiltered IDF n=%d sql=%s go-scan=%s", n, sqlElapsed, goElapsed)
 }
 
 func recallFrequencyGoScan(db *Database, term recallTerm) (int, error) {
