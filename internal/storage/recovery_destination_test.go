@@ -281,6 +281,42 @@ func TestRecoverUnionPreservesActiveAndStrandedRecords(t *testing.T) {
 	assertRecoveryDBSnapshot(t, strandedPath, strandedSnapshot)
 }
 
+func TestRecoveryPreservesUnambiguousIngestionFingerprint(t *testing.T) {
+	ctx := context.Background()
+	dir := t.TempDir()
+	sourcePath := filepath.Join(dir, "source.db")
+	const indexedPath = "/sessions/fingerprinted.jsonl"
+	const fingerprint = "v1:0123456789abcdef"
+	file := recoveryDestinationIndexedFile(indexedPath, "source-hash", []IndexedMessage{{
+		Ordinal: 0, Role: "user", Text: "fingerprint recovery", UUID: "11111111-1111-4111-8111-111111111111",
+		ContentType: "text", ExtractionVersion: CurrentExtractionVersion,
+	}})
+	file.IngestionFingerprint = fingerprint
+	createRecoveryDestinationSourceDB(t, sourcePath, []IndexedFile{file})
+
+	plan := recoveryDestinationPlanFromDBs(t, ctx, sourcePath)
+	if got := plan.IngestionFingerprints[indexedPath]; got != fingerprint {
+		t.Fatalf("planned ingestion fingerprint = %q, want %q", got, fingerprint)
+	}
+	destination, err := CreateRecoveryDestination(ctx, dir, plan)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = removeRecoveryDestinationTestFiles(destination) }()
+	db, err := OpenReadOnly(destination)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	var got string
+	if err := db.DB().QueryRow(`SELECT ingestion_fingerprint FROM indexed_files WHERE path = ?`, indexedPath).Scan(&got); err != nil {
+		t.Fatal(err)
+	}
+	if got != fingerprint {
+		t.Fatalf("recovered ingestion fingerprint = %q, want %q", got, fingerprint)
+	}
+}
+
 func TestRecoveryDestinationInstallsV16ClaudeDerivedUUIDs(t *testing.T) {
 	ctx := context.Background()
 	baseUUID := "11111111-1111-4111-8111-111111111111"

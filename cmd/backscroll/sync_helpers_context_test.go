@@ -38,6 +38,8 @@ func (r *cancelingSyncReader) Name() string {
 	return "cancel-test"
 }
 
+func (r *cancelingSyncReader) IngestionEpoch() uint64 { return 1 }
+
 func (r *cancelingSyncReader) Discover(ctx context.Context, _ input_config.InputDefinition) ([]string, error) {
 	r.discoveries++
 	if r.phase == "discovery" {
@@ -219,7 +221,7 @@ func TestMaybeAutoSyncContextPublishesSuccessfulProgressInOrder(t *testing.T) {
 	if err := syncService.sync(context.Background(), &config.Config{DatabasePath: dbPath}, &progress, startupPhaseTiming{}); err != nil {
 		t.Fatalf("sync: %v", err)
 	}
-	want := "Re-parsing empty Pi file 1: " + sourcePath + "\n"
+	want := "Re-parsing changed ingestion semantics 1/200: " + sourcePath + "\n"
 	if got := progress.String(); got != want {
 		t.Fatalf("progress=%q want %q", got, want)
 	}
@@ -365,7 +367,7 @@ func TestRecoverCancellationDiscardsBufferedPostInstallProgress(t *testing.T) {
 	if reader.parses != 1 {
 		t.Fatalf("parse calls=%d want 1 after replay progress", reader.parses)
 	}
-	if strings.Contains(stderr.String(), "Re-parsing empty Pi file") {
+	if strings.Contains(stderr.String(), "Re-parsing changed ingestion semantics") {
 		t.Fatalf("canceled recover emitted partial sync progress: %q", stderr.String())
 	}
 	if stdout.Len() != 0 {
@@ -455,7 +457,7 @@ func TestOwnedStartupPreservesSuccessfulProgressBytes(t *testing.T) {
 	if result.Failure != nil {
 		t.Fatalf("failure=%v", result.Failure)
 	}
-	want := "Re-parsing empty Pi file 1: " + sourcePath + "\n"
+	want := "Re-parsing changed ingestion semantics 1/200: " + sourcePath + "\n"
 	if got := progress.String(); got != want {
 		t.Fatalf("progress=%q want %q", got, want)
 	}

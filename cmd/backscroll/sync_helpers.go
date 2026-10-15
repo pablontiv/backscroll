@@ -23,21 +23,6 @@ func diagnosticsEnabled() bool {
 	return os.Getenv("BACKSCROLL_STARTUP_DIAGNOSTICS") == "1"
 }
 
-const emptyPiHashPrefix = "pi-empty-v1:"
-
-// canonicalContentHash removes persisted parser-state markers when comparing
-// content identity. The marker is Pi-specific and remains intact in storage.
-func canonicalContentHash(readerName, hash string) string {
-	if readerName == "pi" {
-		return strings.TrimPrefix(hash, emptyPiHashPrefix)
-	}
-	return hash
-}
-
-func contentHashesEqual(readerName, persistedHash, observedHash string) bool {
-	return canonicalContentHash(readerName, persistedHash) == canonicalContentHash(readerName, observedHash)
-}
-
 type startupSyncService struct {
 	diagnostics        bool
 	now                func() time.Time
@@ -117,14 +102,16 @@ func getFileMetadata(path string) (*int64, *string, error) {
 // The replay scheduler uses one discovered claim and one classification per
 // unique source path, independent of input and discovery ordering.
 type discoveredPathClaim struct {
-	path   string
-	def    input_config.InputDefinition
-	reader readers.SessionReader
+	path        string
+	def         input_config.InputDefinition
+	reader      readers.SessionReader
+	fingerprint string
 }
 
 type syncInputSemantics struct {
 	source         string
 	format         string
+	decoderEpoch   uint64
 	indexReasoning bool
 }
 
@@ -132,14 +119,15 @@ func semanticsForClaim(claim discoveredPathClaim) syncInputSemantics {
 	return syncInputSemantics{
 		source:         claim.def.Source,
 		format:         claim.reader.Name(),
+		decoderEpoch:   claim.reader.IngestionEpoch(),
 		indexReasoning: claim.def.Decode.IndexReasoning,
 	}
 }
 
 func claimDescription(claim discoveredPathClaim) string {
 	semantics := semanticsForClaim(claim)
-	return fmt.Sprintf("%q (source=%q, format=%q, index_reasoning=%t)",
-		claim.def.ID, semantics.source, semantics.format, semantics.indexReasoning)
+	return fmt.Sprintf("%q (source=%q, format=%q, decoder_epoch=%d, index_reasoning=%t)",
+		claim.def.ID, semantics.source, semantics.format, semantics.decoderEpoch, semantics.indexReasoning)
 }
 
 // contextMergeSort applies a stable deterministic ordering while checking ctx
@@ -281,32 +269,33 @@ func deduplicatePathClaims(ctx context.Context, claims []discoveredPathClaim) ([
 type replayReason uint8
 
 const (
-	replayOrigin replayReason = 1 << iota
+	replaySemantics replayReason = 1 << iota
+	replayOrigin
 	replayEcho
 	replayStale
-	replayEmptyPi
 )
 
 type replayQueues struct {
-	origin  []string
-	echo    []string
-	stale   []string
-	emptyPi []string
+	semantics []string
+	origin    []string
+	echo      []string
+	stale     []string
 }
 
 type syncPathState struct {
-	claim        discoveredPathClaim
-	existingMeta storage.FileMetadata
-	exists       bool
-	hash         string
-	naturalParse bool
+	claim              discoveredPathClaim
+	existingMeta       storage.FileMetadata
+	exists             bool
+	hash               string
+	currentFingerprint string
+	naturalParse       bool
 }
 
 // selectReplayPaths combines all parser-backed maintenance queues. Queue order
-// is durable (origin, echo, pure stale, empty Pi), while duplicate paths retain
-// all reasons and consume at most one slot. Only discovered, hash-immutable
-// paths spend the replay budget; natural parses perform the same maintenance
-// for free.
+// is durable (ingestion semantics, origin, echo, stale), while duplicate paths
+// retain all reasons and consume at most one slot. Only discovered,
+// hash-immutable paths spend the replay budget; natural parses perform the same
+// maintenance for free.
 func selectReplayPaths(ctx context.Context, states map[string]*syncPathState, queues replayQueues, limit int) (map[string]replayReason, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err
@@ -328,6 +317,9 @@ func selectReplayPaths(ctx context.Context, states map[string]*syncPathState, qu
 		}
 		return nil
 	}
+	if err := addQueue(queues.semantics, replaySemantics); err != nil {
+		return nil, err
+	}
 	if err := addQueue(queues.origin, replayOrigin); err != nil {
 		return nil, err
 	}
@@ -335,9 +327,6 @@ func selectReplayPaths(ctx context.Context, states map[string]*syncPathState, qu
 		return nil, err
 	}
 	if err := addQueue(queues.stale, replayStale); err != nil {
-		return nil, err
-	}
-	if err := addQueue(queues.emptyPi, replayEmptyPi); err != nil {
 		return nil, err
 	}
 
@@ -354,14 +343,10 @@ func selectReplayPaths(ctx context.Context, states map[string]*syncPathState, qu
 		}
 		state := states[path]
 		if state == nil || !state.exists || state.naturalParse ||
-			!contentHashesEqual(state.claim.reader.Name(), state.existingMeta.Hash, state.hash) {
+			state.existingMeta.Hash != state.hash {
 			continue
 		}
-		reason := reasons[path]
-		if reason == replayEmptyPi && (state.claim.reader.Name() != "pi" || strings.HasPrefix(state.existingMeta.Hash, emptyPiHashPrefix)) {
-			continue
-		}
-		selected[path] = reason
+		selected[path] = reasons[path]
 	}
 	if err := ctx.Err(); err != nil {
 		return nil, err
@@ -491,10 +476,6 @@ func (s *startupSyncService) syncWithProgress(ctx context.Context, cfg *config.C
 	if err != nil {
 		return fmt.Errorf("discover stale paths: %w", err)
 	}
-	emptyPaths, err := db.EmptyIndexedPathsContext(ctx)
-	if err != nil {
-		return fmt.Errorf("discover empty indexed paths: %w", err)
-	}
 	echoPaths, err := db.PendingSearchEchoPathsContext(ctx)
 	if err != nil {
 		return fmt.Errorf("discover pending search echo paths: %w", err)
@@ -554,11 +535,12 @@ func (s *startupSyncService) syncWithProgress(ctx context.Context, cfg *config.C
 		if diag {
 			report.finishPhase()
 		}
+		fingerprint := readers.IngestionFingerprint(reader, def)
 		for _, ref := range refs {
 			if err := ctx.Err(); err != nil {
 				return err
 			}
-			claims = append(claims, discoveredPathClaim{path: ref, def: def, reader: reader})
+			claims = append(claims, discoveredPathClaim{path: ref, def: def, reader: reader, fingerprint: fingerprint})
 		}
 	}
 	uniqueClaims, err := deduplicatePathClaims(ctx, claims)
@@ -572,13 +554,19 @@ func (s *startupSyncService) syncWithProgress(ctx context.Context, cfg *config.C
 	// Classify every unique path before choosing replay work. New and modified
 	// files are natural parses and therefore never spend the maintenance cap.
 	states := make(map[string]*syncPathState, len(uniqueClaims))
+	semanticsPaths := make([]string, 0, len(uniqueClaims))
 	for _, claim := range uniqueClaims {
 		if err := ctx.Err(); err != nil {
 			return err
 		}
 		ref, reader := claim.path, claim.reader
 		existingMeta, exists := existingMetadata[ref]
-		state := &syncPathState{claim: claim, existingMeta: existingMeta, exists: exists}
+		state := &syncPathState{
+			claim:              claim,
+			existingMeta:       existingMeta,
+			exists:             exists,
+			currentFingerprint: claim.fingerprint,
+		}
 
 		if diag {
 			report.filesChecked++
@@ -623,15 +611,18 @@ func (s *startupSyncService) syncWithProgress(ctx context.Context, cfg *config.C
 			report.finishPhase()
 		}
 
-		state.naturalParse = !exists || !contentHashesEqual(reader.Name(), existingMeta.Hash, state.hash)
+		state.naturalParse = !exists || existingMeta.Hash != state.hash
+		if exists && (existingMeta.IngestionFingerprint == nil || *existingMeta.IngestionFingerprint != state.currentFingerprint) {
+			semanticsPaths = append(semanticsPaths, ref)
+		}
 		states[ref] = state
 	}
 
 	replaySet, err := selectReplayPaths(ctx, states, replayQueues{
-		origin:  originPaths,
-		echo:    echoPaths,
-		stale:   stalePaths,
-		emptyPi: emptyPaths,
+		semantics: semanticsPaths,
+		origin:    originPaths,
+		echo:      echoPaths,
+		stale:     stalePaths,
 	}, replayParsesCap)
 	if err != nil {
 		return err
@@ -643,7 +634,7 @@ func (s *startupSyncService) syncWithProgress(ctx context.Context, cfg *config.C
 	// Collect indexed files. uniqueClaims is path-sorted, so natural work and
 	// selected replays are deterministic even when discovery order changes.
 	var indexedFiles []storage.IndexedFile
-	staleReplaysDone, emptyPiReplaysDone := 0, 0
+	semanticsReplaysDone, staleReplaysDone := 0, 0
 	for _, claim := range uniqueClaims {
 		if err := ctx.Err(); err != nil {
 			return err
@@ -655,9 +646,9 @@ func (s *startupSyncService) syncWithProgress(ctx context.Context, cfg *config.C
 			continue
 		}
 		if replaySelected {
-			if reason == replayEmptyPi {
-				emptyPiReplaysDone++
-				_, _ = fmt.Fprintf(progress, "Re-parsing empty Pi file %d: %s\n", emptyPiReplaysDone, ref)
+			if reason&replaySemantics != 0 {
+				semanticsReplaysDone++
+				_, _ = fmt.Fprintf(progress, "Re-parsing changed ingestion semantics %d/%d: %s\n", semanticsReplaysDone, replayParsesCap, ref)
 			} else {
 				staleReplaysDone++
 				_, _ = fmt.Fprintf(progress, "Re-parsing stale file %d/%d: %s\n", staleReplaysDone, replayParsesCap, ref)
@@ -728,24 +719,18 @@ func (s *startupSyncService) syncWithProgress(ctx context.Context, cfg *config.C
 		if err := ctx.Err(); err != nil {
 			return err
 		}
-		indexedHash := pf.Hash
-		if reader.Name() == "pi" && len(pf.Records) == 0 {
-			// Mark a zero-row parse with the Pi parser epoch. Old unmarked hashes
-			// replay once. Supported-empty files then converge instead of replaying
-			// on every startup. Bump the prefix when zero-row Pi semantics change.
-			indexedHash = emptyPiHashPrefix + pf.Hash
-		}
 
 		indexedFiles = append(indexedFiles, storage.IndexedFile{
-			SourcePath:      ref,
-			Source:          def.Source,
-			Hash:            indexedHash,
-			Project:         ident.ProjectID,
-			ProjectEvidence: evidence,
-			Messages:        indexedMsgs,
-			Tags:            sessionTags.Tags(),
-			FileSize:        fileSize,
-			FileMtime:       fileMtime,
+			SourcePath:           ref,
+			Source:               def.Source,
+			Hash:                 pf.Hash,
+			IngestionFingerprint: state.currentFingerprint,
+			Project:              ident.ProjectID,
+			ProjectEvidence:      evidence,
+			Messages:             indexedMsgs,
+			Tags:                 sessionTags.Tags(),
+			FileSize:             fileSize,
+			FileMtime:            fileMtime,
 		})
 	}
 

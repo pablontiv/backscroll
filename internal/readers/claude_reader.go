@@ -17,7 +17,8 @@ import (
 // It captures text, tool_use inputs, and tool_result outputs (including errors).
 type ClaudeReader struct{}
 
-func (r *ClaudeReader) Name() string { return "claude" }
+func (r *ClaudeReader) Name() string           { return "claude" }
+func (r *ClaudeReader) IngestionEpoch() uint64 { return 1 }
 
 func (r *ClaudeReader) Discover(ctx context.Context, def input_config.InputDefinition) ([]string, error) {
 	return input_config.DiscoverFilesContext(ctx, def.Discover)

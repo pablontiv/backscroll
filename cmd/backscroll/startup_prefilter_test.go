@@ -24,7 +24,8 @@ type sidecarBackedReader struct {
 	parseCalls int
 }
 
-func (*sidecarBackedReader) Name() string { return "opencode" }
+func (*sidecarBackedReader) Name() string           { return "opencode" }
+func (*sidecarBackedReader) IngestionEpoch() uint64 { return 1 }
 
 func (r *sidecarBackedReader) Discover(context.Context, input_config.InputDefinition) ([]string, error) {
 	return []string{r.path}, nil

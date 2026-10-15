@@ -40,7 +40,8 @@ type replaySchedulerReader struct {
 	parseCalls map[string]int
 }
 
-func (r *replaySchedulerReader) Name() string { return r.name }
+func (r *replaySchedulerReader) Name() string           { return r.name }
+func (r *replaySchedulerReader) IngestionEpoch() uint64 { return 1 }
 
 func (r *replaySchedulerReader) Discover(_ context.Context, def input_config.InputDefinition) ([]string, error) {
 	return append([]string(nil), r.pathsByID[def.ID]...), nil
@@ -233,37 +234,21 @@ func TestReplaySchedulerDrains200Then1Then0(t *testing.T) {
 	}
 }
 
-func TestReplaySchedulerEmptyPiOverlapDoesNotDuplicate(t *testing.T) {
-	const path = "/empty-pi.jsonl"
+func TestReplaySchedulerSemanticOverlapDoesNotDuplicate(t *testing.T) {
+	const path = "/changed-semantics.jsonl"
 	states := map[string]*syncPathState{path: schedulerState(path, "pi")}
 	selected := mustSelectReplayPaths(t, states, replayQueues{
-		origin:  []string{path},
-		echo:    []string{path},
-		stale:   []string{path},
-		emptyPi: []string{path},
+		semantics: []string{path},
+		origin:    []string{path},
+		echo:      []string{path},
+		stale:     []string{path},
 	}, 200)
 	if len(selected) != 1 {
-		t.Fatalf("empty Pi overlap selected %d parses, want one", len(selected))
+		t.Fatalf("semantic overlap selected %d parses, want one", len(selected))
 	}
-	want := replayOrigin | replayEcho | replayStale | replayEmptyPi
+	want := replaySemantics | replayOrigin | replayEcho | replayStale
 	if selected[path] != want {
-		t.Fatalf("empty Pi overlap reason = %v, want %v", selected[path], want)
-	}
-
-	states[path].existingMeta.Hash = emptyPiHashPrefix + "same"
-	states[path].hash = "same" // racy-clean hashing returns the unmarked content hash
-	if got := mustSelectReplayPaths(t, states, replayQueues{emptyPi: []string{path}}, 200); len(got) != 0 {
-		t.Fatalf("marked empty Pi path replayed again after forced hash: %v", got)
-	}
-}
-
-func TestCanonicalContentHashIsScopedToPi(t *testing.T) {
-	marked := emptyPiHashPrefix + "same"
-	if !contentHashesEqual("pi", marked, "same") {
-		t.Fatal("Pi marker changed canonical content identity")
-	}
-	if contentHashesEqual("claude", marked, "same") {
-		t.Fatal("Pi marker normalization leaked into another reader")
+		t.Fatalf("semantic overlap reason = %v, want %v", selected[path], want)
 	}
 }
 

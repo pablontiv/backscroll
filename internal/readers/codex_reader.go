@@ -17,7 +17,8 @@ import (
 // See docs/research/codex-input-evidence.md for the observed format boundary.
 type CodexReader struct{}
 
-func (*CodexReader) Name() string { return "codex" }
+func (*CodexReader) Name() string           { return "codex" }
+func (*CodexReader) IngestionEpoch() uint64 { return 1 }
 
 func (*CodexReader) Discover(ctx context.Context, def input_config.InputDefinition) ([]string, error) {
 	return input_config.DiscoverFilesContext(ctx, def.Discover)

@@ -20,7 +20,8 @@ import (
 // OpenCode stores sessions in <project_dir>/.opencode/opencode.db.
 type OpenCodeReader struct{}
 
-func (r *OpenCodeReader) Name() string { return "opencode" }
+func (r *OpenCodeReader) Name() string           { return "opencode" }
+func (r *OpenCodeReader) IngestionEpoch() uint64 { return 1 }
 
 // Discover returns paths to OpenCode database files matching the definition's discover config.
 func (r *OpenCodeReader) Discover(ctx context.Context, def input_config.InputDefinition) ([]string, error) {

@@ -109,6 +109,29 @@ with an actionable
 reader implementation and registration; a manifest alone cannot define a new
 provider schema.
 
+## Ingestion-semantics replay
+
+Each indexed source stores a versioned `v1` ingestion-semantics fingerprint in
+addition to its byte hash. The fingerprint covers the registered decoder format,
+that decoder's replay epoch, the manifest `source`, and `index_reasoning`.
+Changing any of those semantics therefore reparses matching sources even when
+their bytes are unchanged.
+
+Startup considers only sources currently returned by active discovery. Semantic
+mismatches share the deterministic 200-path replay budget with the other bounded
+startup reparses and drain over later invocations. Sources that are expired,
+unmounted, excluded, or otherwise unavailable are not opened or changed; their
+indexed rows and stored fingerprint remain intact. Recovery preserves a source
+fingerprint when its inputs agree.
+
+Replay never retroactively purges perennial UUID-bearing history. Turning
+`index_reasoning` off can prevent newly observed reasoning from being captured,
+but it does not delete reasoning rows already stored under stable identities.
+Readers without stable record UUIDs use whole-file snapshot replacement when an
+available source is reparsed; records omitted by the new decoder configuration
+can therefore leave that source snapshot. Use `purge` for intentional retention
+deletion.
+
 ## Parser-backed message origin
 
 Readers attach one of five origins to each indexed message: `human`,
@@ -389,8 +412,9 @@ Limits (observed format boundary and RED/GREEN evidence: [Codex input evidence](
   assistant/tool/reasoning text are not subject to this exclusion. Tag names
   match exactly (no attribute/case guessing). See [wrapper RED/GREEN evidence](research/codex-wrapper-evidence.md).
 - `index_reasoning = true` includes only readable summary/plaintext reasoning.
-  Choose it before initial ingestion; as with existing readers, changing decode
-  options alone does not invalidate unchanged file hashes.
+  Changing it schedules the same bounded ingestion-semantics replay as source or
+  decoder changes. Codex records are UUID-less, so the whole-file snapshot
+  replacement caveat above applies.
 - Malformed JSON/blocks, invalid response timestamps and unsupported payload shapes
   are skipped; valid neighboring records still ingest. File I/O errors are returned.
 - Text is normalized by existing cleaning/classification; tool text is capped at

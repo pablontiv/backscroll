@@ -57,7 +57,6 @@ func TestMaintenanceContextPreCanceled(t *testing.T) {
 	}{
 		{"GetFileMetadata", func() error { _, err := db.GetFileMetadataContext(ctx); return err }},
 		{"StalePaths", func() error { _, err := db.StalePathsContext(ctx, CurrentExtractionVersion); return err }},
-		{"EmptyIndexedPaths", func() error { _, err := db.EmptyIndexedPathsContext(ctx); return err }},
 		{"PendingSearchEchoPaths", func() error { _, err := db.PendingSearchEchoPathsContext(ctx); return err }},
 		{"PendingOriginPaths", func() error { _, err := db.PendingOriginPathsContext(ctx, CurrentOriginVersion, 10); return err }},
 		{"StaleTemplatePaths", func() error { _, err := db.StaleTemplatePathsContext(ctx, CurrentNormalizationVersion); return err }},
@@ -211,7 +210,6 @@ func TestMaintenanceContextLegacyWrappersEquivalent(t *testing.T) {
 	}{
 		{"GetFileMetadata", func() (any, error) { return db.GetFileMetadataContext(context.Background()) }, func() (any, error) { return db.GetFileMetadata() }},
 		{"StalePaths", func() (any, error) { return db.StalePathsContext(context.Background(), CurrentExtractionVersion) }, func() (any, error) { return db.StalePaths(CurrentExtractionVersion) }},
-		{"EmptyIndexedPaths", func() (any, error) { return db.EmptyIndexedPathsContext(context.Background()) }, func() (any, error) { return db.EmptyIndexedPaths() }},
 		{"PendingSearchEchoPaths", func() (any, error) { return db.PendingSearchEchoPathsContext(context.Background()) }, func() (any, error) { return db.PendingSearchEchoPaths() }},
 		{"PendingOriginPaths", func() (any, error) {
 			return db.PendingOriginPathsContext(context.Background(), CurrentOriginVersion, 10)

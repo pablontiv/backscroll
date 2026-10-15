@@ -331,7 +331,7 @@ func withReleaseSchemaFS(t *testing.T, fsys fs.FS) {
 func loadPublishedCurrentMigrationRows(t *testing.T) map[int]migrationRow {
 	t.Helper()
 
-	fixtureSQL, err := fs.ReadFile(releaseSchemaFS, "testdata/release-schemas/v17.sql")
+	fixtureSQL, err := fs.ReadFile(releaseSchemaFS, "testdata/release-schemas/v18.sql")
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -21,7 +21,7 @@ func TestV17DefaultsHistoricalProjectEvidenceToUnknown(t *testing.T) {
 	if err != nil || diag != nil {
 		t.Fatalf("%v %+v", err, diag)
 	}
-	if len(plan.Steps) != 1 || plan.Steps[0].Version != 17 {
+	if len(plan.Steps) != 2 || plan.Steps[0].Version != 17 || plan.Steps[1].Version != 18 {
 		t.Fatal(plan.Steps)
 	}
 	if err := applyMigrationPlanForTest(context.Background(), db, plan); err != nil {

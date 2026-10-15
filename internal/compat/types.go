@@ -40,9 +40,10 @@ type MigrationPlan struct {
 }
 
 type RecoveryInput struct {
-	Shape    SchemaShape
-	Records  []models.IndexedRecord
-	RowCount int
+	Shape                 SchemaShape
+	Records               []models.IndexedRecord
+	IngestionFingerprints map[string]string
+	RowCount              int
 }
 
 type CanonicalRecord struct {
@@ -51,9 +52,10 @@ type CanonicalRecord struct {
 }
 
 type RecoveryPlan struct {
-	InputShapes     []SchemaShape
-	Records         []CanonicalRecord
-	ExactDuplicates int
+	InputShapes           []SchemaShape
+	Records               []CanonicalRecord
+	IngestionFingerprints map[string]string
+	ExactDuplicates       int
 }
 
 type Queryer interface {

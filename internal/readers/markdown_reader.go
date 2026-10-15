@@ -15,7 +15,8 @@ import (
 type MarkdownDocumentReader struct{}
 
 // Name returns the declarative decode format for whole-document Markdown inputs.
-func (r *MarkdownDocumentReader) Name() string { return "markdown_document" }
+func (r *MarkdownDocumentReader) Name() string           { return "markdown_document" }
+func (r *MarkdownDocumentReader) IngestionEpoch() uint64 { return 1 }
 
 // Discover returns files matching the input definition's discovery rules.
 func (r *MarkdownDocumentReader) Discover(ctx context.Context, def input_config.InputDefinition) ([]string, error) {
@@ -36,7 +37,8 @@ func (r *MarkdownDocumentReader) Parse(ctx context.Context, path string, def inp
 type MarkdownSectionsReader struct{}
 
 // Name returns the declarative decode format for sectioned Markdown inputs.
-func (r *MarkdownSectionsReader) Name() string { return "markdown_sections" }
+func (r *MarkdownSectionsReader) Name() string           { return "markdown_sections" }
+func (r *MarkdownSectionsReader) IngestionEpoch() uint64 { return 1 }
 
 // Discover returns files matching the input definition's discovery rules.
 func (r *MarkdownSectionsReader) Discover(ctx context.Context, def input_config.InputDefinition) ([]string, error) {

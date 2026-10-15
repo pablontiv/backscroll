@@ -529,6 +529,7 @@ var migrationPlanDispatch = map[compat.MigrationStep]migrationApplier{
 	{Version: 15, Name: "V15 search echo provenance"}:                                    applyV15,
 	{Version: 16, Name: "V16 parser-backed message origin"}:                              applyV16,
 	{Version: 17, Name: "V17 project attribution evidence"}:                              applyV17,
+	{Version: 18, Name: "V18 ingestion semantics fingerprint"}:                           applyV18,
 }
 
 func planStartsFromEmptySchema(plan compat.MigrationPlan) bool {
@@ -977,4 +978,13 @@ func applyV17(ctx context.Context, tx *sql.Tx, _ compat.SchemaShape) error {
 		return fmt.Errorf("apply v17 project evidence: %w", err)
 	}
 	return recordMigration(ctx, tx, 17, "V17 project attribution evidence", sqlV17, "record migration v17")
+}
+
+const sqlV18 = `ALTER TABLE indexed_files ADD COLUMN ingestion_fingerprint TEXT;`
+
+func applyV18(ctx context.Context, tx *sql.Tx, _ compat.SchemaShape) error {
+	if _, err := tx.ExecContext(ctx, sqlV18); err != nil {
+		return fmt.Errorf("apply v18 ingestion semantics fingerprint: %w", err)
+	}
+	return recordMigration(ctx, tx, 18, "V18 ingestion semantics fingerprint", sqlV18, "record migration v18")
 }

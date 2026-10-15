@@ -16,7 +16,8 @@ import (
 // Only explicit message content is indexed; see docs/input-contract.md.
 type OMPReader struct{}
 
-func (*OMPReader) Name() string { return "omp" }
+func (*OMPReader) Name() string           { return "omp" }
+func (*OMPReader) IngestionEpoch() uint64 { return 1 }
 func (*OMPReader) Discover(ctx context.Context, def input_config.InputDefinition) ([]string, error) {
 	return input_config.DiscoverFilesContext(ctx, def.Discover)
 }

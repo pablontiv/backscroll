@@ -26,7 +26,8 @@ type originReplayClaudeReader struct {
 	parseErr           error
 }
 
-func (*originReplayClaudeReader) Name() string { return "claude" }
+func (*originReplayClaudeReader) Name() string             { return "claude" }
+func (r *originReplayClaudeReader) IngestionEpoch() uint64 { return r.delegate.IngestionEpoch() }
 
 func (r *originReplayClaudeReader) Discover(ctx context.Context, def input_config.InputDefinition) ([]string, error) {
 	refs, err := r.delegate.Discover(ctx, def)

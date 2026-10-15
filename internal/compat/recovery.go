@@ -27,12 +27,27 @@ type recordIdentity struct {
 // multiple canonical payloads, the returned records are intentionally empty and
 // diagnostics describe every rejected occurrence.
 func PlanRecovery(inputs []RecoveryInput) (RecoveryPlan, []Diagnostic, error) {
-	plan := RecoveryPlan{InputShapes: make([]SchemaShape, 0, len(inputs))}
+	plan := RecoveryPlan{
+		InputShapes:           make([]SchemaShape, 0, len(inputs)),
+		IngestionFingerprints: make(map[string]string),
+	}
+	ambiguousFingerprints := make(map[string]bool)
 	byIdentity := map[recordIdentity]map[string][]recordOccurrence{}
 	var diagnostics []Diagnostic
 
 	for inputIndex, input := range inputs {
 		plan.InputShapes = append(plan.InputShapes, input.Shape)
+		for path, fingerprint := range input.IngestionFingerprints {
+			if path == "" || fingerprint == "" || ambiguousFingerprints[path] {
+				continue
+			}
+			if existing, ok := plan.IngestionFingerprints[path]; ok && existing != fingerprint {
+				delete(plan.IngestionFingerprints, path)
+				ambiguousFingerprints[path] = true
+				continue
+			}
+			plan.IngestionFingerprints[path] = fingerprint
+		}
 		for rowIndex, record := range input.Records {
 			if record.Origin == "" {
 				record.Origin = models.OriginUnknown
