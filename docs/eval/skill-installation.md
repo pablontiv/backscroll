@@ -31,8 +31,7 @@ Only temporary HOME fixtures may be replaced during this task.
 
 ## Experiment and RED/GREEN
 
-At baseline `82f8bb8`, `go build -o .local-evidence/backscroll ./cmd/backscroll`
-and `python3 tests/skill_install_poc.py .local-evidence/backscroll` succeeded:
+At baseline `82f8bb8`, a dev build and the then-current Python installation PoC succeeded:
 
 | Native pre-push destination | Symlink | Stale recipe retained | Local-note retained |
 | --- | --- | --- | --- |
@@ -44,7 +43,7 @@ The real dev binary returned `result_0_filepath=<temporary fixture>/recall.md`
 for `installationoraclecobalt`, with no stderr. This corrects the oracle without
 claiming that retrieval was defective.
 
-`python3 tests/test_skill_install.py` then exited 1 with two failures before
+The then-current Python installation suite exited 1 with two failures before
 production changes: native pre-push destroyed the Claude sentinel, and the
 explicit preservation-safe installation interface did not yet exist. These
 executable tests are committed separately in `1eb5b18` as the versioned E2E RED. Hook build
@@ -54,8 +53,8 @@ Git, filesystem operations, the hook itself and PoC retrieval are real.
 ## Fresh production implementation and GREEN
 
 No PoC installer code was promoted into production. The production entrypoint
-is `scripts/install-skills.py`; both Git hooks now leave skills unchanged. The
-explicit installer verifies a clean ordinary source clone, emits a digest-bound
+at that time was the explicit Python installer. Both Git hooks left skills unchanged. The
+explicit installer verified a clean ordinary source clone, emits a digest-bound
 read-only inventory, preserves previous objects by rename, and links all three
 supported destinations to the same canonical tree. Receipts precede mutation and
 append-only events support restoration even after process exit mid-install.

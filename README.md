@@ -38,7 +38,7 @@ Backscroll ships as a **single self-contained binary**: pure Go, built with CGO 
 curl -fsSL https://raw.githubusercontent.com/pablontiv/backscroll/master/install.sh | bash
 ```
 
-Detects your platform (Linux x86_64 / macOS aarch64), installs the binary to `~/.local/bin/`, and installs the shipped Claude, Pi, OMP, OpenCode, and Codex input presets without overwriting existing manifests. The Unix installer uses `BACKSCROLL_CONFIG_DIR` as the config base when set and `$HOME/.config` otherwise, placing presets under `backscroll/inputs/`.
+Detects your platform (Linux x86_64 / macOS aarch64), installs the binary to `~/.local/bin/`, and runs `backscroll presets install`. The native command installs the shipped Claude, Pi, OMP, decisions, OpenCode, and Codex presets without overwriting existing manifests. The script passes `BACKSCROLL_CONFIG_DIR` through `--config-home` when the variable is set. Otherwise the native command uses `XDG_CONFIG_HOME` or `$HOME/.config`.
 
 **Windows (PowerShell):**
 
@@ -46,38 +46,28 @@ Detects your platform (Linux x86_64 / macOS aarch64), installs the binary to `~/
 irm https://raw.githubusercontent.com/pablontiv/backscroll/master/install.ps1 | iex
 ```
 
-Installs the binary to `%LOCALAPPDATA%\backscroll\bin\`, adds it to your PATH, and installs the shipped Claude, Pi, OMP, and Codex input presets without overwriting existing manifests. The Windows installer uses `BACKSCROLL_CONFIG_DIR` as the config base when set and `<user-home>\.config` otherwise, placing presets under `<config-base>\backscroll\inputs\`. Compatible with Windows PowerShell 5.1+.
+Installs the binary to `%LOCALAPPDATA%\backscroll\bin\`, adds it to your PATH, and runs `backscroll presets install`. The native command installs the shipped Claude, Pi, OMP, decisions, OpenCode, and Codex presets without overwriting existing manifests. The Windows installer passes `BACKSCROLL_CONFIG_DIR` through `--config-home` when set and otherwise uses `<user-home>\.config`. Compatible with Windows PowerShell 5.1+.
 
 ### Install input presets
 
-Backscroll ships Claude, Pi, OMP, OpenCode, and Codex input presets at `inputs/claude.inputs.toml`, `inputs/pi.inputs.toml`, `inputs/omp.inputs.toml`, `inputs/opencode.inputs.toml`, and `inputs/codex.inputs.toml`. Existing manifests are preserved by default; set `BACKSCROLL_FORCE_INPUTS=1` only when you intentionally want to replace edited presets. Pi subagent sessions are excluded by default and available through an explicit per-input opt-in; see the [Pi input contract](docs/input-contract.md#complete-pi-example). OMP has a dedicated native v3 reader and excludes nested child sessions by default; see the [OMP input contract](docs/input-contract.md#complete-omp-example). For Codex roots, supported records and limits, see the [Codex input contract](docs/input-contract.md#complete-codex-example).
-Runtime input config directories:
-
-| OS | Input manifest directory |
-| --- | --- |
-| Linux / macOS | `$HOME/.config/backscroll/inputs/` |
-| Windows | `<user-home>\.config\backscroll\inputs\` |
-
-Set `BACKSCROLL_CONFIG_DIR` to override the `<config_dir>` base. Both install scripts follow this runtime convention and otherwise use the platform defaults shown above.
-
-If you install from a source checkout, copy presets without clobbering existing files:
+Backscroll incorporates the Claude, Pi, OMP, decisions, OpenCode, and Codex input presets. Install missing presets with the native command:
 
 ```bash
-config_dir="${BACKSCROLL_CONFIG_DIR:-$HOME/.config}"
-mkdir -p "$config_dir/backscroll/inputs"
-cp -n inputs/claude.inputs.toml inputs/pi.inputs.toml inputs/omp.inputs.toml inputs/opencode.inputs.toml inputs/codex.inputs.toml "$config_dir/backscroll/inputs/"
+backscroll presets install
+```
+
+The command writes to `<config-home>/backscroll/inputs/`. It preserves every existing file by default. Use `--config-home /absolute/path` to select a config home. Use `--overwrite` only when you intend to replace the six managed names.
+
+```bash
+backscroll presets install --config-home "$HOME/.config" --overwrite
 backscroll validate
 backscroll config
 ```
 
+The command uses `XDG_CONFIG_HOME` when it is set and absolute. Otherwise it uses `$HOME/.config`. `BACKSCROLL_CONFIG_DIR` remains the runtime application override. The Unix bootstrap translates that variable to `--config-home` for compatibility. Pi subagent sessions remain opt-in; see the [Pi input contract](docs/input-contract.md#complete-pi-example). OMP has a dedicated native v3 reader and excludes nested child sessions by default; see the [OMP input contract](docs/input-contract.md#complete-omp-example). For Codex records and limits, see the [Codex input contract](docs/input-contract.md#complete-codex-example).
+
 ```powershell
-$configDir = if ($env:BACKSCROLL_CONFIG_DIR) { $env:BACKSCROLL_CONFIG_DIR } else { Join-Path $HOME ".config" }
-$inputsDir = Join-Path $configDir "backscroll\inputs"
-New-Item -ItemType Directory -Force $inputsDir | Out-Null
-foreach ($name in "claude.inputs.toml", "pi.inputs.toml", "omp.inputs.toml", "opencode.inputs.toml", "codex.inputs.toml") {
-  $dest = Join-Path $inputsDir $name
-  if (-not (Test-Path $dest)) { Copy-Item (Join-Path "inputs" $name) $dest }
-}
+backscroll presets install --config-home (Join-Path $HOME ".config")
 backscroll validate
 backscroll config
 ```
@@ -252,7 +242,9 @@ On `search`, `--fields minimal|full` controls machine-output density, while `--m
 
 Backscroll is a CLI. Nothing requires an agent, and there is no MCP server — a CLI call costs a fraction of the tokens an MCP tool schema does.
 
-Agents use the same commands with `--robot --fields minimal --max-tokens N`. The discoverable `.claude/skills/backscroll/SKILL.md` is a minimal shim: it tells the runtime to execute `backscroll --skill` and follow stdout. The complete, authoritative instructions are embedded in the binary and printed by that flag without reading configuration or modifying files. The optional [skill installer](docs/skill-installation.md) links Claude, Agents (Codex), and OpenCode to the shim in an explicitly selected stable clone. Installation requires a reviewed inventory digest; existing destinations are backed up and can be restored. Git hooks and binary installers never replace skills implicitly.
+Agents use the same commands with `--robot --fields minimal --max-tokens N`. The discoverable `.claude/skills/backscroll/SKILL.md` is a minimal shim. It tells the runtime to execute `backscroll --skill` and follow stdout. `cmd/backscroll/backscroll_skill.md` is the authoritative instruction source. `backscroll skill` and the compatibility alias print those exact embedded instructions without ordinary startup effects.
+
+Run `backscroll skill --install` to install the embedded shim for Claude, Agents/Codex, and OpenCode. The three links point to one immutable managed copy. Unknown destination content requires a reviewed preimage digest. The installer backs up replaced content and returns a durable receipt for `backscroll skill --restore RECEIPT --approve SHA256`. See [skill installation and restoration](docs/skill-installation.md). Git hooks do not install skills or presets.
 
 ---
 
@@ -334,13 +326,12 @@ The versioned hooks in `.githooks/` are **not active until you point git at them
 git config core.hooksPath .githooks
 ```
 
-Without this, git uses `.git/hooks/` (samples only) and **every push silently skips**:
+Without this, git uses `.git/hooks/` and every push skips:
 
-- the `just ci` aggregate-coverage gate when Go files change,
-- the AGENTS.md / docs-update validation, and
-- input preset synchronization.
+- the `just ci` aggregate-coverage gate when Go files change, and
+- the AGENTS.md and documentation update validation.
 
-Once activated, `pre-push` runs those gates and syncs input presets; `post-merge` syncs presets and documentation aggregates after a `git pull`/merge. Hooks never install the Backscroll executable or replace skill directories. Install a release with `install.sh`; released binaries then update themselves. Explicitly installed skill links follow the operator-selected stable clone; see [installation and restoration](docs/skill-installation.md).
+Once activated, `pre-push` runs those gates. `post-merge` updates documentation aggregates after a merge. Hooks do not install the executable, skills, or presets. Install a release with `install.sh`. Use the native commands for skill and preset installation.
 
 Commits follow [Conventional Commits](https://www.conventionalcommits.org/) (`type(scope): description`).
 

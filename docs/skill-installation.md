@@ -1,167 +1,143 @@
-# Installing the Backscroll skill
+# Instalación del skill de Backscroll
 
-Backscroll has two deliberately separate skill artifacts:
+Backscroll distribuye un solo skill oficial. Su nombre es `backscroll`.
 
-- `.claude/skills/backscroll/SKILL.md` is a minimal discovery shim. It instructs
-  the runtime to execute `backscroll --skill` and follow stdout.
-- The complete, authoritative instruction payload is embedded in the Backscroll
-  binary. `backscroll --skill` prints it without installing or modifying files.
+El archivo `.claude/skills/backscroll/SKILL.md` es un shim de descubrimiento. El archivo `cmd/backscroll/backscroll_skill.md` contiene las instrucciones autoritativas. El binario incorpora ambos artefactos.
 
-On macOS/Linux, `scripts/install-skills.py` installs absolute symlinks to the shim
-tree in an **operator-selected stable ordinary clone**. It requires Python 3.9+
-and Git; these are not dependencies of the Backscroll binary.
+`backscroll skill` imprime las instrucciones autoritativas en stdout. `backscroll --skill` conserva los mismos bytes por compatibilidad. Ambos comandos dejan stderr vacío cuando terminan correctamente. Ambos comandos omiten la configuración, SQLite, la sincronización y la actualización automática.
 
-| Supported target | Installed entry |
+## Plataformas y destinos compatibles
+
+`backscroll skill --install` y `backscroll skill --restore` admiten macOS y Linux. Windows rechaza ambas operaciones antes de modificar archivos o directorios.
+
+La instalación gestiona estas entradas:
+
+| Consumidor | Destino |
 | --- | --- |
 | Claude Code | `<home>/.claude/skills/backscroll` |
-| Agents-compatible discovery (Codex) | `<home>/.agents/skills/backscroll` |
+| Agents y Codex | `<home>/.agents/skills/backscroll` |
 | OpenCode | `<config-home>/opencode/skills/backscroll` |
 
-`--home` and `--source-root` are mandatory. `--config-home` defaults to the explicit
-home's `.config`; it deliberately does not inherit ambient `XDG_CONFIG_HOME` or
-`BACKSCROLL_CONFIG_DIR`. If OpenCode uses a different XDG config root, pass that
-same root explicitly to **both** plan and apply. All three targets are included
-in one approval. No other directory is swept or removed. In particular, old
-`backscroll-doctor`, plugin-managed skills, project overrides, and unsupported
-copies are outside this installer's ownership; inventory and retire them through
-their own owners, with separate approval. This installer is not for Windows.
+Los tres destinos son enlaces simbólicos absolutos. Los tres enlaces apuntan a una copia inmutable que gestiona el binario. La copia está bajo `<home>/.local/share/backscroll/skill/backscroll/`.
 
-Neither `install.sh`/`install.ps1` nor `pre-push`/`post-merge` replaces skill
-folders. Downloading a binary does not install a discovery shim, and installing
-the shim does not replace input preset synchronization. Git hooks still handle
-inputs but never install the binary, and skill replacement is never a side effect
-of a push or merge.
+La operación no gestiona `backscroll-doctor`. La operación no recorre otros nombres. La operación no necesita Python, Git ni un clon del repositorio.
 
-## Inspect, approve, install
+## Instalar
 
-Choose an ordinary product clone that you intend to keep. Do not choose a task
-copy or a directory scheduled for cleanup. The installer rejects linked Git
-worktrees, a missing or dirty shim source, untracked/ignored overlays, skill-tree
-symlinks, and source/destination overlap. An ordinary clone can still be deleted
-by its owner: filesystem inspection cannot prove your retention intent.
-
-Run the read-only inventory from the product repository:
+Use un hogar absoluto existente. Puede indicar también el hogar de configuración de OpenCode.
 
 ```bash
-python3 scripts/install-skills.py plan \
-  --source-root /absolute/stable/backscroll --home /absolute/destination/home
+backscroll skill --install \
+  --home /ruta/absoluta/al/hogar \
+  --config-home /ruta/absoluta/a/config
 ```
 
-Inspect the full JSON: source root, shim path, source commit, tree SHA-256, all
-three exact destination paths, and recursive `before` preimages. The digest
-covers filenames, file contents, modes and lexical symlink targets, not access
-times, ACLs or extended attributes. Backups preserve the original filesystem
-objects by rename rather than copying their contents. No symlink is traversed
-while inventorying a destination. Special files and hard-linked regular files
-are refused rather than incompletely inventoried.
+`--home` usa el hogar del usuario cuando se omite. `--config-home` usa `XDG_CONFIG_HOME` cuando la variable contiene una ruta absoluta. En otro caso usa `<home>/.config`.
 
-**For a real home, obtain explicit approval for this exact inventory digest.**
-A historical issue digest, a successful fixture test, or permission to implement
-the installer is not rollout permission. Never automatically pipe plan's digest
-into apply. After approval, repeat the same arguments:
+Una instalación limpia crea la copia gestionada y los tres enlaces. Una instalación idéntica devuelve `changed: 0`. Esta operación no crea otro recibo.
+
+Una versión gestionada anterior se actualiza sin aprobación. El instalador conserva el enlace anterior en el respaldo de la transacción.
+
+## Revisar y aprobar contenido desconocido
+
+El instalador usa `lstat`. El instalador no sigue un enlace al inventariar un destino. El instalador considera desconocido cualquier archivo, directorio o enlace que no apunte a una copia gestionada válida.
+
+Una ejecución sin `--approve` no cambia ningún destino desconocido. La ejecución devuelve `approval_required: true`, el plan completo y el digest `plan.approval`.
+
+Revise el hogar, el hogar de configuración, la copia gestionada y las tres preimágenes. Después repita la misma orden con el digest aprobado.
 
 ```bash
-python3 scripts/install-skills.py apply \
-  --source-root /absolute/stable/backscroll --home /absolute/destination/home \
-  --approve APPROVED_PLAN_SHA256
+backscroll skill --install \
+  --home /ruta/absoluta/al/hogar \
+  --config-home /ruta/absoluta/a/config \
+  --approve SHA256_APROBADO
 ```
 
-A changed source commit/content, path, destination type/content/mode, or action
-invalidates approval. Plan writes nothing; an approval mismatch does not even
-create installation state. Apply checks again under a per-home advisory lock,
-records recovery instructions, renames each previous object to a backup, then
-creates the link. Already-correct links are not moved or backed up again; repeated
-installation returns `changed: 0`. Backups and destinations must be on the same
-filesystem. Symlinked destination/state ancestors are refused.
+Un cambio en una ruta o preimagen invalida el digest. Un digest incorrecto no crea estado operativo. La aprobación autoriza el respaldo y la sustitución de las tres entradas descritas en el plan.
 
-This is a local, single-operator filesystem tool, not a security boundary against
-a hostile process running as the same user. Stop concurrent writers and source
-updates during application/restoration. The lock serializes this installer only;
-it cannot lock your editor or Git. Do not use it on shared/network filesystems.
+El instalador rechaza ancestros simbólicos, destinos solapados, enlaces físicos y archivos especiales. El instalador toma un bloqueo exclusivo por hogar. El instalador escribe el recibo y el evento `prepared` antes de sustituir destinos. Cada evento se añade a `events.jsonl` y se sincroniza en disco.
 
-## Verify and update
+El instalador publica cada enlace mediante una sustitución atómica. Un fallo posterior inicia la reversión de los destinos ya cambiados. El instalador conserva el recibo, el diario y los respaldos.
 
-Repeat `plan` with the same paths: every target should report `change: false`,
-`before.kind: link`, and `before.target` equal to `source.path`. Inspect both the
-lexical link (`readlink <installed-entry>`) and the resolved `SKILL.md` contents.
-The three entries resolve to the same shim source, not separately copied
-versions. Confirm that the resolved shim names `backscroll --skill`; it should not
-contain the full instruction manual.
+## Recibos y restore
 
-Update the stable clone through your normal reviewed Git workflow. All three
-links then expose the new shim without reinstalling. The instructions followed at
-runtime come from the installed binary, so update the binary to update the
-authoritative payload. Do not move/delete the shim source while links depend on
-it. Restart runtimes that cache skills. Local edits to the shim source are
-immediately visible too; the links are not immutable release snapshots. A new
-`plan` validates the current committed shim again.
+Una instalación con cambios devuelve estos campos:
 
-Runtime checks are distinct from link checks:
+```json
+{
+  "changed": 3,
+  "receipt": "/ruta/al/receipt.json",
+  "restore_approval": "SHA256"
+}
+```
 
-- Claude: its [documented personal-skill discovery](https://code.claude.com/docs/en/skills)
-  follows symlinked skill folders. Check `/skills` in a fresh session. The CLI
-  `claude plugin validate <skills-parent> --json` **skips symlink entries** even
-  when it reports success; validate the canonical parent `.claude/skills` as well.
-  Validator success alone is not a session-discovery result.
-- Codex: [user skills](https://developers.openai.com/codex/skills) are discovered
-  under `$HOME/.agents/skills`, including symlinked directories. The app-server
-  `skills/list` response reports the resolved `SKILL.md` path and enabled state.
-- OpenCode: `opencode debug skill --pure` reports available skills, their lexical
-  locations and content. Its [discovery contract](https://opencode.ai/docs/skills/)
-  also scans Claude/Agents-compatible paths; checking only a name can mask a broken
-  OpenCode-specific entry. Verify the returned location and content.
+El estado privado está bajo `<home>/.local/state/backscroll/skill-install/`. Cada transacción conserva `receipt.json`, `events.jsonl` y los respaldos `backup-N`.
 
-The authoritative payload printed by `backscroll --skill` uses cwd inference
-first, semantic IDs for explicit `--project`, and robot `result_N_filepath` /
-`result_N_content` keys. JSON's `source_path` / `snippet` keys are not robot field
-names.
-
-## Receipts, rollback and restoration
-
-Apply returns `receipt` and `restore_approval`. Keep both. The private directory
-`<home>/.local/state/backscroll/skill-install/<transaction>/` contains an immutable
-`receipt.json`, backups, and append-only `events.jsonl`. The prepared event holds
-the restore digest before the first replacement; install/restore intent and
-completion events are flushed to disk. The receipt records all planned targets,
-so recovery does not rely on the last console line. No automatic backup retention
-or deletion policy is imposed.
-
-An ordinary application error attempts rollback of all changed destinations. If
-rollback cannot safely reconcile a changed destination or backup, it stops and
-preserves the evidence; the error prints the receipt path and restore digest.
-After interruption, inspect the transaction receipt and its prepared event, then
-use the same explicit restoration command:
+Guarde `receipt` y `restore_approval`. Use ambos valores para restaurar la preimagen:
 
 ```bash
-python3 scripts/install-skills.py restore --home /absolute/destination/home \
-  --receipt /absolute/path/to/receipt.json --approve RESTORE_SHA256
+backscroll skill \
+  --restore /ruta/absoluta/al/receipt.json \
+  --approve SHA256_DE_RESTORE \
+  --home /ruta/absoluta/al/hogar
 ```
 
-Restore validates **every** destination and backup before restoring any. It moves
-backups back without overwriting new operator work, restores originally absent
-entries to absence, and is safe to repeat after interruption or successful
-restoration. A source clone need not still exist for restoration. Empty parent
-directories created by installation may remain. If a destination/backup was edited
-since install, obtain a fresh inventory and operator decision; do not force a
-restore or hand-delete evidence to make it pass.
+Restore valida todos los destinos y todos los respaldos antes de cambiar uno. Restore no sobrescribe trabajo nuevo del operador. Restore es idempotente. Una segunda ejecución válida devuelve `restored: 0`.
 
-For uninstall without restoring the previous copies, use the same two-step
-`plan` / `apply` flow with `--action uninstall` on **both** commands. Uninstall
-only removes exact links to the selected source, backs those links up, and refuses
-unowned entries. Its own receipt can restore the links. To recover the older
-copies instead, restore the original installation receipt after reconciling any
-later transactions in reverse order. No command deletes the product source.
+La implementación nativa escribe recibos v2. La implementación restaura recibos nativos v2 y recibos Python v1 existentes. El clon registrado por un recibo Python v1 puede no existir durante restore. La ruta Python ya no participa en instalaciones nuevas.
 
-## Tests and evidence
+## Instalar presets
+
+La instalación de presets es una operación separada.
+
+```bash
+backscroll presets install
+```
+
+La operación instala estos seis manifiestos incorporados:
+
+- `claude.inputs.toml`
+- `pi.inputs.toml`
+- `omp.inputs.toml`
+- `decisions.inputs.toml`
+- `opencode.inputs.toml`
+- `codex.inputs.toml`
+
+El destino es `<config-home>/backscroll/inputs`. Use una ruta explícita cuando sea necesario:
+
+```bash
+backscroll presets install --config-home /ruta/absoluta/a/config
+```
+
+La operación conserva todos los archivos existentes por defecto. La operación no modifica otros nombres. Use `--overwrite` para sustituir de forma explícita los seis nombres gestionados.
+
+```bash
+backscroll presets install --config-home /ruta/absoluta/a/config --overwrite
+```
+
+`install.sh` e `install.ps1` instalan el binario y después ejecutan esta operación nativa. `BACKSCROLL_CONFIG_DIR` se traduce a `--config-home`. `BACKSCROLL_FORCE_INPUTS=1` se traduce a `--overwrite` para conservar la compatibilidad del bootstrap.
+
+Los hooks de Git no instalan skills ni presets. Los hooks solo aplican las comprobaciones del repositorio y la actualización de agregados de documentación.
+
+## Verificación
+
+Compruebe los enlaces y el shim:
+
+```bash
+readlink "$HOME/.claude/skills/backscroll"
+readlink "$HOME/.agents/skills/backscroll"
+cat "$HOME/.claude/skills/backscroll/SKILL.md"
+backscroll skill
+```
+
+El shim debe indicar `backscroll --skill`. El shim no debe contener el manual completo.
+
+Ejecute las pruebas herméticas:
 
 ```bash
 just test-skills
-# Optional installed-runtime probe, macOS only; blocks network and external writes:
-python3 tests/skill_runtime_probe.py
 ```
 
-Tests create all homes, Git sources, databases and backup state under the ignored
-`.local-evidence/` directory. They never replace real installed skills. CI runs
-filesystem and installed-recipe E2E tests on Linux and macOS without requiring
-agent runtimes or credentials. See [issue #62 evidence](eval/skill-installation.md)
-for the versioned native RED, corrected robot oracle, results and runtime limits.
+Las pruebas usan hogares temporales en Linux y macOS. Las pruebas no modifican el hogar real. La prueba opcional `tests/skill_runtime_probe.py` comprueba runtimes externos instalados en macOS. Esa prueba no forma parte de CI y no invoca modelos.
+
+Las pruebas de permisos establecen con `chmod` los modos exactos de sus preimágenes y archivos deliberadamente inseguros. Los permisos de creación están sujetos al `umask` heredado; las pruebas no modifican ese estado global ni relajan las comprobaciones de seguridad.

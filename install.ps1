@@ -2,14 +2,13 @@ $ErrorActionPreference = "Stop"
 
 $Repo = "pablontiv/backscroll"
 $Binary = "backscroll"
-$InputPresets = @("claude.inputs.toml", "pi.inputs.toml", "omp.inputs.toml", "codex.inputs.toml")
 
 function Main {
     $arch = Get-Arch
     $version = Get-LatestVersion
     $installDir = Get-InstallDir
     Install-Binary -Version $version -Arch $arch -InstallDir $installDir
-    Install-InputPresets -Version $version
+    Install-InputPresets -InstallDir $installDir
     Verify-Installation -InstallDir $installDir
 }
 
@@ -103,59 +102,18 @@ function Get-ConfigDir {
     throw "Could not determine user home directory. Set BACKSCROLL_CONFIG_DIR."
 }
 
-function Get-LocalInputsDir {
-    if ($env:BACKSCROLL_INPUTS_SOURCE_DIR) {
-        return $env:BACKSCROLL_INPUTS_SOURCE_DIR
-    }
-
-    if ($PSScriptRoot) {
-        return (Join-Path $PSScriptRoot "inputs")
-    }
-
-    return $null
-}
-
 function Install-InputPresets {
-    param($Version, $SourceDir)
+    param($InstallDir)
 
-    $configDir = Get-ConfigDir
-    $backscrollDir = Join-Path $configDir "backscroll"
-    $inputsDir = Join-Path $backscrollDir "inputs"
-    if (-not $SourceDir) {
-        $SourceDir = Get-LocalInputsDir
+    $exe = Join-Path $InstallDir "$Binary.exe"
+    $arguments = @("presets", "install", "--config-home", (Get-ConfigDir))
+    if ($env:BACKSCROLL_FORCE_INPUTS -eq "1") {
+        $arguments += "--overwrite"
     }
-
-    New-Item -ItemType Directory -Path $inputsDir -Force | Out-Null
-    Write-Host "Installing input presets to $inputsDir"
-
-    foreach ($preset in $InputPresets) {
-        $destPath = Join-Path $inputsDir $preset
-        if ((Test-Path $destPath) -and ($env:BACKSCROLL_FORCE_INPUTS -ne "1")) {
-            Write-Host "$destPath exists, skipping"
-            continue
-        }
-
-        $sourcePath = $null
-        if ($SourceDir) {
-            $candidate = Join-Path $SourceDir $preset
-            if (Test-Path $candidate) {
-                $sourcePath = $candidate
-            }
-        }
-
-        if ($sourcePath) {
-            Copy-Item -Path $sourcePath -Destination $destPath -Force
-        }
-        else {
-            if (-not $Version) {
-                $Version = "main"
-            }
-            $url = "https://raw.githubusercontent.com/$Repo/$Version/inputs/$preset"
-            $tmpPath = "$destPath.tmp"
-            Invoke-WebRequest -Uri $url -OutFile $tmpPath -UseBasicParsing
-            Move-Item -Path $tmpPath -Destination $destPath -Force
-        }
-        Write-Host "Installed $preset"
+    Write-Host "Installing embedded input presets"
+    & $exe @arguments
+    if ($LASTEXITCODE -ne 0) {
+        throw "Input preset installation failed with exit code $LASTEXITCODE"
     }
 }
 

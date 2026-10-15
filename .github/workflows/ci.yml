@@ -52,15 +52,16 @@ jobs:
       - uses: actions/setup-go@v7
         with:
           go-version-file: go.mod
-      - uses: actions/setup-python@v7
-        with:
-          python-version: '3.9'
-      - name: Test isolated skill installation and recipe retrieval
+      - name: Test native skill installation, presets, and recipe retrieval
         run: |
-          mkdir -p .local-evidence
-          go build -o .local-evidence/backscroll ./cmd/backscroll
-          export BACKSCROLL_TEST_BINARY="$PWD/.local-evidence/backscroll"
-          python3 tests/test_skill_install.py -v
+          test_home=$(mktemp -d)
+          test_config=$(mktemp -d)
+          gomodcache=$(go env GOMODCACHE)
+          gocache=$(go env GOCACHE)
+          trap 'rm -rf "$test_home" "$test_config"' EXIT
+          HOME="$test_home" BACKSCROLL_CONFIG_DIR="$test_config" \
+            GOMODCACHE="$gomodcache" GOCACHE="$gocache" \
+            go test ./internal/skillinstall ./internal/presets ./cmd/backscroll
       - name: "Install-script bash regression suite (issue #74)"
         run: |
           env -u XDG_CONFIG_HOME \

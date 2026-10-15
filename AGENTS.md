@@ -8,7 +8,7 @@ Backscroll is a Go CLI tool that indexes Claude Code, Pi, OMP, OpenCode, Codex C
 
 **Status**: Go port complete — `main` branch is the active Go implementation. The Rust implementation is frozen in the `v0` branch.
 
- Implemented: `internal/autoupdate`, `internal/config`, `internal/input_config`, `internal/models`, `internal/readers`, `internal/sync`, `internal/tagging`, `internal/plans`, `internal/sources`, `internal/storage`, `internal/services`, `internal/projects`, `internal/templates`, `internal/corrections`, `internal/categories`, `internal/sequences`, `internal/hybrid`, `internal/compat`, `internal/recovery`, `internal/startuplock`. CLI commands in `cmd/backscroll/` (10 v2 commands via cobra).
+ Implemented: `internal/autoupdate`, `internal/config`, `internal/input_config`, `internal/presets`, `internal/models`, `internal/readers`, `internal/sync`, `internal/tagging`, `internal/plans`, `internal/sources`, `internal/storage`, `internal/services`, `internal/projects`, `internal/templates`, `internal/corrections`, `internal/categories`, `internal/sequences`, `internal/hybrid`, `internal/compat`, `internal/recovery`, `internal/startuplock`, `internal/skillinstall`. CLI commands in `cmd/backscroll/` (12 v2 commands via cobra).
  github.com/pablontiv/backscroll/internal/autoupdate    — Private context-aware release staging and safe replacement
 
 Stack: cobra, go-toml/v2, goldmark, modernc.org/sqlite (pure Go, no CGO), stdlib testing.
@@ -24,6 +24,7 @@ just coverage-summary   # go test -cover ./...
 just coverage           # coverage report via pkcov
 just coverage-check     # coverage report + enforce per-package floors (≥85%)
 just audit              # go mod verify
+just test-skills        # native skill/preset unit and hermetic E2E tests
 just ci                 # local mirror of CI gate: build + scrubbed-HOME tests + coverage ≥85%
 ```
 
@@ -52,6 +53,7 @@ cmd/backscroll/
 ├── validate.go        — validate command (--json)
 ├── rebuild.go         — rebuild command (replaces reindex)
 ├── config.go          — config command (shows effective config + inputs)
+├── skill.go           — startup-bypass skill and preset installation commands
 └── sync_helpers.go    — shared startup sync helpers (maybeAutoSync, reader registry wiring)
 internal/
 ├── autoupdate/        — private context-aware release staging and safe replacement; observable backend errors
@@ -59,6 +61,7 @@ internal/
 ├── compat/            — stateless schema-shape inspection, release lineage catalog, migration plans, and canonical recovery planning
 ├── directsearch/      — shared direct-search predicates (IsDirectSearchCommand, IsCodexDirectSearchCall, IsSerializedDirectSearchCall): the single strict boundary for "is this a direct search call", at ingest (readers, raw input) and at query/replay (storage, serialized text)
 ├── input_config/      — input manifest loading, discovery, and legacy session-dirs compatibility
+├── presets/           — embedded input preset installation with explicit overwrite control
 ├── models/            — domain types: SessionRecord, MessageContent, ParsedFile, SearchResult, Stats
 ├── sync/              — WalkDir, SHA-256 dedup, JSONL parsing, noise filtering, content-type classification
 ├── tagging/           — heuristic auto-tagging (debugging, refactoring, feature, testing, docs, config)
@@ -68,6 +71,7 @@ internal/
 ├── readers/           — SessionReader interface, Registry, ClaudeReader (text+tool_use+tool_result), PiReader (text+toolCall+custom results), OMPReader (native v3 text+thinking+toolCall+toolResult; parser-backed identities and origin), OpenCodeReader (text+tool state.input+state.output), CodexReader (rollout response items; docs/input-contract.md), MarkdownDocumentReader (`markdown_document`), MarkdownSectionsReader (`markdown_sections`); toolfmt serializer
 ├── recovery/          — stranded database recovery orchestration, verified active+stranded union, durable backup, atomic replacement, and post-install sync
 ├── startuplock/       — canonical database lock coordination via persistent OS advisory sidecar
+├── skillinstall/      — safe Backscroll skill installation, receipts, rollback, and Python v1 restore compatibility
 ├── templates/         — F2 Drain-inspired miner: Miner, ProcessLine, ExtractErrorLines, deterministic signature via SHA256
 ├── corrections/       — F3 correction detection: bilingual lexicon, interrupt flags, denial heuristics, rephrase-similarity; detector registry + implementations
 ├── categories/        — F4 category map loader (rule engine, versioning, tool→category mapping) with embedded default preset
@@ -79,7 +83,7 @@ scripts/
 └── recall-eval/       — isolated legacy/synthetic recall evaluator and cohort reporter
 ```
 
-Ten v2 CLI commands: `list [--project] [--all-projects] [--recent N] [--order timestamp:desc|asc] [--limit] [--offset] [--json] [--robot]`, `search [--text <query>] [--project] [--all-projects] [--source] [--source-path] [--after] [--before] [--role] [--content-type] [--tag] [--limit] [--offset] [--fields minimal|full] [--max-tokens N] [--relax] [--json] [--robot]`, `context (--uuid <opaque-uuid> | --source-path <exact-path> --ordinal <n>) [--before 0..50] [--after 0..50] [--max-tokens 64..16384] [--json] [--robot]`, `patterns --kind commands|failures|templates|sequences|corrections [--origin human|assistant|system|automation|unknown] [--pending] [--batch N] [--project] [--all-projects] [--tag] [--trend] [--after] [--before] [--min-support N] [--min-confidence F] [--min-length N] [--max-length N] [--limit] [--offset] [--json] [--robot]`, `annotate --uuid <u> --kind <k> --label <l> [--path <p> --ordinal <n>]`, `recover --from <path> [--dry-run]`, `status [--json]`, `validate [--json]`, `rebuild`, `config [--json]`.
+Twelve v2 CLI commands: `list [--project] [--all-projects] [--recent N] [--order timestamp:desc|asc] [--limit] [--offset] [--json] [--robot]`, `search [--text <query>] [--project] [--all-projects] [--source] [--source-path] [--after] [--before] [--role] [--content-type] [--tag] [--limit] [--offset] [--fields minimal|full] [--max-tokens N] [--relax] [--json] [--robot]`, `context (--uuid <opaque-uuid> | --source-path <exact-path> --ordinal <n>) [--before 0..50] [--after 0..50] [--max-tokens 64..16384] [--json] [--robot]`, `patterns --kind commands|failures|templates|sequences|corrections [--origin human|assistant|system|automation|unknown] [--pending] [--batch N] [--project] [--all-projects] [--tag] [--trend] [--after] [--before] [--min-support N] [--min-confidence F] [--min-length N] [--max-length N] [--limit] [--offset] [--json] [--robot]`, `annotate --uuid <u> --kind <k> --label <l> [--path <p> --ordinal <n>]`, `recover --from <path> [--dry-run]`, `status [--json]`, `validate [--json]`, `rebuild`, `config [--json]`, `skill [--install | --restore RECEIPT] [--approve SHA256] [--home HOME] [--config-home CONFIG_HOME]`, `presets install [--overwrite] [--config-home CONFIG_HOME]`.
 
 The `SearchEngine` interface is the port; `internal/storage` is the adapter. Database opened lazily. `OpenReadOnly()` provides read-only access for external consumers.
 
@@ -123,7 +127,7 @@ External knowledge sources are configured with active `*.inputs.toml` manifests 
 - **Defensive parsing**: `SessionRecord` wrapper with `json.RawMessage` for fields handles legacy schemas and noise.
 - **Noise filtering**: Excludes `system-reminder`, `task-notification`, and subagent sessions by default.
 - **External FTS5**: Uses `search_items` as content table with SQLite triggers, `snippet()` extraction, and Porter stemmer tokenizer for morphological matching.
-- **Startup command classes**: Operational commands are explicitly classified as `snapshot-read: search, context, list, patterns, status, validate`; `metadata-read: config`; `mutation: annotate, rebuild`; and `remediation: recover`. Snapshot-read, metadata-read, and mutation owners validate active manifests, prepare/migrate the index, and attempt one incremental sync before their handlers. Metadata-read followers can print validated configuration without opening the DB. Remediation (`recover`) acquires and retains the mutation-grade startup lock, but deliberately skips ordinary compatible-open/index preparation and pre-handler sync so recovery can inspect or replace an index that normal startup may reject; non-dry-run apply runs post-install sync under the same retained lease before printing the recovery report. Session, plan, and Markdown files are ingestion inputs; SQLite is the perennial record used by search, context, list, patterns, status, and validate. Search is ranked discovery; context is exact neighborhood retrieval once an opaque UUID or exact source-path-plus-ordinal identity exists. Concurrent followers are allowed only under the coordinated owner/follower lock contract: a busy read-safe follower uses `OpenReadOnly` on the last committed WAL snapshot, a busy config follower prints validated configuration without opening the DB, and busy mutation/remediation followers wait up to five seconds before failing retryably with `sync_in_progress`.
+- **Startup command classes**: Commands are explicitly classified as `snapshot-read: search, context, list, patterns, status, validate`; `metadata-read: config`; `mutation: annotate, rebuild`; `remediation: recover`; and `bypass: skill, presets`. Bypass commands do not start configuration, index, sync, lock, or autoupdate work. Snapshot-read, metadata-read, and mutation owners validate active manifests, prepare/migrate the index, and attempt one incremental sync before their handlers. Metadata-read followers can print validated configuration without opening the DB. Remediation (`recover`) acquires and retains the mutation-grade startup lock, but deliberately skips ordinary compatible-open/index preparation and pre-handler sync so recovery can inspect or replace an index that normal startup may reject; non-dry-run apply runs post-install sync under the same retained lease before printing the recovery report. Session, plan, and Markdown files are ingestion inputs; SQLite is the perennial record used by search, context, list, patterns, status, and validate. Search is ranked discovery; context is exact neighborhood retrieval once an opaque UUID or exact source-path-plus-ordinal identity exists. Concurrent followers are allowed only under the coordinated owner/follower lock contract: a busy read-safe follower uses `OpenReadOnly` on the last committed WAL snapshot, a busy config follower prints validated configuration without opening the DB, and busy mutation/remediation followers wait up to five seconds before failing retryably with `sync_in_progress`.
 - **Incremental sync and ingestion semantics**: SHA-256 per-file hashes skip unchanged bytes only when the persisted V18 `v1` ingestion fingerprint also matches. The fingerprint covers decoder format plus its replay epoch, source, and `index_reasoning`. Available mismatches share the deterministic 200-path startup replay cap; unavailable paths and their rows remain untouched. UUID-bearing perennial rows retain existing payload/identity while accepting newly exposed records; UUID-less per-file reloads replace the available source snapshot, so omitted records can leave that snapshot. Recovery preserves unambiguous fingerprints.
 - **Plan indexing**: Markdown plans from `~/.claude/plans/` split by `##` headers, each section indexed as a separate search item with `source='plan'`.
 - **Declarative Markdown inputs**: `markdown_document` and `markdown_sections` readers reuse `internal/sources` parsers, flow through the normal input manifest registry/autosync path, and store the manifest `source` value on indexed rows. They do not parse YAML frontmatter into structured metadata.
@@ -188,8 +192,8 @@ External knowledge sources are configured with active `*.inputs.toml` manifests 
 
 - `docs/research/` — Structured research documents: feasibility study and architecture decisions
 - `docs/roadmap/` — Roadmap decomposition (O01–O06): outcomes and tasks with frontmatter metadata
-- `.claude/skills/backscroll/` — installable discovery shim for Claude, Agents (Codex), and OpenCode. `cmd/backscroll/backscroll_skill.md`, printed by `backscroll --skill`, is the sole authoritative source of complete instructions. Explicit stable-source installation, approvals, backup/restore, and runtime checks are owned by `docs/skill-installation.md` and `scripts/install-skills.py`; Git hooks never replace skills. `just test-skills` runs isolated filesystem and installed-shim E2E tests.
-- `inputs/` — Shipped input presets (`claude.inputs.toml`, `pi.inputs.toml`, `omp.inputs.toml`, `decisions.inputs.toml`, `opencode.inputs.toml`, `codex.inputs.toml`, `categories.toml`); copied to `<config_dir>/backscroll/inputs/` by `install.sh` and the pre-push hook (skips if already present; `BACKSCROLL_FORCE_INPUTS=1` to overwrite)
+- `.claude/skills/backscroll/` — discovery shim for Claude, Agents/Codex, and OpenCode. `cmd/backscroll/backscroll_skill.md` is the sole authoritative source of complete instructions. `backscroll skill --install` installs the embedded shim with approval, backup, receipt, and restore controls. Git hooks do not install skills or presets. `just test-skills` runs native unit and hermetic E2E tests.
+- `inputs/` — Shipped input presets (`claude.inputs.toml`, `pi.inputs.toml`, `omp.inputs.toml`, `decisions.inputs.toml`, `opencode.inputs.toml`, `codex.inputs.toml`, `categories.toml`). `backscroll presets install` installs the six managed input manifests. It preserves existing files unless the operator passes `--overwrite`. `install.sh` and `install.ps1` invoke this native command after installing the binary.
 
 - Documentation is written in a mix of Spanish and English (roadmap fields like `estado`, `tipo` are in Spanish)
 
@@ -245,6 +249,7 @@ github.com/pablontiv/backscroll/internal/config        — Config structs and re
 github.com/pablontiv/backscroll/internal/compat        — Stateless schema inspection, release lineage catalog, migration planning, and canonical recovery planning
 github.com/pablontiv/backscroll/internal/directsearch  — Shared direct-search predicates (IsDirectSearchCommand, IsCodexDirectSearchCall, IsSerializedDirectSearchCall): the single strict boundary used by readers at ingest and by storage at query/replay time
 github.com/pablontiv/backscroll/internal/input_config  — Input manifest loading, discovery, and legacy session-dirs compatibility
+github.com/pablontiv/backscroll/internal/presets       — Embedded input preset installation with explicit overwrite control
 github.com/pablontiv/backscroll/internal/models        — Domain types and SearchEngine interface
 github.com/pablontiv/backscroll/internal/sync          — Session parsing and noise filtering
 github.com/pablontiv/backscroll/internal/plans         — Markdown plan parsing
@@ -260,9 +265,10 @@ github.com/pablontiv/backscroll/internal/storage       — Database schema, migr
 github.com/pablontiv/backscroll/internal/projects      — Project identity registry
 github.com/pablontiv/backscroll/internal/readers       — SessionReader interface, Registry, ClaudeReader (text+tool_use+tool_result), PiReader (text+toolCall+custom results), OMPReader (native v3 text+thinking+toolCall+toolResult; parser-backed identities and origin), OpenCodeReader (text+tool state.input+state.output), CodexReader (rollout response items; docs/input-contract.md), MarkdownDocumentReader (`markdown_document`), MarkdownSectionsReader (`markdown_sections`); toolfmt serializer
 github.com/pablontiv/backscroll/internal/recovery      — Stranded database recovery orchestration, durable backup, atomic replacement, and post-install sync
- Implemented: `internal/autoupdate`, `internal/config`, `internal/input_config`, `internal/models`, `internal/readers`, `internal/sync`, `internal/tagging`, `internal/plans`, `internal/sources`, `internal/storage`, `internal/services`, `internal/projects`, `internal/templates`, `internal/corrections`, `internal/categories`, `internal/sequences`, `internal/hybrid`, `internal/compat`, `internal/recovery`, `internal/startuplock`. CLI commands in `cmd/backscroll/` (10 v2 commands via cobra).
+ Implemented: `internal/autoupdate`, `internal/config`, `internal/input_config`, `internal/presets`, `internal/models`, `internal/readers`, `internal/sync`, `internal/tagging`, `internal/plans`, `internal/sources`, `internal/storage`, `internal/services`, `internal/projects`, `internal/templates`, `internal/corrections`, `internal/categories`, `internal/sequences`, `internal/hybrid`, `internal/compat`, `internal/recovery`, `internal/startuplock`, `internal/skillinstall`. CLI commands in `cmd/backscroll/` (12 v2 commands via cobra).
  github.com/pablontiv/backscroll/internal/autoupdate    — Private context-aware release staging and safe replacement
 github.com/pablontiv/backscroll/internal/startuplock   — Canonical database lock coordination via persistent OS advisory sidecar
+github.com/pablontiv/backscroll/internal/skillinstall  — Safe Backscroll skill installation, receipts, rollback, and Python v1 restore compatibility
 github.com/pablontiv/backscroll/scripts/recall-eval    — Isolated recall evaluation runner and cohort reporter
 ```
 

@@ -1,0 +1,19 @@
+# Codex CLI rollout JSONL (active and archived sessions).
+# Copy to <config_dir>/backscroll/inputs/; see docs/input-contract.md.
+# For a custom CODEX_HOME, replace both roots explicitly.
+version = 1
+
+[[inputs]]
+id = "codex"
+source = "session"
+active = true
+
+[inputs.discover]
+roots = ["~/.codex/sessions", "~/.codex/archived_sessions"]
+include = ["**/*.jsonl"]
+exclude = []
+follow_symlinks = false
+
+[inputs.decode]
+format = "codex"
+index_reasoning = false

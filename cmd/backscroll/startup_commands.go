@@ -9,20 +9,19 @@ const (
 	startupMetadataRead startupCommandClass = "metadata-read"
 	startupMutation     startupCommandClass = "mutation"
 	startupRemediation  startupCommandClass = "remediation"
+	startupBypass       startupCommandClass = "bypass"
 	startupClassKey                         = "backscroll.io/startup-class"
 )
 
 func startupCommandClassFor(cmd *cobra.Command) (startupCommandClass, bool) {
-	if cmd.Annotations == nil {
-		return startupMutation, false
+	for current := cmd; current != nil; current = current.Parent() {
+		class := startupCommandClass(current.Annotations[startupClassKey])
+		switch class {
+		case startupSnapshotRead, startupMetadataRead, startupMutation, startupRemediation, startupBypass:
+			return class, true
+		}
 	}
-	class := startupCommandClass(cmd.Annotations[startupClassKey])
-	switch class {
-	case startupSnapshotRead, startupMetadataRead, startupMutation, startupRemediation:
-		return class, true
-	default:
-		return startupMutation, false
-	}
+	return startupMutation, false
 }
 
 func startupClassRetainsLease(class startupCommandClass) bool {

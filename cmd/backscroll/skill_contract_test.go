@@ -4,14 +4,12 @@ import (
 	"fmt"
 	"io"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"runtime"
 	"sort"
 	"strings"
 	"testing"
 
-	"github.com/pablontiv/backscroll/internal/input_config"
 	"github.com/spf13/cobra"
 )
 
@@ -506,77 +504,6 @@ func TestBackscrollSkillPreservesCorrectionsAuditAndUnixConfigGuidance(t *testin
 	}
 }
 
-func TestBackscrollSkillUnixConfigDirectoryMatchesInputsDir(t *testing.T) {
-	if runtime.GOOS == "windows" {
-		t.Skip("the Unix skill recipe requires /bin/sh")
-	}
-
-	var assignment string
-	for _, line := range strings.Split(strings.ReplaceAll(embeddedBackscrollSkill, "\r\n", "\n"), "\n") {
-		trimmed := strings.TrimSpace(line)
-		if !strings.HasPrefix(trimmed, "config_dir=") {
-			continue
-		}
-		if assignment != "" {
-			t.Fatal("skill recipe has more than one config_dir assignment")
-		}
-		assignment = trimmed
-	}
-	if assignment == "" {
-		t.Fatal("skill recipe has no config_dir assignment")
-	}
-
-	for _, tc := range []struct {
-		name     string
-		override string
-		unset    bool
-	}{
-		{name: "unset override", unset: true},
-		{name: "empty override"},
-		{name: "explicit override", override: "config override with spaces"},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			root := t.TempDir()
-			home := filepath.Join(root, "home with spaces")
-			xdg := filepath.Join(root, "conflicting xdg config")
-			override := ""
-			if tc.override != "" {
-				override = filepath.Join(root, tc.override)
-			}
-			t.Setenv("HOME", home)
-			t.Setenv("XDG_CONFIG_HOME", xdg)
-			t.Setenv("BACKSCROLL_CONFIG_DIR", override)
-			if tc.unset {
-				if err := os.Unsetenv("BACKSCROLL_CONFIG_DIR"); err != nil {
-					t.Fatalf("unset config override: %v", err)
-				}
-			}
-
-			want, err := input_config.InputsDir()
-			if err != nil {
-				t.Fatalf("resolve runtime inputs directory: %v", err)
-			}
-
-			// Execute only the assignment, not installation or preset-copy commands.
-			// Scrub inherited environment/startup hooks and keep every path temporary.
-			cmd := exec.Command("/bin/sh", "-c", assignment+"\nprintf '%s' \"$config_dir\"")
-			cmd.Dir = root
-			cmd.Env = []string{"HOME=" + home, "XDG_CONFIG_HOME=" + xdg}
-			if !tc.unset {
-				cmd.Env = append(cmd.Env, "BACKSCROLL_CONFIG_DIR="+override)
-			}
-			output, err := cmd.CombinedOutput()
-			if err != nil {
-				t.Fatalf("execute skill config_dir assignment: %v\n%s", err, output)
-			}
-			got := filepath.Join(string(output), "backscroll", "inputs")
-			if got != want {
-				t.Errorf("skill input directory = %q, runtime InputsDir = %q", got, want)
-			}
-		})
-	}
-}
-
 func assertContextCommandsHaveNoRoleFilter(t *testing.T, content string) {
 	t.Helper()
 	for _, line := range strings.Split(strings.ReplaceAll(content, "\r\n", "\n"), "\n") {
@@ -749,7 +676,7 @@ func validateBackscrollInvocations(root *cobra.Command, path string, lineNumber 
 		args := shellishTokenValues(argsTokens)
 		cmd := root
 		cmdName := root.Name()
-		flagArgsTokens := argsTokens
+		consumed := 0
 		if len(args) > 0 && !strings.HasPrefix(args[0], "-") {
 			child := findSubcommand(root, args[0])
 			if child == nil {
@@ -767,8 +694,16 @@ func validateBackscrollInvocations(root *cobra.Command, path string, lineNumber 
 			}
 			cmd = child
 			cmdName = root.Name() + " " + child.Name()
-			flagArgsTokens = argsTokens[1:]
+			consumed = 1
+			if len(args) > 1 && !strings.HasPrefix(args[1], "-") {
+				if grandchild := findSubcommand(child, args[1]); grandchild != nil {
+					cmd = grandchild
+					cmdName += " " + grandchild.Name()
+					consumed = 2
+				}
+			}
 		}
+		flagArgsTokens := argsTokens[consumed:]
 
 		flagArgs := shellishTokenValues(flagArgsTokens)
 		for _, flagName := range longFlags(flagArgs) {
