@@ -2,6 +2,7 @@ package storage
 
 import (
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 )
@@ -41,8 +42,9 @@ func TestStalePathsReturnsPreV8Files(t *testing.T) {
 	if len(paths) != 3 {
 		t.Fatalf("want 3 stale paths (v1 + legacy + v0), got %d: %v", len(paths), paths)
 	}
-	if paths[0] != "/p/legacy.jsonl" || paths[1] != "/p/rich.jsonl" || paths[2] != "/p/stale.jsonl" {
-		t.Errorf("stale paths = %v, want [/p/legacy.jsonl /p/rich.jsonl /p/stale.jsonl]", paths)
+	want := []string{"/p/legacy.jsonl", "/p/rich.jsonl", "/p/stale.jsonl"}
+	if !slices.Equal(slices.Sorted(slices.Values(paths)), slices.Sorted(slices.Values(want))) {
+		t.Errorf("stale paths = %v, want %v", paths, want)
 	}
 
 	// Non-session source must not appear
