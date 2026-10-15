@@ -861,30 +861,6 @@ func (d *Database) LoadToolSequences(opts LoadSequencesOpts) ([]sequences.Sequen
 	return result, nil
 }
 
-// EmptyIndexedPaths returns files recorded in indexed_files without any indexed
-// rows. It starts from indexed_files because row-backed stale queries cannot see
-// files whose prior parser produced no messages.
-func (d *Database) EmptyIndexedPaths() ([]string, error) {
-	return d.EmptyIndexedPathsContext(context.Background())
-}
-
-// EmptyIndexedPathsContext is EmptyIndexedPaths with cancellation propagated
-// through the query and row iteration.
-func (d *Database) EmptyIndexedPathsContext(ctx context.Context) ([]string, error) {
-	paths, err := d.queryPathsContext(ctx, `
-		SELECT indexed_files.path
-		FROM indexed_files
-		LEFT JOIN search_items ON search_items.source_path = indexed_files.path
-		WHERE search_items.id IS NULL
-		  AND indexed_files.hash <> ?
-		ORDER BY indexed_files.last_indexed ASC, indexed_files.path ASC
-	`, recoveredSourceHash)
-	if err != nil {
-		return nil, fmt.Errorf("query empty indexed paths: %w", err)
-	}
-	return paths, nil
-}
-
 // PendingOriginPaths returns a bounded queue of source-backed paths whose
 // historical rows have not been read at currentVersion by an origin-aware
 // parser. It never derives origin from stored role or text.

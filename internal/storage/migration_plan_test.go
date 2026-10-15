@@ -68,7 +68,7 @@ func TestEveryCatalogFixtureReachesCurrentSemanticHead(t *testing.T) {
 		"v4.sql", "v5-with-source-metadata.sql", "v5-without-source-metadata.sql",
 		"v6.sql", "v7.sql", "v8.sql", "v9.sql", "v10.sql", "v11.sql", "v12.sql",
 		"v13.sql", "v13-legacy-existing-schema-migrations.sql",
-		"v13-legacy-alter-built.sql", "v13-development-alter-built.sql", "v14.sql", "v15.sql", "v16.sql", "v17.sql",
+		"v13-legacy-alter-built.sql", "v13-development-alter-built.sql", "v14.sql", "v15.sql", "v16.sql", "v17.sql", "v18.sql",
 	}
 	for _, name := range required {
 		if !seen[name] {
@@ -923,6 +923,7 @@ func TestLockedMigrationPlanFromEmptySchemaCreatesCurrentShape(t *testing.T) {
 		{Version: 15, Name: "V15 search echo provenance"},
 		{Version: 16, Name: "V16 parser-backed message origin"},
 		{Version: 17, Name: "V17 project attribution evidence"},
+		{Version: 18, Name: "V18 ingestion semantics fingerprint"},
 	}
 	if err := applyMigrationPlanForTest(ctx, db, plan); err != nil {
 		t.Fatalf("apply full plan: %v", err)
@@ -2137,6 +2138,7 @@ func authoritativeCurrentMigrationRows() []storageMigrationRow {
 		{Version: 15, Name: "V15 search echo provenance", Checksum: "9b7b241b37c48b808134c909df64eba2a5bbb3a592a754dad662a8c4826aba09"},
 		{Version: 16, Name: "V16 parser-backed message origin", Checksum: "e80730f36197ce73a4c5d8d900863914cf38b516d742ce66217e9d3c81aed6cf"},
 		{Version: 17, Name: "V17 project attribution evidence", Checksum: "f29dc8d36c05df4ccba1e63f709b919d032b03a94ab95e282ce8449050cb9c86"},
+		{Version: 18, Name: "V18 ingestion semantics fingerprint", Checksum: "979fffaf1ca510d1213df712d0d43fef57aca88c4da3b77f4115fe27f35e0b72"},
 	}
 }
 

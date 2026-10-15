@@ -30,7 +30,50 @@ func ReadRecoveryInputFromQueryer(ctx context.Context, q compat.Queryer) (compat
 	if err != nil || diag != nil {
 		return compat.RecoveryInput{}, diag, err
 	}
-	return compat.RecoveryInput{Shape: plan.From, Records: records, RowCount: len(records)}, nil, nil
+	fingerprints, err := readRecoveryIngestionFingerprints(ctx, q)
+	if err != nil {
+		return compat.RecoveryInput{}, nil, err
+	}
+	return compat.RecoveryInput{
+		Shape:                 plan.From,
+		Records:               records,
+		IngestionFingerprints: fingerprints,
+		RowCount:              len(records),
+	}, nil, nil
+}
+
+func readRecoveryIngestionFingerprints(ctx context.Context, q compat.Queryer) (map[string]string, error) {
+	var hasFingerprint int
+	if err := q.QueryRowContext(ctx, `SELECT COUNT(*) FROM pragma_table_info('indexed_files') WHERE name = 'ingestion_fingerprint'`).Scan(&hasFingerprint); err != nil {
+		return nil, fmt.Errorf("inspect recovery ingestion fingerprint: %w", err)
+	}
+	if hasFingerprint == 0 {
+		return nil, nil
+	}
+	rows, err := q.QueryContext(ctx, `
+		SELECT path, ingestion_fingerprint
+		FROM indexed_files
+		WHERE ingestion_fingerprint IS NOT NULL
+		ORDER BY path
+	`)
+	if err != nil {
+		return nil, fmt.Errorf("read recovery ingestion fingerprints: %w", err)
+	}
+	defer rows.Close()
+	fingerprints := make(map[string]string)
+	for rows.Next() {
+		var path, fingerprint string
+		if err := rows.Scan(&path, &fingerprint); err != nil {
+			return nil, fmt.Errorf("scan recovery ingestion fingerprint: %w", err)
+		}
+		if path != "" && fingerprint != "" {
+			fingerprints[path] = fingerprint
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate recovery ingestion fingerprints: %w", err)
+	}
+	return fingerprints, nil
 }
 
 func readRecordsForShape(ctx context.Context, q compat.Queryer, shape compat.SchemaShape) ([]models.IndexedRecord, *compat.Diagnostic, error) {

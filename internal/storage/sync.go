@@ -39,13 +39,14 @@ type IndexedMessage struct {
 
 // IndexedFile represents a file to be synced into the database.
 type IndexedFile struct {
-	SourcePath      string
-	Source          string // "session", "plan", "ke", "decision", etc.
-	Hash            string
-	Project         string
-	ProjectEvidence string
-	Messages        []IndexedMessage
-	Tags            []string // only used for sessions
+	SourcePath           string
+	Source               string // "session", "plan", "ke", "decision", etc.
+	Hash                 string
+	IngestionFingerprint string
+	Project              string
+	ProjectEvidence      string
+	Messages             []IndexedMessage
+	Tags                 []string // only used for sessions
 	// Metadata for v14 prefilter
 	FileSize  *int64  // populated by sync_helpers.go if available
 	FileMtime *string // populated by sync_helpers.go if available; RFC3339 format
@@ -437,14 +438,12 @@ func (d *Database) SyncFilesContext(ctx context.Context, files []IndexedFile) (r
 			}
 		}
 
-		// If this is a session (source == "session"), upsert session_tags
+		// Tags are derived only for session sources. A source-semantic replay
+		// clears any prior session classification before applying current tags.
+		if _, err := tx.ExecContext(ctx, "DELETE FROM session_tags WHERE source_path = ?", file.SourcePath); err != nil {
+			return fmt.Errorf("delete old session_tags for %s: %w", file.SourcePath, err)
+		}
 		if file.Source == "session" {
-			// Delete old tags for this source_path
-			if _, err := tx.ExecContext(ctx, "DELETE FROM session_tags WHERE source_path = ?", file.SourcePath); err != nil {
-				return fmt.Errorf("delete old session_tags for %s: %w", file.SourcePath, err)
-			}
-
-			// Insert new tags
 			for _, tag := range file.Tags {
 				if err := ctx.Err(); err != nil {
 					return err
@@ -462,15 +461,17 @@ func (d *Database) SyncFilesContext(ctx context.Context, files []IndexedFile) (r
 			}
 		}
 
-		// Insert or replace in indexed_files
+		// Insert or replace in indexed_files.
 		_, err = tx.ExecContext(ctx, `
-			INSERT OR REPLACE INTO indexed_files (path, hash, last_indexed, file_size, file_mtime)
-			VALUES (?, ?, CURRENT_TIMESTAMP, ?, ?)
+			INSERT OR REPLACE INTO indexed_files
+				(path, hash, last_indexed, file_size, file_mtime, ingestion_fingerprint)
+			VALUES (?, ?, CURRENT_TIMESTAMP, ?, ?, ?)
 		`,
 			file.SourcePath,
 			file.Hash,
 			file.FileSize,
 			file.FileMtime,
+			file.IngestionFingerprint,
 		)
 		if err != nil {
 			return fmt.Errorf("upsert indexed_files for %s: %w", file.SourcePath, err)
@@ -673,15 +674,16 @@ func (d *Database) GetFileHashes() (map[string]string, error) {
 
 // FileMetadata represents the persisted metadata for a file.
 type FileMetadata struct {
-	Path        string
-	Hash        string
-	Size        *int64  // NULL for pre-v14 rows
-	Mtime       *string // NULL for pre-v14 rows
-	LastIndexed *string // timestamp of the indexing, used for racy-clean detection
+	Path                 string
+	Hash                 string
+	Size                 *int64  // NULL for pre-v14 rows
+	Mtime                *string // NULL for pre-v14 rows
+	LastIndexed          *string // timestamp of the indexing, used for racy-clean detection
+	IngestionFingerprint *string // NULL for pre-v18 rows and recovery-pending sources
 }
 
-// GetFileMetadata returns all indexed file metadata (path, hash, size, mtime, last_indexed).
-// Pre-v14 rows have NULL size and mtime. LastIndexed is populated from indexed_files.last_indexed.
+// GetFileMetadata returns all indexed file metadata, including the persisted
+// ingestion-semantics fingerprint. Older rows retain NULL fields.
 func (d *Database) GetFileMetadata() (map[string]FileMetadata, error) {
 	return d.GetFileMetadataContext(context.Background())
 }
@@ -693,7 +695,7 @@ func (d *Database) GetFileMetadataContext(ctx context.Context) (map[string]FileM
 		return nil, err
 	}
 	rows, err := d.db.QueryContext(ctx, `
-		SELECT path, hash, file_size, file_mtime, last_indexed
+		SELECT path, hash, file_size, file_mtime, last_indexed, ingestion_fingerprint
 		FROM indexed_files
 		WHERE hash <> ?
 	`, recoveredSourceHash)
@@ -711,15 +713,17 @@ func (d *Database) GetFileMetadataContext(ctx context.Context) (map[string]FileM
 		var size *int64
 		var mtime *string
 		var lastIndexed *string
-		if err := rows.Scan(&path, &hash, &size, &mtime, &lastIndexed); err != nil {
+		var ingestionFingerprint *string
+		if err := rows.Scan(&path, &hash, &size, &mtime, &lastIndexed, &ingestionFingerprint); err != nil {
 			return nil, fmt.Errorf("scan file metadata: %w", err)
 		}
 		metadata[path] = FileMetadata{
-			Path:        path,
-			Hash:        hash,
-			Size:        size,
-			Mtime:       mtime,
-			LastIndexed: lastIndexed,
+			Path:                 path,
+			Hash:                 hash,
+			Size:                 size,
+			Mtime:                mtime,
+			LastIndexed:          lastIndexed,
+			IngestionFingerprint: ingestionFingerprint,
 		}
 	}
 

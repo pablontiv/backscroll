@@ -643,6 +643,14 @@
       "AppliedVersion": 17,
       "HasSourceMetadata": false,
       "Provenance": "Migration v17 applied to retained v16 fixture; project attribution evidence defaults historical records to unknown."
+    },
+    {
+      "Fixture": "v18.sql",
+      "ProvenanceSHA256": "f1a1f60c65ee66fdec13badee438d4731d8643fc486b135eeaff4051a277bca5",
+      "Signature": "sha256:5acdb0def1bdfcf2f54d5a0e4615c36cbbe0e52316ddda7db211297d8d0571d4",
+      "AppliedVersion": 18,
+      "HasSourceMetadata": false,
+      "Provenance": "Migration v18 adds a nullable versioned ingestion-semantics fingerprint to indexed source accounting."
     }
   ]
 }

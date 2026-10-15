@@ -263,6 +263,9 @@ func TestOMPReasoningTogglePreservesPerennialToolCoordinates(t *testing.T) {
 		t.Fatal(err)
 	}
 	writeFile(t, manifestPath, strings.ReplaceAll(string(manifest), "index_reasoning = true", "index_reasoning = false"))
+	if rows := ompRecall(t, "omptogglereason", "--content-type", "reasoning"); len(rows) != 1 {
+		t.Fatalf("reasoning opt-out retroactively removed perennial row: %+v", rows)
+	}
 	writeFile(t, source, initial+appended)
 	if rows := ompRecall(t, "omptoggleb", "--content-type", "tool"); len(rows) != 1 {
 		t.Fatalf("appended call: %+v", rows)

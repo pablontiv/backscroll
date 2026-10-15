@@ -8,9 +8,13 @@ import (
 	"github.com/pablontiv/backscroll/internal/models"
 )
 
-type mockReader struct{ name string }
+type mockReader struct {
+	name  string
+	epoch uint64
+}
 
-func (m *mockReader) Name() string { return m.name }
+func (m *mockReader) Name() string           { return m.name }
+func (m *mockReader) IngestionEpoch() uint64 { return m.epoch }
 func (m *mockReader) Discover(context.Context, input_config.InputDefinition) ([]string, error) {
 	return []string{"ref1", "ref2"}, nil
 }
@@ -101,5 +105,33 @@ func TestMockReaderInterface(t *testing.T) {
 	pf, err := m.Parse(context.Background(), "ref1", input_config.InputDefinition{})
 	if err != nil || pf.Path != "ref1" {
 		t.Errorf("Parse: err=%v pf=%v", err, pf)
+	}
+}
+
+func TestIngestionFingerprintCoversSupportedSemantics(t *testing.T) {
+	base := input_config.InputDefinition{
+		Source: "session",
+		Decode: input_config.DecodeConfig{Format: "pi"},
+	}
+	current := IngestionFingerprint(&mockReader{name: "pi", epoch: 1}, base)
+	if current == "" || current[:3] != "v1:" {
+		t.Fatalf("fingerprint = %q, want v1 prefix", current)
+	}
+	cases := []struct {
+		name   string
+		reader SessionReader
+		def    input_config.InputDefinition
+	}{
+		{name: "decoder", reader: &mockReader{name: "omp", epoch: 1}, def: base},
+		{name: "epoch", reader: &mockReader{name: "pi", epoch: 2}, def: base},
+		{name: "source", reader: &mockReader{name: "pi", epoch: 1}, def: input_config.InputDefinition{Source: "decision", Decode: base.Decode}},
+		{name: "reasoning", reader: &mockReader{name: "pi", epoch: 1}, def: input_config.InputDefinition{Source: "session", Decode: input_config.DecodeConfig{Format: "pi", IndexReasoning: true}}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := IngestionFingerprint(tc.reader, tc.def); got == current {
+				t.Fatalf("%s transition retained fingerprint %q", tc.name, got)
+			}
+		})
 	}
 }

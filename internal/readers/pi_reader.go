@@ -16,7 +16,8 @@ import (
 // results from separate `custom` records.
 type PiReader struct{}
 
-func (r *PiReader) Name() string { return "pi" }
+func (r *PiReader) Name() string           { return "pi" }
+func (r *PiReader) IngestionEpoch() uint64 { return 1 }
 
 func (r *PiReader) Discover(ctx context.Context, def input_config.InputDefinition) ([]string, error) {
 	return input_config.DiscoverFilesContext(ctx, def.Discover)

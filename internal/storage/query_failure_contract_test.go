@@ -139,13 +139,6 @@ func TestDisposedIndexConsumersReportFailure(t *testing.T) {
 			}
 			return e
 		},
-		"empty queue": func() error {
-			r, e := db.EmptyIndexedPaths()
-			if r != nil {
-				t.Errorf("partial queue: %+v", r)
-			}
-			return e
-		},
 		"message reload": func() error {
 			r, e := db.LoadMessagesForPath("/omp")
 			if r != nil {

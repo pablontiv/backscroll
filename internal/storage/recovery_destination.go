@@ -257,10 +257,14 @@ func recoveryDestinationSourcePaths(plan compat.RecoveryPlan) []string {
 
 func insertRecoveryDestinationAccounting(ctx context.Context, tx *sql.Tx, plan compat.RecoveryPlan) error {
 	for _, path := range recoveryDestinationSourcePaths(plan) {
+		var fingerprint any
+		if value, ok := plan.IngestionFingerprints[path]; ok {
+			fingerprint = value
+		}
 		if _, err := tx.ExecContext(ctx, `
-			INSERT INTO indexed_files (path, hash, last_indexed)
-			VALUES (?, ?, NULL)
-		`, path, recoveredSourceHash); err != nil {
+			INSERT INTO indexed_files (path, hash, last_indexed, ingestion_fingerprint)
+			VALUES (?, ?, NULL, ?)
+		`, path, recoveredSourceHash, fingerprint); err != nil {
 			return fmt.Errorf("insert recovered source accounting for %s: %w", path, err)
 		}
 	}
@@ -292,7 +296,7 @@ func verifyRecoveryDestinationRows(ctx context.Context, q compat.Queryer, plan c
 		return fmt.Errorf("search_items count = %d, want %d", rowCount, len(plan.Records))
 	}
 	rows, err := q.QueryContext(ctx, `
-		SELECT path, hash, last_indexed
+		SELECT path, hash, last_indexed, ingestion_fingerprint
 		FROM indexed_files
 		ORDER BY path
 	`)
@@ -303,8 +307,8 @@ func verifyRecoveryDestinationRows(ctx context.Context, q compat.Queryer, plan c
 	var gotPaths []string
 	for rows.Next() {
 		var path, hash string
-		var lastIndexed sql.NullString
-		if err := rows.Scan(&path, &hash, &lastIndexed); err != nil {
+		var lastIndexed, fingerprint sql.NullString
+		if err := rows.Scan(&path, &hash, &lastIndexed, &fingerprint); err != nil {
 			_ = rows.Close()
 			return fmt.Errorf("scan recovered source accounting: %w", err)
 		}
@@ -315,6 +319,11 @@ func verifyRecoveryDestinationRows(ctx context.Context, q compat.Queryer, plan c
 		if lastIndexed.Valid {
 			_ = rows.Close()
 			return fmt.Errorf("recovered source accounting for %s has last_indexed %q", path, lastIndexed.String)
+		}
+		wantFingerprint, hasFingerprint := plan.IngestionFingerprints[path]
+		if fingerprint.Valid != hasFingerprint || (hasFingerprint && fingerprint.String != wantFingerprint) {
+			_ = rows.Close()
+			return fmt.Errorf("recovered source accounting for %s has ingestion fingerprint %q", path, fingerprint.String)
 		}
 		gotPaths = append(gotPaths, path)
 	}

@@ -43,7 +43,8 @@ func TestPairedEchoV14UpgradeReparsesUnchangedFiles(t *testing.T) {
 	}
 	if _, err := db.Exec(`INSERT INTO search_items(id,source,source_path,ordinal,role,text,timestamp,uuid,project,content_type,extraction_version,was_interrupted)
  SELECT id,source,source_path,ordinal,role,text,timestamp,uuid,project,content_type,extraction_version,was_interrupted FROM seed.search_items;
- INSERT INTO indexed_files SELECT * FROM seed.indexed_files;`); err != nil {
+ INSERT INTO indexed_files(path,hash,last_indexed,file_size,file_mtime)
+ SELECT path,hash,last_indexed,file_size,file_mtime FROM seed.indexed_files;`); err != nil {
 		t.Fatal(err)
 	}
 	// Capture stable identities before any migration or replay.

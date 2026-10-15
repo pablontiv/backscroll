@@ -4,7 +4,10 @@ package readers
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"fmt"
+	"strconv"
 
 	"github.com/pablontiv/backscroll/internal/input_config"
 	"github.com/pablontiv/backscroll/internal/models"
@@ -14,6 +17,9 @@ import (
 type SessionReader interface {
 	// Name returns the format identifier (e.g., "jsonl", "opencode").
 	Name() string
+	// IngestionEpoch identifies this decoder's persisted parsing semantics.
+	// Increment only the decoder whose interpretation of stable input changed.
+	IngestionEpoch() uint64
 	// Discover returns the list of session references (paths or IDs) matching the input definition.
 	Discover(ctx context.Context, def input_config.InputDefinition) ([]string, error)
 	// Hash returns a stable identifier for the current state of a session reference.
@@ -21,6 +27,39 @@ type SessionReader interface {
 	Hash(ctx context.Context, sessionRef string) (string, error)
 	// Parse parses a session reference into a ParsedFile.
 	Parse(ctx context.Context, sessionRef string, def input_config.InputDefinition) (models.ParsedFile, error)
+}
+
+// IngestionFingerprint returns the versioned parsing contract persisted for a
+// source. Source and reasoning are included alongside the decoder's own epoch,
+// so stable bytes replay when any supported ingestion semantic changes.
+func IngestionFingerprint(reader SessionReader, def input_config.InputDefinition) string {
+	source := def.Source
+	if source == "" {
+		source = "session"
+	}
+	payload := make([]byte, 0, len(reader.Name())+len(source)+32)
+	payload = appendFingerprintPart(payload, reader.Name())
+	payload = strconv.AppendUint(payload, reader.IngestionEpoch(), 10)
+	payload = append(payload, 0)
+	payload = appendFingerprintPart(payload, source)
+	if def.Decode.IndexReasoning {
+		payload = append(payload, '1')
+	} else {
+		payload = append(payload, '0')
+	}
+	sum := sha256.Sum256(payload)
+	var encoded [3 + sha256.Size*2]byte
+	copy(encoded[:], "v1:")
+	hex.Encode(encoded[3:], sum[:])
+	return string(encoded[:])
+}
+
+func appendFingerprintPart(dst []byte, value string) []byte {
+	dst = strconv.AppendInt(dst, int64(len(value)), 10)
+	dst = append(dst, ':')
+	dst = append(dst, value...)
+	dst = append(dst, 0)
+	return dst
 }
 
 // Registry maps format names to their SessionReader implementations.

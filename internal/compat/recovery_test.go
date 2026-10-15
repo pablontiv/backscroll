@@ -505,3 +505,29 @@ func TestPlanRecoveryContradictoryProjectPayloadRemainsConflict(t *testing.T) {
 		}
 	}
 }
+
+func TestPlanRecoveryPreservesOnlyAgreedIngestionFingerprints(t *testing.T) {
+	const path = "/sessions/source.jsonl"
+	plan, diagnostics, err := PlanRecovery([]RecoveryInput{
+		{IngestionFingerprints: map[string]string{path: "v1:first"}},
+		{IngestionFingerprints: map[string]string{path: "v1:first"}},
+	})
+	if err != nil || len(diagnostics) != 0 {
+		t.Fatalf("plan error=%v diagnostics=%+v", err, diagnostics)
+	}
+	if got := plan.IngestionFingerprints[path]; got != "v1:first" {
+		t.Fatalf("agreed fingerprint = %q", got)
+	}
+
+	plan, diagnostics, err = PlanRecovery([]RecoveryInput{
+		{IngestionFingerprints: map[string]string{path: "v1:first"}},
+		{IngestionFingerprints: map[string]string{path: "v1:second"}},
+		{IngestionFingerprints: map[string]string{path: "v1:first"}},
+	})
+	if err != nil || len(diagnostics) != 0 {
+		t.Fatalf("conflicting plan error=%v diagnostics=%+v", err, diagnostics)
+	}
+	if _, ok := plan.IngestionFingerprints[path]; ok {
+		t.Fatalf("conflicting fingerprint was preserved: %+v", plan.IngestionFingerprints)
+	}
+}
