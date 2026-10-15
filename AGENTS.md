@@ -8,7 +8,7 @@ Backscroll is a Go CLI tool that indexes Claude Code, Pi, OMP, OpenCode, Codex C
 
 **Status**: Go port complete — `main` branch is the active Go implementation. The Rust implementation is frozen in the `v0` branch.
 
- Implemented: `internal/autoupdate`, `internal/config`, `internal/input_config`, `internal/models`, `internal/readers`, `internal/sync`, `internal/tagging`, `internal/plans`, `internal/sources`, `internal/storage`, `internal/services`, `internal/projects`, `internal/templates`, `internal/corrections`, `internal/categories`, `internal/sequences`, `internal/chunking`, `internal/embedding`, `internal/hybrid`, `internal/compat`, `internal/recovery`, `internal/startuplock`. CLI commands in `cmd/backscroll/` (10 v2 commands via cobra).
+ Implemented: `internal/autoupdate`, `internal/config`, `internal/input_config`, `internal/models`, `internal/readers`, `internal/sync`, `internal/tagging`, `internal/plans`, `internal/sources`, `internal/storage`, `internal/services`, `internal/projects`, `internal/templates`, `internal/corrections`, `internal/categories`, `internal/sequences`, `internal/hybrid`, `internal/compat`, `internal/recovery`, `internal/startuplock`. CLI commands in `cmd/backscroll/` (10 v2 commands via cobra).
  github.com/pablontiv/backscroll/internal/autoupdate    — Private context-aware release staging and safe replacement
 
 Stack: cobra, go-toml/v2, goldmark, modernc.org/sqlite (pure Go, no CGO), stdlib testing.
@@ -43,7 +43,7 @@ Tests use stdlib `testing` + subprocess or direct `run()` invocation. Unit tests
 cmd/backscroll/
 ├── main.go            — entrypoint; run(stdout, stderr, args) for testability
 ├── list.go            — list command (v2: --project, --all-projects, --recent N, --order, --limit, --offset, --json, --robot)
-├── search.go          — search command (v2: --text, --project, --all-projects, --source, --source-path, --after, --before, --role, --content-type, --tag, --fields, --max-tokens, --lexical-only, --relax, --similarity-threshold, --json, --robot)
+├── search.go          — search command (v2: --text, --project, --all-projects, --source, --source-path, --after, --before, --role, --content-type, --tag, --fields, --max-tokens, --relax, --json, --robot)
 ├── context.go         — exact indexed neighborhood command (--uuid or exact --source-path + --ordinal, --before, --after, --max-tokens, --json, --robot)
 ├── patterns.go        — patterns command (v2: --kind commands|failures|templates|sequences|corrections [--origin human|assistant|system|automation|unknown] [--pending] [--batch N] [--trend], --project, --all-projects, --tag, --min-support, --min-confidence, --min-length, --max-length, --json, --robot)
 ├── annotate.go        — annotate command (F3b: --uuid --kind --label; validates message existence; upsert semantics)
@@ -71,9 +71,7 @@ internal/
 ├── templates/         — F2 Drain-inspired miner: Miner, ProcessLine, ExtractErrorLines, deterministic signature via SHA256
 ├── corrections/       — F3 correction detection: bilingual lexicon, interrupt flags, denial heuristics, rephrase-similarity; detector registry + implementations
 ├── categories/        — F4 category map loader (rule engine, versioning, tool→category mapping) with embedded default preset
-├── chunking/          — Token-aware text chunking helpers for embedding preparation
-├── embedding/         — Embedding provider interfaces, mock provider, and ONNX provider implementation
-├── hybrid/            — Reciprocal Rank Fusion helpers for merged lexical/vector retrieval
+├── hybrid/            — Reciprocal Rank Fusion helpers for merged lexical retrieval
 ├── sequences/         — F4 PrefixSpan mining (deterministic discovery of frequent tool-call sequences per session)
 ├── services/          — Concrete typed read-only query orchestration over storage
 └── storage/           — SQLite adapter (dual FTS5 indexes: tool_fts + messages_fts, BM25, WAL mode, migrations v1–v17, search_items, session_tags, tool_events, message_templates, template_matches, correction_signals, annotations, AggregateCommands, AggregateFailures, AggregateTemplates, AggregateCorrections, UpsertAnnotation, LoadToolSequences)
@@ -81,7 +79,7 @@ scripts/
 └── recall-eval/       — isolated legacy/synthetic recall evaluator and cohort reporter
 ```
 
-Ten v2 CLI commands: `list [--project] [--all-projects] [--recent N] [--order timestamp:desc|asc] [--limit] [--offset] [--json] [--robot]`, `search [--text <query>] [--project] [--all-projects] [--source] [--source-path] [--after] [--before] [--role] [--content-type] [--tag] [--limit] [--offset] [--fields minimal|full] [--max-tokens N] [--lexical-only] [--relax] [--similarity-threshold F] [--json] [--robot]`, `context (--uuid <opaque-uuid> | --source-path <exact-path> --ordinal <n>) [--before 0..50] [--after 0..50] [--max-tokens 64..16384] [--json] [--robot]`, `patterns --kind commands|failures|templates|sequences|corrections [--origin human|assistant|system|automation|unknown] [--pending] [--batch N] [--project] [--all-projects] [--tag] [--trend] [--after] [--before] [--min-support N] [--min-confidence F] [--min-length N] [--max-length N] [--limit] [--offset] [--json] [--robot]`, `annotate --uuid <u> --kind <k> --label <l> [--path <p> --ordinal <n>]`, `recover --from <path> [--dry-run]`, `status [--json]`, `validate [--json]`, `rebuild`, `config [--json]`.
+Ten v2 CLI commands: `list [--project] [--all-projects] [--recent N] [--order timestamp:desc|asc] [--limit] [--offset] [--json] [--robot]`, `search [--text <query>] [--project] [--all-projects] [--source] [--source-path] [--after] [--before] [--role] [--content-type] [--tag] [--limit] [--offset] [--fields minimal|full] [--max-tokens N] [--relax] [--json] [--robot]`, `context (--uuid <opaque-uuid> | --source-path <exact-path> --ordinal <n>) [--before 0..50] [--after 0..50] [--max-tokens 64..16384] [--json] [--robot]`, `patterns --kind commands|failures|templates|sequences|corrections [--origin human|assistant|system|automation|unknown] [--pending] [--batch N] [--project] [--all-projects] [--tag] [--trend] [--after] [--before] [--min-support N] [--min-confidence F] [--min-length N] [--max-length N] [--limit] [--offset] [--json] [--robot]`, `annotate --uuid <u> --kind <k> --label <l> [--path <p> --ordinal <n>]`, `recover --from <path> [--dry-run]`, `status [--json]`, `validate [--json]`, `rebuild`, `config [--json]`.
 
 The `SearchEngine` interface is the port; `internal/storage` is the adapter. Database opened lazily. `OpenReadOnly()` provides read-only access for external consumers.
 
@@ -255,16 +253,14 @@ github.com/pablontiv/backscroll/internal/sources       — External source parse
 github.com/pablontiv/backscroll/internal/templates     — F2 Drain-inspired miner: Miner, ProcessLine, ExtractErrorLines
 github.com/pablontiv/backscroll/internal/corrections   — F3 correction-signal detectors: lexicon (es+en), interrupt, denial, rephrase-similarity; registry pattern for deterministic, pluggable detectors
 github.com/pablontiv/backscroll/internal/categories    — F4 category map loader (rule engine, versioning, tool→category mapping) with embedded default preset
-github.com/pablontiv/backscroll/internal/chunking      — Token-aware text chunking helpers for embedding preparation
-github.com/pablontiv/backscroll/internal/embedding     — Embedding provider interface, mock provider, and ONNX provider implementation
-github.com/pablontiv/backscroll/internal/hybrid        — Reciprocal Rank Fusion helpers for merged lexical/vector retrieval
+github.com/pablontiv/backscroll/internal/hybrid        — Reciprocal Rank Fusion helpers for merged lexical retrieval
 github.com/pablontiv/backscroll/internal/sequences     — F4 PrefixSpan mining (deterministic pattern discovery per session)
 github.com/pablontiv/backscroll/internal/services      — Concrete typed read-only query orchestration over storage
 github.com/pablontiv/backscroll/internal/storage       — Database schema, migrations v1–v17, FTS5 indexes
 github.com/pablontiv/backscroll/internal/projects      — Project identity registry
 github.com/pablontiv/backscroll/internal/readers       — SessionReader interface, Registry, ClaudeReader (text+tool_use+tool_result), PiReader (text+toolCall+custom results), OMPReader (native v3 text+thinking+toolCall+toolResult; parser-backed identities and origin), OpenCodeReader (text+tool state.input+state.output), CodexReader (rollout response items; docs/input-contract.md), MarkdownDocumentReader (`markdown_document`), MarkdownSectionsReader (`markdown_sections`); toolfmt serializer
 github.com/pablontiv/backscroll/internal/recovery      — Stranded database recovery orchestration, durable backup, atomic replacement, and post-install sync
- Implemented: `internal/autoupdate`, `internal/config`, `internal/input_config`, `internal/models`, `internal/readers`, `internal/sync`, `internal/tagging`, `internal/plans`, `internal/sources`, `internal/storage`, `internal/services`, `internal/projects`, `internal/templates`, `internal/corrections`, `internal/categories`, `internal/sequences`, `internal/chunking`, `internal/embedding`, `internal/hybrid`, `internal/compat`, `internal/recovery`, `internal/startuplock`. CLI commands in `cmd/backscroll/` (10 v2 commands via cobra).
+ Implemented: `internal/autoupdate`, `internal/config`, `internal/input_config`, `internal/models`, `internal/readers`, `internal/sync`, `internal/tagging`, `internal/plans`, `internal/sources`, `internal/storage`, `internal/services`, `internal/projects`, `internal/templates`, `internal/corrections`, `internal/categories`, `internal/sequences`, `internal/hybrid`, `internal/compat`, `internal/recovery`, `internal/startuplock`. CLI commands in `cmd/backscroll/` (10 v2 commands via cobra).
  github.com/pablontiv/backscroll/internal/autoupdate    — Private context-aware release staging and safe replacement
 github.com/pablontiv/backscroll/internal/startuplock   — Canonical database lock coordination via persistent OS advisory sidecar
 github.com/pablontiv/backscroll/scripts/recall-eval    — Isolated recall evaluation runner and cohort reporter

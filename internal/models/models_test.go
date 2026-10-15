@@ -433,18 +433,16 @@ func TestSearchOptionsCreation(t *testing.T) {
 	before := time.Date(2024, 12, 31, 23, 59, 59, 0, time.UTC)
 
 	opts := SearchOptions{
-		Project:             "myproject",
-		AllProjects:         false,
-		Source:              "session",
-		After:               &after,
-		Before:              &before,
-		Role:                "assistant",
-		Limit:               10,
-		Offset:              5,
-		ContentType:         "text",
-		Tag:                 "feature",
-		LexicalOnly:         true,
-		SimilarityThreshold: 0.75,
+		Project:     "myproject",
+		AllProjects: false,
+		Source:      "session",
+		After:       &after,
+		Before:      &before,
+		Role:        "assistant",
+		Limit:       10,
+		Offset:      5,
+		ContentType: "text",
+		Tag:         "feature",
 	}
 
 	if opts.Project != "myproject" {
@@ -477,12 +475,6 @@ func TestSearchOptionsCreation(t *testing.T) {
 	if opts.Tag != "feature" {
 		t.Errorf("expected Tag 'feature', got %q", opts.Tag)
 	}
-	if opts.LexicalOnly != true {
-		t.Errorf("expected LexicalOnly true, got %v", opts.LexicalOnly)
-	}
-	if opts.SimilarityThreshold != 0.75 {
-		t.Errorf("expected SimilarityThreshold 0.75, got %f", opts.SimilarityThreshold)
-	}
 }
 
 // TestSearchOptionsZeroValues tests SearchOptions with zero values.
@@ -503,9 +495,6 @@ func TestSearchOptionsZeroValues(t *testing.T) {
 	}
 	if opts.Before != nil {
 		t.Errorf("expected nil Before, got %v", opts.Before)
-	}
-	if opts.LexicalOnly != false {
-		t.Errorf("expected LexicalOnly false, got %v", opts.LexicalOnly)
 	}
 }
 
@@ -529,19 +518,6 @@ func TestSearchOptionsVariousSources(t *testing.T) {
 		}
 		if opts.Source != source {
 			t.Errorf("expected Source %q, got %q", source, opts.Source)
-		}
-	}
-}
-
-// TestSearchOptionsSimilarityThreshold tests SearchOptions with various similarity thresholds.
-func TestSearchOptionsSimilarityThreshold(t *testing.T) {
-	thresholds := []float64{0.0, 0.25, 0.5, 0.75, 1.0}
-	for _, threshold := range thresholds {
-		opts := SearchOptions{
-			SimilarityThreshold: threshold,
-		}
-		if opts.SimilarityThreshold != threshold {
-			t.Errorf("expected SimilarityThreshold %f, got %f", threshold, opts.SimilarityThreshold)
 		}
 	}
 }

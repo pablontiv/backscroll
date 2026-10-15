@@ -64,7 +64,7 @@ func TestZeroValuedCodexExecCommandEchoExcludedBeforeReplay(t *testing.T) {
 			t.Errorf("zero-valued Codex fallback leaks=%d want %d: %v", codexLeaks, wantCodexLeaks, queryEchoShape(got))
 		}
 
-		out := e.run("search", "--text", "violet handshake adaptation", "--all-projects", "--lexical-only", "--relax", "--robot", "--fields", "minimal", "--max-tokens", "200")
+		out := e.run("search", "--text", "violet handshake adaptation", "--all-projects", "--relax", "--robot", "--fields", "minimal", "--max-tokens", "200")
 		if !strings.Contains(out, "result_0_filepath="+filepath.Join(e.fixtures, "target.jsonl")+"\n") || !strings.Contains(out, `result_0_dropped_terms=["adaptation"]`) {
 			t.Errorf("zero-valued query echoes changed unfiltered --relax IDF\nstdout=%s", out)
 		}

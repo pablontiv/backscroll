@@ -389,7 +389,7 @@ func TestRunSearchTextBudgetBoundary(t *testing.T) {
 		err := runSearch(context.Background(), &stdout, &stderr, cfg,
 			"presentselector", "", true, outputText,
 			"", "", "", "", "", 20, 0, "text", "",
-			"minimal", maxTokens, true, 0.3, false)
+			"minimal", maxTokens, false)
 		if err != nil {
 			t.Fatalf("runSearch with budget %d: %v\nstderr: %s", maxTokens, err, stderr.String())
 		}

@@ -248,7 +248,7 @@ func runSearchContract(t *testing.T, cfg *config.Config, query, fields string, j
 	err := runSearch(context.Background(), &stdout, &stderr, cfg,
 		query, "", true, mode,
 		"", "", "", "", "", 20, 0, "text", "",
-		fields, 0, true, 0.3, false)
+		fields, 0, false)
 	if err != nil {
 		t.Fatalf("run search %q: %v\nstderr: %s", query, err, stderr.String())
 	}

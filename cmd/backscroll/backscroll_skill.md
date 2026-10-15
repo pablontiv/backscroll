@@ -59,7 +59,7 @@ Input manifests are loaded only from:
 where `<config_dir>` is non-empty `BACKSCROLL_CONFIG_DIR`, otherwise `$HOME/.config`
 on every OS (Windows: `<user-home>\.config`). `XDG_CONFIG_HOME`, macOS Application
 Support, and `%APPDATA%` do not select this directory. The app config file is for
-database and embedding settings, not ingestion sources.
+database settings, not ingestion sources.
 
 Inspect the effective database, legacy session directories, and active inputs:
 
@@ -125,11 +125,10 @@ If output is truncated, treat it as evidence that more indexed data exists. Refi
 
 For explicit lexical term-overload recall, add `--relax` (for example `backscroll search --text '+violet handshake technique adaptation' --relax --robot --fields minimal --max-tokens 2000`); `+term`/quoted phrases stay protected, scope never widens, and relaxed results report `match_stage`/`dropped_terms`—this does not recover missing vocabulary.
 
-`--lexical-only` explicitly requests BM25-only retrieval. The CLI currently has
-no wired embedding provider and falls back to lexical retrieval even without
-that flag. `--similarity-threshold F` accepts finite `0..1` (default `0.3`;
-`0` disables the vector threshold) but applies only to vector results, not BM25
-or `--relax`. It does not enable semantic expansion.
+Search is always lexical: prose uses Porter-stemmed BM25, tool text uses trigram
+BM25, and unfiltered searches fuse those lexical rankings with RRF. `--relax`
+only drops low-IDF terms after a strict zero-result search; it never performs
+semantic expansion.
 
 ## 5) Query patterns by use case
 

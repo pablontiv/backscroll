@@ -176,11 +176,10 @@ A context UUID is opaque and is never synthesized for a result that lacks one. T
 
 Filters worth knowing: `--after` / `--before` for a date window, `--tag` for auto-detected session categories (debugging, refactoring, testing…), `--source-path` to pin one stored input path, `--source` to keep one source class, and `--role` to filter the stored role field. The role field is not a semantic-origin guarantee.
 
-`--lexical-only` explicitly selects BM25-only retrieval. The CLI currently has no
-wired embedding provider, so ordinary search also falls back to lexical retrieval.
-`--similarity-threshold F` accepts a finite value in `0..1` (default `0.3`,
-`0` disables a vector threshold), but applies only to vector results; it does not
-filter BM25 results or `--relax`. These flags do not enable semantic expansion.
+Search is lexical: prose uses Porter-stemmed BM25, tool text uses trigram BM25,
+and unfiltered searches fuse those two lexical rankings with RRF. `--relax`
+optionally drops low-IDF terms after a strict zero-result search without changing
+scope or introducing semantic expansion.
 
 ### Discover what recurs
 

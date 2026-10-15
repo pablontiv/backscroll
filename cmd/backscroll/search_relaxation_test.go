@@ -39,7 +39,7 @@ func TestSearchRelaxationRecoverableE2E(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(inputs, "relaxation.inputs.toml"), []byte(manifest), 0600); err != nil {
 		t.Fatal(err)
 	}
-	args := []string{"search", "--text", "violet handshake adaptation", "--all-projects", "--lexical-only", "--robot", "--fields", "minimal", "--max-tokens", "200"}
+	args := []string{"search", "--text", "violet handshake adaptation", "--all-projects", "--robot", "--fields", "minimal", "--max-tokens", "200"}
 	strict, stderr, err := runCmd(args...)
 	if err != nil || strict != "" {
 		t.Fatalf("strict must miss target: err=%v stdout=%s stderr=%s", err, strict, stderr)
@@ -54,7 +54,7 @@ func TestSearchRelaxationRecoverableE2E(t *testing.T) {
 	if !strings.Contains(out, "result_0_match_stage=drop-terms\n") || !strings.Contains(out, "result_0_dropped_terms=[\"adaptation\"]\n") {
 		t.Fatalf("relaxed target must carry provenance: %s", out)
 	}
-	positive := []string{"search", "--text", "violet handshake", "--all-projects", "--lexical-only", "--robot", "--fields", "minimal"}
+	positive := []string{"search", "--text", "violet handshake", "--all-projects", "--robot", "--fields", "minimal"}
 	before, _, err := runCmd(positive...)
 	if err != nil {
 		t.Fatal(err)
@@ -91,7 +91,7 @@ func TestSearchRelaxationRecoverableE2E(t *testing.T) {
 		}
 	}
 	for _, format := range [][]string{{}, {"--robot"}, {"--json"}, {"--json", "--fields", "full"}} {
-		base := append([]string{"search", "--text", "violet handshake", "--all-projects", "--lexical-only"}, format...)
+		base := append([]string{"search", "--text", "violet handshake", "--all-projects"}, format...)
 		before, beforeErr, err := runCmd(base...)
 		if err != nil {
 			t.Fatal(err)

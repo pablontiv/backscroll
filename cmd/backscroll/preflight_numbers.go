@@ -12,11 +12,11 @@ func validateUnitInterval(flag string, value float64) error {
 	return nil
 }
 
-func validateSearchNumbers(maxTokens int, threshold float64) error {
+func validateSearchNumbers(maxTokens int) error {
 	if maxTokens < 0 {
 		return fmt.Errorf("--max-tokens must be >= 0")
 	}
-	return validateUnitInterval("similarity-threshold", threshold)
+	return nil
 }
 
 func validateListNumbers(recent, limit, offset int) error {

@@ -20,33 +20,31 @@ import (
 
 func newSearchCmd(stdout, stderr io.Writer) *cobra.Command {
 	var (
-		project             string
-		allProjects         bool
-		jsonFormat          bool
-		robotFormat         bool
-		source              string
-		sourcePath          string
-		after               string
-		before              string
-		role                string
-		limit               int
-		offset              int
-		contentType         string
-		tag                 string
-		fields              string
-		maxTokens           int
-		lexicalOnly         bool
-		relax               bool
-		similarityThreshold float64
-		text                string
+		project     string
+		allProjects bool
+		jsonFormat  bool
+		robotFormat bool
+		source      string
+		sourcePath  string
+		after       string
+		before      string
+		role        string
+		limit       int
+		offset      int
+		contentType string
+		tag         string
+		fields      string
+		maxTokens   int
+		relax       bool
+		text        string
 	)
 
 	cmd := &cobra.Command{
 		Use:          "search [<query>]",
 		Short:        "Full-text search indexed content",
 		SilenceUsage: true,
-		Long: `Search performs a hybrid search (BM25 + vector embeddings with RRF fusion)
-across all indexed sessions, plans, and external sources.
+		Long: `Search performs lexical full-text search (BM25) across the prose and
+tool indexes for all indexed sessions, plans, and external sources.
 
 Use --text <query> (v2 preferred) or positional <query> (legacy) for search text.
 Use --project to filter to a single project (default: auto-detect from cwd).
@@ -62,11 +60,11 @@ Use --fields to choose machine-readable detail: minimal (default) or full.
 Use --max-tokens to limit output size (approximate token count).
 Use --relax for opt-in lexical recall: after zero rows, drop low-IDF terms while
 keeping at least two unprotected terms. Leading +term and quoted phrases are
-protected. All scope filters remain fixed; no OR or semantic expansion is used.`,
+protected. All scope filters remain fixed.`,
 		Args: func(cmd *cobra.Command, args []string) error {
 			return validateCommandBeforeStartup(cmd, args, cobra.MaximumNArgs(1), func() error {
 				query := searchQuery(text, args)
-				if err := validateSearchNumbers(maxTokens, similarityThreshold); err != nil {
+				if err := validateSearchNumbers(maxTokens); err != nil {
 					return err
 				}
 				_, _, err := validateAndParseSearchRequest(query, fields, contentType, after, before, limit, offset, relax)
@@ -88,7 +86,7 @@ protected. All scope filters remain fixed; no OR or semantic expansion is used.`
 			}
 			return runSearch(cmd.Context(), stdout, stderr, startup.Config, query, project, allProjects, invocationOutputMode(cmd),
 				source, sourcePath, after, before, role, limit, offset, contentType, tag,
-				fields, maxTokens, lexicalOnly, similarityThreshold, relax)
+				fields, maxTokens, relax)
 		},
 	}
 
@@ -107,9 +105,7 @@ protected. All scope filters remain fixed; no OR or semantic expansion is used.`
 	cmd.Flags().StringVar(&tag, "tag", "", "Filter sessions by tag")
 	cmd.Flags().StringVar(&fields, "fields", "minimal", "Machine-readable fields to emit: minimal or full")
 	cmd.Flags().IntVar(&maxTokens, "max-tokens", 0, "Max tokens in output (0=unlimited)")
-	cmd.Flags().BoolVar(&lexicalOnly, "lexical-only", false, "Use BM25 only, skip vector search")
-	cmd.Flags().BoolVar(&relax, "relax", false, "Lexical-only recall: after zero rows, drop low-IDF terms within the same scope (+term protects a term); ignores vector similarity thresholds")
-	cmd.Flags().Float64Var(&similarityThreshold, "similarity-threshold", 0.3, "Minimum cosine similarity for vector results (finite 0..1; 0=no threshold)")
+	cmd.Flags().BoolVar(&relax, "relax", false, "Lexical recall: after zero rows, drop low-IDF terms within the same scope (+term protects a term)")
 	cmd.Flags().StringVar(&text, "text", "", "Search text (v2 preferred grammar)")
 
 	cmd.MarkFlagsMutuallyExclusive("project", "all-projects")
@@ -170,8 +166,7 @@ func runSearch(ctx context.Context, stdout, stderr io.Writer, cfg *config.Config
 	project string, allProjects bool, mode outputMode,
 	source, sourcePath, after, before, role string,
 	limit, offset int, contentType, tag string,
-	fields string, maxTokens int,
-	lexicalOnly bool, similarityThreshold float64, relax bool) (retErr error) {
+	fields string, maxTokens int, relax bool) (retErr error) {
 
 	afterTime, beforeTime, err := validateAndParseSearchRequest(query, fields, contentType, after, before, limit, offset, relax)
 	if err != nil {
@@ -196,19 +191,17 @@ func runSearch(ctx context.Context, stdout, stderr io.Writer, cfg *config.Config
 
 	// Build search options
 	opts := models.SearchOptions{
-		Project:             project,
-		AllProjects:         allProjects,
-		Source:              source,
-		SourcePath:          sourcePath,
-		After:               afterTime,
-		Before:              beforeTime,
-		Role:                role,
-		Limit:               limit,
-		Offset:              offset,
-		ContentType:         contentType,
-		Tag:                 tag,
-		LexicalOnly:         lexicalOnly,
-		SimilarityThreshold: similarityThreshold,
+		Project:     project,
+		AllProjects: allProjects,
+		Source:      source,
+		SourcePath:  sourcePath,
+		After:       afterTime,
+		Before:      beforeTime,
+		Role:        role,
+		Limit:       limit,
+		Offset:      offset,
+		ContentType: contentType,
+		Tag:         tag,
 	}
 
 	queryService := services.QueryService{DB: db}

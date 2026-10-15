@@ -88,7 +88,7 @@ func TestLegacySourcesAllowsHelpAndVersion(t *testing.T) {
 	}{
 		{name: "root help", args: []string{"--help"}, want: "Available Commands:"},
 		{name: "root version", args: []string{"--version"}, want: "backscroll"},
-		{name: "subcommand help", args: []string{"search", "--help"}, want: "Search performs a hybrid search"},
+		{name: "subcommand help", args: []string{"search", "--help"}, want: "Search performs lexical full-text search"},
 	}
 
 	for _, tt := range tests {

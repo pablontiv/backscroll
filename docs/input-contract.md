@@ -327,7 +327,7 @@ Verify with an installed manifest (use your actual custom source path if needed)
 
 ```bash
 backscroll config --json
-backscroll search --text "a phrase you remember" --all-projects --source session --source-path '*omp*' --lexical-only --json
+backscroll search --text "a phrase you remember" --all-projects --source session --source-path '*omp*' --json
 backscroll search --text "a command fragment" --all-projects --source session --content-type tool --source-path '*omp*' --robot
 ```
 
@@ -368,7 +368,7 @@ Codex files remain read-only):
 
 ```bash
 backscroll config --json
-backscroll search --text "a phrase you remember" --all-projects --source session --source-path '*codex*' --lexical-only --json
+backscroll search --text "a phrase you remember" --all-projects --source session --source-path '*codex*' --json
 backscroll search --text "a command fragment" --all-projects --content-type tool --source-path '*codex*' --robot --fields minimal --max-tokens 1000
 backscroll validate --json
 ```

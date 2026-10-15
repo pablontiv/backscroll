@@ -471,40 +471,22 @@ func TestSearchHelp(t *testing.T) {
 	if err != nil {
 		t.Fatalf("search --help error: %v", err)
 	}
-	for _, flag := range []string{"--project", "--source", "--after", "--before", "--role", "--limit", "--json", "--robot", "--lexical-only", "--similarity-threshold"} {
+	for _, flag := range []string{"--project", "--source", "--after", "--before", "--role", "--limit", "--json", "--robot", "--relax"} {
 		if !strings.Contains(out, flag) {
 			t.Errorf("search --help missing flag %q", flag)
 		}
 	}
 }
 
-func TestSearchLexicalOnly(t *testing.T) {
-	_, cleanup := testEnv(t)
-	defer cleanup()
-
-	fixture := filepath.Join(fixturesDir(), "claude.jsonl")
-	_, _, _ = syncForTest(t, "sync", "--path", filepath.Dir(fixture))
-
-	out, _, err := runCmd("search", "--lexical-only", "session")
-	if err != nil {
-		t.Fatalf("search --lexical-only error: %v", err)
+func TestSearchRejectsRemovedSemanticFlags(t *testing.T) {
+	for _, flag := range []string{"--lexical-only", "--similarity-threshold"} {
+		t.Run(flag, func(t *testing.T) {
+			_, _, err := runCmd("search", "session", flag)
+			if err == nil || !strings.Contains(err.Error(), "unknown flag: "+flag) {
+				t.Fatalf("search %s error = %v, want unknown flag", flag, err)
+			}
+		})
 	}
-	_ = out
-}
-
-func TestSearchSimilarityThreshold(t *testing.T) {
-	_, cleanup := testEnv(t)
-	defer cleanup()
-
-	fixture := filepath.Join(fixturesDir(), "claude.jsonl")
-	_, _, _ = syncForTest(t, "sync", "--path", filepath.Dir(fixture))
-
-	// With no vectors in DB, falls back to BM25 regardless of threshold
-	out, _, err := runCmd("search", "--similarity-threshold", "0.5", "session")
-	if err != nil {
-		t.Fatalf("search --similarity-threshold error: %v", err)
-	}
-	_ = out
 }
 
 func TestListTextSynced(t *testing.T) {
@@ -1359,7 +1341,7 @@ func TestSearchFindsPionRecordTypeAfterEmptyIndex(t *testing.T) {
 		t.Fatalf("close seeded index: %v", err)
 	}
 
-	out, _, err := runCmd("search", "pion_recordtype_search_token", "--all-projects", "--lexical-only")
+	out, _, err := runCmd("search", "pion_recordtype_search_token", "--all-projects")
 	if err != nil {
 		t.Fatalf("search Pion recordType: %v", err)
 	}
@@ -1440,7 +1422,7 @@ func TestPiPionIngestionRegressionMatrixE2E(t *testing.T) {
 
 			searchCount := func(query string) int {
 				t.Helper()
-				out, stderr, err := runCmd("search", "--text", query, "--all-projects", "--lexical-only", "--json")
+				out, stderr, err := runCmd("search", "--text", query, "--all-projects", "--json")
 				if err != nil {
 					t.Fatalf("search %q: %v\nstdout=%s\nstderr=%s", query, err, out, stderr)
 				}

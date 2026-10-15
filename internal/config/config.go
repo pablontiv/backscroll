@@ -9,15 +9,6 @@ import (
 	"github.com/pelletier/go-toml/v2"
 )
 
-// EmbeddingConfig contains settings for the vector embedding system.
-type EmbeddingConfig struct {
-	Enabled             bool    `toml:"enabled"`
-	ModelName           string  `toml:"model_name"`           // e.g., "all-MiniLM-L6-v2"
-	ModelPath           string  `toml:"model_path"`           // local path or "" for auto-download
-	SimilarityThreshold float32 `toml:"similarity_threshold"` // default: 0.7
-	TopK                int     `toml:"top_k"`                // default: 10
-}
-
 // SourcesConfig contains paths for different source types.
 type SourcesConfig struct {
 	KE        []string `toml:"ke"`
@@ -30,12 +21,11 @@ type SourcesConfig struct {
 
 // Config represents the complete application configuration.
 type Config struct {
-	DatabasePath        string          `toml:"database_path"`
-	SessionDirs         []string        `toml:"session_dirs"`
-	SessionDir          string          `toml:"session_dir"` // backward compat: single string
-	Sources             SourcesConfig   `toml:"sources"`
-	Embedding           EmbeddingConfig `toml:"embedding"`
-	SessionDirsExplicit bool            `toml:"-"` // true if session_dirs was set in config
+	DatabasePath        string        `toml:"database_path"`
+	SessionDirs         []string      `toml:"session_dirs"`
+	SessionDir          string        `toml:"session_dir"` // backward compat: single string
+	Sources             SourcesConfig `toml:"sources"`
+	SessionDirsExplicit bool          `toml:"-"` // true if session_dirs was set in config
 }
 
 // Load loads the configuration from files and environment variables.
@@ -50,12 +40,6 @@ func LoadValidated(inputsDir string) (*Config, error) {
 	cfg := &Config{
 		DatabasePath: defaultDatabasePath(),
 		SessionDirs:  []string{"."},
-		Embedding: EmbeddingConfig{
-			Enabled:             false,
-			ModelName:           "all-MiniLM-L6-v2",
-			SimilarityThreshold: 0.7,
-			TopK:                10,
-		},
 	}
 
 	var legacyFiles []LegacySourcesFile
@@ -110,16 +94,15 @@ func loadConfigFileSnapshot(path string, cfg *Config) (*LegacySourcesFile, error
 
 	// A pointer distinguishes an absent sources key from even an empty table.
 	var parsed struct {
-		DatabasePath string          `toml:"database_path"`
-		SessionDirs  []string        `toml:"session_dirs"`
-		SessionDir   string          `toml:"session_dir"`
-		Sources      *SourcesConfig  `toml:"sources"`
-		Embedding    EmbeddingConfig `toml:"embedding"`
+		DatabasePath string         `toml:"database_path"`
+		SessionDirs  []string       `toml:"session_dirs"`
+		SessionDir   string         `toml:"session_dir"`
+		Sources      *SourcesConfig `toml:"sources"`
 	}
 	if err := toml.Unmarshal(data, &parsed); err != nil {
 		return nil, fmt.Errorf("failed to parse %s: %w", path, err)
 	}
-	tempCfg := Config{DatabasePath: parsed.DatabasePath, SessionDirs: parsed.SessionDirs, SessionDir: parsed.SessionDir, Embedding: parsed.Embedding}
+	tempCfg := Config{DatabasePath: parsed.DatabasePath, SessionDirs: parsed.SessionDirs, SessionDir: parsed.SessionDir}
 	var legacy *LegacySourcesFile
 	if parsed.Sources != nil {
 		tempCfg.Sources = *parsed.Sources
@@ -158,23 +141,6 @@ func loadConfigFileSnapshot(path string, cfg *Config) (*LegacySourcesFile, error
 	}
 	if len(tempCfg.Sources.Backlog) > 0 {
 		cfg.Sources.Backlog = tempCfg.Sources.Backlog
-	}
-
-	// Merge embedding config if enabled
-	if tempCfg.Embedding.Enabled {
-		cfg.Embedding.Enabled = true
-	}
-	if tempCfg.Embedding.ModelName != "" {
-		cfg.Embedding.ModelName = tempCfg.Embedding.ModelName
-	}
-	if tempCfg.Embedding.ModelPath != "" {
-		cfg.Embedding.ModelPath = tempCfg.Embedding.ModelPath
-	}
-	if tempCfg.Embedding.SimilarityThreshold > 0 {
-		cfg.Embedding.SimilarityThreshold = tempCfg.Embedding.SimilarityThreshold
-	}
-	if tempCfg.Embedding.TopK > 0 {
-		cfg.Embedding.TopK = tempCfg.Embedding.TopK
 	}
 
 	return legacy, nil

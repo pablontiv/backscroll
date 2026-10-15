@@ -44,7 +44,7 @@ func TestSearchRelaxationQueryEchoesDoNotInvertIDF(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	control := []string{"search", "--text", "violet handshake adaptation", "--all-projects", "--lexical-only", "--robot", "--fields", "minimal", "--max-tokens", "200"}
+	control := []string{"search", "--text", "violet handshake adaptation", "--all-projects", "--robot", "--fields", "minimal", "--max-tokens", "200"}
 	strict, stderr, err := runCmd(control...)
 	if err != nil || strict != "" {
 		t.Fatalf("strict must miss: err=%v stdout=%s stderr=%s", err, strict, stderr)

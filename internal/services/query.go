@@ -85,7 +85,7 @@ func ValidateExplicitSearchScope(request SearchRequest) error {
 	return nil
 }
 
-// Search runs either ordinary hybrid retrieval or opt-in lexical relaxation.
+// Search runs ordinary lexical retrieval or opt-in lexical relaxation.
 func (s QueryService) Search(ctx context.Context, request SearchRequest) (SearchResponse, error) {
 	if err := ctx.Err(); err != nil {
 		return SearchResponse{}, err
@@ -104,7 +104,7 @@ func (s QueryService) Search(ctx context.Context, request SearchRequest) (Search
 		}, err
 	}
 
-	results, err := s.DB.HybridSearchContext(ctx, request.Query, request.Options)
+	results, err := s.DB.SearchContext(ctx, request.Query, request.Options)
 	return SearchResponse{Results: results}, err
 }
 

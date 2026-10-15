@@ -89,11 +89,11 @@ func TestRequiredOutputFailures(t *testing.T) {
 			if populated {
 				seedOutputBranches(t, path)
 			}
-			commands := [][]string{{"config"}, {"status"}, {"validate"}, {"list", "--all-projects"}, {"search", "--text", "database", "--all-projects", "--lexical-only"}}
+			commands := [][]string{{"config"}, {"status"}, {"validate"}, {"list", "--all-projects"}, {"search", "--text", "database", "--all-projects"}}
 			for _, kind := range []string{"commands", "failures", "templates", "corrections", "sequences"} {
 				commands = append(commands, []string{"patterns", "--kind", kind, "--all-projects", "--min-support", "1"})
 			}
-			commands = append(commands, []string{"search", "--text", "database", "--all-projects", "--lexical-only", "--fields", "full"}, []string{"list", "--project", "absent"}, []string{"patterns", "--kind", "corrections", "--origin", "human", "--all-projects"})
+			commands = append(commands, []string{"search", "--text", "database", "--all-projects", "--fields", "full"}, []string{"list", "--project", "absent"}, []string{"patterns", "--kind", "corrections", "--origin", "human", "--all-projects"})
 			for _, kind := range []string{"commands", "failures"} {
 				commands = append(commands, []string{"patterns", "--kind", kind, "--all-projects", "--trend"})
 			}

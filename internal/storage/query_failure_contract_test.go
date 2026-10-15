@@ -178,7 +178,7 @@ func TestDisposedIndexConsumersReportFailure(t *testing.T) {
 			return e
 		},
 		"search": func() error {
-			r, e := db.HybridSearch("retained", models.SearchOptions{Limit: 10, LexicalOnly: true})
+			r, e := db.Search("retained", models.SearchOptions{Limit: 10})
 			if r != nil {
 				t.Errorf("partial search: %+v", r)
 			}
