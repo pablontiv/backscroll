@@ -157,9 +157,6 @@ func TestInvalidOperationalCommandsSkipStartup(t *testing.T) {
 		{name: "annotate positional argument", argv: []string{"annotate", "unexpected", "--uuid", "u", "--kind", "correction", "--label", "x"}},
 		{name: "annotate missing label", argv: []string{"annotate", "--uuid", "u", "--kind", "correction"}},
 		{name: "annotate missing identity", argv: []string{"annotate", "--kind", "correction", "--label", "x"}},
-		{name: "purge positional argument", argv: []string{"purge", "unexpected", "--before", "2030-01-01"}},
-		{name: "purge missing before", argv: []string{"purge"}},
-		{name: "purge invalid before", argv: []string{"purge", "--before", "not-a-date"}},
 		{name: "recover missing from", argv: []string{"recover"}},
 		{name: "recover empty from", argv: []string{"recover", "--from", ""}},
 	}
@@ -219,8 +216,6 @@ func TestEveryOperationalCommandRunsStartupBeforeHandler(t *testing.T) {
 		{argv: []string{"list"}, wantClass: startupSnapshotRead},
 		{argv: []string{"patterns", "--kind", "commands"}, wantClass: startupSnapshotRead},
 		{argv: []string{"annotate", "--uuid", "u", "--kind", "correction", "--label", "x"}, wantClass: startupMutation},
-		{argv: []string{"purge", "--before", "2030-01-01"}, wantClass: startupMutation},
-		{argv: []string{"purge", "--before", "2030-01-01T12:30:00Z"}, wantClass: startupMutation},
 		{argv: []string{"rebuild"}, wantClass: startupMutation},
 		{argv: []string{"status"}, wantClass: startupSnapshotRead},
 		{argv: []string{"validate"}, wantClass: startupSnapshotRead},

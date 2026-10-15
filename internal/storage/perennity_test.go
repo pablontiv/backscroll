@@ -140,32 +140,6 @@ func TestRebuildFTSRestoresIndexWithoutDataLoss(t *testing.T) {
 	}
 }
 
-func TestPurgeDeletesToolEventsExplicitly(t *testing.T) {
-	db, err := Open(filepath.Join(t.TempDir(), "test.db"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer func() { _ = db.Close() }()
-
-	old := IndexedMessage{Ordinal: 0, Role: "assistant", Text: "Bash command=rm", UUID: "u1",
-		Timestamp: "2020-01-01T00:00:00Z", ContentType: "tool", ToolName: "Bash", CommandHead: "rm", ExtractionVersion: 1}
-	if err := db.SyncFiles(sessionFile("h1", []IndexedMessage{old})); err != nil {
-		t.Fatal(err)
-	}
-
-	if _, err := db.Purge("2021-01-01"); err != nil {
-		t.Fatalf("purge: %v", err)
-	}
-
-	var n int
-	if err := db.db.QueryRow("SELECT COUNT(*) FROM tool_events").Scan(&n); err != nil {
-		t.Fatal(err)
-	}
-	if n != 0 {
-		t.Errorf("purge must delete satellite tool_events rows, %d remain", n)
-	}
-}
-
 func TestSessionSurvivesSourceFileExpiry(t *testing.T) {
 	// Simulates: session indexed -> JSONL expires from disk -> rebuild runs.
 	// The perennity contract: rows survive both events.

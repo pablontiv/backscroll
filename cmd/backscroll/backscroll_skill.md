@@ -246,10 +246,9 @@ active/backup paths and follow `docs/sync.md#recovery-runbook` for restoration.
 Migration snapshots retain two validated siblings and are not recovery backups;
 see `docs/sync.md#migration-snapshots-and-recovery-backups`.
 
-**Destructive-command boundary:** `purge` is never an automatic troubleshooting
-step. For accepted RFC3339/date-only cutoffs, exclusive UTC semantics, and
-explicit deletion instructions, consult `backscroll purge --help` and the
-operator section of `README.md`; obtain operator approval before deletion.
+**Perennial-retention boundary:** indexed records remain available after their
+source files expire. The perennial store has no deletion command; troubleshooting
+and maintenance must preserve retained records.
 
 ## 7) Token budget allocation for agents
 

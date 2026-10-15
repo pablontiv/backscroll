@@ -30,7 +30,6 @@ func TestStaleIndexBlocksIndexBackedCommands(t *testing.T) {
 		{"list-json", []string{"list", "--json"}, false},
 		{"patterns", []string{"patterns", "--kind", "commands"}, false},
 		{"rebuild", []string{"rebuild"}, true},
-		{"purge", []string{"purge", "--before", "2030-01-01"}, true},
 		{"annotate", []string{"annotate", "--uuid", "u", "--kind", "correction", "--label", "x"}, true},
 	}
 

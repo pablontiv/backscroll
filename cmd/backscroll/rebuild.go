@@ -91,8 +91,8 @@ func newRebuildCmd(stdout, stderr io.Writer, runner *rebuildRunner) *cobra.Comma
 
 Rebuild re-derives the FTS search indexes from the database itself and
 operates on the index synchronized at command startup. It never deletes indexed
-content: sessions whose source files have expired from disk are preserved (the
-database is the perennial event store). Use 'purge' to delete data explicitly.`,
+content: sessions whose source files have expired from disk remain preserved in
+the perennial event store, which has no deletion path.`,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			startup := startupResultFrom(cmd)
 			if startup.Config == nil {

@@ -274,7 +274,6 @@ query merges both by rank position (RRF).`,
 	registerStartupCommand(root, startupSnapshotRead, newListCmd(stdout, stderr))
 	registerStartupCommand(root, startupSnapshotRead, newPatternsCmd(stdout, stderr))
 	registerStartupCommand(root, startupMutation, newRebuildCmd(stdout, stderr, rebuild))
-	registerStartupCommand(root, startupMutation, newPurgeCmd(stdout, stderr))
 	registerStartupCommand(root, startupSnapshotRead, newValidateCmd(stdout, stderr))
 	registerStartupCommand(root, startupSnapshotRead, newStatusCmd(stdout, stderr))
 	registerStartupCommand(root, startupMetadataRead, newConfigCmd(stdout, stderr))

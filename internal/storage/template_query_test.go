@@ -138,47 +138,6 @@ func TestAggregateTemplatesDerivedCount(t *testing.T) {
 	}
 }
 
-func TestPurgeDeletesOrphanedTemplates(t *testing.T) {
-	db, err := Open(filepath.Join(t.TempDir(), "test.db"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer func() { _ = db.Close() }()
-
-	msgs := []IndexedMessage{
-		{Ordinal: 0, UUID: "u1", ContentType: "tool", ToolName: "Bash", IsError: boolPtr(true),
-			Text: "error: failed", Timestamp: "2026-01-01T00:00:00Z", ExtractionVersion: 1},
-	}
-	files := []IndexedFile{
-		{SourcePath: "/p/s.jsonl", Source: "session", Hash: "h1", Project: "proj", Messages: msgs},
-	}
-	if err := db.SyncFiles(files); err != nil {
-		t.Fatal(err)
-	}
-
-	// Verify template exists
-	var tmplCount int
-	if err := db.db.QueryRow(`SELECT COUNT(*) FROM message_templates`).Scan(&tmplCount); err != nil {
-		t.Fatal(err)
-	}
-	if tmplCount != 1 {
-		t.Fatalf("expect 1 template before purge, got %d", tmplCount)
-	}
-
-	// Purge everything
-	if _, err := db.Purge("2026-02-01T00:00:00Z"); err != nil {
-		t.Fatalf("purge: %v", err)
-	}
-
-	// Orphaned template should be gone
-	if err := db.db.QueryRow(`SELECT COUNT(*) FROM message_templates`).Scan(&tmplCount); err != nil {
-		t.Fatal(err)
-	}
-	if tmplCount != 0 {
-		t.Errorf("expect 0 templates after purge, got %d", tmplCount)
-	}
-}
-
 func TestAggregateTemplatesEmpty(t *testing.T) {
 	db, err := Open(filepath.Join(t.TempDir(), "test.db"))
 	if err != nil {

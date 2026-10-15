@@ -10,7 +10,7 @@ Startup behavior is command-classed, not one-size-fits-all:
 ```text
 snapshot-read: search, context, list, patterns, status, validate
 metadata-read: config
-mutation: annotate, purge, rebuild
+mutation: annotate, rebuild
 remediation: recover
 ```
 
@@ -167,7 +167,7 @@ backscroll rebuild
 
 `rebuild` is non-destructive. Mutation-class startup sync runs first and prepares the database. The rebuild handler does not perform a second sync: it re-derives both FTS5 indexes from the perennial `search_items` table, backfills derived templates/corrections/tool events from stored text where possible, and re-resolves project identities. It does not discard sessions whose files have expired.
 
-Use `rebuild` after index-recovery work or when derived search structures need regeneration. It is not a substitute for a removed manual sync command. `backscroll purge --before <DATE>` is the explicit deletion path.
+Use `rebuild` after index-recovery work or when derived search structures need regeneration. It is not a substitute for a removed manual sync command.
 
 ## Declarative inputs
 
@@ -207,7 +207,7 @@ Backscroll stores a content hash or reader watermark for each indexed input. Unc
 
 Startup coordination uses owner/follower branches: snapshot-read, metadata-read, and mutation owners acquire the canonical lock and perform prepare/migrate/sync before the handler runs; a remediation owner acquires and retains the same mutation-grade lock but bypasses ordinary compatible-open and pre-handler sync; a read-safe follower validates the existing database read-only and continues on a compatible snapshot; metadata-read followers avoid opening the database; mutation and remediation followers wait up to five seconds for ownership or fail retryably with `sync_in_progress`. WAL snapshot followers remain compatible only on the same local host.
 
-The SQLite database is the perennial event store, not a disposable cache. When a source file expires, its indexed rows remain available. Only `purge` removes retained data explicitly.
+The SQLite database is the perennial event store, not a disposable cache. When a source file expires, its indexed rows remain available; the perennial store has no deletion path.
 
 ## Machine output
 

@@ -222,7 +222,7 @@ func TestRequiredMutationOutputFailures(t *testing.T) {
 	for _, args := range [][]string{
 		{"annotate", "--uuid", "output-anchor", "--kind", "correction", "--label", "accepted"},
 		{"annotate", "--path", "/output/session.jsonl", "--ordinal", "0", "--kind", "correction", "--label", "accepted"},
-		{"purge", "--before", "2027-01-01"}, {"rebuild"},
+		{"rebuild"},
 	} {
 		t.Run(strings.Join(args, " "), func(t *testing.T) {
 			path, _ := testEnv(t)

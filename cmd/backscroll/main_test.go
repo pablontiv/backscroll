@@ -110,7 +110,7 @@ func TestHelp(t *testing.T) {
 	commandsSection := parts[1]
 
 	// v2 approved root commands that SHOULD be present
-	approvedV2 := []string{"list", "search", "context", "status", "validate", "rebuild", "purge", "config"}
+	approvedV2 := []string{"list", "search", "context", "status", "validate", "rebuild", "config"}
 	for _, cmd := range approvedV2 {
 		if !strings.Contains(commandsSection, "\n  "+cmd+" ") && !strings.Contains(commandsSection, "\n  "+cmd+"\n") {
 			t.Errorf("--help missing approved v2 command %q", cmd)
@@ -118,12 +118,19 @@ func TestHelp(t *testing.T) {
 	}
 
 	// v1 commands that SHOULD NOT be in root Available Commands section (removed in v2)
-	removedV1 := []string{"sessions", "events", "inputs", "projects", "topics", "insights", "export", "sync", "resume", "reindex"}
+	removedV1 := []string{"sessions", "events", "inputs", "projects", "topics", "insights", "export", "sync", "resume", "reindex", "purge"}
 	for _, cmd := range removedV1 {
 		// Check for command name as a line item: "  <cmd> " or "  <cmd>\n"
 		if strings.Contains(commandsSection, "\n  "+cmd+" ") || strings.Contains(commandsSection, "\n  "+cmd+"\n") {
 			t.Errorf("--help should not contain removed v1 command %q as root command", cmd)
 		}
+	}
+}
+
+func TestPurgeIsUnknownCommand(t *testing.T) {
+	_, _, err := runCmd("purge", "--before", "2020-01-01")
+	if err == nil || !strings.Contains(err.Error(), `unknown command "purge"`) {
+		t.Fatalf("purge error = %v, want unknown command", err)
 	}
 }
 
@@ -220,61 +227,6 @@ func TestShippedPresetCommandsExecuteAndSync(t *testing.T) {
 	}
 	if commands == 0 {
 		t.Fatal("shipped presets contain no executable backscroll examples")
-	}
-}
-
-func TestPurgeHelpAndCutoffContract(t *testing.T) {
-	help, stderr, err := runDocContractCommand("purge", "--help")
-	if err != nil || stderr != "" {
-		t.Fatalf("purge help: err=%v stderr=%q", err, stderr)
-	}
-	for _, term := range []string{"YYYY-MM-DD", "RFC3339", "exclusive"} {
-		if !strings.Contains(help, term) {
-			t.Errorf("purge help does not describe %s: %s", term, help)
-		}
-	}
-	for _, cutoff := range []string{"2026-01-02T02:00:00+02:00", "2026-01-01T19:00:00-05:00"} {
-		if err := validatePurgeBefore(cutoff); err != nil {
-			t.Fatalf("RFC3339 offset cutoff %q rejected: %v", cutoff, err)
-		}
-	}
-	for _, cutoff := range []string{"2026-01-02", "2026-01-02T00:00:00Z"} {
-		t.Run(cutoff, func(t *testing.T) {
-			dbPath, cleanup := testEnv(t)
-			defer cleanup()
-			if err := validatePurgeBefore(cutoff); err != nil {
-				t.Fatalf("documented cutoff rejected: %v", err)
-			}
-			db, err := storage.Open(dbPath)
-			if err != nil {
-				t.Fatal(err)
-			}
-			for i, timestamp := range []any{"2026-01-01T23:59:59Z", "2026-01-02T00:00:00Z", "2026-01-02T00:00:01Z", nil} {
-				if _, err := db.DB().Exec(`INSERT INTO search_items (source_path, ordinal, text, role, content_type, timestamp) VALUES (?, ?, ?, 'user', 'text', ?)`, "/purge/fixture.jsonl", i, fmt.Sprintf("purge contract %d", i), timestamp); err != nil {
-					_ = db.Close()
-					t.Fatal(err)
-				}
-			}
-			if err := db.Close(); err != nil {
-				t.Fatal(err)
-			}
-			out, stderr, err := runDocContractCommand("purge", "--before", cutoff)
-			if err != nil || out != "Deleted 1 indexed items before "+cutoff+"\n" {
-				t.Fatalf("purge: stdout=%q stderr=%q err=%v", out, stderr, err)
-			}
-			db, err = storage.Open(dbPath)
-			if err != nil {
-				t.Fatal(err)
-			}
-			defer db.Close()
-			var count, equal, unknown int
-			if err := db.DB().QueryRow(`SELECT COUNT(*), SUM(timestamp = '2026-01-02T00:00:00Z'), SUM(timestamp IS NULL) FROM search_items WHERE source_path = ?`, "/purge/fixture.jsonl").Scan(&count, &equal, &unknown); err != nil {
-				t.Fatal(err)
-			}
-			if count != 3 || equal != 1 || unknown != 1 {
-				t.Fatalf("exclusive cutoff must retain equality and NULL: count=%d equal=%d NULL=%d", count, equal, unknown)
-			}
-		})
 	}
 }
 
@@ -388,22 +340,6 @@ func TestValidate(t *testing.T) {
 	out, _, err := runCmd("validate")
 	if err != nil {
 		t.Fatalf("validate error: %v", err)
-	}
-	_ = out
-}
-
-func TestPurge(t *testing.T) {
-	_, cleanup := testEnv(t)
-	defer cleanup()
-
-	// Sync some content first
-	piDir := filepath.Dir(filepath.Join(fixturesDir(), "pi-session.jsonl"))
-	_, _, _ = syncForTest(t, "sync", "--path", piDir)
-
-	// Purge entries before a future date (should purge everything)
-	out, _, err := runCmd("purge", "--before", "2030-01-01")
-	if err != nil {
-		t.Fatalf("purge error: %v", err)
 	}
 	_ = out
 }
@@ -527,16 +463,6 @@ func TestSyncSearchRoundtrip(t *testing.T) {
 	}
 	if strings.Contains(out, "Files indexed:    0") {
 		t.Logf("warning: no files indexed, fixture may be empty: %s", out)
-	}
-}
-
-func TestPurgeMissingBeforeFlag(t *testing.T) {
-	_, cleanup := testEnv(t)
-	defer cleanup()
-
-	_, _, err := runCmd("purge")
-	if err == nil {
-		t.Error("expected error when --before flag missing, got nil")
 	}
 }
 
@@ -682,21 +608,6 @@ func TestValidateAfterSync(t *testing.T) {
 	_ = out
 }
 
-func TestPurgeAfterSync(t *testing.T) {
-	_, cleanup := testEnv(t)
-	defer cleanup()
-
-	piDir := filepath.Dir(filepath.Join(fixturesDir(), "pi-session.jsonl"))
-	_, _, _ = syncForTest(t, "sync", "--path", piDir)
-
-	// Purge with a future date — should purge everything
-	out, _, err := runCmd("purge", "--before", "2030-01-01")
-	if err != nil {
-		t.Fatalf("purge after sync error: %v", err)
-	}
-	_ = out
-}
-
 func TestListEmptyDB(t *testing.T) {
 	_, cleanup := testEnv(t)
 	defer cleanup()
@@ -809,10 +720,7 @@ func TestHelpListsAllCommands(t *testing.T) {
 	commandsSection := parts[1]
 
 	// v2 approved root commands
-	for _, cmd := range []string{
-		"search", "list", "purge", "validate", "status",
-		"rebuild", "config",
-	} {
+	for _, cmd := range []string{"search", "list", "validate", "status", "rebuild", "config"} {
 		if !strings.Contains(commandsSection, "\n  "+cmd+" ") && !strings.Contains(commandsSection, "\n  "+cmd+"\n") {
 			t.Errorf("--help missing v2 command %q", cmd)
 		}
@@ -1309,28 +1217,6 @@ func TestStatusAndValidateAreMaintenanceV2(t *testing.T) {
 	}
 	if !strings.Contains(out, "passed") && !strings.Contains(out, "✓") {
 		t.Logf("validate output may not clearly indicate success: %s", out)
-	}
-}
-
-// TestPurgeAndRebuildAgentOutput verifies maintenance commands output agent-readable by default.
-func TestPurgeAndRebuildAgentOutput(t *testing.T) {
-	_, cleanup := testEnv(t)
-	defer cleanup()
-
-	// sync first to create index
-	claudeDir := filepath.Join(fixturesDir(), "claude-preset", "projects")
-	_, _, err := syncForTest(t, "sync", "--path", claudeDir)
-	if err != nil {
-		t.Fatalf("sync error: %v", err)
-	}
-
-	// purge should produce simple agent-readable output by default
-	out, _, err := runCmd("purge", "--before", "1999-01-01")
-	if err != nil {
-		t.Fatalf("purge error: %v", err)
-	}
-	if len(strings.TrimSpace(out)) == 0 {
-		t.Errorf("purge produced empty output")
 	}
 }
 

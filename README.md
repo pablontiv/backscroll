@@ -137,7 +137,7 @@ Found 20 templates (min_support=5):
 
 **The database is the record, not a cache.** Session files expire; indexed sessions do not. Once a file is gone from disk, sync never walks it again, so everything indexed from it stays — that is what makes the record outlive its source.
 
-How a file is re-synced depends on whether its messages carry identity. Sessions whose messages have a uuid — Claude Code, from schema v8 onward — sync append-only: rows already keyed by uuid are left alone and their ids stay stable. The one exception is a one-time cleanup. If the same file was indexed before v8, those older rows carry no uuid, and re-parsing would duplicate the whole file; they are deleted once, on the first re-sync after the upgrade, and never again. Sessions without one, which today is most of the corpus, are wiped and reloaded on every re-sync, so their row ids are not stable and edits to a live file replace its rows wholesale. Either way the deletion only ever happens while the file still exists; `backscroll purge --before` is the only command that removes anything on your behalf.
+How a file is re-synced depends on whether its messages carry identity. Sessions whose messages have a uuid — Claude Code, from schema v8 onward — sync append-only: rows already keyed by uuid are left alone and their ids stay stable. The one exception is a one-time cleanup. If the same file was indexed before v8, those older rows carry no uuid, and re-parsing would duplicate the whole file; they are deleted once, on the first re-sync after the upgrade, and never again. Sessions without one, which today is most of the corpus, are wiped and reloaded on every re-sync, so their row ids are not stable and edits to a live file replace its rows wholesale. Either way, lifecycle replacement only occurs while the source exists; retained records have no deletion path.
 
 **Every assistant, one index.** Claude Code, Pi, OMP, OpenCode, and Codex each store sessions differently. A dedicated reader per format normalizes them behind one schema, so you search content, not file layouts. Input manifests select a registered reader and its discovery roots; adding a new provider format requires a reader implementation, not only a manifest. Message origin is likewise parser-backed: Backscroll uses native structured actor and tool boundaries, never message text or a historical stored role. An indexed message without sufficient evidence is `unknown`. Startup reparse can enrich a historical `unknown` only while its configured source remains available to its reader. Recovery can also enrich `unknown` by merging a compatible duplicate with proven origin; contradictory proven origins are rejected.
 
@@ -219,15 +219,10 @@ backscroll config --json     # effective database, session_dirs, and active inpu
 backscroll status            # size, counts, last sync (not build identity)
 backscroll validate --json   # prepared-index integrity, not input inventory
 backscroll rebuild           # re-derive search indexes from the database
-backscroll purge --before "$DATE"   # the only deletion path
 ```
 
 For exact development-build provenance, use `go version -m "$(command -v backscroll)"`
 and inspect `vcs.revision`/`vcs.modified`; `--version` is not a commit identifier.
-Purge is destructive: `--before` accepts `YYYY-MM-DD` (midnight UTC) or RFC3339
-with `Z`/an explicit offset (for example `2026-01-01T12:30:00+02:00`). It deletes
-only timestamps strictly earlier than that instant; equal and NULL timestamps
-survive. Offset timestamps are compared as UTC instants, not local calendar dates.
 
 For stranded indexes, first inspect `backscroll recover --from "$STRANDED_DB" --dry-run`,
 then intentionally apply without `--dry-run`. The configured active database must
@@ -244,7 +239,7 @@ distinct from recovery backups. See [snapshot retention](docs/sync.md#migration-
 
 Default output is human-readable text. Machine modes keep stdout parseable: human progress and warnings go to stderr, JSON/robot startup progress is discarded, and structured diagnostics remain parseable.
 
-`--json` is available on `search`, `context`, `list`, `patterns`, `status`, `validate`, and `config`. JSON mode on context emits one complete envelope with `anchor`, `records`, `truncated`, and `omitted`. `--robot` is available on `search`, `context`, `list`, and `patterns`; context robot mode emits line-oriented anchor, envelope, and record fields. `rebuild`, `purge`, and `annotate` report in plain text only.
+`--json` is available on `search`, `context`, `list`, `patterns`, `status`, `validate`, and `config`. JSON mode on context emits one complete envelope with `anchor`, `records`, `truncated`, and `omitted`. `--robot` is available on `search`, `context`, `list`, and `patterns`; context robot mode emits line-oriented anchor, envelope, and record fields. `rebuild` and `annotate` report in plain text only.
 
 Search identity is present in every density and output mode. Text uses `Path`, `UUID`, and `Ordinal`; minimal JSON uses `source_path`, `uuid`, and `ordinal`; full JSON keeps the model casing `FilePath`, `UUID`, and `Ordinal`; robot output uses `result_N_filepath`, `result_N_uuid`, and `result_N_ordinal` for both `--fields minimal` and `--fields full`. A missing UUID is `null`, not a generated value.
 

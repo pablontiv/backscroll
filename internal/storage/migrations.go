@@ -400,8 +400,8 @@ CREATE TABLE IF NOT EXISTS dynamic_stopwords (term TEXT PRIMARY KEY);
 // applyV8Migration adds the F0 perennity surface: extraction_version and
 // was_interrupted on search_items, and the perennial tool_events satellite
 // table (one row per tool_use, anchored by message identity). tool_events is
-// NOT re-derivable once source files expire — no CASCADE lifecycle; only
-// purge deletes from it, explicitly.
+// NOT re-derivable once source files expire; perennial tables have no
+// CASCADE lifecycle or deletion path.
 func (d *Database) applyV8Migration() error {
 	return d.applySingleMigration(applyV8)
 }

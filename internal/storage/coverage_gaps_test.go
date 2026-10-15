@@ -8,61 +8,6 @@ import (
 	"github.com/pablontiv/backscroll/internal/projects"
 )
 
-// TestPurgeWithToolEvents verifies Purge deletes tool_events satellites
-func TestPurgeWithToolEvents(t *testing.T) {
-	db, err := Open(filepath.Join(t.TempDir(), "test.db"))
-	if err != nil {
-		t.Fatalf("open: %v", err)
-	}
-	defer func() { _ = db.Close() }()
-
-	// Insert indexed files with old timestamp
-	_, err = db.db.Exec(`
-		INSERT INTO indexed_files (path, hash, last_indexed)
-		VALUES ('/old/session.jsonl', 'abc123', '2020-01-01T00:00:00Z')
-	`)
-	if err != nil {
-		t.Fatalf("insert indexed_files: %v", err)
-	}
-
-	// Insert search_items linked to old file
-	_, err = db.db.Exec(`
-		INSERT INTO search_items (source, source_path, ordinal, role, text, timestamp, project, content_type)
-		VALUES ('session', '/old/session.jsonl', 0, 'user', 'text', '2020-01-01T00:00:00Z', 'proj', 'text')
-	`)
-	if err != nil {
-		t.Fatalf("insert search_items: %v", err)
-	}
-
-	// Insert tool_events for that path
-	_, err = db.db.Exec(`
-		INSERT INTO tool_events (source_path, ordinal, tool_name, command_head, extraction_version)
-		VALUES ('/old/session.jsonl', 0, 'bash', 'ls', 0)
-	`)
-	if err != nil {
-		t.Fatalf("insert tool_events: %v", err)
-	}
-
-	// Purge before 2021-01-01
-	deleted, err := db.Purge("2021-01-01")
-	if err != nil {
-		t.Fatalf("purge: %v", err)
-	}
-	if deleted == 0 {
-		t.Errorf("expected rows to be deleted, got 0")
-	}
-
-	// Verify tool_events deleted too
-	var toolCount int
-	err = db.db.QueryRow("SELECT COUNT(*) FROM tool_events WHERE source_path = '/old/session.jsonl'").Scan(&toolCount)
-	if err != nil {
-		t.Fatalf("query tool_events: %v", err)
-	}
-	if toolCount != 0 {
-		t.Errorf("expected tool_events to be deleted, got %d rows", toolCount)
-	}
-}
-
 // TestAggregateTemplatesWithEmptyTable verifies empty result handling
 func TestAggregateTemplatesWithEmptyTable(t *testing.T) {
 	db, err := Open(filepath.Join(t.TempDir(), "test.db"))
@@ -183,51 +128,6 @@ func TestRebuildFTSWithEmptyTable(t *testing.T) {
 	// Rebuild on empty table should not error
 	if err := db.RebuildFTS(); err != nil {
 		t.Fatalf("rebuild empty fts: %v", err)
-	}
-}
-
-// TestPurgeWithAnnotations verifies Purge handles annotated items
-func TestPurgeWithAnnotations(t *testing.T) {
-	db, err := Open(filepath.Join(t.TempDir(), "test.db"))
-	if err != nil {
-		t.Fatalf("open: %v", err)
-	}
-	defer func() { _ = db.Close() }()
-
-	// Insert indexed file with old timestamp
-	_, err = db.db.Exec(`
-		INSERT INTO indexed_files (path, hash, last_indexed)
-		VALUES ('/old/session.jsonl', 'abc', '2020-01-01T00:00:00Z')
-	`)
-	if err != nil {
-		t.Fatalf("insert: %v", err)
-	}
-
-	// Insert search_items
-	_, err = db.db.Exec(`
-		INSERT INTO search_items (source, source_path, ordinal, role, text, uuid, timestamp, content_type)
-		VALUES ('session', '/old/session.jsonl', 0, 'user', 'text', 'u1', '2020-01-01T00:00:00Z', 'text')
-	`)
-	if err != nil {
-		t.Fatalf("insert search_items: %v", err)
-	}
-
-	// Insert annotations
-	_, err = db.db.Exec(`
-		INSERT INTO annotations (item_uuid, source_path, ordinal, kind, label, created_at)
-		VALUES ('u1', '/old/session.jsonl', 0, 'correction', 'test_label', CURRENT_TIMESTAMP)
-	`)
-	if err != nil {
-		t.Fatalf("insert annotations: %v", err)
-	}
-
-	// Purge should handle annotations gracefully
-	deleted, err := db.Purge("2021-01-01")
-	if err != nil {
-		t.Fatalf("purge: %v", err)
-	}
-	if deleted == 0 {
-		t.Errorf("expected rows to be deleted")
 	}
 }
 
