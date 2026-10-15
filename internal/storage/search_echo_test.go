@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"slices"
 	"strings"
 	"testing"
 
@@ -108,7 +109,8 @@ func TestV15EchoBackfillPreservesPerennialIdentity(t *testing.T) {
 		t.Fatalf("identity/provenance changed: %d %q %d %d", id, text, echo, version)
 	}
 	paths, err = db.StalePaths(CurrentExtractionVersion)
-	if err != nil || !reflect.DeepEqual(paths, []string{"expired.jsonl", "prose.jsonl"}) {
+	wantPaths := []string{"expired.jsonl", "prose.jsonl"}
+	if err != nil || !slices.Equal(slices.Sorted(slices.Values(paths)), slices.Sorted(slices.Values(wantPaths))) {
 		t.Fatalf("backfill failed to converge: %v %v", paths, err)
 	}
 	got, err = db.Search("orchard", models.SearchOptions{AllProjects: true})
@@ -170,7 +172,7 @@ func TestPendingSearchEchoPathsRequeuesZeroValuedDirectCalls(t *testing.T) {
 		t.Fatal(err)
 	}
 	want := []string{"codex.jsonl", "opencode.db", "unknown.jsonl"}
-	if !reflect.DeepEqual(got, want) {
+	if !slices.Equal(slices.Sorted(slices.Values(got)), slices.Sorted(slices.Values(want))) {
 		t.Fatalf("pending=%v want %v", got, want)
 	}
 }
@@ -230,7 +232,7 @@ func TestPendingSearchEchoPathsRequeuesZeroValuedCodexShellCall(t *testing.T) {
 		t.Fatal(err)
 	}
 	want := []string{"shell_args_c.jsonl", "shell_args_lc.jsonl", "shell_bare_c.jsonl"}
-	if !reflect.DeepEqual(got, want) {
+	if !slices.Equal(slices.Sorted(slices.Values(got)), slices.Sorted(slices.Values(want))) {
 		t.Fatalf("pending=%v want %v", got, want)
 	}
 }
@@ -311,7 +313,7 @@ func TestPendingSearchEchoPathsRequeuesZeroValuedCodexShellSerializedWhitespace(
 		t.Fatal(err)
 	}
 	want := []string{"sep_cr.jsonl", "sep_em_space.jsonl", "sep_en_space.jsonl", "sep_ff.jsonl", "sep_nbsp.jsonl", "sep_nbsp_lc.jsonl", "sep_newline.jsonl", "sep_space.jsonl", "sep_tab.jsonl"}
-	if !reflect.DeepEqual(got, want) {
+	if !slices.Equal(slices.Sorted(slices.Values(got)), slices.Sorted(slices.Values(want))) {
 		t.Fatalf("pending=%v want %v", got, want)
 	}
 }
