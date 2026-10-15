@@ -50,6 +50,30 @@ A new candidate is required after every pull request synchronization.
 After merge, install and verify the resulting stable release. Never install or
 verify a development (`dev`) build.
 
+## Dagu issue flow
+
+Maintainers deliver issues with the versioned
+`.workspace/dagu/dags/feature.yaml`. From the clean primary clone on `main`,
+obtain the coordinating session ID with `dagu_session_id`, then enqueue:
+
+```sh
+dagu enqueue --run-id "backscroll-issue-$ISSUE" \
+  .workspace/dagu/dags/feature.yaml -- \
+  ISSUE="$ISSUE" PRIMARY="$PWD" BRANCH="dagu/issue-$ISSUE" \
+  PR_NUMBER="" OMP_SESSION_ID="$OMP_SESSION_ID"
+```
+
+The coordinator completes guarded `triage` through the designated
+`triage-reviewer` and owns the `triage` and `implement` human tasks. The
+scheduled reconciler alone advances or pushes back `await_merge`; leave that
+task for it rather than completing it manually.
+
+A failed or aborted run is terminal. After fixing the cause, recover a pushed
+checkpoint with `git fetch origin && git branch dagu/issue-$ISSUE
+origin/dagu/issue-$ISSUE`, then enqueue a new run with a suffixed run ID. Set
+`PR_NUMBER` when the branch already has an open pull request. Runs that failed
+before a checkpoint can be enqueued again after their cleanup completes.
+
 ## Releasing
 
 Releases are fully automated via CI. On push to `main`, CI analyzes conventional commit prefixes, calculates the next semver version, builds multi-platform binaries (Linux, macOS, Windows), and creates a GitHub Release. No manual release steps needed.
