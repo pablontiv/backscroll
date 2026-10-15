@@ -59,19 +59,17 @@ type Stats struct {
 
 // SearchOptions contains options for searching.
 type SearchOptions struct {
-	Project             string
-	AllProjects         bool
-	Source              string
-	SourcePath          string // exact path, SQL LIKE pattern, or * glob
-	After               *time.Time
-	Before              *time.Time
-	Role                string
-	Limit               int
-	Offset              int
-	ContentType         string
-	Tag                 string
-	LexicalOnly         bool    // skip vector search, BM25 only
-	SimilarityThreshold float64 // minimum cosine similarity (0 = no threshold)
+	Project     string
+	AllProjects bool
+	Source      string
+	SourcePath  string // exact path, SQL LIKE pattern, or * glob
+	After       *time.Time
+	Before      *time.Time
+	Role        string
+	Limit       int
+	Offset      int
+	ContentType string
+	Tag         string
 }
 
 // SyncOptions contains options for syncing.

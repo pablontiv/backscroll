@@ -52,7 +52,7 @@ format = "codex"
 		{"codexafterquartz", "assistant", "text"},
 	} {
 		t.Run(tc.marker, func(t *testing.T) {
-			out, stderr, err := runCmd("search", tc.marker, "--project", "codex-fixture-project", "--source", "session", "--source-path", source, "--role", tc.role, "--content-type", tc.kind, "--after", "2026-09-01", "--before", "2026-09-02", "--lexical-only", "--json")
+			out, stderr, err := runCmd("search", tc.marker, "--project", "codex-fixture-project", "--source", "session", "--source-path", source, "--role", tc.role, "--content-type", tc.kind, "--after", "2026-09-01", "--before", "2026-09-02", "--json")
 			if err != nil {
 				t.Fatalf("search: %v stderr=%s", err, stderr)
 			}
@@ -69,7 +69,7 @@ format = "codex"
 		"codexignoredinstructions", "codexignoredimage", "codexignoredencrypted",
 		"codexignoredcompact", "codexignoredfuture", "codexignoredmalformed", "codexreasonquartz",
 	} {
-		out, stderr, err := runCmd("search", marker, "--all-projects", "--lexical-only", "--json")
+		out, stderr, err := runCmd("search", marker, "--all-projects", "--json")
 		if err != nil {
 			t.Fatalf("negative search: %v %s", err, stderr)
 		}

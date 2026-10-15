@@ -37,7 +37,7 @@ func installOMPFixture(t *testing.T, reasoning bool) (string, string, []byte) {
 
 func ompRecall(t *testing.T, marker string, extra ...string) []map[string]any {
 	t.Helper()
-	args := append([]string{"search", "--text", marker, "--all-projects", "--lexical-only", "--json"}, extra...)
+	args := append([]string{"search", "--text", marker, "--all-projects", "--json"}, extra...)
 	out, stderr, err := runCmd(args...)
 	if err != nil {
 		t.Fatalf("recall %s: %v %s", marker, err, stderr)
@@ -70,7 +70,7 @@ func TestOMPV3E2E(t *testing.T) {
 		{"ompagentquartz", "user", "text"}, {"ompunknownquartz", "user", "text"}, {"ompbranchquartz", "assistant", "text"},
 	} {
 		// Project identity comes from the header cwd, never the bucket directory.
-		out, stderr, err := runCmd("search", "--text", tc.marker, "--project", "omp-fixture-project", "--source", "session", "--source-path", source, "--role", tc.role, "--content-type", tc.kind, "--after", "2026-09-01", "--before", "2026-09-02", "--lexical-only", "--json")
+		out, stderr, err := runCmd("search", "--text", tc.marker, "--project", "omp-fixture-project", "--source", "session", "--source-path", source, "--role", tc.role, "--content-type", tc.kind, "--after", "2026-09-01", "--before", "2026-09-02", "--json")
 		if err != nil {
 			t.Fatalf("%s: %v %s", tc.marker, err, stderr)
 		}

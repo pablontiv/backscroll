@@ -39,10 +39,6 @@ func TestInvalidInvocationBeforeStartup(t *testing.T) {
 		cases = append(cases, struct {
 			args []string
 			want string
-		}{[]string{"search", "query", "--similarity-threshold", value}, "--similarity-threshold"})
-		cases = append(cases, struct {
-			args []string
-			want string
 		}{[]string{"patterns", "--kind", "corrections", "--min-confidence", value}, "--min-confidence"})
 	}
 	for _, flag := range []string{"min-support", "min-length", "max-length", "batch"} {
@@ -112,8 +108,8 @@ func TestPreflightBoundariesPreservePayloads(t *testing.T) {
 		args []string
 		want string
 	}{
-		{[]string{"search", "needle", "--all-projects", "--similarity-threshold", "0", "--max-tokens", "0", "--json"}, "[]"},
-		{[]string{"search", "--text", "needle", "--all-projects", "--similarity-threshold", "1", "--limit", "0", "--offset", "0", "--json"}, "[]"},
+		{[]string{"search", "needle", "--all-projects", "--max-tokens", "0", "--json"}, "[]"},
+		{[]string{"search", "--text", "needle", "--all-projects", "--limit", "0", "--offset", "0", "--json"}, "[]"},
 		{[]string{"patterns", "--kind", "sequences", "--all-projects", "--min-support", "0", "--min-length", "0", "--max-length", "0", "--limit", "0", "--batch", "0", "--json"}, `{"count":0,"kind":"sequences","patterns":[]}`},
 		{[]string{"patterns", "--kind", "corrections", "--all-projects", "--min-confidence", "0", "--json"}, `{"count":0,"kind":"corrections","patterns":[]}`},
 		{[]string{"patterns", "--kind", "corrections", "--all-projects", "--min-confidence", "1", "--json"}, `{"count":0,"kind":"corrections","patterns":[]}`},

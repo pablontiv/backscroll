@@ -124,7 +124,7 @@ func TestZeroValuedCodexShellEchoExcludedBeforeReplay(t *testing.T) {
 		}
 	}
 
-	out := e.run("search", "--text", "violet handshake adaptation", "--all-projects", "--lexical-only", "--relax", "--robot", "--fields", "minimal", "--max-tokens", "200")
+	out := e.run("search", "--text", "violet handshake adaptation", "--all-projects", "--relax", "--robot", "--fields", "minimal", "--max-tokens", "200")
 	if !strings.Contains(out, "result_0_filepath="+filepath.Join(e.fixtures, "target.jsonl")+"\n") || !strings.Contains(out, `result_0_dropped_terms=["adaptation"]`) {
 		t.Errorf("zero-valued shell query echoes inverted unfiltered --relax IDF\nstdout=%s", out)
 	}

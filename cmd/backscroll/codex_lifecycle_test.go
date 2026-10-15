@@ -42,7 +42,7 @@ func TestCodexPresetIncrementalAndPerennialRecall(t *testing.T) {
 	}
 	recall := func(marker string) {
 		t.Helper()
-		out, stderr, err := runCmd("search", marker, "--all-projects", "--lexical-only", "--json")
+		out, stderr, err := runCmd("search", marker, "--all-projects", "--json")
 		if err != nil {
 			t.Fatalf("recall %s: %v %s", marker, err, stderr)
 		}

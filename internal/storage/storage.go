@@ -13,15 +13,13 @@ import (
 	"time"
 
 	"github.com/pablontiv/backscroll/internal/compat"
-	"github.com/pablontiv/backscroll/internal/embedding"
 	"modernc.org/sqlite"
 )
 
 // Database represents a SQLite database connection with FTS5 support.
 type Database struct {
-	db                *sql.DB
-	path              string
-	embeddingProvider embedding.EmbeddingProvider
+	db   *sql.DB
+	path string
 }
 
 var (

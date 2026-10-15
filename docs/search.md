@@ -29,14 +29,6 @@ backscroll search "artifact literal" --source-path "*/session.jsonl" --robot
 | `--max-tokens <N>` | Approximate token budget for text and robot output; JSON is not contractually truncated |
 | `--source-path <PATH_OR_PATTERN>` | Filter a normal text query by indexed `source_path`; exact paths or `*`/SQL `LIKE` patterns |
 | `--relax` | Opt in to bounded lexical term dropping after zero rows; all scope filters stay fixed |
-| `--lexical-only` | Force BM25-only search; skip vector retrieval |
-| `--similarity-threshold <F>` | Finite `0..1` vector cosine threshold (default `0.3`; `0` disables it); not a BM25 filter |
-
-The CLI has no wired embedding provider, so search currently falls back to
-lexical retrieval even without `--lexical-only`. `--similarity-threshold` only
-affects vector candidates when a provider is available; it does not filter
-BM25 results and is ignored by lexical `--relax`. Neither flag enables
-semantic expansion in the deployed CLI.
 
 ## Output Formats
 
@@ -250,7 +242,7 @@ If all tokens in a query are stopwords, the original query is used unfiltered as
 
 ## Opt-in lexical relaxation
 
-Ordinary searches, including `--relax=false`, retain the existing behavior and output. `--relax` is a lexical-only option, not a new default and not semantic search:
+Ordinary searches, including `--relax=false`, retain the existing behavior and output. `--relax` is an opt-in lexical option:
 
 ```bash
 backscroll search --text 'violet handshake adaptation' --relax --robot --fields minimal --max-tokens 2000
@@ -300,8 +292,7 @@ commands accept no positional operands. Search, list, and patterns reject
 simultaneous `--project` and `--all-projects` rather than overriding a scope.
 Their independent default scope remains unchanged.
 
-Before startup, search requires a finite `--similarity-threshold` in [0, 1]
-(0 still means no threshold) and nonnegative `--max-tokens` (0 is unlimited).
+Before startup, search requires nonnegative `--max-tokens` (0 is unlimited).
 List requires nonnegative `--recent`, `--limit`, and `--offset`.
 List defaults to 20 results; explicit `--limit 0` or `--recent 0` is unlimited.
 `--recent` cannot be combined with explicit `--limit` or `--order`;

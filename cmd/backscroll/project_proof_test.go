@@ -22,7 +22,7 @@ func TestClaudeProjectProofSurvivesExpiredSourceRebuild(t *testing.T) {
 		t.Fatal(err)
 	}
 	writeFile(t, filepath.Join(os.Getenv("BACKSCROLL_CONFIG_DIR"), "backscroll", "inputs", "claude.inputs.toml"), replaceManifestRoots(t, "inputs/claude.inputs.toml", string(preset), root))
-	if _, stderr, err := runCmd("search", "--text", "nativeproofquartz", "--all-projects", "--lexical-only", "--json"); err != nil {
+	if _, stderr, err := runCmd("search", "--text", "nativeproofquartz", "--all-projects", "--json"); err != nil {
 		t.Fatalf("%v %s", err, stderr)
 	}
 	read := func() (int64, string, string, string, string) {

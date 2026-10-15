@@ -46,7 +46,7 @@ func TestCodexInjectedWrappersV1E2E(t *testing.T) {
 		{"codexblockkeepquartz", "user", 1},
 	} {
 		t.Run(tc.marker, func(t *testing.T) {
-			out, stderr, err := runCmd("search", tc.marker, "--all-projects", "--source-path", sourcePath, "--role", tc.role, "--content-type", "text", "--lexical-only", "--json")
+			out, stderr, err := runCmd("search", tc.marker, "--all-projects", "--source-path", sourcePath, "--role", tc.role, "--content-type", "text", "--json")
 			if err != nil {
 				t.Fatalf("search: %v stderr=%s", err, stderr)
 			}

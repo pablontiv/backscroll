@@ -1,7 +1,6 @@
 package storage
 
 import (
-	"context"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -9,7 +8,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/pablontiv/backscroll/internal/embedding"
 	"github.com/pablontiv/backscroll/internal/models"
 )
 
@@ -766,12 +764,11 @@ func TestListSessionsAfterSync(t *testing.T) {
 	}
 }
 
-func TestEmbeddingPipeline_WithMockProvider(t *testing.T) {
+func TestEmbeddingMetadataLifecycle(t *testing.T) {
 	db, cleanup := newTestDB(t)
 	defer cleanup()
 
-	provider := embedding.NewMockProvider(384)
-	defer func() { _ = provider.Close() }()
+	const dimensions = 384
 
 	sourcePath := "test/session.jsonl"
 	text := "hello world. this is a test paragraph. it has multiple sentences!"
@@ -786,14 +783,7 @@ func TestEmbeddingPipeline_WithMockProvider(t *testing.T) {
 	}
 
 	for _, id := range ids {
-		vec, err := provider.Embed(context.Background(), text)
-		if err != nil {
-			t.Fatalf("Embed: %v", err)
-		}
-		if len(vec) != provider.Dimensions() {
-			t.Errorf("vector length %d != dimensions %d", len(vec), provider.Dimensions())
-		}
-		if err := db.InsertEmbeddingMetadata(id, "mock", "v1", provider.Dimensions(), now); err != nil {
+		if err := db.InsertEmbeddingMetadata(id, "historical", "v1", dimensions, now); err != nil {
 			t.Fatalf("InsertEmbeddingMetadata: %v", err)
 		}
 	}
@@ -937,152 +927,6 @@ func TestVectorSearch_RoundTrip(t *testing.T) {
 	if results[0].Similarity < 0.99 {
 		t.Errorf("expected similarity ≈ 1.0, got %.4f", results[0].Similarity)
 	}
-}
-
-func TestHybridSearch_FallbackWithoutProvider(t *testing.T) {
-	db, cleanup := newTestDB(t)
-	defer cleanup()
-
-	_ = db.SyncFiles([]IndexedFile{{
-		SourcePath: "test/b.jsonl",
-		Source:     "session",
-		Hash:       "h2",
-		Project:    "proj",
-		Messages: []IndexedMessage{
-			{Ordinal: 0, Role: "user", Text: "hybrid search fallback test", ContentType: "text"},
-		},
-	}})
-
-	// No provider set — should return BM25 results
-	results, err := db.HybridSearch("hybrid", models.SearchOptions{AllProjects: true})
-	if err != nil {
-		t.Fatalf("HybridSearch: %v", err)
-	}
-	if len(results) == 0 {
-		t.Error("expected BM25 fallback results")
-	}
-}
-
-func TestHybridSearch_WithMockProvider(t *testing.T) {
-	db, cleanup := newTestDB(t)
-	defer cleanup()
-
-	provider := embedding.NewMockProvider(4)
-	defer func() { _ = provider.Close() }()
-	db.SetEmbeddingProvider(provider)
-
-	_ = db.SyncFiles([]IndexedFile{{
-		SourcePath: "test/c.jsonl",
-		Source:     "session",
-		Hash:       "h3",
-		Project:    "proj",
-		Messages: []IndexedMessage{
-			{Ordinal: 7, Role: "user", Text: "mock provider hybrid search", UUID: "hybrid-uuid", ContentType: "text"},
-		},
-	}})
-
-	// Insert chunk + embedding so vector path activates
-	ids, _ := db.InsertChunks("test/c.jsonl", []ChunkRecord{
-		{ChunkIdx: 0, Content: "mock provider hybrid search", TokenCount: 4},
-	}, time.Now().Unix())
-	vec, _ := provider.Embed(context.Background(), "mock provider hybrid search")
-	_ = db.InsertChunkEmbedding(ids[0], vec)
-
-	results, err := db.HybridSearch("mock", models.SearchOptions{AllProjects: true})
-	if err != nil {
-		t.Fatalf("HybridSearch with provider: %v", err)
-	}
-	if len(results) == 0 {
-		t.Fatal("expected hybrid results with mock provider")
-	}
-	if results[0].UUID == nil || *results[0].UUID != "hybrid-uuid" || results[0].Ordinal != 7 {
-		t.Fatalf("hybrid copy lost identity: %+v", results[0])
-	}
-}
-
-func TestHybridSearch_LexicalOnly(t *testing.T) {
-	db, cleanup := newTestDB(t)
-	defer cleanup()
-
-	provider := embedding.NewMockProvider(4)
-	defer func() { _ = provider.Close() }()
-	db.SetEmbeddingProvider(provider)
-
-	_ = db.SyncFiles([]IndexedFile{{
-		SourcePath: "test/d.jsonl",
-		Source:     "session",
-		Hash:       "h4",
-		Project:    "proj",
-		Messages: []IndexedMessage{
-			{Ordinal: 0, Role: "user", Text: "lexical only search test", ContentType: "text"},
-		},
-	}})
-
-	// LexicalOnly=true should skip vector path even with provider
-	results, err := db.HybridSearch("lexical", models.SearchOptions{
-		AllProjects: true,
-		LexicalOnly: true,
-	})
-	if err != nil {
-		t.Fatalf("HybridSearch lexical-only: %v", err)
-	}
-	if len(results) == 0 {
-		t.Error("expected BM25 results with lexical-only")
-	}
-}
-
-func TestHasEmbeddingProvider(t *testing.T) {
-	db, cleanup := newTestDB(t)
-	defer cleanup()
-
-	if db.HasEmbeddingProvider() {
-		t.Error("expected no provider initially")
-	}
-
-	provider := embedding.NewMockProvider(4)
-	defer func() { _ = provider.Close() }()
-	db.SetEmbeddingProvider(provider)
-
-	if !db.HasEmbeddingProvider() {
-		t.Error("expected provider after SetEmbeddingProvider")
-	}
-}
-
-func TestHybridSearch_SimilarityThreshold(t *testing.T) {
-	db, cleanup := newTestDB(t)
-	defer cleanup()
-
-	provider := embedding.NewMockProvider(4)
-	defer func() { _ = provider.Close() }()
-	db.SetEmbeddingProvider(provider)
-
-	_ = db.SyncFiles([]IndexedFile{{
-		SourcePath: "test/e.jsonl",
-		Source:     "session",
-		Hash:       "h5",
-		Project:    "proj",
-		Messages: []IndexedMessage{
-			{Ordinal: 0, Role: "user", Text: "threshold filter test query", ContentType: "text"},
-		},
-	}})
-
-	ids, _ := db.InsertChunks("test/e.jsonl", []ChunkRecord{
-		{ChunkIdx: 0, Content: "threshold filter test query", TokenCount: 4},
-	}, time.Now().Unix())
-	vec, _ := provider.Embed(context.Background(), "threshold filter test query")
-	_ = db.InsertChunkEmbedding(ids[0], vec)
-
-	// High threshold — mock provider produces deterministic unit vectors so similarity ≈ 1.0
-	// Using very high threshold (e.g. 0.99) should still return results
-	results, err := db.HybridSearch("threshold", models.SearchOptions{
-		AllProjects:         true,
-		SimilarityThreshold: 0.99,
-	})
-	if err != nil {
-		t.Fatalf("HybridSearch similarity threshold: %v", err)
-	}
-	// Results may be empty if similarity < threshold — just verify no error
-	_ = results
 }
 
 func TestCosineSimilarity_ZeroVector(t *testing.T) {
@@ -1335,8 +1179,8 @@ func TestGetStatsEmptyDatabase(t *testing.T) {
 	}
 }
 
-// TestHybridSearchWithAllProjectsFilter covers allprojects path
-func TestHybridSearchWithAllProjectsFilter(t *testing.T) {
+// TestSearchWithAllProjectsFilter covers the all-projects path.
+func TestSearchWithAllProjectsFilter(t *testing.T) {
 	db, cleanup := newTestDB(t)
 	defer cleanup()
 
@@ -1354,9 +1198,9 @@ func TestHybridSearchWithAllProjectsFilter(t *testing.T) {
 		t.Fatalf("SyncFiles: %v", err)
 	}
 
-	results, err := db.HybridSearch("search", models.SearchOptions{AllProjects: true})
+	results, err := db.Search("search", models.SearchOptions{AllProjects: true})
 	if err != nil {
-		t.Fatalf("HybridSearch all projects: %v", err)
+		t.Fatalf("Search all projects: %v", err)
 	}
 	if len(results) == 0 {
 		t.Error("expected results for AllProjects=true")
@@ -1670,62 +1514,6 @@ func TestVectorSearchTopKLimit(t *testing.T) {
 	}
 }
 
-// TestHybridSearchWithEmptyIndex covers hybrid search on empty DB
-func TestHybridSearchWithEmptyIndex(t *testing.T) {
-	db, cleanup := newTestDB(t)
-	defer cleanup()
-
-	// Hybrid search on empty database
-	results, err := db.HybridSearch("test", models.SearchOptions{AllProjects: true})
-	if err != nil {
-		t.Fatalf("HybridSearch empty: %v", err)
-	}
-	if len(results) != 0 {
-		t.Errorf("expected 0 results on empty index, got %d", len(results))
-	}
-}
-
-// TestHybridSearchVectorDeduplication covers the deduplication logic
-func TestHybridSearchVectorDeduplication(t *testing.T) {
-	db, cleanup := newTestDB(t)
-	defer cleanup()
-
-	// Set a provider
-	provider := embedding.NewMockProvider(4)
-	defer func() { _ = provider.Close() }()
-	db.SetEmbeddingProvider(provider)
-
-	// Index content
-	if err := db.SyncFiles([]IndexedFile{
-		{
-			SourcePath: "test/v.jsonl",
-			Source:     "session",
-			Hash:       "h1",
-			Project:    "test",
-			Messages: []IndexedMessage{
-				{Ordinal: 0, Role: "user", Text: "dedup vector test content", UUID: getTestUUID(), ContentType: "text"},
-			},
-		},
-	}); err != nil {
-		t.Fatalf("SyncFiles: %v", err)
-	}
-
-	// Insert chunk with matching embedding
-	ids, _ := db.InsertChunks("test/v.jsonl", []ChunkRecord{
-		{ChunkIdx: 0, Content: "dedup vector test content", TokenCount: 5},
-	}, time.Now().Unix())
-
-	vec, _ := provider.Embed(context.Background(), "dedup vector test content")
-	_ = db.InsertChunkEmbedding(ids[0], vec)
-
-	// Search should handle deduplication correctly
-	results, err := db.HybridSearch("dedup", models.SearchOptions{AllProjects: true})
-	if err != nil {
-		t.Fatalf("HybridSearch dedup: %v", err)
-	}
-	_ = results
-}
-
 // TestLoadChunkEmbeddingsError covers error path in LoadChunkEmbeddings
 func TestLoadChunkEmbeddingsEmpty(t *testing.T) {
 	db, cleanup := newTestDB(t)
@@ -1847,48 +1635,6 @@ func TestInsertChunksMultipleBatches(t *testing.T) {
 	if count != 4 {
 		t.Errorf("expected 4 chunks total, got %d", count)
 	}
-}
-
-// TestHybridSearchSimilarityFilter covers the similarity threshold filtering
-func TestHybridSearchSimilarityFilter(t *testing.T) {
-	db, cleanup := newTestDB(t)
-	defer cleanup()
-
-	provider := embedding.NewMockProvider(4)
-	defer func() { _ = provider.Close() }()
-	db.SetEmbeddingProvider(provider)
-
-	// Index content
-	if err := db.SyncFiles([]IndexedFile{
-		{
-			SourcePath: "test/sim.jsonl",
-			Source:     "session",
-			Hash:       "h1",
-			Project:    "test",
-			Messages: []IndexedMessage{
-				{Ordinal: 0, Role: "user", Text: "similarity filtering test", UUID: getTestUUID(), ContentType: "text"},
-			},
-		},
-	}); err != nil {
-		t.Fatalf("SyncFiles: %v", err)
-	}
-
-	// Insert chunk with embedding
-	ids, _ := db.InsertChunks("test/sim.jsonl", []ChunkRecord{
-		{ChunkIdx: 0, Content: "similarity filtering test", TokenCount: 3},
-	}, time.Now().Unix())
-	vec, _ := provider.Embed(context.Background(), "similarity filtering test")
-	_ = db.InsertChunkEmbedding(ids[0], vec)
-
-	// Search with high similarity threshold
-	results, err := db.HybridSearch("similarity", models.SearchOptions{
-		AllProjects:         true,
-		SimilarityThreshold: 0.5,
-	})
-	if err != nil {
-		t.Fatalf("HybridSearch similarity: %v", err)
-	}
-	_ = results
 }
 
 // TestSyncFilesSessionTagsNodup covers session-specific tag insertion
@@ -2029,178 +1775,6 @@ func TestSearchProjectFiltering(t *testing.T) {
 			t.Errorf("expected project=proj1, got %s", r.Project)
 		}
 	}
-}
-
-// TestHybridSearchRRFFusion covers the RRF fusion path with both BM25 and vector results
-func TestHybridSearchRRFFusion(t *testing.T) {
-	db, cleanup := newTestDB(t)
-	defer cleanup()
-
-	provider := embedding.NewMockProvider(4)
-	defer func() { _ = provider.Close() }()
-	db.SetEmbeddingProvider(provider)
-
-	// Index multiple documents
-	if err := db.SyncFiles([]IndexedFile{
-		{
-			SourcePath: "test/rrf1.jsonl",
-			Source:     "session",
-			Hash:       "h1",
-			Project:    "test",
-			Messages: []IndexedMessage{
-				{Ordinal: 0, Role: "user", Text: "machine learning algorithms", UUID: getTestUUID(), ContentType: "text"},
-			},
-		},
-		{
-			SourcePath: "test/rrf2.jsonl",
-			Source:     "session",
-			Hash:       "h2",
-			Project:    "test",
-			Messages: []IndexedMessage{
-				{Ordinal: 0, Role: "user", Text: "deep learning neural networks", UUID: getTestUUID(), ContentType: "text"},
-			},
-		},
-	}); err != nil {
-		t.Fatalf("SyncFiles: %v", err)
-	}
-
-	// Insert chunks and embeddings for both
-	for i, path := range []string{"test/rrf1.jsonl", "test/rrf2.jsonl"} {
-		text := []string{"machine learning algorithms", "deep learning neural networks"}[i]
-		ids, _ := db.InsertChunks(path, []ChunkRecord{
-			{ChunkIdx: 0, Content: text, TokenCount: 3},
-		}, time.Now().Unix())
-		vec, _ := provider.Embed(context.Background(), text)
-		_ = db.InsertChunkEmbedding(ids[0], vec)
-	}
-
-	// Hybrid search with limit to trigger RRF path
-	results, err := db.HybridSearch("learning", models.SearchOptions{
-		AllProjects: true,
-		Limit:       10,
-	})
-	if err != nil {
-		t.Fatalf("HybridSearch RRF: %v", err)
-	}
-	if len(results) == 0 {
-		t.Error("expected RRF fusion results")
-	}
-}
-
-// TestHybridSearchVectorCountZero covers zero vector count path
-func TestHybridSearchZeroVectorCount(t *testing.T) {
-	db, cleanup := newTestDB(t)
-	defer cleanup()
-
-	provider := embedding.NewMockProvider(4)
-	defer func() { _ = provider.Close() }()
-	db.SetEmbeddingProvider(provider)
-
-	// Index without vectors
-	if err := db.SyncFiles([]IndexedFile{
-		{
-			SourcePath: "test/novector.jsonl",
-			Source:     "session",
-			Hash:       "h1",
-			Project:    "test",
-			Messages: []IndexedMessage{
-				{Ordinal: 0, Role: "user", Text: "no vector embedding", UUID: getTestUUID(), ContentType: "text"},
-			},
-		},
-	}); err != nil {
-		t.Fatalf("SyncFiles: %v", err)
-	}
-
-	// HybridSearch should fallback to BM25 when no vectors exist
-	results, err := db.HybridSearch("vector", models.SearchOptions{AllProjects: true})
-	if err != nil {
-		t.Fatalf("HybridSearch no vectors: %v", err)
-	}
-	if len(results) == 0 {
-		t.Error("expected BM25 fallback results")
-	}
-}
-
-// TestHybridSearchProviderEmbedError covers provider embed error
-func TestHybridSearchProviderEmbedError(t *testing.T) {
-	db, cleanup := newTestDB(t)
-	defer cleanup()
-
-	// Mock provider that succeeds
-	provider := embedding.NewMockProvider(4)
-	defer func() { _ = provider.Close() }()
-	db.SetEmbeddingProvider(provider)
-
-	// Index with vector embeddings
-	if err := db.SyncFiles([]IndexedFile{
-		{
-			SourcePath: "test/embed.jsonl",
-			Source:     "session",
-			Hash:       "h1",
-			Project:    "test",
-			Messages: []IndexedMessage{
-				{Ordinal: 0, Role: "user", Text: "embedding test query", UUID: getTestUUID(), ContentType: "text"},
-			},
-		},
-	}); err != nil {
-		t.Fatalf("SyncFiles: %v", err)
-	}
-
-	ids, _ := db.InsertChunks("test/embed.jsonl", []ChunkRecord{
-		{ChunkIdx: 0, Content: "embedding test query", TokenCount: 3},
-	}, time.Now().Unix())
-	vec, _ := provider.Embed(context.Background(), "embedding test query")
-	_ = db.InsertChunkEmbedding(ids[0], vec)
-
-	// Search should handle embedding success gracefully
-	results, err := db.HybridSearch("embedding", models.SearchOptions{AllProjects: true})
-	if err != nil {
-		t.Fatalf("HybridSearch with embed: %v", err)
-	}
-	_ = results
-}
-
-// TestHybridSearchEmptyVectorResults covers empty vector results path
-func TestHybridSearchEmptyVectorResults(t *testing.T) {
-	db, cleanup := newTestDB(t)
-	defer cleanup()
-
-	provider := embedding.NewMockProvider(4)
-	defer func() { _ = provider.Close() }()
-	db.SetEmbeddingProvider(provider)
-
-	// Index document
-	if err := db.SyncFiles([]IndexedFile{
-		{
-			SourcePath: "test/emptyvec.jsonl",
-			Source:     "session",
-			Hash:       "h1",
-			Project:    "test",
-			Messages: []IndexedMessage{
-				{Ordinal: 0, Role: "user", Text: "text content here", UUID: getTestUUID(), ContentType: "text"},
-			},
-		},
-	}); err != nil {
-		t.Fatalf("SyncFiles: %v", err)
-	}
-
-	// Add vector embedding with specific vector
-	ids, _ := db.InsertChunks("test/emptyvec.jsonl", []ChunkRecord{
-		{ChunkIdx: 0, Content: "text content here", TokenCount: 3},
-	}, time.Now().Unix())
-	// Insert vector of different dimension to cause mismatch
-	vec := make([]float32, 4)
-	for i := range vec {
-		vec[i] = float32(i+1) * 10
-	}
-	_ = db.InsertChunkEmbedding(ids[0], vec)
-
-	// Search with query that won't match vectors (different embedding)
-	results, err := db.HybridSearch("different", models.SearchOptions{AllProjects: true})
-	if err != nil {
-		t.Fatalf("HybridSearch empty vectors: %v", err)
-	}
-	_ = results
 }
 
 // TestOpenReadOnlyPingError covers read-only ping success path
@@ -2941,12 +2515,12 @@ func TestIntegrationFullWorkflow(t *testing.T) {
 	}
 	_ = vresults
 
-	// 12. Hybrid search
-	hresults, err := db.HybridSearch("workflow", models.SearchOptions{AllProjects: true})
+	// 12. Lexical search
+	searchResults, err := db.Search("workflow", models.SearchOptions{AllProjects: true})
 	if err != nil {
-		t.Fatalf("HybridSearch: %v", err)
+		t.Fatalf("Search: %v", err)
 	}
-	_ = hresults
+	_ = searchResults
 
 	// 13. ResolveSessionPath
 	path, err := db.ResolveSessionPath("/s1.jsonl")

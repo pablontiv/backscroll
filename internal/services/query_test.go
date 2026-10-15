@@ -21,7 +21,6 @@ func TestQueryServiceSearch(t *testing.T) {
 			Options: models.SearchOptions{
 				SourcePath:  "/target.jsonl",
 				ContentType: "text",
-				LexicalOnly: true,
 				Limit:       10,
 			},
 		})
