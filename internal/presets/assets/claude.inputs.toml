@@ -1,0 +1,19 @@
+# Shipped Claude input preset.
+# Backscroll does not read files from this repository inputs/ directory at runtime;
+# copy this file into <config_dir>/backscroll/inputs/ (or set BACKSCROLL_CONFIG_DIR)
+# and edit as needed.
+version = 1
+
+[[inputs]]
+id = "claude"
+source = "session"
+active = true
+
+[inputs.discover]
+roots = ["~/.claude/projects"]
+include = ["**/*.jsonl"]
+exclude = ["**/subagents/**"]
+follow_symlinks = false
+
+[inputs.decode]
+format = "claude"

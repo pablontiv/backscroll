@@ -1,37 +1,7 @@
 #!/usr/bin/env bash
-# Post-merge: install inputs, propagate doc aggregates
-
-[ -z "$HOME" ] && HOME=$(eval echo ~)
+# Post-merge: propagate documentation aggregates.
 
 REPO_ROOT="$(git rev-parse --show-toplevel)"
 
-install_input_presets() {
-  local config_dir inputs_dest preset dest
-  if [ -n "${BACKSCROLL_CONFIG_DIR:-}" ]; then
-    config_dir="$BACKSCROLL_CONFIG_DIR"
-  elif [ "$(uname -s)" = "Darwin" ]; then
-    config_dir="$HOME/Library/Application Support"
-  else
-    config_dir="${XDG_CONFIG_HOME:-$HOME/.config}"
-  fi
-
-  inputs_dest="$config_dir/backscroll/inputs"
-  mkdir -p "$inputs_dest"
-  for preset in claude.inputs.toml pi.inputs.toml omp.inputs.toml codex.inputs.toml; do
-    dest="$inputs_dest/$preset"
-    if [ -e "$dest" ] && [ "${BACKSCROLL_FORCE_INPUTS:-0}" != "1" ]; then
-      echo "backscroll: $dest exists, skipping"
-      continue
-    fi
-    cp "$REPO_ROOT/inputs/$preset" "$dest"
-    echo "backscroll: installed input preset → $dest"
-  done
-}
-
-# Existing product-owned links follow the stable clone automatically. Never
-# replace skill destinations implicitly; see docs/skill-installation.md.
-echo "backscroll: skills unchanged; explicit installation: docs/skill-installation.md"
-install_input_presets
-
-# Propagate aggregate values after merge (fix stale parent READMEs).
+# Propagate aggregate values after merge.
 rootline fix --all "$REPO_ROOT/docs/roadmap/" 2>/dev/null || true

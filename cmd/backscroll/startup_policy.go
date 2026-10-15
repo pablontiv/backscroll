@@ -239,6 +239,9 @@ query merges both by rank position (RRF).`,
 				return err
 			}
 			class, _ := startupCommandClassFor(cmd)
+			if class == startupBypass {
+				return nil
+			}
 			ctx := cmd.Context()
 			if syncService.diagnostics {
 				ctx = context.WithValue(ctx, startupDiagnosticsWriterKey{}, stderr)
@@ -279,6 +282,8 @@ query merges both by rank position (RRF).`,
 	registerStartupCommand(root, startupMetadataRead, newConfigCmd(stdout, stderr))
 	registerStartupCommand(root, startupMutation, newAnnotateCmd(stdout, stderr))
 	registerStartupCommand(root, startupRemediation, newRecoverCmd(stdout, stderr, syncService, execute))
+	registerStartupCommand(root, startupBypass, newSkillCmd(stdout))
+	registerStartupCommand(root, startupBypass, newPresetsCmd(stdout))
 
 	return root
 }

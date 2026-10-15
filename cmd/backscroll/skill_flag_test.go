@@ -10,13 +10,13 @@ import (
 	"testing"
 )
 
-func TestDiscoveryShimDelegatesToSkillFlag(t *testing.T) {
+func TestDiscoveryShimDelegatesToSkillCommand(t *testing.T) {
 	shim, err := os.ReadFile(filepath.Join("..", "..", ".claude", "skills", "backscroll", "SKILL.md"))
 	if err != nil {
 		t.Fatalf("read discovery shim: %v", err)
 	}
 	content := string(shim)
-	for _, want := range []string{"---\nname: backscroll\n", "description:", "`backscroll --skill`", "follow the complete instructions printed to stdout"} {
+	for _, want := range []string{"---\nname: backscroll\n", "description:", "`backscroll skill`", "follow the complete instructions printed to stdout"} {
 		if !strings.Contains(content, want) {
 			t.Errorf("discovery shim missing %q", want)
 		}

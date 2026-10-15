@@ -130,8 +130,23 @@ func runContext(ctx context.Context, stdout, stderr io.Writer, args []string) (r
 		_, err := io.WriteString(stdout, embeddedBackscrollSkill)
 		return err
 	}
+	if startupBypassInvocation(args) {
+		return executeRoot(ctx, buildRootCmd(stdout, stderr), args)
+	}
 
 	return runContextWithDependencies(ctx, stdout, stderr, args, newRunDependencies(stdout, stderr))
+}
+
+func startupBypassInvocation(args []string) bool {
+	return len(args) > 0 && (args[0] == "skill" || args[0] == "presets")
+}
+
+func executeRoot(ctx context.Context, root *cobra.Command, args []string) error {
+	if indexPolicyMachineArgs(args) || startupBypassInvocation(args) {
+		root.SilenceUsage = true
+	}
+	root.SetArgs(args)
+	return root.ExecuteContext(ctx)
 }
 
 func runContextWithDependencies(ctx context.Context, stdout, stderr io.Writer, args []string, deps runDependencies) error {
@@ -147,6 +162,9 @@ func runContextWithDependencies(ctx context.Context, stdout, stderr io.Writer, a
 	root := deps.root
 	if root == nil {
 		root = buildRootCmd(stdout, stderr)
+	}
+	if startupBypassInvocation(args) {
+		return executeRoot(ctx, root, args)
 	}
 	stagingWait := deps.stagingWait
 	if stagingWait <= 0 {

@@ -8,4 +8,4 @@ allowed-tools:
 
 # Backscroll
 
-Execute `backscroll --skill` exactly as a standalone command, then follow the complete instructions printed to stdout. Treat that output as authoritative.
+Execute `backscroll skill` exactly as a standalone command, then follow the complete instructions printed to stdout. Treat that output as authoritative.

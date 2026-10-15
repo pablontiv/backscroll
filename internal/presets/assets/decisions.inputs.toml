@@ -1,0 +1,32 @@
+# Architecture Decision Records (ADR) and decision sources preset.
+# Backscroll does not read files from this repository inputs/ directory at runtime;
+# copy this file into <config_dir>/backscroll/inputs/ (or set BACKSCROLL_CONFIG_DIR)
+# to enable indexing of architecture decision records.
+#
+# This preset discovers ADRs from docs/adr/ and docs/decisions/ directories
+# across configured project roots and indexes them with source = "decision" for
+# decision-specific search and audit.
+#
+# Keep active = false until the roots below match your projects. Active inputs
+# are synchronized automatically before index-consuming commands such as search,
+# list, and patterns.
+#
+# decode.format = "markdown_sections" indexes each section headed by "## " as
+# a separate decision record. YAML frontmatter remains part of the Markdown text;
+# Backscroll does not parse it into structured metadata.
+#
+version = 1
+
+[[inputs]]
+id = "decisions"
+source = "decision"
+active = false
+
+[inputs.discover]
+roots = ["docs/adr", "docs/decisions"]
+include = ["**/*.md"]
+exclude = ["TEMPLATE.md", "template.md", "Template.md"]
+follow_symlinks = false
+
+[inputs.decode]
+format = "markdown_sections"
