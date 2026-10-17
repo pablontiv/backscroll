@@ -1,0 +1,403 @@
+# dagu-feature-bundle: @a4s/omp-dagu@0.3.10 source=pablontiv/a4s@85fe2c1040c24678d4026685d56e176e4f02e4dd bootstrap=bootstrap-backscroll-v0-3-10 dagu=2.20.1
+labels:
+  - workspace=backscroll
+  - dagu-feature-bundle=0.3.10
+queue: backscroll
+type: graph
+dotenv: []
+shell: bash
+max_active_steps: 1
+params:
+  - name: LENSES
+    type: string
+    required: true
+  - name: POLICY
+    type: string
+    default: defecto
+  - name: SOURCE
+    type: string
+    default: ""
+  - name: LIVE_TARGET
+    type: string
+    default: ""
+  - name: PRIMARY
+    type: string
+    required: true
+  - name: OMP_SESSION_ID
+    type: string
+    default: ""
+env:
+  - RUN: ${context.run.id}
+  - DAGU_FEATURE_BUNDLE: "dagu-feature-bundle=0.3.10 source=pablontiv/a4s@85fe2c1040c24678d4026685d56e176e4f02e4dd bootstrap=bootstrap-backscroll-v0-3-10"
+steps:
+  - id: snapshot
+    run: |
+      set -euo pipefail
+      printf '%s\n' "$DAGU_FEATURE_BUNDLE"
+      for tool in git gh jq; do command -v "$tool" >/dev/null; done
+      test "$(git -C "$PRIMARY" rev-parse --show-toplevel)" = "$PRIMARY"
+      [[ "$RUN" =~ ^[A-Za-z0-9][A-Za-z0-9._-]*$ ]]
+      [[ "$LENSES" =~ ^[0-4](,[0-4])*$ ]]
+      [[ "$POLICY" =~ ^(defecto|mejora|duplicado)(,(defecto|mejora|duplicado))*$ ]]
+      test "$(jq -nr --arg value "$LENSES" '$value / "," | length')" = \
+        "$(jq -nr --arg value "$LENSES" '$value / "," | unique | length')"
+      metadata=$(cd "$PRIMARY" && gh repo view --json nameWithOwner,defaultBranchRef)
+      NWO=$(jq -er '.nameWithOwner | select(type == "string" and length > 0)' <<<"$metadata")
+      BASE_BRANCH=$(jq -er '.defaultBranchRef.name | select(type == "string" and length > 0)' <<<"$metadata")
+      owner=${NWO%/*}
+      repo=${NWO#*/}
+      test "$owner" != "$NWO" && test -n "$owner" && test -n "$repo"
+      ROOT="${DAGU_HOME:-$HOME/.dagu}/data/discovery/${owner}__${repo}"
+      OUT_DIR="$ROOT/$RUN"
+      SNAPSHOT="$OUT_DIR/snapshot"
+      mkdir -p "$OUT_DIR"
+      test ! -e "$SNAPSHOT"
+      git -C "$PRIMARY" fetch origin "$BASE_BRANCH"
+      SHA=$(git -C "$PRIMARY" rev-parse "origin/$BASE_BRANCH^{commit}")
+      git -C "$PRIMARY" worktree add --detach "$SNAPSHOT" "$SHA"
+      chmod -R a-w "$SNAPSHOT"
+      IFS=',' read -r -a lenses <<<"$LENSES"
+      for lens in "${lenses[@]}"; do
+        history="$ROOT/lenses/$lens"
+        if test -f "$history/findings.jsonl"; then
+          cp "$history/findings.jsonl" "$OUT_DIR/prior-$lens.jsonl"
+        else
+          : > "$OUT_DIR/prior-$lens.jsonl"
+        fi
+        if test -f "$history/temporal.jsonl"; then
+          cp "$history/temporal.jsonl" "$OUT_DIR/prior-temporal-$lens.jsonl"
+        else
+          : > "$OUT_DIR/prior-temporal-$lens.jsonl"
+        fi
+      done
+      printf 'out_dir=%s\nsha=%s\nsnapshot=%s\n' "$OUT_DIR" "$SHA" "$SNAPSHOT"
+      {
+        printf 'OUT_DIR=%s\n' "$OUT_DIR"
+        printf 'SHA=%s\n' "$SHA"
+        printf 'SNAPSHOT=%s\n' "$SNAPSHOT"
+        printf 'NWO=%s\n' "$NWO"
+        printf 'BASE_BRANCH=%s\n' "$BASE_BRANCH"
+      } >> "$DAGU_OUTPUT_FILE"
+    outputs:
+      - name: OUT_DIR
+      - name: SHA
+      - name: SNAPSHOT
+      - name: NWO
+      - name: BASE_BRANCH
+
+  - id: discover
+    depends: snapshot
+    action: human.task
+    with:
+      prompt: >-
+        Ejecuta una subagente por lente solicitada (${LENSES}), con un máximo de 8.
+        Diagnostica el snapshot de solo lectura ${steps.snapshot.outputs.SNAPSHOT},
+        aplica el contrato y la lente correspondiente de skills/discovery, y escribe
+        exactamente un objeto JSON por línea en
+        ${steps.snapshot.outputs.OUT_DIR}/findings-<lente>.jsonl. Un archivo vacío
+        representa cero hallazgos. SOURCE=${SOURCE}.
+
+  - id: check_findings
+    depends: discover
+    env:
+      - OUT_DIR: ${steps.snapshot.outputs.OUT_DIR}
+    run: |
+      set -euo pipefail
+      IFS=',' read -r -a lenses <<<"$LENSES"
+      for lens in "${lenses[@]}"; do
+        file="$OUT_DIR/findings-$lens.jsonl"
+        if test ! -f "$file"; then
+          printf '%s:1: rule=required-file\n' "$file" >&2
+          exit 1
+        fi
+        line_no=0
+        while IFS= read -r row || test -n "$row"; do
+          line_no=$((line_no + 1))
+          if ! jq -e --arg lens "$lens" '
+            type == "object" and
+            ((keys | sort) == (["id","lens","unit","location","criterion","severity","evidence","reproduce","status","verification"] | sort)) and
+            ([.id,.lens,.unit,.location,.criterion,.evidence,.reproduce,.verification] | all(type == "string" and length > 0)) and
+            .lens == $lens and
+            (.severity == "critica" or .severity == "alta" or .severity == "media" or .severity == "baja") and
+            (.status == "verificado" or .status == "sospechado")
+          ' >/dev/null 2>&1 <<<"$row"; then
+            printf '%s:%s: rule=findings-schema\n' "$file" "$line_no" >&2
+            exit 1
+          fi
+        done < "$file"
+        duplicate=$(jq -sr '
+          group_by(.id) | map(select(length > 1) | .[0].id) | first // empty
+        ' "$file")
+        if test -n "$duplicate"; then
+          duplicate_line=$(jq -sr --arg id "$duplicate" '
+            to_entries | map(select(.value.id == $id) | .key + 1) | .[1]
+          ' "$file")
+          printf '%s:%s: rule=unique-id\n' "$file" "$duplicate_line" >&2
+          exit 1
+        fi
+      done
+
+  - id: temporal
+    depends: check_findings
+    env:
+      - OUT_DIR: ${steps.snapshot.outputs.OUT_DIR}
+    run: |
+      set -euo pipefail
+      IFS=',' read -r -a lenses <<<"$LENSES"
+      for lens in "${lenses[@]}"; do
+        current="$OUT_DIR/findings-$lens.jsonl"
+        prior="$OUT_DIR/prior-$lens.jsonl"
+        prior_temporal="$OUT_DIR/prior-temporal-$lens.jsonl"
+        destination="$OUT_DIR/temporal-$lens.jsonl"
+        jq -nc --arg lens "$lens" \
+          --slurpfile current "$current" \
+          --slurpfile prior "$prior" \
+          --slurpfile prior_temporal "$prior_temporal" '
+          ($prior | map(.id)) as $prior_ids |
+          ($prior_temporal | map(select(.temporal == "resuelto") | .id)) as $resolved_ids |
+          (($current | sort_by(.id) | map(.id as $id |
+            {id:$id, lens:$lens,
+             temporal:(if ($resolved_ids | index($id)) != null then "regresion"
+                       elif ($prior_ids | index($id)) != null then "persistente"
+                       else "nuevo" end)})) +
+           ($prior | map(select(.id as $id | ($current | map(.id) | index($id)) == null)) |
+             sort_by(.id) | map({id:.id, lens:$lens, temporal:"resuelto"})))[]
+        ' > "$destination"
+      done
+
+  - id: validate
+    depends: temporal
+    action: human.task
+    with:
+      prompt: >-
+        Valida independientemente cada hallazgo actual de ${steps.snapshot.outputs.OUT_DIR}
+        y escribe ${steps.snapshot.outputs.OUT_DIR}/verdicts.jsonl. Debe haber un
+        veredicto por id actual. LIVE_TARGET=${LIVE_TARGET}; si está definido, la
+        comprobación en vivo es exclusivamente de lectura y se marca live=true.
+
+  - id: check_verdicts
+    depends: validate
+    env:
+      - OUT_DIR: ${steps.snapshot.outputs.OUT_DIR}
+    run: |
+      set -euo pipefail
+      file="$OUT_DIR/verdicts.jsonl"
+      if test ! -f "$file"; then
+        printf '%s:1: rule=required-file\n' "$file" >&2
+        exit 1
+      fi
+      line_no=0
+      while IFS= read -r row || test -n "$row"; do
+        line_no=$((line_no + 1))
+        if ! jq -e --arg live_target "$LIVE_TARGET" '
+          type == "object" and
+          ((keys | sort) == (["finding","verdict","basis","live"] | sort)) and
+          (.finding | type == "string" and length > 0) and
+          (.basis | type == "string" and length > 0) and
+          (.live | type == "boolean") and
+          (.verdict == "confirmado" or .verdict == "descartado") and
+          ((.live | not) or ($live_target | length > 0))
+        ' >/dev/null 2>&1 <<<"$row"; then
+          printf '%s:%s: rule=verdicts-schema\n' "$file" "$line_no" >&2
+          exit 1
+        fi
+      done < "$file"
+      current="$OUT_DIR/current-findings.jsonl"
+      : > "$current"
+      IFS=',' read -r -a lenses <<<"$LENSES"
+      for lens in "${lenses[@]}"; do cat "$OUT_DIR/findings-$lens.jsonl" >> "$current"; done
+      violation=$(jq -nr --slurpfile current "$current" --slurpfile verdicts "$file" '
+        ($current | map(.id)) as $ids |
+        first($verdicts | to_entries[] |
+          select((.value.finding as $id | $ids | index($id)) == null) |
+          "\(.key + 1)\tunknown-finding") //
+        first($verdicts | to_entries[] as $entry |
+          select([$verdicts[] | select(.finding == $entry.value.finding)] | length > 1) |
+          "\($entry.key + 1)\tduplicate-verdict") //
+        first($current[] | .id as $id |
+          select([$verdicts[] | select(.finding == $id)] | length == 0) |
+          "1\tmissing-verdict") // empty
+      ')
+      if test -n "$violation"; then
+        printf '%s:%s: rule=%s\n' "$file" "${violation%%$'\t'*}" "${violation#*$'\t'}" >&2
+        exit 1
+      fi
+
+  - id: consolidate
+    depends: check_verdicts
+    action: human.task
+    with:
+      prompt: >-
+        Consolida los hallazgos confirmados en unidades de trabajo autocontenidas y
+        escribe ${steps.snapshot.outputs.OUT_DIR}/units.jsonl. Cada unidad conserva
+        el linaje de ids en findings; cada confirmado aparece exactamente una vez.
+        El id de unidad debe ser estable y derivarse de los ids ordenados.
+
+  - id: check_units
+    depends: consolidate
+    env:
+      - OUT_DIR: ${steps.snapshot.outputs.OUT_DIR}
+    run: |
+      set -euo pipefail
+      file="$OUT_DIR/units.jsonl"
+      if test ! -f "$file"; then
+        printf '%s:1: rule=required-file\n' "$file" >&2
+        exit 1
+      fi
+      line_no=0
+      while IFS= read -r row || test -n "$row"; do
+        line_no=$((line_no + 1))
+        if ! jq -e '
+          type == "object" and
+          ((keys | sort) == (["id","title","body","classification","findings"] | sort)) and
+          ([.id,.title,.body] | all(type == "string" and length > 0)) and
+          (.classification == "defecto" or .classification == "mejora" or .classification == "duplicado") and
+          (.findings | type == "array" and length > 0 and all(type == "string" and length > 0) and length == (unique | length))
+        ' >/dev/null 2>&1 <<<"$row"; then
+          printf '%s:%s: rule=units-schema-and-lineage\n' "$file" "$line_no" >&2
+          exit 1
+        fi
+      done < "$file"
+      duplicate=$(jq -sr 'group_by(.id) | map(select(length > 1)) | first | .[1].id // empty' "$file")
+      if test -n "$duplicate"; then
+        duplicate_line=$(jq -sr --arg id "$duplicate" 'to_entries | map(select(.value.id == $id) | .key + 1) | .[1]' "$file")
+        printf '%s:%s: rule=unique-unit-id\n' "$file" "$duplicate_line" >&2
+        exit 1
+      fi
+      verdicts="$OUT_DIR/verdicts.jsonl"
+      violation=$(jq -nr --slurpfile verdicts "$verdicts" --slurpfile units "$file" '
+        ($verdicts | map(select(.verdict == "confirmado") | .finding)) as $confirmed |
+        first($units | to_entries[] as $unit | $unit.value.findings[] as $finding |
+          select(($confirmed | index($finding)) == null) |
+          "\($unit.key + 1)\tunknown-or-discarded-finding") //
+        first($units | to_entries[] as $unit | $unit.value.findings[] as $finding |
+          select([$units[].findings[] | select(. == $finding)] | length > 1) |
+          "\($unit.key + 1)\tduplicate-lineage") //
+        first($confirmed[] as $finding |
+          select([$units[].findings[] | select(. == $finding)] | length == 0) |
+          "1\tmissing-confirmed-finding") // empty
+      ')
+      if test -n "$violation"; then
+        printf '%s:%s: rule=%s\n' "$file" "${violation%%$'\t'*}" "${violation#*$'\t'}" >&2
+        exit 1
+      fi
+
+  - id: approve
+    depends: check_units
+    action: human.task
+    with:
+      prompt: >-
+        Revisa ${steps.snapshot.outputs.OUT_DIR}/units.jsonl. APPROVED acepta `all`
+        o una lista separada por comas de ids de unidad. Ninguna escritura en GitHub
+        ocurre antes de completar este formulario. Puedes devolver la tarea a
+        consolidate para corregir las unidades.
+      form:
+        type: object
+        additionalProperties: false
+        properties:
+          APPROVED:
+            type: string
+            minLength: 1
+        required: [APPROVED]
+      push_back:
+        rewind_to: consolidate
+
+  - id: materialize
+    depends: approve
+    env:
+      - APPROVED: ${steps.approve.outputs.APPROVED}
+      - OUT_DIR: ${steps.snapshot.outputs.OUT_DIR}
+      - NWO: ${steps.snapshot.outputs.NWO}
+    run: |
+      set -euo pipefail
+      units="$OUT_DIR/units.jsonl"
+      issues="$OUT_DIR/issues.jsonl"
+      if [[ "$APPROVED" == all ]]; then
+        jq -sc '.' "$units" > "$OUT_DIR/approved-units.json"
+      else
+        if [[ "$APPROVED" == *, || "$APPROVED" == ,* || "$APPROVED" == *,,* ]]; then
+          printf '%s:1: rule=approved-unit-list\n' "$units" >&2
+          exit 1
+        fi
+        jq -nr --arg approved "$APPROVED" '$approved / ","' > "$OUT_DIR/approved-ids.json"
+        if ! jq -sc --slurpfile ids "$OUT_DIR/approved-ids.json" '
+          . as $units | $ids[0] as $ids |
+          if ($ids | length) != ($ids | unique | length) then error("duplicate approved id")
+          elif any($ids[]; . as $id | ($units | map(.id) | index($id)) == null) then error("unknown approved id")
+          else [$ids[] as $id | $units[] | select(.id == $id)] end
+        ' "$units" > "$OUT_DIR/approved-units.json" 2>/dev/null; then
+          printf '%s:1: rule=approved-unit-list\n' "$units" >&2
+          exit 1
+        fi
+      fi
+      existing=$(gh issue list --repo "$NWO" --state all --limit 1000 --json number,body,url)
+      jq -e 'type == "array"' >/dev/null <<<"$existing"
+      tmp="$issues.tmp"
+      : > "$tmp"
+      index=0
+      while IFS= read -r unit; do
+        index=$((index + 1))
+        id=$(jq -er '.id' <<<"$unit")
+        marker="<!-- discovery-unit: $id -->"
+        matches=$(jq -c --arg marker "$marker" '[.[] | select((.body // "") | contains($marker))]' <<<"$existing")
+        count=$(jq 'length' <<<"$matches")
+        if test "$count" -gt 1; then
+          printf '%s:1: rule=unique-issue-marker unit=%s\n' "$issues" "$id" >&2
+          exit 1
+        elif test "$count" -eq 1; then
+          number=$(jq -er '.[0].number' <<<"$matches")
+          url=$(jq -er '.[0].url' <<<"$matches")
+          reused=true
+        else
+          body_file="$OUT_DIR/issue-body-$index.md"
+          { jq -r '.body' <<<"$unit"; printf '\n\n%s\n' "$marker"; } > "$body_file"
+          title=$(jq -er '.title' <<<"$unit")
+          url=$(gh issue create --repo "$NWO" --title "$title" --body-file "$body_file")
+          number=${url##*/}
+          [[ "$number" =~ ^[1-9][0-9]*$ ]]
+          reused=false
+          existing=$(jq -c --argjson number "$number" --arg url "$url" --arg body "$(cat "$body_file")" \
+            '. + [{number:$number,url:$url,body:$body}]' <<<"$existing")
+        fi
+        jq -nc --arg unit "$id" --argjson number "$number" --arg url "$url" --argjson reused "$reused" \
+          '{unit:$unit,number:$number,url:$url,reused:$reused}' >> "$tmp"
+      done < <(jq -c '.[]' "$OUT_DIR/approved-units.json")
+      mv "$tmp" "$issues"
+
+  - id: dispose
+    depends: materialize
+    env:
+      - OUT_DIR: ${steps.snapshot.outputs.OUT_DIR}
+      - NWO: ${steps.snapshot.outputs.NWO}
+    run: |
+      set -euo pipefail
+      repo=${NWO##*/}
+      jq -nc --slurpfile issues "$OUT_DIR/issues.jsonl" --slurpfile units "$OUT_DIR/units.jsonl" '
+        $issues[] as $issue | $units[] | select(.id == $issue.unit) |
+        {unit:.id,classification:.classification,number:$issue.number}
+      ' | while IFS= read -r row; do
+        classification=$(jq -r '.classification' <<<"$row")
+        if ! jq -ne --arg policy "$POLICY" --arg classification "$classification" \
+          '$policy / "," | index($classification) != null' >/dev/null; then
+          continue
+        fi
+        number=$(jq -r '.number' <<<"$row")
+        run_id="$repo-issue-$number"
+        if dagu status --run-id "$run_id" feature >/dev/null 2>&1; then
+          printf 'exists=%s issue=%s\n' "$run_id" "$number"
+        else
+          dagu enqueue --run-id "$run_id" "$PRIMARY/.workspace/dagu/dags/feature.yaml" -- \
+            ISSUE="$number" PRIMARY="$PRIMARY" BRANCH="dagu/issue-$number" PR_NUMBER="" \
+            OMP_SESSION_ID="$OMP_SESSION_ID"
+          printf 'enqueued=%s issue=%s\n' "$run_id" "$number"
+        fi
+      done
+      root=$(dirname "$OUT_DIR")
+      IFS=',' read -r -a lenses <<<"$LENSES"
+      for lens in "${lenses[@]}"; do
+        history="$root/lenses/$lens"
+        mkdir -p "$history"
+        install -m 0644 "$OUT_DIR/findings-$lens.jsonl" "$history/findings.jsonl"
+        install -m 0644 "$OUT_DIR/temporal-$lens.jsonl" "$history/temporal.jsonl"
+      done
+

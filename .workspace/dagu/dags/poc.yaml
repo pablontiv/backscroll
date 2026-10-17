@@ -1,7 +1,7 @@
-# dagu-feature-bundle: @a4s/omp-dagu@0.2.0 source=pablontiv/a4s@3654f1646aba40298a6cd7ade2812c91acf94a84 bootstrap=bootstrap-backscroll-v0-2-0 dagu=2.19.2
+# dagu-feature-bundle: @a4s/omp-dagu@0.3.10 source=pablontiv/a4s@85fe2c1040c24678d4026685d56e176e4f02e4dd bootstrap=bootstrap-backscroll-v0-3-10 dagu=2.20.1
 labels:
   - workspace=backscroll
-  - dagu-feature-bundle=0.2.0
+  - dagu-feature-bundle=0.3.10
 queue: backscroll
 type: graph
 dotenv: []
@@ -30,7 +30,7 @@ params:
 env:
   - RUN: ${context.run.id}
   - WORKTREE: ${PRIMARY}/.workspace/worktrees/poc-${RUN}
-  - DAGU_FEATURE_BUNDLE: "dagu-feature-bundle=0.2.0 source=pablontiv/a4s@3654f1646aba40298a6cd7ade2812c91acf94a84 bootstrap=bootstrap-backscroll-v0-2-0"
+  - DAGU_FEATURE_BUNDLE: "dagu-feature-bundle=0.3.10 source=pablontiv/a4s@85fe2c1040c24678d4026685d56e176e4f02e4dd bootstrap=bootstrap-backscroll-v0-3-10"
 steps:
   - id: record
     run: |
@@ -77,17 +77,49 @@ steps:
       test -n "$QUESTION"
       printf '%s\n' "$QUESTION" > "$STATE/question.txt"
 
-  - id: base
+  - id: detect_base_primary
     depends: record
     run: |
       set -euo pipefail
+      branch=$(git -C "$PRIMARY" branch --show-current)
+      status=$(git -C "$PRIMARY" status --porcelain --untracked-files=all)
+      if [[ "$branch" != "$BASE_BRANCH" ]]; then
+        reason="primary on ${branch:-detached HEAD}, expected $BASE_BRANCH"
+      elif [[ -n "$status" ]]; then
+        reason="primary dirty: ${status//$'\n'/; }"
+      else
+        reason=ready
+      fi
+      printf 'base: %s\n' "$reason" >&2
+      printf 'reason=%s\n' "$reason" >> "$DAGU_OUTPUT_FILE"
+    outputs:
+      - name: reason
+
+  - id: base_primary_unavailable
+    depends: detect_base_primary
+    continue_on: skipped
+    preconditions:
+      - condition: "${steps.detect_base_primary.outputs.reason}"
+        expected: "re:^primary "
+    action: human.task
+    with:
+      prompt: "base: ${steps.detect_base_primary.outputs.reason}. Restore ${PRIMARY} to clean ${BASE_BRANCH}, preserving the operator's changes; then push back this checkpoint with the observed iteration to recheck in the same run. The DAG records BASE_SHA and creates the worktree."
+      push_back:
+        rewind_to: detect_base_primary
+
+  - id: base
+    depends: base_primary_unavailable
+    run: |
+      set -euo pipefail
       printf '%s\n' "$DAGU_FEATURE_BUNDLE"
-      test "$(git -C "$PRIMARY" rev-parse --show-toplevel)" = "$PRIMARY"
+      primary_path=$(cd "$PRIMARY" && pwd -P)
+      primary_root=$(cd "$(git -C "$PRIMARY" rev-parse --show-toplevel)" && pwd -P)
+      test "$primary_root" = "$primary_path" || { printf 'base: PRIMARY %s resolves to %s, repository root is %s\n' "$PRIMARY" "$primary_path" "$primary_root" >&2; exit 1; }
       test "$(git -C "$PRIMARY" rev-parse --absolute-git-dir)" = "$(git -C "$PRIMARY" rev-parse --path-format=absolute --git-common-dir)"
       test "$(git -C "$PRIMARY" symbolic-ref --short HEAD)" = "$BASE_BRANCH"
       test -z "$(git -C "$PRIMARY" status --porcelain --untracked-files=all)"
-      git -C "$PRIMARY" fetch origin
-      git -C "$PRIMARY" merge --ff-only "origin/$BASE_BRANCH"
+      git -C "$PRIMARY" fetch origin || { printf 'base: fetch origin failed; restore origin access and recover this run\n' >&2; exit 1; }
+      git -C "$PRIMARY" merge --ff-only "origin/$BASE_BRANCH" || { printf 'base: ff-only failed; reconcile primary with origin/%s preserving commits, then recover this run\n' "$BASE_BRANCH" >&2; exit 1; }
       STATE=$(git -C "$PRIMARY" rev-parse --path-format=absolute --git-path "poc/runs/$RUN")
       git -C "$PRIMARY" rev-parse HEAD > "$STATE/base.sha"
       printf 'BASE_SHA=%s\n' "$(cat "$STATE/base.sha")" >> "$DAGU_OUTPUT_FILE"
@@ -299,8 +331,25 @@ handler_on:
       [[ "$RUN" =~ ^[A-Za-z0-9][A-Za-z0-9._-]*$ ]]
       WT="$PRIMARY/.workspace/worktrees/poc-$RUN"
       BRANCH="poc/$RUN"
-      if [[ -d "$WT" ]]; then git -C "$PRIMARY" worktree remove --force "$WT"; fi
+      WT_REAL="$WT"
+      if [[ -d "$WT" ]]; then
+        WT_REAL=$(cd "$WT" && pwd -P)
+        git -C "$PRIMARY" worktree remove "$WT_REAL"
+      fi
+      git -C "$PRIMARY" worktree prune
       if git -C "$PRIMARY" show-ref --verify --quiet "refs/heads/$BRANCH"; then
         git -C "$PRIMARY" branch -D "$BRANCH"
       fi
+      WORKTREE_LIST=$(git -C "$PRIMARY" worktree list --porcelain)
+      if [[ -e "$WT" || -e "$WT_REAL" ]] ||
+         grep -Fqx "worktree $WT" <<<"$WORKTREE_LIST" ||
+         grep -Fqx "worktree $WT_REAL" <<<"$WORKTREE_LIST"; then
+        printf 'cleanup failed: worktree %s remains\n' "$WT" >&2
+        exit 1
+      fi
+      if git -C "$PRIMARY" show-ref --verify --quiet "refs/heads/$BRANCH"; then
+        printf 'cleanup failed: branch %s remains\n' "$BRANCH" >&2
+        exit 1
+      fi
+      printf 'cleanup worktree=%s branch=%s\n' "$WT" "$BRANCH"
 
