@@ -1,7 +1,7 @@
-# dagu-feature-bundle: @a4s/omp-dagu@0.2.0 source=pablontiv/a4s@3654f1646aba40298a6cd7ade2812c91acf94a84 bootstrap=bootstrap-backscroll-v0-2-0 dagu=2.19.2
+# dagu-feature-bundle: @a4s/omp-dagu@0.3.10 source=pablontiv/a4s@85fe2c1040c24678d4026685d56e176e4f02e4dd bootstrap=bootstrap-backscroll-v0-3-10 dagu=2.20.1
 labels:
   - workspace=backscroll
-  - dagu-feature-bundle=0.2.0
+  - dagu-feature-bundle=0.3.10
 queue: backscroll
 type: graph
 dotenv: []
@@ -42,7 +42,7 @@ params:
 env:
   - WORKTREE: ${PRIMARY}/.workspace/worktrees/issue-${ISSUE}
   - RUN: ${context.run.id}
-  - DAGU_FEATURE_BUNDLE: "dagu-feature-bundle=0.2.0 source=pablontiv/a4s@3654f1646aba40298a6cd7ade2812c91acf94a84 bootstrap=bootstrap-backscroll-v0-2-0"
+  - DAGU_FEATURE_BUNDLE: "dagu-feature-bundle=0.3.10 source=pablontiv/a4s@85fe2c1040c24678d4026685d56e176e4f02e4dd bootstrap=bootstrap-backscroll-v0-3-10"
 steps:
   - id: triage
     action: human.task
@@ -249,8 +249,41 @@ steps:
           OMP_SESSION_ID="$OMP_SESSION_ID"
       fi
 
-  - id: start_gate
+  - id: detect_start_primary
     depends: triage_decision
+    preconditions:
+      - condition: "${steps.triage.outputs.POC}"
+        expected: "no"
+    run: |
+      set -euo pipefail
+      branch=$(git -C "$PRIMARY" branch --show-current)
+      status=$(git -C "$PRIMARY" status --porcelain)
+      if [[ "$branch" != "$BASE_BRANCH" ]]; then
+        reason="primary on ${branch:-detached HEAD}, expected $BASE_BRANCH"
+      elif [[ -n "$status" ]]; then
+        reason="primary dirty: ${status//$'\n'/; }"
+      else
+        reason=ready
+      fi
+      printf 'start_gate: %s\n' "$reason" >&2
+      printf 'reason=%s\n' "$reason" >> "$DAGU_OUTPUT_FILE"
+    outputs:
+      - name: reason
+
+  - id: start_primary_unavailable
+    depends: detect_start_primary
+    continue_on: skipped
+    preconditions:
+      - condition: "${steps.detect_start_primary.outputs.reason}"
+        expected: "re:^primary "
+    action: human.task
+    with:
+      prompt: "start_gate: ${steps.detect_start_primary.outputs.reason}. Restore ${PRIMARY} to clean ${BASE_BRANCH}, preserving the operator's changes; then push back this checkpoint with the observed iteration to recheck in the same run. start_gate creates the worktree."
+      push_back:
+        rewind_to: detect_start_primary
+
+  - id: start_gate
+    depends: start_primary_unavailable
     env:
       - POC: ${steps.triage.outputs.POC}
     preconditions:
@@ -262,15 +295,19 @@ steps:
       umask 0022
       test -n "$PRIMARY"
       test -n "$GATE" && test -n "$REQUIRED_CHECK"
-      test "$(git -C "$PRIMARY" rev-parse --show-toplevel)" = "$PRIMARY"
+      primary_path=$(cd "$PRIMARY" && pwd -P)
+      primary_root=$(cd "$(git -C "$PRIMARY" rev-parse --show-toplevel)" && pwd -P)
+      test "$primary_root" = "$primary_path" || { printf 'start_gate: PRIMARY %s resolves to %s, repository root is %s\n' "$PRIMARY" "$primary_path" "$primary_root" >&2; exit 1; }
       test "$(git -C "$PRIMARY" rev-parse --absolute-git-dir)" = "$(git -C "$PRIMARY" rev-parse --path-format=absolute --git-common-dir)"
       git -C "$PRIMARY" check-ignore -q "$WORKTREE"
       test "$(git -C "$PRIMARY" branch --show-current)" = "$BASE_BRANCH"
       test -z "$(git -C "$PRIMARY" status --porcelain)"
-      git -C "$PRIMARY" fetch origin
-      git -C "$PRIMARY" merge --ff-only "origin/$BASE_BRANCH"
+      git -C "$PRIMARY" fetch origin || { printf 'start_gate: fetch origin failed; restore origin access and recover this run\n' >&2; exit 1; }
+      git -C "$PRIMARY" merge --ff-only "origin/$BASE_BRANCH" || { printf 'start_gate: ff-only failed; reconcile primary with origin/%s preserving commits, then recover this run\n' "$BASE_BRANCH" >&2; exit 1; }
       if test -e "$WORKTREE"; then
-        test "$(git -C "$WORKTREE" rev-parse --show-toplevel)" = "$WORKTREE"
+        worktree_path=$(cd "$WORKTREE" && pwd -P)
+        worktree_root=$(cd "$(git -C "$WORKTREE" rev-parse --show-toplevel)" && pwd -P)
+        test "$worktree_root" = "$worktree_path" || { printf 'start_gate: WORKTREE %s resolves to %s, repository root is %s\n' "$WORKTREE" "$worktree_path" "$worktree_root" >&2; exit 1; }
         test "$(git -C "$WORKTREE" branch --show-current)" = "$BRANCH"
         test -z "$(git -C "$WORKTREE" status --porcelain)"
       elif git -C "$PRIMARY" show-ref --verify --quiet "refs/heads/$BRANCH"; then
@@ -403,7 +440,13 @@ steps:
       umask 0022
       cd "$WORKTREE"
       env -u GH_TOKEN -u GITHUB_TOKEN bash -euo pipefail -c "$GATE"
-      test -z "$(git status --porcelain)"
+      status=$(git status --porcelain)
+      if [[ -n "$status" ]]; then
+        printf 'gate: worktree %s has changes after GATE:\n' "$WORKTREE" >&2
+        printf '%s\n' "$status" >&2
+        git diff --stat >&2
+        exit 1
+      fi
       printf 'tested_sha=%s\n' "$(git rev-parse HEAD)"
 
   - id: push
@@ -435,10 +478,23 @@ steps:
       cd "$WORKTREE"
       sha=$(git rev-parse HEAD)
       pr_ref=${PR_NUMBER:-$BRANCH}
-      test "$(gh pr view "$pr_ref" --json headRefOid --jq .headRefOid)" = "$sha"
-      gh pr merge "$pr_ref" --auto --squash --match-head-commit "$sha"
-      printf 'pr=%s\nhead_sha=%s\n' \
-        "$(gh pr view "$pr_ref" --json number --jq .number)" "$sha"
+      observation=$(gh pr view "$pr_ref" --json state,mergeStateStatus,autoMergeRequest,mergeCommit,headRefOid)
+      test "$(jq -r '.headRefOid' <<< "$observation")" = "$sha"
+      merge_body=$(printf 'Closes #%s\n\n%s' "$ISSUE" "$(git log -1 --format=%b "$sha")")
+      if test "$(jq -r '.state' <<< "$observation")" = MERGED; then
+        jq -e '.mergeCommit.oid | type == "string" and length > 0' <<< "$observation" >/dev/null
+      elif jq -e '.autoMergeRequest != null' <<< "$observation" >/dev/null; then
+        :
+      else
+        case "$(jq -r '.mergeStateStatus' <<< "$observation")" in
+          CLEAN) gh pr merge "$pr_ref" --squash --match-head-commit "$sha" --body "$merge_body" ;;
+          BEHIND|BLOCKED|UNSTABLE|DIRTY|UNKNOWN)
+            gh pr merge "$pr_ref" --auto --squash --match-head-commit "$sha" --body "$merge_body" ;;
+          *) printf 'Unexpected PR merge state: %s\n' "$observation" >&2; exit 1 ;;
+        esac
+      fi
+      pr_number=$(gh pr view "$pr_ref" --json number --jq .number)
+      printf 'pr=%s\nhead_sha=%s\n' "$pr_number" "$sha"
 
   - id: await_merge
     depends: auto_merge
@@ -448,26 +504,59 @@ steps:
       push_back:
         rewind_to: rebase
 
-  - id: close_gate
+  - id: detect_close_primary
     depends: await_merge
+    run: |
+      set -euo pipefail
+      branch=$(git -C "$PRIMARY" branch --show-current)
+      status=$(git -C "$PRIMARY" status --porcelain)
+      if [[ "$branch" != "$BASE_BRANCH" ]]; then
+        reason="primary on ${branch:-detached HEAD}, expected $BASE_BRANCH"
+      elif [[ -n "$status" ]]; then
+        reason="primary dirty: ${status//$'\n'/; }"
+      else
+        reason=ready
+      fi
+      printf 'close_gate: %s\n' "$reason" >&2
+      printf 'reason=%s\n' "$reason" >> "$DAGU_OUTPUT_FILE"
+    outputs:
+      - name: reason
+
+  - id: close_primary_unavailable
+    depends: detect_close_primary
+    continue_on: skipped
+    preconditions:
+      - condition: "${steps.detect_close_primary.outputs.reason}"
+        expected: "re:^primary "
+    action: human.task
+    with:
+      prompt: "close_gate: ${steps.detect_close_primary.outputs.reason}. Restore ${PRIMARY} to clean ${BASE_BRANCH}, preserving the operator's changes; then push back this checkpoint with the observed iteration to recheck in the same run. close_gate removes the worktree."
+      push_back:
+        rewind_to: detect_close_primary
+
+  - id: close_gate
+    depends: [await_merge, close_primary_unavailable]
     run: |
       set -euo pipefail
       umask 0022
       fail() { printf 'close_gate: %s\n' "$*" >&2; exit 1; }
-      cd "$WORKTREE"
-      sha=$(git rev-parse HEAD)
+      repo=$(git -C "$PRIMARY" remote get-url origin) ||
+        fail "PRIMARY $PRIMARY origin lookup failed, expected repository"
       pr_ref=${PR_NUMBER:-$BRANCH}
-      if ! pr=$(gh pr view "$pr_ref" --json number --jq .number); then
+      if ! pr=$(gh pr view "$pr_ref" --repo "$repo" --json number --jq .number); then
         fail "PR lookup for $pr_ref failed, expected PR number"
       fi
       [[ -n "$pr" ]] || fail "PR lookup for $pr_ref returned empty, expected PR number"
-      state=$(gh pr view "$pr" --json state --jq .state) ||
+      state=$(gh pr view "$pr" --repo "$repo" --json state --jq .state) ||
         fail "PR #$pr state lookup failed, expected MERGED"
       [[ "$state" == MERGED ]] || fail "PR #$pr state=$state, expected MERGED"
-      head_sha=$(gh pr view "$pr" --json headRefOid --jq .headRefOid) ||
-        fail "PR #$pr headRefOid lookup failed, expected $sha"
-      [[ "$head_sha" == "$sha" ]] || fail "PR #$pr headRefOid=$head_sha, expected $sha"
-      check_state=$(gh pr checks "$pr" --required --json name,state \
+      tested_sha=$(gh pr view "$pr" --repo "$repo" --json headRefOid --jq .headRefOid) ||
+        fail "PR #$pr headRefOid lookup failed, expected tested SHA"
+      branch_sha=$(git -C "$PRIMARY" rev-parse "refs/heads/$BRANCH") ||
+        fail "local branch $BRANCH lookup failed, expected $tested_sha"
+      [[ "$branch_sha" == "$tested_sha" ]] ||
+        fail "local branch $BRANCH SHA=$branch_sha, expected $tested_sha"
+      check_state=$(gh pr checks "$pr" --repo "$repo" --required --json name,state \
         --jq 'map(select(.name == env.REQUIRED_CHECK)) | if length == 0 then "MISSING" else .[0].state end') ||
         fail "required check $REQUIRED_CHECK lookup failed, expected SUCCESS"
       [[ "$check_state" == SUCCESS ]] ||
@@ -493,7 +582,50 @@ steps:
         fail "origin/$BASE_BRANCH lookup failed, expected commit SHA"
       [[ "$base_sha" == "$origin_base_sha" ]] ||
         fail "PRIMARY $PRIMARY HEAD=$base_sha, expected $origin_base_sha"
-      printf 'pr=%s\ntested_sha=%s\nbase_sha=%s\n' "$pr" "$sha" "$base_sha"
+      worktree_real=$(cd "$WORKTREE" && pwd -P) ||
+        fail "worktree $WORKTREE canonicalization failed, expected directory"
+      git -C "$PRIMARY" worktree remove "$worktree_real" ||
+        fail "worktree $WORKTREE removal failed, expected removed"
+      git -C "$PRIMARY" worktree prune ||
+        fail "worktree prune failed, expected success"
+      git -C "$PRIMARY" branch -D "$BRANCH" ||
+        fail "local branch $BRANCH removal failed, expected removed"
+      git -C "$PRIMARY" fetch --prune origin ||
+        fail "origin prune failed, expected success"
+      remote=absent
+      if git -C "$PRIMARY" show-ref --verify --quiet "refs/remotes/origin/$BRANCH"; then
+        git -C "$PRIMARY" push origin --delete "$BRANCH" ||
+          fail "remote branch $BRANCH deletion failed, expected removed"
+        remote=deleted
+      fi
+      git -C "$PRIMARY" fetch --prune origin ||
+        fail "origin final prune failed, expected success"
+      worktree_list=$(git -C "$PRIMARY" worktree list --porcelain) ||
+        fail "worktree list failed, expected readable"
+      if [[ -e "$WORKTREE" || -e "$worktree_real" ]] ||
+         grep -Fqx "worktree $WORKTREE" <<<"$worktree_list" ||
+         grep -Fqx "worktree $worktree_real" <<<"$worktree_list"; then
+        fail "worktree $WORKTREE remains, expected removed"
+      fi
+      if git -C "$PRIMARY" show-ref --verify --quiet "refs/heads/$BRANCH"; then
+        fail "local branch $BRANCH remains, expected removed"
+      fi
+      if git -C "$PRIMARY" show-ref --verify --quiet "refs/remotes/origin/$BRANCH"; then
+        fail "remote branch $BRANCH remains, expected removed"
+      fi
+      primary_branch=$(git -C "$PRIMARY" branch --show-current) ||
+        fail "PRIMARY $PRIMARY final branch lookup failed, expected $BASE_BRANCH"
+      [[ "$primary_branch" == "$BASE_BRANCH" ]] ||
+        fail "PRIMARY $PRIMARY on branch $primary_branch, expected $BASE_BRANCH"
+      primary_status=$(git -C "$PRIMARY" status --porcelain) ||
+        fail "PRIMARY $PRIMARY final status lookup failed, expected clean"
+      [[ -z "$primary_status" ]] || fail "PRIMARY $PRIMARY has local changes, expected clean"
+      base_sha=$(git -C "$PRIMARY" rev-parse HEAD) ||
+        fail "PRIMARY $PRIMARY final HEAD lookup failed, expected $origin_base_sha"
+      [[ "$base_sha" == "$origin_base_sha" ]] ||
+        fail "PRIMARY $PRIMARY HEAD=$base_sha, expected $origin_base_sha"
+      printf 'pr=%s\ntested_sha=%s\nbase_sha=%s\ncleanup worktree=%s branch=%s remote=%s\n' \
+        "$pr" "$tested_sha" "$base_sha" "$WORKTREE" "$BRANCH" "$remote"
 
 handler_on:
   wait:
@@ -542,7 +674,7 @@ handler_on:
           elif git -C "$PRIMARY" show-ref --verify --quiet "refs/remotes/origin/$BASE_BRANCH" &&
                git -C "$PRIMARY" merge-base --is-ancestor "$head" "origin/$BASE_BRANCH"; then
             published=true
-          elif pr=$(cd "$PRIMARY" && gh pr view "$pr_ref" --json state,headRefOid 2>/dev/null) &&
+          elif pr=$(gh pr view "$pr_ref" --repo "$(git -C "$PRIMARY" remote get-url origin)" --json state,headRefOid) &&
                [[ "$(jq -r '.state // empty' <<<"$pr")" == MERGED ]] &&
                [[ "$(jq -r '.headRefOid // empty' <<<"$pr")" == "$head" ]]; then
             published=true
