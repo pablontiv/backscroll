@@ -3,6 +3,8 @@ package readers
 import (
 	"context"
 	"encoding/json"
+	"fmt"
+	"strconv"
 	"strings"
 	"time"
 
@@ -12,12 +14,11 @@ import (
 )
 
 // PiReader implements SessionReader for Pi agent JSONL sessions.
-// It captures text and toolCall inputs from `message` records, and tool
-// results from separate `custom` records.
+// It captures text, native tool calls/results, and legacy custom output.
 type PiReader struct{}
 
 func (r *PiReader) Name() string           { return "pi" }
-func (r *PiReader) IngestionEpoch() uint64 { return 1 }
+func (r *PiReader) IngestionEpoch() uint64 { return 2 }
 
 func (r *PiReader) Discover(ctx context.Context, def input_config.InputDefinition) ([]string, error) {
 	return input_config.DiscoverFilesContext(ctx, def.Discover)
@@ -28,6 +29,7 @@ func (r *PiReader) Hash(ctx context.Context, path string) (string, error) {
 }
 
 type piRecord struct {
+	ID         string          `json:"id"`
 	Type       json.RawMessage `json:"type"`
 	RecordType json.RawMessage `json:"recordType"`
 	Timestamp  string          `json:"timestamp"`
@@ -38,12 +40,15 @@ type piRecord struct {
 }
 
 type piMessage struct {
-	Role    string          `json:"role"`
-	Content json.RawMessage `json:"content"`
+	Role       string          `json:"role"`
+	Content    json.RawMessage `json:"content"`
+	ToolCallID string          `json:"toolCallId"`
+	IsError    *bool           `json:"isError"`
 }
 
 type piBlock struct {
 	Type      string          `json:"type"`
+	ID        string          `json:"id"`
 	Text      string          `json:"text"`
 	Name      string          `json:"name"`
 	Arguments json.RawMessage `json:"arguments"`
@@ -60,6 +65,9 @@ func (r *PiReader) Parse(ctx context.Context, path string, def input_config.Inpu
 
 	var msgs []models.Message
 	var cwd string
+	var sessionID string
+	calls := make(map[string]int)
+	var results []piResultSignal
 	indexReasoning := def.Decode.IndexReasoning
 	err = sync.IterateJSONLFileContext(ctx, path, func(_ int, line []byte) error {
 		var rec piRecord
@@ -73,15 +81,40 @@ func (r *PiReader) Parse(ctx context.Context, path string, def input_config.Inpu
 		if !ok {
 			return nil
 		}
+		if recordType == "session" && sessionID == "" {
+			sessionID = rec.ID
+		}
 		switch recordType {
 		case "message":
+			if rec.Message != nil && rec.Message.Role == "toolResult" {
+				result := piResultSignal{callID: rec.Message.ToolCallID, isError: rec.Message.IsError}
+				body := SerializeToolOutput(rec.Message.Content)
+				if strings.TrimSpace(body) != "" {
+					result.index = len(msgs)
+					msgs = append(msgs, models.Message{
+						Role: "tool", Origin: models.OriginAutomation, Content: body,
+						ContentType: "tool", Timestamp: piTimestamp(rec.Timestamp),
+						UUID: piRecordIdentity(rec.ID, "result"), ToolUseID: result.callID, IsError: result.isError,
+					})
+				} else {
+					result.index = -1
+				}
+				results = append(results, result)
+				return nil
+			}
 			extracted, err := extractPiMessages(ctx, rec, indexReasoning)
 			if err != nil {
 				return err
 			}
+			for i := range extracted {
+				if extracted[i].ToolUseID != "" {
+					calls[extracted[i].ToolUseID] = len(msgs) + i
+				}
+			}
 			msgs = append(msgs, extracted...)
 		case "custom":
 			if m, ok := extractPiCustom(rec); ok {
+				m.UUID = piRecordIdentity(rec.ID, "custom")
 				msgs = append(msgs, m)
 			}
 		}
@@ -91,7 +124,48 @@ func (r *PiReader) Parse(ctx context.Context, path string, def input_config.Inpu
 		return models.ParsedFile{}, err
 	}
 
+	// Pair native signals independently of content serialization and physical
+	// adjacency, including empty and out-of-order results.
+	for _, result := range results {
+		if idx, ok := calls[result.callID]; ok && result.callID != "" {
+			if result.isError != nil {
+				msgs[idx].IsError = result.isError
+			}
+			if result.index >= 0 {
+				msgs[result.index].SearchEcho = msgs[idx].SearchEcho
+			}
+		}
+	}
+	// Legacy files without a native session ID retain snapshot semantics.
+	// Identified sessions require complete identities, so an incomplete replay
+	// fails before storage can silently skip UUID-less rows.
+	identified := sessionID != ""
+	for _, msg := range msgs {
+		if identified && msg.UUID == "" {
+			return models.ParsedFile{}, fmt.Errorf("pi: native session %q has a message without native identity", sessionID)
+		}
+	}
+	for i := range msgs {
+		if identified {
+			msgs[i].UUID = "pi:" + sessionID + ":" + msgs[i].UUID
+		} else {
+			msgs[i].UUID = ""
+		}
+	}
 	return models.ParsedFile{Path: path, Hash: hash, Records: msgs, Cwd: cwd}, nil
+}
+
+type piResultSignal struct {
+	callID  string
+	isError *bool
+	index   int
+}
+
+func piRecordIdentity(id, suffix string) string {
+	if id == "" {
+		return ""
+	}
+	return "entry:" + id + "#" + suffix
 }
 
 // piEnvelopeType resolves the record discriminator. The legacy type field owns
@@ -158,7 +232,7 @@ func extractPiMessages(ctx context.Context, rec piRecord, indexReasoning bool) (
 		if text == "" {
 			return nil, nil
 		}
-		return []models.Message{{Role: role, Origin: piMessageOrigin(role), Content: text, ContentType: classifyText(text), Timestamp: ts}}, nil
+		return []models.Message{{Role: role, Origin: piMessageOrigin(role), Content: text, ContentType: classifyText(text), Timestamp: ts, UUID: piRecordIdentity(rec.ID, "text")}}, nil
 	}
 
 	// content as an array of blocks
@@ -168,7 +242,7 @@ func extractPiMessages(ctx context.Context, rec piRecord, indexReasoning bool) (
 	}
 	var out []models.Message
 	var textParts []string
-	for _, b := range blocks {
+	for i, b := range blocks {
 		if err := ctx.Err(); err != nil {
 			return nil, err
 		}
@@ -179,12 +253,20 @@ func extractPiMessages(ctx context.Context, rec piRecord, indexReasoning bool) (
 			}
 		case "toolCall":
 			if t := SerializeToolInput(b.Name, b.Arguments); strings.TrimSpace(t) != "" {
-				out = append(out, models.Message{Role: role, Origin: models.OriginAssistant, Content: t, ContentType: "tool", Timestamp: ts,
-					SearchEcho: isDirectSearchInput(b.Name, b.Arguments)})
+				m := models.Message{Role: role, Origin: models.OriginAssistant, Content: t, ContentType: "tool", Timestamp: ts,
+					ToolName: b.Name, ToolUseID: b.ID, CommandHead: commandHead(b.Arguments),
+					SearchEcho: isDirectSearchInput(b.Name, b.Arguments)}
+				if b.ID != "" {
+					m.UUID = "call:" + b.ID
+				} else {
+					m.UUID = piRecordIdentity(rec.ID, "call:"+strconv.Itoa(i))
+				}
+				out = append(out, m)
 			}
 		case "thinking":
 			if indexReasoning {
 				if m := extractPiReasoning(b, ts); m != nil {
+					m.UUID = piRecordIdentity(rec.ID, "thinking:"+strconv.Itoa(i))
 					out = append(out, *m)
 				}
 			}
@@ -192,7 +274,7 @@ func extractPiMessages(ctx context.Context, rec piRecord, indexReasoning bool) (
 	}
 	if len(textParts) > 0 {
 		text := strings.TrimSpace(strings.Join(textParts, " "))
-		out = append([]models.Message{{Role: role, Origin: piMessageOrigin(role), Content: text, ContentType: classifyText(text), Timestamp: ts}}, out...)
+		out = append([]models.Message{{Role: role, Origin: piMessageOrigin(role), Content: text, ContentType: classifyText(text), Timestamp: ts, UUID: piRecordIdentity(rec.ID, "text")}}, out...)
 	}
 	return out, nil
 }

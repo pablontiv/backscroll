@@ -205,6 +205,13 @@ Plans and external Markdown documents are also declared as inputs. Use `decode.f
 
 Backscroll stores a content hash or reader watermark plus a versioned ingestion-semantics fingerprint for each indexed input. Unchanged files are skipped on later startup syncs only while the decoder epoch, format, source, and reasoning option also match. Available semantic mismatches share the 200-path bounded replay queue; unavailable sources remain untouched. OpenCode is the exception to the file-metadata shortcut: its SQLite watermark is queried on every owner sync because WAL commits may not change `opencode.db` itself. Files with stable message UUIDs are updated append-only; legacy or UUID-less inputs retain wipe-and-reload behavior while the source exists.
 
+Pi reader epoch 2 captures native tool events and result signals when an
+unchanged source is replayed. Native session/entry/call identities use canonical
+UUID reconciliation and allow a later result to enrich its original call.
+Legacy Pi sources without a native session ID keep snapshot semantics.
+Unavailable sources keep their existing rows and fingerprint; their missing
+native metadata remains unknown.
+
 Startup coordination uses owner/follower branches: snapshot-read, metadata-read, and mutation owners acquire the canonical lock and perform prepare/migrate/sync before the handler runs; a remediation owner acquires and retains the same mutation-grade lock but bypasses ordinary compatible-open and pre-handler sync; a read-safe follower validates the existing database read-only and continues on a compatible snapshot; metadata-read followers avoid opening the database; mutation and remediation followers wait up to five seconds for ownership or fail retryably with `sync_in_progress`. WAL snapshot followers remain compatible only on the same local host.
 
 The SQLite database is the perennial event store, not a disposable cache. When a source file expires, its indexed rows remain available; the perennial store has no deletion path.
