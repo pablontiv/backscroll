@@ -161,7 +161,8 @@ func TestQueryContextRecordsTreatsDuplicateUUIDDefensively(t *testing.T) {
 			id INTEGER PRIMARY KEY,
 			uuid TEXT,
 			source_path TEXT NOT NULL,
-			ordinal INTEGER NOT NULL
+			ordinal INTEGER NOT NULL,
+			session_id TEXT
 		);
 		INSERT INTO search_items (id, uuid, source_path, ordinal) VALUES
 			(1, 'duplicate-uuid', '/one', 1),

@@ -19,6 +19,7 @@ func TestContextFormatsGoldenAndStructuralFields(t *testing.T) {
 	records := []storage.ContextRecord{{
 		UUID:        nil,
 		SourcePath:  "/tmp/chat\none",
+		Project:     "historical-project",
 		Ordinal:     7,
 		Role:        "assistant",
 		Origin:      models.OriginAutomation,
@@ -653,5 +654,28 @@ func assertContextDiagnostic(t *testing.T, err error, stdout, stderr, code strin
 	}
 	if diagnostic.Code != code {
 		t.Fatalf("diagnostic code = %q, want %q", diagnostic.Code, code)
+	}
+}
+
+func TestContextRecordProjectRequiresNativeSession(t *testing.T) {
+	for _, session := range []string{"", "native-session"} {
+		record := storage.ContextRecord{SessionID: session, Project: "legacy-project", Text: "body", Anchor: true}
+		output := contextOutputRecord(record)
+		encoded, err := json.Marshal(output)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if strings.Contains(string(encoded), `"project"`) != (session != "") {
+			t.Fatalf("session=%q output=%s", session, encoded)
+		}
+		for _, format := range []outputMode{outputJSON, outputText, outputRobot} {
+			payload, fits, err := contextSuccessfulPayloadWithinBudget([]storage.ContextRecord{record}, format, contextMaxMaxTokens)
+			if err != nil || !fits {
+				t.Fatalf("format=%v fits=%v err=%v", format, fits, err)
+			}
+			if strings.Contains(string(payload), "legacy-project") != (session != "") {
+				t.Fatalf("session=%q format=%v payload=%s", session, format, payload)
+			}
+		}
 	}
 }

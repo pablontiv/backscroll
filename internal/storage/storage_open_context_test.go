@@ -318,8 +318,8 @@ func TestOpenWrapperMatchesOpenContext(t *testing.T) {
 		if err := db.DB().QueryRow(`SELECT COUNT(*) FROM schema_migrations`).Scan(&versions); err != nil {
 			t.Fatalf("%s migration count: %v", label, err)
 		}
-		if versions != 19 {
-			t.Fatalf("%s migration count = %d, want 19", label, versions)
+		if versions != 20 {
+			t.Fatalf("%s migration count = %d, want 20", label, versions)
 		}
 	}
 }

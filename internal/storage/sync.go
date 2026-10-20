@@ -9,6 +9,7 @@ import (
 
 	"github.com/pablontiv/backscroll/internal/corrections"
 	"github.com/pablontiv/backscroll/internal/models"
+	"github.com/pablontiv/backscroll/internal/tagging"
 	"github.com/pablontiv/backscroll/internal/templates"
 )
 
@@ -20,6 +21,10 @@ const CurrentExtractionVersion = 3
 
 // IndexedMessage represents a message to be indexed.
 type IndexedMessage struct {
+	SessionID       string
+	Project         string
+	ProjectEvidence string
+
 	Ordinal     int
 	Role        string
 	Origin      models.MessageOrigin
@@ -59,6 +64,10 @@ type IndexedFile struct {
 // without relying on INSERT conflict handling.
 func validateSyncUUIDs(ctx context.Context, tx *sql.Tx, files []IndexedFile) (map[string]bool, error) {
 	seen := make(map[string]string)
+	type incomingOwnership struct{ session, project, evidence string }
+	incoming := make(map[string]incomingOwnership)
+	type sessionKey struct{ path, session string }
+	nativeProjects := make(map[sessionKey]string)
 	for _, file := range files {
 		if err := ctx.Err(); err != nil {
 			return nil, err
@@ -67,6 +76,23 @@ func validateSyncUUIDs(ctx context.Context, tx *sql.Tx, files []IndexedFile) (ma
 			if err := ctx.Err(); err != nil {
 				return nil, err
 			}
+			if message.SessionID != "" && message.ProjectEvidence == "native_cwd" {
+				key := sessionKey{file.SourcePath, message.SessionID}
+				if project, seen := nativeProjects[key]; seen {
+					if project != message.Project {
+						return nil, fmt.Errorf("session %q contradicts incoming native project ownership", message.SessionID)
+					}
+				} else {
+					var conflict bool
+					if err := tx.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM search_items WHERE source_path=? AND session_id=? AND project_evidence='native_cwd' AND project IS NOT ?)`, file.SourcePath, message.SessionID, message.Project).Scan(&conflict); err != nil {
+						return nil, err
+					}
+					if conflict {
+						return nil, fmt.Errorf("session %q contradicts retained native project ownership", message.SessionID)
+					}
+					nativeProjects[key] = message.Project
+				}
+			}
 			if message.UUID == "" {
 				continue
 			}
@@ -74,6 +100,7 @@ func validateSyncUUIDs(ctx context.Context, tx *sql.Tx, files []IndexedFile) (ma
 				return nil, fmt.Errorf("duplicate UUID %q in sync batch (source paths %q and %q)", message.UUID, firstPath, file.SourcePath)
 			}
 			seen[message.UUID] = file.SourcePath
+			incoming[message.UUID] = incomingOwnership{message.SessionID, message.Project, message.ProjectEvidence}
 		}
 	}
 
@@ -82,8 +109,8 @@ func validateSyncUUIDs(ctx context.Context, tx *sql.Tx, files []IndexedFile) (ma
 		if err := ctx.Err(); err != nil {
 			return nil, err
 		}
-		var owner string
-		err := tx.QueryRowContext(ctx, `SELECT source_path FROM search_items WHERE uuid = ?`, uuid).Scan(&owner)
+		var owner, session, project, evidence string
+		err := tx.QueryRowContext(ctx, `SELECT source_path,COALESCE(session_id,''),COALESCE(project,''),COALESCE(project_evidence,'') FROM search_items WHERE uuid = ?`, uuid).Scan(&owner, &session, &project, &evidence)
 		switch {
 		case err == sql.ErrNoRows:
 		case err != nil:
@@ -91,6 +118,13 @@ func validateSyncUUIDs(ctx context.Context, tx *sql.Tx, files []IndexedFile) (ma
 		case owner != sourcePath:
 			return nil, fmt.Errorf("UUID %q belongs to source_path %q, not %q", uuid, owner, sourcePath)
 		default:
+			m := incoming[uuid]
+			if session != "" && m.session != "" && session != m.session {
+				return nil, fmt.Errorf("UUID %q contradicts retained session ownership", uuid)
+			}
+			if m.session != "" && m.evidence == "native_cwd" && evidence == "native_cwd" && project != m.project {
+				return nil, fmt.Errorf("UUID %q contradicts retained native project ownership", uuid)
+			}
 			existing[uuid] = true
 		}
 
@@ -289,7 +323,9 @@ func (d *Database) SyncFilesContext(ctx context.Context, files []IndexedFile) (r
 		// SQLite's UNIQUE constraint allows multiple NULLs but not multiple "".
 		// For perennial files, skip messages without UUIDs (flap guard: don't
 		// introduce uuid-less rows into a perennial file).
+		hasNativeSession := false
 		for _, msg := range file.Messages {
+			hasNativeSession = hasNativeSession || msg.SessionID != ""
 			if err := ctx.Err(); err != nil {
 				return err
 			}
@@ -298,6 +334,10 @@ func (d *Database) SyncFilesContext(ctx context.Context, files []IndexedFile) (r
 				continue
 			}
 
+			project, evidence := file.Project, file.ProjectEvidence
+			if msg.SessionID != "" {
+				project, evidence = msg.Project, msg.ProjectEvidence
+			}
 			origin := normalizedOrigin(msg.Origin)
 			if err := rejectConflictingOrigin(ctx, tx, msg.UUID, origin); err != nil {
 				return fmt.Errorf("validate message origin for %s: %w", file.SourcePath, err)
@@ -318,8 +358,8 @@ func (d *Database) SyncFilesContext(ctx context.Context, files []IndexedFile) (r
 			if !perennial || msg.UUID == "" || !existingUUIDs[msg.UUID] {
 				_, err := tx.ExecContext(ctx, `
 					INSERT INTO search_items
-					(source, source_path, ordinal, role, origin, text, timestamp, uuid, project, content_type, extraction_version, was_interrupted, search_echo, origin_version, project_evidence)
-					VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+					(source, source_path, ordinal, role, origin, text, timestamp, uuid, project, content_type, extraction_version, was_interrupted, search_echo, origin_version, project_evidence, session_id)
+					VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 				`,
 					file.Source,
 					file.SourcePath,
@@ -329,13 +369,14 @@ func (d *Database) SyncFilesContext(ctx context.Context, files []IndexedFile) (r
 					msg.Text,
 					timestampVal,
 					uuidVal,
-					file.Project,
+					project,
 					msg.ContentType,
 					msg.ExtractionVersion,
 					msg.WasInterrupted,
 					msg.SearchEcho,
 					CurrentOriginVersion,
-					projectEvidence(file.ProjectEvidence),
+					projectEvidence(evidence),
+					nullableSessionID(msg.SessionID),
 				)
 				if err != nil {
 					return fmt.Errorf("insert search_item for %s: %w", file.SourcePath, err)
@@ -347,10 +388,21 @@ func (d *Database) SyncFilesContext(ctx context.Context, files []IndexedFile) (r
 			// a later paired result may also supply positive evidence. Never erase
 			// previously proven linkage when a partial source no longer has the call.
 			if perennial {
+				if msg.SessionID != "" {
+					if _, err := tx.ExecContext(ctx, `UPDATE search_items SET session_id=? WHERE uuid=? AND session_id IS NULL`, msg.SessionID, msg.UUID); err != nil {
+						return err
+					}
+				}
+				if msg.SessionID != "" && evidence == "native_cwd" {
+					if _, err := tx.ExecContext(ctx, `UPDATE search_items SET project=?,project_evidence='native_cwd' WHERE source_path=? AND uuid=? AND session_id=? AND COALESCE(project_evidence,'unknown') IN ('unknown','path_fallback')`, project, file.SourcePath, msg.UUID, msg.SessionID); err != nil {
+						return fmt.Errorf("enrich native project proof for %s: %w", file.SourcePath, err)
+					}
+				}
 				if _, err := tx.ExecContext(ctx, `UPDATE search_items SET project = ?, project_evidence = ?
      WHERE source_path = ? AND uuid = ? AND text = ? AND content_type = ?
+     AND (session_id IS NULL OR session_id IS ?)
      AND COALESCE(project_evidence,'unknown') IN ('unknown','path_fallback') AND ? IN ('path_fallback','registry','native_cwd')`,
-					file.Project, projectEvidence(file.ProjectEvidence), file.SourcePath, msg.UUID, msg.Text, msg.ContentType, projectEvidence(file.ProjectEvidence)); err != nil {
+					project, projectEvidence(evidence), file.SourcePath, msg.UUID, msg.Text, msg.ContentType, nullableSessionID(msg.SessionID), projectEvidence(evidence)); err != nil {
 					return fmt.Errorf("enrich project proof for %s: %w", file.SourcePath, err)
 				}
 				if _, err := tx.ExecContext(ctx, `UPDATE search_items SET search_echo = ?
@@ -453,6 +505,21 @@ func (d *Database) SyncFilesContext(ctx context.Context, files []IndexedFile) (r
 			}
 		}
 
+		// Native cwd proves ownership for every retained record in the same logical session.
+		if hasNativeSession {
+			if _, err := tx.ExecContext(ctx, `UPDATE search_items AS si
+	 SET project=(SELECT proof.project FROM search_items proof WHERE proof.source_path=si.source_path AND proof.session_id=si.session_id AND proof.project_evidence='native_cwd' LIMIT 1), project_evidence='native_cwd'
+	 WHERE si.source_path=? AND si.session_id IS NOT NULL AND COALESCE(si.project_evidence,'unknown') IN ('unknown','path_fallback')
+	 AND EXISTS(SELECT 1 FROM search_items proof WHERE proof.source_path=si.source_path AND proof.session_id=si.session_id AND proof.project_evidence='native_cwd')`, file.SourcePath); err != nil {
+				return fmt.Errorf("enrich retained native project proof for %s: %w", file.SourcePath, err)
+			}
+		}
+
+		// Native tags use the entire retained canonical corpus, including expired siblings.
+		if err := rebuildNativeSessionTags(ctx, tx, file.SourcePath); err != nil {
+			return fmt.Errorf("rebuild identity tags for %s: %w", file.SourcePath, err)
+		}
+
 		// Tags are derived only for session sources. A source-semantic replay
 		// clears any prior session classification before applying current tags.
 		if _, err := tx.ExecContext(ctx, "DELETE FROM session_tags WHERE source_path = ?", file.SourcePath); err != nil {
@@ -506,25 +573,6 @@ func (d *Database) SyncFilesContext(ctx context.Context, files []IndexedFile) (r
 			}
 		}
 
-		// Convert IndexedMessage to models.Message for detector input
-		detectionMsgs := make([]models.Message, len(file.Messages))
-		for i, im := range file.Messages {
-			if err := ctx.Err(); err != nil {
-				return err
-			}
-			detectionMsgs[i] = models.Message{
-				Role:           im.Role,
-				Origin:         normalizedOrigin(im.Origin),
-				Content:        im.Text,
-				ContentType:    im.ContentType,
-				Timestamp:      time.Time{}, // not needed for detection
-				UUID:           im.UUID,
-				ToolName:       im.ToolName,
-				IsError:        im.IsError,
-				WasInterrupted: im.WasInterrupted,
-			}
-		}
-
 		// A successful parser pass closes pending historical evidence without
 		// inventing proof for retained identities no longer present in the source.
 		if file.ProjectEvidence != "" {
@@ -548,7 +596,7 @@ func (d *Database) SyncFilesContext(ctx context.Context, files []IndexedFile) (r
 
 		// Run detectors with prose-only filter: lexicon, rephrase, denial on
 		// content_type='text'|'code' + role='user'; interrupt on all user messages.
-		detections, err := corrections.RunDetectorsFilteredContext(ctx, detectionMsgs)
+		detections, err := detectSessionCorrections(ctx, file.Messages)
 		if err != nil {
 			return fmt.Errorf("detect corrections for %s: %w", file.SourcePath, err)
 		}
@@ -759,4 +807,89 @@ func projectEvidence(value string) string {
 		return "unknown"
 	}
 	return value
+}
+
+func nullableSessionID(id string) any {
+	if id == "" {
+		return nil
+	}
+	return id
+}
+
+// rebuildNativeSessionTags derives eligibility only from proven native identities.
+// Close the corpus cursor before writes so failures roll back the entire sync.
+func rebuildNativeSessionTags(ctx context.Context, tx *sql.Tx, path string) error {
+	rows, err := tx.QueryContext(ctx, `SELECT session_id,text FROM search_items
+ WHERE source_path=? AND source='session' AND session_id IS NOT NULL AND session_id<>''`, path)
+	if err != nil {
+		return err
+	}
+	accumulators := make(map[string]*tagging.Accumulator)
+	for rows.Next() {
+		var session, text string
+		if err := rows.Scan(&session, &text); err != nil {
+			rows.Close()
+			return err
+		}
+		a := accumulators[session]
+		if a == nil {
+			a = &tagging.Accumulator{}
+			accumulators[session] = a
+		}
+		a.Add(text)
+	}
+	err = rows.Err()
+	closeErr := rows.Close()
+	if err != nil {
+		return err
+	}
+	if closeErr != nil {
+		return closeErr
+	}
+	if _, err := tx.ExecContext(ctx, "DELETE FROM session_identity_tags WHERE source_path=?", path); err != nil {
+		return err
+	}
+	for session, a := range accumulators {
+		for _, tag := range a.Tags() {
+			if _, err := tx.ExecContext(ctx, `INSERT INTO session_identity_tags(source_path,session_id,tag) VALUES(?,?,?)`, path, session, tag); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
+// detectSessionCorrections preserves physical indices while isolating logical conversations.
+func detectSessionCorrections(ctx context.Context, messages []IndexedMessage) (map[int][]corrections.Detection, error) {
+	// Detectors see logical sessions, not interleaved siblings in a database.
+	detectionMsgs := make(map[string][]models.Message)
+	detectionIndices := make(map[string][]int)
+	for i, im := range messages {
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
+		detectionIndices[im.SessionID] = append(detectionIndices[im.SessionID], i)
+		detectionMsgs[im.SessionID] = append(detectionMsgs[im.SessionID], models.Message{
+			Role:           im.Role,
+			Origin:         normalizedOrigin(im.Origin),
+			Content:        im.Text,
+			ContentType:    im.ContentType,
+			Timestamp:      time.Time{}, // not needed for detection
+			UUID:           im.UUID,
+			ToolName:       im.ToolName,
+			IsError:        im.IsError,
+			WasInterrupted: im.WasInterrupted,
+		})
+	}
+	detections := make(map[int][]corrections.Detection)
+	for session, groupMessages := range detectionMsgs {
+		group, err := corrections.RunDetectorsFilteredContext(ctx, groupMessages)
+		if err != nil {
+			return nil, err
+		}
+		for index, detected := range group {
+			detections[detectionIndices[session][index]] = detected
+		}
+	}
+	return detections, nil
 }

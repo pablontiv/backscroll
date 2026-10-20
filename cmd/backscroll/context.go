@@ -46,6 +46,8 @@ type contextAnchorOutput struct {
 }
 
 type contextRecordOutput struct {
+	SessionID   string  `json:"session_id,omitempty"`
+	Project     string  `json:"project,omitempty"`
 	UUID        *string `json:"uuid"`
 	SourcePath  string  `json:"source_path"`
 	Ordinal     int64   `json:"ordinal"`
@@ -238,7 +240,12 @@ func contextSuccessfulPayloadWithinBudget(records []storage.ContextRecord, forma
 }
 
 func contextOutputRecord(record storage.ContextRecord) contextRecordOutput {
+	project := ""
+	if record.SessionID != "" {
+		project = record.Project
+	}
 	return contextRecordOutput{
+		SessionID: record.SessionID, Project: project,
 		UUID:        record.UUID,
 		SourcePath:  record.SourcePath,
 		Ordinal:     record.Ordinal,
@@ -288,6 +295,10 @@ func renderContextText(envelope contextEnvelope) string {
 		fmt.Fprintf(&out, "  source_path: %s\n", strconv.Quote(record.SourcePath))
 		fmt.Fprintf(&out, "  ordinal: %d\n", record.Ordinal)
 		fmt.Fprintf(&out, "  role: %s\n", strconv.Quote(record.Role))
+		if record.SessionID != "" {
+			fmt.Fprintf(&out, "  session_id: %s\n", strconv.Quote(record.SessionID))
+			fmt.Fprintf(&out, "  project: %s\n", strconv.Quote(record.Project))
+		}
 		fmt.Fprintf(&out, "  origin: %s\n", strconv.Quote(record.Origin))
 		fmt.Fprintf(&out, "  timestamp: %s\n", contextNullableText(record.Timestamp))
 		fmt.Fprintf(&out, "  content_type: %s\n", strconv.Quote(record.ContentType))
@@ -311,6 +322,10 @@ func renderContextRobot(envelope contextEnvelope) string {
 		fmt.Fprintf(&out, "record_%d_source_path=%s\n", i, contextRobotEscape(record.SourcePath))
 		fmt.Fprintf(&out, "record_%d_ordinal=%d\n", i, record.Ordinal)
 		fmt.Fprintf(&out, "record_%d_role=%s\n", i, contextRobotEscape(record.Role))
+		if record.SessionID != "" {
+			fmt.Fprintf(&out, "record_%d_session_id=%s\n", i, contextRobotEscape(record.SessionID))
+			fmt.Fprintf(&out, "record_%d_project=%s\n", i, contextRobotEscape(record.Project))
+		}
 		fmt.Fprintf(&out, "record_%d_origin=%s\n", i, contextRobotEscape(record.Origin))
 		fmt.Fprintf(&out, "record_%d_timestamp=%s\n", i, contextNullableRobot(record.Timestamp))
 		fmt.Fprintf(&out, "record_%d_content_type=%s\n", i, contextRobotEscape(record.ContentType))

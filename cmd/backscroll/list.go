@@ -151,6 +151,11 @@ func runList(ctx context.Context, stdout, stderr io.Writer, cfg *config.Config,
 			if err := writeOutput(stdout, "Session %d: %s\n", i+1, s.Path); err != nil {
 				return err
 			}
+			if s.SessionID != "" {
+				if err := writeOutput(stdout, "  Session ID: %s\n", s.SessionID); err != nil {
+					return err
+				}
+			}
 			if err := writeOutput(stdout, "  Project: %s\n", s.Project); err != nil {
 				return err
 			}
@@ -171,6 +176,11 @@ func runList(ctx context.Context, stdout, stderr io.Writer, cfg *config.Config,
 		for i, s := range sessions {
 			if err := writeOutput(stdout, "%d. %s\n", i+1, s.Path); err != nil {
 				return err
+			}
+			if s.SessionID != "" {
+				if err := writeOutput(stdout, "   Session ID: %s\n", s.SessionID); err != nil {
+					return err
+				}
 			}
 			if err := writeOutput(stdout, "   Project: %s, Timestamp: %s\n", s.Project, s.Timestamp.Format("2006-01-02 15:04:05 MST")); err != nil {
 				return err

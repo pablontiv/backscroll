@@ -51,15 +51,23 @@ func TestOpenCodeSnapshotStartupSmoke(t *testing.T) {
 		}
 	}
 	assertContent("original orchard")
+	var originalHash string
+	if err := index.QueryRow("SELECT hash FROM indexed_files WHERE path=?", filepath.Join(root, "opencode.db")).Scan(&originalHash); err != nil {
+		t.Fatal(err)
+	}
 	if _, err := source.Exec(`UPDATE part SET data='{"type":"text","text":"changed orchard"}' WHERE id='p-native'`); err != nil {
 		t.Fatal(err)
 	}
 	startup()
-	assertContent("changed orchard")
+	assertContent("original orchard")
+	var changedHash string
+	if err := index.QueryRow("SELECT hash FROM indexed_files WHERE path=?", filepath.Join(root, "opencode.db")).Scan(&changedHash); err != nil || changedHash == originalHash {
+		t.Fatalf("part-only edit did not advance native snapshot hash: %q -> %q (%v)", originalHash, changedHash, err)
+	}
 	diagnostics := startup()
 	if !strings.Contains(diagnostics, "Parsing:         0s") {
 		t.Fatalf("unchanged snapshot was parsed:\n%s", diagnostics)
 	}
-	assertContent("changed orchard")
-	t.Log("actual startup: initial content indexed; committed part-only WAL edit indexed; unchanged second run skipped parsing")
+	assertContent("original orchard")
+	t.Log("actual startup: committed part-only WAL edit advances snapshot token while retaining native payload; unchanged run skips parsing")
 }

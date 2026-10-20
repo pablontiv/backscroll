@@ -196,6 +196,7 @@ func isCommonWord(w string) bool {
 
 // SessionEntry represents a session record.
 type SessionEntry struct {
+	SessionID string `json:",omitempty"`
 	Path      string
 	Project   string
 	Timestamp time.Time
@@ -218,7 +219,7 @@ type ListOptions struct {
 // Supports --order (timestamp:asc|desc), --limit, --offset, --after, and --before.
 func (d *Database) ListItemsV2(opts ListOptions) ([]SessionEntry, error) {
 	query := `
-		SELECT si.source_path, si.project, MAX(si.timestamp) as ts
+		SELECT si.source_path, si.project, MAX(si.timestamp) as ts,COALESCE(si.session_id,'')
 		FROM search_items si
 		WHERE si.source = 'session'
 	`
@@ -242,14 +243,14 @@ func (d *Database) ListItemsV2(opts ListOptions) ([]SessionEntry, error) {
 	}
 
 	query += `
-		GROUP BY si.source_path, si.project
+		GROUP BY si.source_path, si.project, si.session_id
 	`
 
 	switch opts.Order {
 	case "", "timestamp:desc":
-		query += " ORDER BY ts DESC, si.source_path ASC, si.project ASC"
+		query += " ORDER BY ts DESC, si.source_path ASC, COALESCE(si.session_id,'') ASC, si.project ASC"
 	case "timestamp:asc":
-		query += " ORDER BY ts ASC, si.source_path ASC, si.project ASC"
+		query += " ORDER BY ts ASC, si.source_path ASC, COALESCE(si.session_id,'') ASC, si.project ASC"
 	default:
 		return nil, fmt.Errorf("invalid order %q: expected timestamp:desc or timestamp:asc", opts.Order)
 	}
@@ -265,7 +266,7 @@ func (d *Database) ListItemsV2(opts ListOptions) ([]SessionEntry, error) {
 		var entry SessionEntry
 		var ts sql.NullString
 
-		if err := rows.Scan(&entry.Path, &entry.Project, &ts); err != nil {
+		if err := rows.Scan(&entry.Path, &entry.Project, &ts, &entry.SessionID); err != nil {
 			_ = rows.Close()
 			return nil, fmt.Errorf("scan item: %w", err)
 		}
@@ -294,7 +295,7 @@ func (d *Database) ListItemsV2(opts ListOptions) ([]SessionEntry, error) {
 	placeholder = placeholder[:len(placeholder)-1]
 
 	tagRows, err := d.db.Query(
-		"SELECT source_path, tag FROM session_tags WHERE source_path IN ("+placeholder+") ORDER BY source_path, tag",
+		"SELECT source_path, COALESCE(session_id,''),tag FROM scoped_session_tags WHERE source_path IN ("+placeholder+") ORDER BY source_path, tag",
 		paths...,
 	)
 	if err != nil {
@@ -304,18 +305,18 @@ func (d *Database) ListItemsV2(opts ListOptions) ([]SessionEntry, error) {
 
 	tagsByPath := make(map[string][]string)
 	for tagRows.Next() {
-		var path, tag string
-		if err := tagRows.Scan(&path, &tag); err != nil {
+		var path, session, tag string
+		if err := tagRows.Scan(&path, &session, &tag); err != nil {
 			return nil, fmt.Errorf("scan tag: %w", err)
 		}
-		tagsByPath[path] = append(tagsByPath[path], tag)
+		tagsByPath[path+"\x00"+session] = append(tagsByPath[path+"\x00"+session], tag)
 	}
 	if err := tagRows.Err(); err != nil {
 		return nil, fmt.Errorf("iterate tags: %w", err)
 	}
 
 	for i := range sessions {
-		sessions[i].Tags = tagsByPath[sessions[i].Path]
+		sessions[i].Tags = tagsByPath[sessions[i].Path+"\x00"+sessions[i].SessionID]
 	}
 
 	return sessions, nil
@@ -325,7 +326,7 @@ func (d *Database) ListItemsV2(opts ListOptions) ([]SessionEntry, error) {
 // If recent > 0, returns the N most recent sessions ordered by timestamp descending.
 func (d *Database) ListSessions(project string, recent int) ([]SessionEntry, error) {
 	query := `
-		SELECT si.source_path, si.project, MAX(si.timestamp) as ts
+		SELECT si.source_path, si.project, MAX(si.timestamp) as ts,COALESCE(si.session_id,'')
 		FROM search_items si
 		WHERE si.source = 'session'
 	`
@@ -337,11 +338,11 @@ func (d *Database) ListSessions(project string, recent int) ([]SessionEntry, err
 	}
 
 	query += `
-		GROUP BY si.source_path, si.project
+		GROUP BY si.source_path, si.project, si.session_id
 	`
 
 	if recent > 0 {
-		query += fmt.Sprintf(" ORDER BY ts DESC LIMIT %d", recent)
+		query += fmt.Sprintf(" ORDER BY ts DESC, si.source_path ASC, COALESCE(si.session_id,'') ASC, si.project ASC LIMIT %d", recent)
 	}
 
 	rows, err := d.db.Query(query, args...)
@@ -357,7 +358,7 @@ func (d *Database) ListSessions(project string, recent int) ([]SessionEntry, err
 		var entry SessionEntry
 		var ts sql.NullString
 
-		if err := rows.Scan(&entry.Path, &entry.Project, &ts); err != nil {
+		if err := rows.Scan(&entry.Path, &entry.Project, &ts, &entry.SessionID); err != nil {
 			_ = rows.Close()
 			return nil, fmt.Errorf("scan session: %w", err)
 		}
@@ -386,7 +387,7 @@ func (d *Database) ListSessions(project string, recent int) ([]SessionEntry, err
 	placeholder = placeholder[:len(placeholder)-1]
 
 	tagRows, err := d.db.Query(
-		"SELECT source_path, tag FROM session_tags WHERE source_path IN ("+placeholder+") ORDER BY source_path, tag",
+		"SELECT source_path, COALESCE(session_id,''),tag FROM scoped_session_tags WHERE source_path IN ("+placeholder+") ORDER BY source_path, tag",
 		paths...,
 	)
 	if err != nil {
@@ -396,18 +397,18 @@ func (d *Database) ListSessions(project string, recent int) ([]SessionEntry, err
 
 	tagsByPath := make(map[string][]string)
 	for tagRows.Next() {
-		var path, tag string
-		if err := tagRows.Scan(&path, &tag); err != nil {
+		var path, session, tag string
+		if err := tagRows.Scan(&path, &session, &tag); err != nil {
 			return nil, fmt.Errorf("scan tag: %w", err)
 		}
-		tagsByPath[path] = append(tagsByPath[path], tag)
+		tagsByPath[path+"\x00"+session] = append(tagsByPath[path+"\x00"+session], tag)
 	}
 	if err := tagRows.Err(); err != nil {
 		return nil, fmt.Errorf("iterate tags: %w", err)
 	}
 
 	for i := range sessions {
-		sessions[i].Tags = tagsByPath[sessions[i].Path]
+		sessions[i].Tags = tagsByPath[sessions[i].Path+"\x00"+sessions[i].SessionID]
 	}
 
 	return sessions, nil
@@ -420,6 +421,7 @@ func (d *Database) Validate() error {
 		"indexed_files",
 		"search_items",
 		"session_tags",
+		"session_identity_tags",
 		"dynamic_stopwords",
 		"schema_migrations",
 	}
@@ -435,6 +437,13 @@ func (d *Database) Validate() error {
 		}
 	}
 
+	var orphanTags int
+	if err := d.db.QueryRow(`SELECT COUNT(*) FROM session_identity_tags tags WHERE NOT EXISTS(SELECT 1 FROM search_items si WHERE si.source_path=tags.source_path AND si.session_id=tags.session_id)`).Scan(&orphanTags); err != nil {
+		return fmt.Errorf("check identity tags: %w", err)
+	}
+	if orphanTags != 0 {
+		return fmt.Errorf("found %d orphaned session identity tags", orphanTags)
+	}
 	// Check FTS5 virtual table
 	var ftsExists int
 	err := d.db.QueryRow(`
@@ -820,8 +829,8 @@ func (d *Database) LoadToolSequences(opts LoadSequencesOpts) ([]sequences.Sequen
 	}
 
 	cte, args := eligibleToolEvents(opts.Project, opts.Tag, opts.After, opts.Before)
-	query := cte + `SELECT session_path, tool_name, command_head
-		FROM eligible_tool_events ORDER BY session_path, session_ordinal ASC, id ASC`
+	query := cte + `SELECT session_path, session_identity, tool_name, command_head
+		FROM eligible_tool_events ORDER BY session_path, session_identity, session_ordinal ASC, id ASC`
 
 	rows, err := d.db.Query(query, args...)
 	if err != nil {
@@ -830,11 +839,12 @@ func (d *Database) LoadToolSequences(opts LoadSequencesOpts) ([]sequences.Sequen
 	defer rows.Close()
 
 	// Group by source_path, categorize each tool, collect into sequences
-	seqsByPath := make(map[string][]string)
+	type sequenceKey struct{ path, session string }
+	seqsByPath := make(map[sequenceKey][]string)
 	for rows.Next() {
-		var sourcePath, toolName string
+		var sourcePath, session, toolName string
 		var commandHead *string
-		if err := rows.Scan(&sourcePath, &toolName, &commandHead); err != nil {
+		if err := rows.Scan(&sourcePath, &session, &toolName, &commandHead); err != nil {
 			return nil, fmt.Errorf("scan: %w", err)
 		}
 		head := ""
@@ -842,7 +852,8 @@ func (d *Database) LoadToolSequences(opts LoadSequencesOpts) ([]sequences.Sequen
 			head = *commandHead
 		}
 		cat := mapper.Categorize(toolName, head)
-		seqsByPath[sourcePath] = append(seqsByPath[sourcePath], cat)
+		key := sequenceKey{sourcePath, session}
+		seqsByPath[key] = append(seqsByPath[key], cat)
 	}
 
 	if err := rows.Err(); err != nil {
@@ -854,8 +865,12 @@ func (d *Database) LoadToolSequences(opts LoadSequencesOpts) ([]sequences.Sequen
 	// corpus — truncating sessions before mining silently corrupts support
 	// counts (and map order made the truncation nondeterministic).
 	var result []sequences.Sequence
-	for path, items := range seqsByPath {
-		result = append(result, sequences.Sequence{SessionID: path, Items: items})
+	for key, items := range seqsByPath {
+		id := key.session
+		if id == "" {
+			id = key.path
+		}
+		result = append(result, sequences.Sequence{SessionID: id, Items: items})
 	}
 
 	return result, nil
@@ -1145,7 +1160,7 @@ func (d *Database) ReresolveProjectsContext(ctx context.Context, resolver func(s
 			continue
 		}
 		if _, err := tx.ExecContext(ctx, `
-			UPDATE search_items SET project = ? WHERE source_path = ? AND project_evidence IN ('unknown','path_fallback')
+			UPDATE search_items SET project = ? WHERE source_path = ? AND session_id IS NULL AND project_evidence IN ('unknown','path_fallback')
 		`, resolvedID, sourcePath); err != nil {
 			if ctxErr := ctx.Err(); ctxErr != nil {
 				return 0, ctxErr
@@ -1184,7 +1199,7 @@ func (d *Database) ReresolveProjectsWithRegistryContext(ctx context.Context, reg
 	rows, err := d.db.QueryContext(ctx, `
 		SELECT DISTINCT si.source_path, si.project
 		FROM search_items si
-		WHERE si.project IS NOT NULL AND si.project_evidence IN ('unknown','path_fallback')
+		WHERE si.session_id IS NULL AND si.project IS NOT NULL AND si.project_evidence IN ('unknown','path_fallback')
 		ORDER BY si.source_path ASC, si.project ASC
 	`)
 	if err != nil {
@@ -1252,7 +1267,7 @@ func (d *Database) ReresolveProjectsWithRegistryContext(ctx context.Context, reg
 			continue
 		}
 		if _, err := tx.ExecContext(ctx, `
-			UPDATE search_items SET project = ?, project_evidence = 'registry' WHERE source_path = ? AND project_evidence IN ('unknown','path_fallback')
+			UPDATE search_items SET project = ?, project_evidence = 'registry' WHERE source_path = ? AND session_id IS NULL AND project_evidence IN ('unknown','path_fallback')
 		`, identity.ProjectID, path.path); err != nil {
 			if ctxErr := ctx.Err(); ctxErr != nil {
 				return 0, ctxErr

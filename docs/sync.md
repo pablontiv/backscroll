@@ -134,6 +134,19 @@ Recovery is remediation, not a missing-input discovery command:
    accepting the recovered/restored state.
 
 
+V20 preserves nullable native session identity as canonical recovery evidence.
+Compatible unknown ownership/project proof can be enriched, while contradictory
+proven session/project assignments block the entire union. Identity-scoped tags
+are regenerated from the retained canonical corpus. Ingestion fingerprints are
+preserved by the existing recovery path; derived tool events are rebuilt.
+Recovery retains its existing freshness contract: canonical `extraction_version`
+starts as NULL in the replacement, and available sources can supply fresh rich
+metadata. With unavailable sources, lossy derived pattern populations can be
+smaller than before recovery. Native session/project ownership and identity-scoped
+tags remain canonical independently of that freshness marker.
+Historical schemas remain readable, and unavailable legacy sources retain NULL
+session ownership rather than guessed native mappings.
+
 ## Normal workflow
 
 ```bash
@@ -257,3 +270,17 @@ remove perennial recall, and `rebuild` reconstructs FTS from SQLite. Raw call
 IDs pair even out-of-order results for native error/exit/interruption and search
 echo provenance before serialization. Unsupported/admin/private payloads are
 never serialized as fallback text. See the [OMP input contract](input-contract.md#complete-omp-example).
+
+## OpenCode native-session replay
+
+OpenCode reader epoch 2 uses the existing 200-path bounded ingestion-fingerprint
+replay. Native UUIDs are stable across source movement, order, timestamps, and
+payload edits. Existing rows keep their UUID, text, extraction epoch, and ordinal;
+new native records append. Compatible unknown ownership/project proof may enrich,
+and contradictory proven ownership rolls back the whole sync, including hash
+and fingerprint. A successful complete nonempty UUID parse converts purely
+legacy available history at the existing replacement boundary. Partial or empty
+replays preserve native history and identity-scoped tags; expired legacy history
+keeps unknown ownership. Search/list/context expose known `session_id` additively;
+list counts logical sessions and context windows remain within the anchor session.
+

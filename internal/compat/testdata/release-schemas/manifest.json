@@ -659,6 +659,14 @@
       "AppliedVersion": 19,
       "HasSourceMetadata": false,
       "Provenance": "Migration v19 adds nullable native call identity to derived tool events, independently of canonical message UUIDs."
+    },
+    {
+      "Fixture": "v20.sql",
+      "ProvenanceSHA256": "68ab9b02fb5f0080d638014725c6cf8e93a70dbe1e3f60376592e2ab7319ce0a",
+      "Signature": "sha256:6794d09dcf71fda737cf3ab265918d5c6d0c66412f5df92f590a839cfc4c24a1",
+      "AppliedVersion": 20,
+      "HasSourceMetadata": false,
+      "Provenance": "Migration v20 adds canonical nullable native session identity and retained-payload identity-scoped tags."
     }
   ]
 }

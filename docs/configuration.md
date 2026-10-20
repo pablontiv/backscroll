@@ -238,3 +238,12 @@ the source is unavailable: absence cannot distinguish delayed replay from expiry
 Only a successful parser transaction closes pending evidence, before rebuild
 repair may relabel completed unknown/path-fallback rows. Recovery preserves both
 pending `NULL` and completed `unknown` evidence in the replacement index.
+
+OpenCode stores independent native sessions within one SQLite input. Its reader
+uses each message/part/session relationship and `session.directory` to prove
+project ownership through this same registry. Records with proven native session
+identity but no native cwd retain unknown project proof. Path repair operates on
+legacy NULL-identity rows; it does not infer a project from the shared database
+location. V20 retains native ownership and derived identity-scoped tags after
+source expiry.
+

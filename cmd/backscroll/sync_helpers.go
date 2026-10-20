@@ -688,16 +688,33 @@ func (s *startupSyncService) syncWithProgress(ctx context.Context, cfg *config.C
 
 		var sessionTags tagging.Accumulator
 		var indexedMsgs []storage.IndexedMessage
+		nativeProjects := make(map[string]string)
 		for ordinal, msg := range pf.Records {
 			if err := ctx.Err(); err != nil {
 				return err
 			}
-			sessionTags.Add(msg.Content)
+			msgProject, msgEvidence := ident.ProjectID, evidence
+			if msg.SessionID != "" {
+				msgProject, msgEvidence = "", "unknown"
+			}
+			if msg.Cwd != "" {
+				var ok bool
+				msgProject, ok = nativeProjects[msg.Cwd]
+				if !ok {
+					msgProject = projects.Identify(msg.Cwd, registry).ProjectID
+					nativeProjects[msg.Cwd] = msgProject
+				}
+				msgEvidence = "native_cwd"
+			}
+			if msg.SessionID == "" {
+				sessionTags.Add(msg.Content)
+			}
 			timestamp := ""
 			if !msg.Timestamp.IsZero() {
 				timestamp = msg.Timestamp.Format("2006-01-02T15:04:05Z07:00")
 			}
 			indexedMsgs = append(indexedMsgs, storage.IndexedMessage{
+				SessionID: msg.SessionID, Project: msgProject, ProjectEvidence: msgEvidence,
 				Ordinal:           ordinal,
 				Role:              msg.Role,
 				Origin:            msg.Origin,

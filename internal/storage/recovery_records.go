@@ -195,6 +195,36 @@ func readCanonicalSearchItems(ctx context.Context, q compat.Queryer) ([]models.I
 			return nil, uninterpretableRecoveryRowDiagnostic(), nil
 		}
 	}
+	var hasSession int
+	if err := q.QueryRowContext(ctx, `SELECT COUNT(*) FROM pragma_table_info('search_items') WHERE name='session_id'`).Scan(&hasSession); err != nil {
+		return nil, nil, err
+	}
+	if hasSession != 0 {
+		sessionRows, err := q.QueryContext(ctx, `SELECT COALESCE(session_id,'') FROM search_items ORDER BY source_path,ordinal,id`)
+		if err != nil {
+			return nil, nil, err
+		}
+		i := 0
+		for sessionRows.Next() {
+			if i >= len(records) {
+				sessionRows.Close()
+				return nil, uninterpretableRecoveryRowDiagnostic(), nil
+			}
+			if err := sessionRows.Scan(&records[i].SessionID); err != nil {
+				sessionRows.Close()
+				return nil, nil, err
+			}
+			i++
+		}
+		err = sessionRows.Err()
+		sessionRows.Close()
+		if err != nil {
+			return nil, nil, err
+		}
+		if i != len(records) {
+			return nil, uninterpretableRecoveryRowDiagnostic(), nil
+		}
+	}
 	for i := range records {
 		records[i].Origin = models.OriginUnknown
 	}

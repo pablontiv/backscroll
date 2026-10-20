@@ -14,6 +14,7 @@ import (
 
 // SearchResult represents a single search result.
 type SearchResult struct {
+	SessionID    string `json:",omitempty"`
 	ID           int
 	Source       string
 	SourcePath   string
@@ -160,7 +161,7 @@ func (d *Database) searchTableQueryContext(ctx context.Context, ftsTable, ftsQue
 	var tagJoin string
 	if opts.Tag != "" {
 		tagJoin = `
-			LEFT JOIN session_tags st ON si.source_path = st.source_path
+			LEFT JOIN scoped_session_tags st ON si.source_path = st.source_path AND st.session_id IS si.session_id
 		`
 		whereClauses = append(whereClauses, "st.tag = ?")
 		args = append(args, opts.Tag)
@@ -193,7 +194,7 @@ func (d *Database) searchTableQueryContext(ctx context.Context, ftsTable, ftsQue
 			si.uuid,
 			si.project,
 			si.content_type,
-			COALESCE(si.search_echo, 0)
+			COALESCE(si.search_echo, 0),COALESCE(si.session_id,'')
 		FROM %[1]s
 		JOIN search_items si ON %[1]s.rowid = si.id
 		%[2]s
@@ -242,7 +243,7 @@ func (d *Database) searchTableQueryContext(ctx context.Context, ftsTable, ftsQue
 			&uuid,
 			&project,
 			&r.ContentType,
-			&r.SearchEcho,
+			&r.SearchEcho, &r.SessionID,
 		)
 		if err != nil {
 			return nil, fmt.Errorf("scan search result: %w", err)

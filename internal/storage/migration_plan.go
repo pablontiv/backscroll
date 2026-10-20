@@ -531,6 +531,7 @@ var migrationPlanDispatch = map[compat.MigrationStep]migrationApplier{
 	{Version: 17, Name: "V17 project attribution evidence"}:                              applyV17,
 	{Version: 18, Name: "V18 ingestion semantics fingerprint"}:                           applyV18,
 	{Version: 19, Name: "V19 native tool call identity"}:                                 applyV19,
+	{Version: 20, Name: "V20 native session identity"}:                                   applyV20,
 }
 
 func planStartsFromEmptySchema(plan compat.MigrationPlan) bool {
@@ -997,4 +998,16 @@ func applyV19(ctx context.Context, tx *sql.Tx, _ compat.SchemaShape) error {
 		return fmt.Errorf("apply v19 native tool call identity: %w", err)
 	}
 	return recordMigration(ctx, tx, 19, "V19 native tool call identity", sqlV19, "record migration v19")
+}
+
+const sqlV20 = `ALTER TABLE search_items ADD COLUMN session_id TEXT CHECK(session_id IS NULL OR length(session_id)>0);
+CREATE TABLE session_identity_tags(source_path TEXT NOT NULL,session_id TEXT NOT NULL CHECK(length(session_id)>0),tag TEXT NOT NULL,PRIMARY KEY(source_path,session_id,tag));
+CREATE INDEX idx_session_identity_tags_tag ON session_identity_tags(tag);
+CREATE VIEW scoped_session_tags AS SELECT source_path,NULL AS session_id,tag FROM session_tags UNION ALL SELECT source_path,session_id,tag FROM session_identity_tags;`
+
+func applyV20(ctx context.Context, tx *sql.Tx, _ compat.SchemaShape) error {
+	if _, err := tx.ExecContext(ctx, sqlV20); err != nil {
+		return fmt.Errorf("apply v20 native session identity: %w", err)
+	}
+	return recordMigration(ctx, tx, 20, "V20 native session identity", sqlV20, "record migration v20")
 }

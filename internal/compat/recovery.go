@@ -34,6 +34,8 @@ func PlanRecovery(inputs []RecoveryInput) (RecoveryPlan, []Diagnostic, error) {
 	ambiguousFingerprints := make(map[string]bool)
 	byIdentity := map[recordIdentity]map[string][]recordOccurrence{}
 	var diagnostics []Diagnostic
+	type nativeSessionKey struct{ path, session string }
+	nativeProjects := make(map[nativeSessionKey]*string)
 
 	for inputIndex, input := range inputs {
 		plan.InputShapes = append(plan.InputShapes, input.Shape)
@@ -49,6 +51,14 @@ func PlanRecovery(inputs []RecoveryInput) (RecoveryPlan, []Diagnostic, error) {
 			plan.IngestionFingerprints[path] = fingerprint
 		}
 		for rowIndex, record := range input.Records {
+			if record.SessionID != "" && record.ProjectEvidence == "native_cwd" {
+				key := nativeSessionKey{record.SourcePath, record.SessionID}
+				if project, found := nativeProjects[key]; found && !equalProject(project, record.Project) {
+					diagnostics = append(diagnostics, Diagnostic{Code: CodeRecoveryConflict, Summary: fmt.Sprintf("recovery input %d row %d has contradictory native project proof for %q session %q", inputIndex, rowIndex, key.path, key.session)})
+				} else {
+					nativeProjects[key] = record.Project
+				}
+			}
 			if record.Origin == "" {
 				record.Origin = models.OriginUnknown
 			} else if !models.ValidMessageOrigin(record.Origin) {
@@ -64,7 +74,11 @@ func PlanRecovery(inputs []RecoveryInput) (RecoveryPlan, []Diagnostic, error) {
 				diagnostics = append(diagnostics, uninterpretablePlanDiagnostic(inputIndex, rowIndex, record, err))
 				continue
 			}
-			hash := payloadHash(record, identity)
+			// Group equal payloads independently of project proof, then reconcile
+			// only compatible unknown/native enrichment below.
+			groupRecord := record
+			groupRecord.Project = nil
+			hash := payloadHash(groupRecord, identity)
 			if byIdentity[identity] == nil {
 				byIdentity[identity] = map[string][]recordOccurrence{}
 			}
@@ -72,7 +86,7 @@ func PlanRecovery(inputs []RecoveryInput) (RecoveryPlan, []Diagnostic, error) {
 				inputIndex: inputIndex,
 				rowIndex:   rowIndex,
 				identity:   identity,
-				hash:       hash,
+				hash:       payloadHash(record, identity),
 				record:     record,
 			})
 		}
@@ -98,14 +112,33 @@ func PlanRecovery(inputs []RecoveryInput) (RecoveryPlan, []Diagnostic, error) {
 			}
 			continue
 		}
-		for hash, occurrences := range groups {
+		for _, occurrences := range groups {
 			sortOccurrences(occurrences)
 			// Provenance enriches an otherwise equal canonical payload. Legacy
 			// unknown evidence never erases proof, and search-echo evidence remains
 			// independent from message-origin evidence.
 			record := occurrences[0].record
 			originConflict := false
+			sessionConflict := false
+			projectConflict := false
 			for _, occurrence := range occurrences {
+				if record.SessionID != "" && occurrence.record.SessionID != "" && record.SessionID != occurrence.record.SessionID {
+					sessionConflict = true
+					break
+				}
+				other := occurrence.record
+				if !equalProject(record.Project, other.Project) {
+					switch {
+					case other.SessionID != "" && other.ProjectEvidence == "native_cwd" && (record.ProjectEvidence == "" || record.ProjectEvidence == "unknown" || record.ProjectEvidence == "path_fallback"):
+						record.Project = other.Project
+					case record.SessionID != "" && record.ProjectEvidence == "native_cwd" && (other.ProjectEvidence == "" || other.ProjectEvidence == "unknown" || other.ProjectEvidence == "path_fallback"):
+					default:
+						projectConflict = true
+					}
+				}
+				if record.SessionID == "" {
+					record.SessionID = occurrence.record.SessionID
+				}
 				record.SearchEcho = record.SearchEcho || occurrence.record.SearchEcho
 				record.ProjectEvidence = mergeProjectEvidence(record.ProjectEvidence, occurrence.record.ProjectEvidence)
 				merged, ok := mergeMessageOrigins(record.Origin, occurrence.record.Origin)
@@ -115,15 +148,22 @@ func PlanRecovery(inputs []RecoveryInput) (RecoveryPlan, []Diagnostic, error) {
 				}
 				record.Origin = merged
 			}
-			if originConflict {
+			if originConflict || sessionConflict || projectConflict {
 				for _, occurrence := range occurrences {
-					diagnostics = append(diagnostics, originConflictPlanDiagnostic(occurrence))
+					diagnostic := originConflictPlanDiagnostic(occurrence)
+					if sessionConflict {
+						diagnostic.Summary = fmt.Sprintf("conflicting native session identity for %s", describeIdentity(occurrence.identity))
+					}
+					if projectConflict {
+						diagnostic = conflictPlanDiagnostic(occurrence, 2)
+					}
+					diagnostics = append(diagnostics, diagnostic)
 				}
 				continue
 			}
 			canonical = append(canonical, plannedRecord{
 				identity: identity,
-				hash:     hash,
+				hash:     payloadHash(record, identity),
 				record:   record,
 			})
 			plan.ExactDuplicates += len(occurrences) - 1
@@ -142,6 +182,16 @@ func PlanRecovery(inputs []RecoveryInput) (RecoveryPlan, []Diagnostic, error) {
 		}
 		return canonical[i].hash < canonical[j].hash
 	})
+	for i := range canonical {
+		record := &canonical[i].record
+		if record.SessionID != "" && (record.ProjectEvidence == "" || record.ProjectEvidence == "unknown" || record.ProjectEvidence == "path_fallback") {
+			if project, found := nativeProjects[nativeSessionKey{record.SourcePath, record.SessionID}]; found {
+				record.Project = project
+				record.ProjectEvidence = "native_cwd"
+				canonical[i].hash = payloadHash(*record, canonical[i].identity)
+			}
+		}
+	}
 	plan.Records = make([]CanonicalRecord, 0, len(canonical))
 	for _, record := range canonical {
 		plan.Records = append(plan.Records, CanonicalRecord{
@@ -353,4 +403,11 @@ func mergeProjectEvidence(left, right string) string {
 		return ""
 	}
 	return left
+}
+
+func equalProject(left, right *string) bool {
+	if left == nil || right == nil {
+		return left == nil && right == nil
+	}
+	return *left == *right
 }

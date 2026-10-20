@@ -176,6 +176,15 @@ never truncated.
 backscroll patterns --kind sequences --after 2026-01-01 --before 2027-01-01 --json
 ```
 
+Native OpenCode workflows are grouped by source capability **and native session**,
+so interleaved projects cannot form a cross-session sequence. Commands, failures,
+templates, corrections, and sequences share canonical message ownership when
+applying project/tag eligibility. Tags for a native session are derived from all
+retained canonical payload, including messages removed from a partial export.
+Correction detectors also receive one logical conversation at a time, during
+sync and stored-history backfill. Historical NULL-identity rows keep their
+source-path grouping.
+
 Sequence `--after`/`--before` select timestamped events before mining using
 `[after, before)`: the lower bound is inclusive (`>=`), the upper exclusive (`<`).
 Use ISO 8601 bounds; `YYYY-MM-DD` denotes the start of the UTC date. Unknown
