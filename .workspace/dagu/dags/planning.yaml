@@ -1,7 +1,7 @@
-# dagu-feature-bundle: @a4s/omp-dagu@0.3.93 source=pablontiv/a4s@fc678c92df21c7307089ab7c226c16388ef89d80 bootstrap=bootstrap-backscroll-v0-3-93 dagu=2.20.1
+# dagu-feature-bundle: @a4s/omp-dagu@0.3.94 source=pablontiv/a4s@f34a300525812f2c87c351e832d9a24321ecadc1 bootstrap=bootstrap-backscroll-v0-3-94 dagu=2.20.1
 labels:
   - workspace=backscroll
-  - dagu-feature-bundle=0.3.93
+  - dagu-feature-bundle=0.3.94
 queue: backscroll
 type: graph
 dotenv: []
@@ -22,7 +22,7 @@ params:
     required: true
 env:
   - RUN: ${context.run.id}
-  - DAGU_FEATURE_BUNDLE: "dagu-feature-bundle=0.3.93 source=pablontiv/a4s@fc678c92df21c7307089ab7c226c16388ef89d80 bootstrap=bootstrap-backscroll-v0-3-93"
+  - DAGU_FEATURE_BUNDLE: "dagu-feature-bundle=0.3.94 source=pablontiv/a4s@f34a300525812f2c87c351e832d9a24321ecadc1 bootstrap=bootstrap-backscroll-v0-3-94"
   - FEEDBACK: ""
 steps:
   - id: init
@@ -82,12 +82,12 @@ steps:
     run: |
       set -euo pipefail
       : > "$OUT_DIR/findings.md"
-      status=$(dagu status planning --run-id "$RUN")
-      iteration=$(sed -nE 's/.*push-back iteration: ([0-9]+).*/\1/p' <<<"$status" | head -1)
-      printf 'PLAN_REVIEW AGENT=plan-reviewer DAG=planning RUN=%s ITERATION=%s END\n' "$RUN" "${iteration:-0}" > "$OUT_DIR/generation"
+      rest=$(curl -fsS "http://127.0.0.1:${DAGU_PORT:-8080}/api/v1/dag-runs/planning/$RUN")
+      iteration=$(jq -er '[.dagRunDetails.nodes[]? | select(.step.id == "review")] | select(length == 1) | .[0] | (if has("approvalIteration") then .approvalIteration else 0 end) | select(type == "number" and . >= 0 and floor == .)' <<<"$rest")
+      printf 'PLAN_REVIEW AGENT=plan-reviewer DAG=planning RUN=%s ITERATION=%s END\n' "$RUN" "$iteration" > "$OUT_DIR/generation"
       printf 'GENERATION=%s\n' "$(cat "$OUT_DIR/generation")" >> "$DAGU_OUTPUT_FILE"
       reject() {
-        printf 'units.jsonl:%s: rule=%s\n' "$1" "$2" | tee "$OUT_DIR/findings.md" >&2
+        printf 'units.jsonl:%s: rule=%s%s\n' "$1" "$2" "${3:+ $3}" | tee "$OUT_DIR/findings.md" >&2
         exit 1
       }
       test ! -f "$OUT_DIR/import-error" || reject 1 import-units
@@ -101,7 +101,7 @@ steps:
         rule=$(jq -r --argjson ids "$ids" '
           def nonempty: type == "string" and test("\\S");
           def sections($names): .body as $body | all($names[]; . as $name | $body | test("(?m)^## " + $name + "[ \\t]*\\r?$"));
-          if has("depends") or has("blocks") or has("blocked_by") then "self-contained"
+          if (keys - ["id","title","dag","labels","body","question","source","findings","relationships"] | length) > 0 then "unit-fields"
           elif (.id | type != "string") then "kebab-id"
           elif (.id | test("^[a-z0-9]+(-[a-z0-9]+)*$") | not) then "kebab-id"
           elif (.id as $id | $ids | index($id)) != null then "unique-id"
@@ -113,6 +113,7 @@ steps:
           elif has("source") and (.source != "refine" and .source != "discovery" and .source != "plan") then "source"
           elif has("findings") and ((.findings | type != "array") or (.findings | all(nonempty) | not)) then "findings"
           elif has("findings") and ((.findings | length) != (.findings | unique | length)) then "unique-findings"
+          elif has("relationships") and (.relationships | type != "array") then "relationships"
           elif (.body | nonempty | not) then "body"
           elif .dag == "feature" and (sections(["(Problema|Problem)","(Cambio|Change)","(Aceptación|Acceptance)"]) | not) then "required-sections"
           elif .dag == "poc" and (sections(["PoC","(Veredicto|Verdict)","(Después del PASS|After PASS)"]) | not) then "required-sections"
@@ -120,6 +121,50 @@ steps:
         test -z "$rule" || reject "$line" "$rule"
         ids=$(jq -c --arg id "$(jq -r .id <<<"$row")" '. + [$id]' <<<"$ids")
       done < "$file"
+      diagnostic=$(jq -sc '
+        . as $units |
+        def reaches($kind; $from; $to; $seen):
+          if $from == $to then true
+          elif ($seen | index($from)) != null then false
+          else any($units[] | select(.id == $from) | .relationships[]? |
+            select(.kind == $kind and (.target | has("unit")));
+            reaches($kind; .target.unit; $to; $seen + [$from])) end;
+        [to_entries[] as $row | $row.value as $unit |
+          ($unit.relationships // []) | to_entries[] |
+          .key as $index | .value as $edge |
+          {line: ($row.key + 1), field: ("relationships[" + ($index|tostring) + "]"), unit: $unit.id} as $where |
+          (if ($edge | type) != "object" then "relationship-object"
+          elif ($edge | keys) != ["kind","target"] then "relationship-fields"
+          elif ($edge.kind != "blocked_by" and $edge.kind != "parent") then "relationship-kind"
+          elif ($edge.target | type) != "object" then "relationship-target"
+          elif ($edge.target | keys) == ["unit"] then
+            if ($edge.target.unit | type) != "string" then "relationship-unit"
+            elif ($edge.target.unit | test("^[a-z0-9]+(-[a-z0-9]+)*$") | not) then "relationship-unit"
+            elif $edge.target.unit == $unit.id then "relationship-self"
+            elif ($units | map(.id) | index($edge.target.unit)) == null then "relationship-unknown-unit"
+            else "" end
+          elif ($edge.target | keys) == ["issue"] then
+            if ($edge.target.issue | type) != "number" then "relationship-issue"
+            elif ($edge.target.issue <= 0 or $edge.target.issue > 9007199254740991 or ($edge.target.issue | floor) != $edge.target.issue) then "relationship-issue"
+            else "" end
+          else "relationship-target" end) as $rule |
+          select($rule != "") | $where + {rule: $rule, observed: $edge}
+        ] as $malformed |
+        if ($malformed | length) > 0 then $malformed[0]
+        else [ $units | to_entries[] as $row | $row.value as $unit |
+          ($unit.relationships // []) | to_entries[] |
+          .key as $index | .value as $edge |
+          (if any(($unit.relationships // [])[0:$index][]; . == $edge) then "relationship-duplicate"
+          elif $edge.kind == "parent" and ([$unit.relationships[] | select(.kind == "parent")] | length) > 1 then "relationship-parent"
+          elif ($edge.target | has("unit")) and reaches($edge.kind; $edge.target.unit; $unit.id; []) then "relationship-cycle"
+          else "" end) as $rule |
+          select($rule != "") |
+          {line: ($row.key + 1), rule: $rule, field: ("relationships[" + ($index|tostring) + "]"), unit: $unit.id, observed: $edge}
+        ][0] // empty end
+      ' "$file")
+      if test -n "$diagnostic"; then
+        reject "$(jq -r .line <<<"$diagnostic")" "$(jq -r .rule <<<"$diagnostic")" "$(jq -c 'del(.line,.rule)' <<<"$diagnostic")"
+      fi
       cp "$file" "$OUT_DIR/validated-units.jsonl"
     outputs:
       - name: GENERATION
@@ -170,9 +215,7 @@ steps:
       cmp "$OUT_DIR/validated-units.jsonl" "$OUT_DIR/units.jsonl"
       rest=$(curl -fsS "http://127.0.0.1:${DAGU_PORT:-8080}/api/v1/dag-runs/planning/$RUN")
       cutoff=$(jq -er '[.dagRunDetails.nodes[]? | select(.step.id == "review")] | select(length == 1) | .[0].startedAt | select(type == "string" and length > 0)' <<<"$rest")
-      status=$(dagu status planning --run-id "$RUN")
-      iteration=$(sed -nE 's/.*push-back iteration: ([0-9]+).*/\1/p' <<<"$status" | head -1)
-      iteration=${iteration:-0}
+      iteration=$(jq -er '[.dagRunDetails.nodes[]? | select(.step.id == "review")] | select(length == 1) | .[0] | (if has("approvalIteration") then .approvalIteration else 0 end) | select(type == "number" and . >= 0 and floor == .)' <<<"$rest")
       marker="PLAN_REVIEW AGENT=plan-reviewer DAG=planning RUN=$RUN ITERATION=$iteration END"
       test "$(cat "$OUT_DIR/generation")" = "$marker"
       canonical=$(cd "$PRIMARY" && pwd -P)
@@ -263,9 +306,8 @@ steps:
       set -euo pipefail
       cmp "$OUT_DIR/reviewed-units.jsonl" "$OUT_DIR/units.jsonl"
       cmp "$OUT_DIR/review-accepted" "$OUT_DIR/generation"
-      status=$(dagu status planning --run-id "$RUN")
-      iteration=$(sed -nE 's/.*push-back iteration: ([0-9]+).*/\1/p' <<<"$status" | head -1)
-      iteration=${iteration:-0}
+      rest=$(curl -fsS "http://127.0.0.1:${DAGU_PORT:-8080}/api/v1/dag-runs/planning/$RUN")
+      iteration=$(jq -er '[.dagRunDetails.nodes[]? | select(.step.id == "review")] | select(length == 1) | .[0] | (if has("approvalIteration") then .approvalIteration else 0 end) | select(type == "number" and . >= 0 and floor == .)' <<<"$rest")
       test "$(cat "$OUT_DIR/review-accepted")" = "PLAN_REVIEW AGENT=plan-reviewer DAG=planning RUN=$RUN ITERATION=$iteration END"
       jq -e '.verdict == "accept" and (.findings | all(.severity != "blocker"))' "$OUT_DIR/review-$iteration.json" >/dev/null
       units="$OUT_DIR/units.jsonl"
@@ -281,6 +323,14 @@ steps:
           else [$ids[] as $id | $units[] | select(.id == $id)] end
         ' "$units" > "$OUT_DIR/approved-units.json"
       fi
+      jq -e '
+        map(.id) as $approved |
+        [ .[] | .id as $id | .relationships[]? | select(.target | has("unit")) |
+          .target.unit as $target | select(($approved | index($target)) == null) |
+          {unit: $id, kind: .kind, target: .target.unit} ] as $missing |
+        if ($missing | length) > 0 then error("rule=approved-relationship-target " + ($missing | tojson))
+        else true end
+      ' "$OUT_DIR/approved-units.json" >/dev/null
       existing=$(gh api --paginate --slurp "repos/$NWO/issues?state=all&per_page=100" | jq -ec 'add | select(type == "array")')
       : > "$issues.tmp"
       index=0
@@ -311,6 +361,7 @@ steps:
           body_file="$OUT_DIR/issue-body-$index.md"
           {
             jq -r '.body' <<<"$unit"
+            jq -r '.relationships[]? | "\nRelationship intent: " + .kind + " " + (if .target.unit then "unit:" + .target.unit else "issue:#" + (.target.issue|tostring) end)' <<<"$unit"
             printf '\n\n%s\n' "$marker"
             jq -r --arg source "$SOURCE" '"\nBreakdown source: " + (.source // $source), (if has("findings") then "Finding lineage: " + (.findings | join(", ")) else empty end)' <<<"$unit"
           } > "$body_file"
