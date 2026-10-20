@@ -45,27 +45,49 @@ verify a development (`dev`) build.
 
 ## Dagu issue flow
 
-Maintainers deliver issues with the versioned
-`.workspace/dagu/dags/feature.yaml`. From the clean primary clone on `main`,
-obtain the coordinating session ID with `dagu_session_id`, then enqueue:
+The repository adopts `@a4s/omp-dagu@0.3.93` from
+`pablontiv/a4s@fc678c92df21c7307089ab7c226c16388ef89d80`, rendered by
+`bootstrap-backscroll-v0-3-93` for Dagu `2.20.1`. The exact bootstrap artifacts
+are versioned under `.workspace/dagu/dags/`: `feature.yaml` delivers issues,
+`poc.yaml` proves feasibility, `discovery.yaml` investigates repositories, and
+`planning.yaml` imports prepared backlog units for independent review, operator
+approval, and issue materialization.
+
+Adoption preserves `BASE_BRANCH=main`,
+`PRIMARY=/Users/Shared/harness/backscroll`, `GATE=just check && just ci`,
+`REQUIRED_CHECK=candidate`, and
+`TEST_PATHS=(^|/)tests/|_test\.go$|^scripts/test-.*\.sh$`.
+`REBASE_RESOLVER` and `VALIDATION` are empty. Existing Go behavior and CI remain
+unchanged.
+
+From the clean primary clone on `main`, obtain the coordinating session ID with
+`dagu_session_id`, then enqueue through the loaded bundle's admission boundary:
 
 ```sh
 dagu enqueue --run-id "backscroll-issue-$ISSUE" \
   .workspace/dagu/dags/feature.yaml -- \
-  ISSUE="$ISSUE" PRIMARY="$PWD" BRANCH="dagu/issue-$ISSUE" \
+  ISSUE="$ISSUE" \
   PR_NUMBER="" OMP_SESSION_ID="$OMP_SESSION_ID"
 ```
 
 The coordinator completes guarded `triage` through the designated
-`triage-reviewer` and owns the `triage` and `implement` human tasks. The
-scheduled reconciler alone advances or pushes back `await_merge`; leave that
-task for it rather than completing it manually.
+`triage-reviewer` and owns the human-task transitions. At `implement`, leave the
+delivery uncommitted in the assigned worktree: Dagu captures the candidate,
+rebases it, and runs `just check && just ci`. Independent QA and review bind
+their verdicts to that candidate before guarded publication and auto-merge.
+The scheduled reconciler owns `await_ci` and `await_merge`, including CI
+recovery, merge observation, and return to implementation or rebase when needed.
+Dagu verifies integration, updates the primary clone, and cleans up owned
+worktrees and branches at close.
 
-A failed or aborted run is terminal. After fixing the cause, recover a pushed
-checkpoint with `git fetch origin && git branch dagu/issue-$ISSUE
-origin/dagu/issue-$ISSUE`, then enqueue a new run with a suffixed run ID. Set
-`PR_NUMBER` when the branch already has an open pull request. Runs that failed
-before a checkpoint can be enqueued again after their cleanup completes.
+A failed or aborted run is terminal. Inspect its logs and resource evidence,
+preserve retained work, and fix the cause before enqueueing a replacement with
+the same `ISSUE`, branch, and coordinating session ID plus a suffixed run ID.
+Set `PR_NUMBER` when an open pull request exists. Dagu validates and transfers
+ownership of the retained branch and worktree while preserving HEAD and files.
+For fresh-clone recovery, fetch the durable checkpoint with
+`git fetch origin refs/dagu/checkpoints/issue-$ISSUE` and follow the bundle
+skill's checkpoint recovery procedure.
 
 ## Releasing
 

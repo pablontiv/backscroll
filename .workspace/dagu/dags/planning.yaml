@@ -1,0 +1,330 @@
+# dagu-feature-bundle: @a4s/omp-dagu@0.3.93 source=pablontiv/a4s@fc678c92df21c7307089ab7c226c16388ef89d80 bootstrap=bootstrap-backscroll-v0-3-93 dagu=2.20.1
+labels:
+  - workspace=backscroll
+  - dagu-feature-bundle=0.3.93
+queue: backscroll
+type: graph
+dotenv: []
+shell: bash
+max_active_steps: 1
+params:
+  - name: UNITS_FROM
+    type: string
+    required: true
+  - name: SOURCE
+    type: string
+    default: plan
+  - name: PRIMARY
+    type: string
+    required: true
+  - name: OMP_SESSION_ID
+    type: string
+    required: true
+env:
+  - RUN: ${context.run.id}
+  - DAGU_FEATURE_BUNDLE: "dagu-feature-bundle=0.3.93 source=pablontiv/a4s@fc678c92df21c7307089ab7c226c16388ef89d80 bootstrap=bootstrap-backscroll-v0-3-93"
+  - FEEDBACK: ""
+steps:
+  - id: init
+    run: |
+      set -euo pipefail
+      printf '%s\n' "$DAGU_FEATURE_BUNDLE"
+      for tool in git gh jq dagu curl; do command -v "$tool" >/dev/null; done
+      test "$(git -C "$PRIMARY" rev-parse --show-toplevel)" = "$PRIMARY"
+      test "$(git -C "$PRIMARY" rev-parse --absolute-git-dir)" = "$(git -C "$PRIMARY" rev-parse --path-format=absolute --git-common-dir)"
+      [[ "$RUN" =~ ^[A-Za-z0-9][A-Za-z0-9._-]*$ ]]
+      NWO=$(cd "$PRIMARY" && gh repo view --json nameWithOwner --jq .nameWithOwner)
+      [[ "$NWO" =~ ^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$ ]]
+      OUT_DIR="${DAGU_HOME:-$HOME/.dagu}/data/planning/${NWO/\//__}/$RUN"
+      mkdir -p "$OUT_DIR"
+      printf '%s\n' "$SOURCE" > "$OUT_DIR/source.md"
+      touch "$OUT_DIR/findings.md"
+      printf 'out_dir=%s\n' "$OUT_DIR"
+      printf 'OUT_DIR=%s\nNWO=%s\n' "$OUT_DIR" "$NWO" >> "$DAGU_OUTPUT_FILE"
+    outputs:
+      - name: OUT_DIR
+      - name: NWO
+
+  - id: import_units
+    depends: init
+    continue_on:
+      failure: true
+    env:
+      - OUT_DIR: ${steps.init.outputs.OUT_DIR}
+    run: |
+      set -euo pipefail
+      rm -f "$OUT_DIR/validated-units.jsonl" "$OUT_DIR/reviewed-units.jsonl" "$OUT_DIR/review-accepted"
+      : > "$OUT_DIR/findings.md"
+      printf 'Import incomplete: correct UNITS_FROM before pushing back.\n' > "$OUT_DIR/import-error"
+      [[ "$UNITS_FROM" == /* ]]
+      [[ "$SOURCE" == refine || "$SOURCE" == discovery || "$SOURCE" == plan ]]
+      test -s "$UNITS_FROM"
+      cp "$UNITS_FROM" "$OUT_DIR/units.jsonl.tmp"
+      mv "$OUT_DIR/units.jsonl.tmp" "$OUT_DIR/units.jsonl"
+      source_dir=$(dirname "$UNITS_FROM")
+      printf '%s\n' "$SOURCE" > "$OUT_DIR/source.md.tmp"
+      if test -f "$source_dir/source.md"; then cp "$source_dir/source.md" "$OUT_DIR/source.md.tmp"; fi
+      mv "$OUT_DIR/source.md.tmp" "$OUT_DIR/source.md"
+      if test -f "$source_dir/plan.md"; then
+        cp "$source_dir/plan.md" "$OUT_DIR/plan.md.tmp"
+        mv "$OUT_DIR/plan.md.tmp" "$OUT_DIR/plan.md"
+      else
+        rm -f "$OUT_DIR/plan.md"
+      fi
+      rm "$OUT_DIR/import-error"
+
+  - id: check_plan
+    depends: import_units
+    continue_on:
+      failure: true
+    env:
+      - OUT_DIR: ${steps.init.outputs.OUT_DIR}
+    run: |
+      set -euo pipefail
+      : > "$OUT_DIR/findings.md"
+      status=$(dagu status planning --run-id "$RUN")
+      iteration=$(sed -nE 's/.*push-back iteration: ([0-9]+).*/\1/p' <<<"$status" | head -1)
+      printf 'PLAN_REVIEW AGENT=plan-reviewer DAG=planning RUN=%s ITERATION=%s END\n' "$RUN" "${iteration:-0}" > "$OUT_DIR/generation"
+      printf 'GENERATION=%s\n' "$(cat "$OUT_DIR/generation")" >> "$DAGU_OUTPUT_FILE"
+      reject() {
+        printf 'units.jsonl:%s: rule=%s\n' "$1" "$2" | tee "$OUT_DIR/findings.md" >&2
+        exit 1
+      }
+      test ! -f "$OUT_DIR/import-error" || reject 1 import-units
+      file="$OUT_DIR/units.jsonl"
+      test -s "$file" || reject 1 required-units
+      line=0
+      ids='[]'
+      while IFS= read -r row || test -n "$row"; do
+        line=$((line + 1))
+        jq -se 'length == 1 and (.[0] | type == "object")' >/dev/null 2>&1 <<<"$row" || reject "$line" json-object
+        rule=$(jq -r --argjson ids "$ids" '
+          def nonempty: type == "string" and test("\\S");
+          def sections($names): .body as $body | all($names[]; . as $name | $body | test("(?m)^## " + $name + "[ \\t]*\\r?$"));
+          if has("depends") or has("blocks") or has("blocked_by") then "self-contained"
+          elif (.id | type != "string") then "kebab-id"
+          elif (.id | test("^[a-z0-9]+(-[a-z0-9]+)*$") | not) then "kebab-id"
+          elif (.id as $id | $ids | index($id)) != null then "unique-id"
+          elif (.title | nonempty | not) then "title"
+          elif (.dag != "feature" and .dag != "poc") then "dag"
+          elif .dag == "poc" and (.question | nonempty | not) then "poc-question"
+          elif (.labels | type != "array") then "labels"
+          elif (.labels | all(nonempty) | not) then "labels"
+          elif has("source") and (.source != "refine" and .source != "discovery" and .source != "plan") then "source"
+          elif has("findings") and ((.findings | type != "array") or (.findings | all(nonempty) | not)) then "findings"
+          elif has("findings") and ((.findings | length) != (.findings | unique | length)) then "unique-findings"
+          elif (.body | nonempty | not) then "body"
+          elif .dag == "feature" and (sections(["(Problema|Problem)","(Cambio|Change)","(Aceptación|Acceptance)"]) | not) then "required-sections"
+          elif .dag == "poc" and (sections(["PoC","(Veredicto|Verdict)","(Después del PASS|After PASS)"]) | not) then "required-sections"
+          else "" end' <<<"$row")
+        test -z "$rule" || reject "$line" "$rule"
+        ids=$(jq -c --arg id "$(jq -r .id <<<"$row")" '. + [$id]' <<<"$ids")
+      done < "$file"
+      cp "$file" "$OUT_DIR/validated-units.jsonl"
+    outputs:
+      - name: GENERATION
+
+  - id: review
+    depends: check_plan
+    action: human.task
+    with:
+      prompt: >-
+        ${steps.check_plan.outputs.GENERATION}.
+        Launch task agent=plan-reviewer named PlanReview<RUN> (retries v<N>)
+        with this exact marker, source.md, units.jsonl and optional plan.md from
+        ${steps.init.outputs.OUT_DIR}, open issues and active workspace runs.
+        Complete REVIEW with the allocated id of the completed independent agent.
+        Read findings.md first. For invalid units, correct UNITS_FROM upstream,
+        then explicitly push back this task to import_units.
+        Correction context: ${FEEDBACK}
+      form:
+        type: object
+        additionalProperties: false
+        properties:
+          REVIEW:
+            type: string
+            minLength: 1
+        required: [REVIEW]
+      push_back:
+        rewind_to: import_units
+        form:
+          type: object
+          additionalProperties: false
+          properties:
+            FEEDBACK:
+              type: string
+
+  - id: check_review
+    depends: review
+    continue_on:
+      failure: true
+    env:
+      - OUT_DIR: ${steps.init.outputs.OUT_DIR}
+      - REVIEW: ${steps.review.outputs.REVIEW}
+    run: |
+      set -euo pipefail
+      rm -f "$OUT_DIR/review-accepted" "$OUT_DIR/reviewed-units.jsonl"
+      trap 'printf "Review verification failed; inspect this step, correct upstream units or obtain a fresh reviewer, then push back explicitly.\n" >> "$OUT_DIR/findings.md"' ERR
+      [[ "$REVIEW" =~ ^[A-Za-z0-9][A-Za-z0-9._-]*$ ]]
+      test -n "$OMP_SESSION_ID"
+      cmp "$OUT_DIR/validated-units.jsonl" "$OUT_DIR/units.jsonl"
+      rest=$(curl -fsS "http://127.0.0.1:${DAGU_PORT:-8080}/api/v1/dag-runs/planning/$RUN")
+      cutoff=$(jq -er '[.dagRunDetails.nodes[]? | select(.step.id == "review")] | select(length == 1) | .[0].startedAt | select(type == "string" and length > 0)' <<<"$rest")
+      status=$(dagu status planning --run-id "$RUN")
+      iteration=$(sed -nE 's/.*push-back iteration: ([0-9]+).*/\1/p' <<<"$status" | head -1)
+      iteration=${iteration:-0}
+      marker="PLAN_REVIEW AGENT=plan-reviewer DAG=planning RUN=$RUN ITERATION=$iteration END"
+      test "$(cat "$OUT_DIR/generation")" = "$marker"
+      canonical=$(cd "$PRIMARY" && pwd -P)
+      home=$(cd "$HOME" && pwd -P)
+      tmp=$(cd "${TMPDIR:-/tmp}" && pwd -P)
+      encode_relative() {
+        local prefix=$1 relative=$2 result
+        result=${relative//\//-}; result=${result//\\/-}; result=${result//:/-}
+        if [[ -z "$result" ]]; then printf '%s' "$prefix"
+        elif [[ "$prefix" == *- ]]; then printf '%s%s' "$prefix" "$result"
+        else printf '%s-%s' "$prefix" "$result"; fi
+      }
+      if [[ "$canonical" == "$tmp" ]]; then encoded=$(encode_relative -tmp '')
+      elif [[ "$canonical" == "$tmp/"* ]]; then encoded=$(encode_relative -tmp "${canonical#"$tmp/"}")
+      elif [[ "$canonical" == "$home" ]]; then encoded=$(encode_relative - '')
+      elif [[ "$canonical" == "$home/"* ]]; then encoded=$(encode_relative - "${canonical#"$home/"}")
+      else
+        encoded=${canonical#/}; encoded=${encoded//\//-}; encoded=${encoded//\\/-}; encoded=${encoded//:/-}; encoded="--${encoded}--"
+      fi
+      shopt -s nullglob
+      matches=("$HOME/.omp/agent/sessions/$encoded"/*_"$OMP_SESSION_ID"/"$REVIEW".jsonl)
+      test "${#matches[@]}" -eq 1
+      transcript=${matches[0]}
+      expected_parent="${transcript%/*}.jsonl"
+      jq -se --arg parent "$expected_parent" --arg marker "$marker" --arg cutoff "$cutoff" '
+        def epoch:
+          capture("^(?<base>[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2})(?:\\.(?<frac>[0-9]+))?(?<zone>Z|(?<sign>[+-])(?<hour>[0-9]{2}):(?<minute>[0-9]{2}))$") |
+          ((.base + "Z") | fromdateiso8601) + (("0." + (.frac // "0")) | tonumber) -
+          (if .zone == "Z" then 0 else ((.hour | tonumber)*3600 + (.minute | tonumber)*60) * (if .sign == "+" then 1 else -1 end) end);
+        [ .[] | select(.type == "session") ] as $sessions |
+        [ .[] | select(.type == "session_init") ] as $inits |
+        [ .[] | select(.type == "message" and .message.role == "toolResult" and .message.toolName == "yield") ] as $yields |
+        $yields[-1].message.details.data as $data |
+        if ($sessions | length) != 1 or ($inits | length) != 1 then error("ambiguous transcript")
+        elif $sessions[0].parentSession != $parent or $inits[0].agent != "plan-reviewer" then error("foreign transcript")
+        elif (($inits[0].task // "") | contains($marker) | not) then error("generation marker")
+        elif ($inits[0].timestamp | epoch) <= ($cutoff | epoch) then error("stale transcript")
+        elif ($data | type) != "object" then error("last yield")
+        elif ($data.verdict != "accept" and $data.verdict != "revise") or ($data.findings | type) != "array" then error("review schema")
+        elif ($data.findings | all((.unit | type == "string") and (.text | type == "string" and test("\\S")) and (.severity == "blocker" or .severity == "concern")) | not) then error("findings schema")
+        elif $data.verdict == "revise" and ($data.findings | any(.severity == "blocker") | not) then error("revise requires blocker")
+        elif $data.verdict == "accept" and ($data.findings | any(.severity == "blocker")) then error("accept has blocker")
+        else $data end
+      ' "$transcript" > "$OUT_DIR/review-$iteration.json.tmp"
+      mv "$OUT_DIR/review-$iteration.json.tmp" "$OUT_DIR/review-$iteration.json"
+      if [[ "$(jq -r .verdict "$OUT_DIR/review-$iteration.json")" == revise ]]; then
+        jq -r '.findings[] | "[\(.severity)] \(.unit): \(.text)"' "$OUT_DIR/review-$iteration.json" > "$OUT_DIR/findings.md"
+      else
+        cp "$OUT_DIR/units.jsonl" "$OUT_DIR/reviewed-units.jsonl"
+        printf '%s\n' "$marker" > "$OUT_DIR/review-accepted"
+      fi
+
+  - id: approve
+    depends: check_review
+    action: human.task
+    with:
+      prompt: >-
+        Read ${steps.init.outputs.OUT_DIR}/units.jsonl, review-<iteration>.json
+        and findings.md. An accepted independent review is required for publication.
+        For corrections, edit UNITS_FROM upstream through refine/the coordinator,
+        then explicitly push back to import_units for a fresh import and review.
+        Only the operator authorizes APPROVED=all or a comma-separated subset of ids.
+        GitHub issues are created only after this approval and an accepted review.
+      form:
+        type: object
+        additionalProperties: false
+        properties:
+          APPROVED:
+            type: string
+            minLength: 1
+        required: [APPROVED]
+      push_back:
+        rewind_to: import_units
+        form:
+          type: object
+          additionalProperties: false
+          properties:
+            FEEDBACK:
+              type: string
+
+  - id: materialize
+    depends: approve
+    env:
+      - APPROVED: ${steps.approve.outputs.APPROVED}
+      - OUT_DIR: ${steps.init.outputs.OUT_DIR}
+      - NWO: ${steps.init.outputs.NWO}
+    run: |
+      set -euo pipefail
+      cmp "$OUT_DIR/reviewed-units.jsonl" "$OUT_DIR/units.jsonl"
+      cmp "$OUT_DIR/review-accepted" "$OUT_DIR/generation"
+      status=$(dagu status planning --run-id "$RUN")
+      iteration=$(sed -nE 's/.*push-back iteration: ([0-9]+).*/\1/p' <<<"$status" | head -1)
+      iteration=${iteration:-0}
+      test "$(cat "$OUT_DIR/review-accepted")" = "PLAN_REVIEW AGENT=plan-reviewer DAG=planning RUN=$RUN ITERATION=$iteration END"
+      jq -e '.verdict == "accept" and (.findings | all(.severity != "blocker"))' "$OUT_DIR/review-$iteration.json" >/dev/null
+      units="$OUT_DIR/units.jsonl"
+      issues="$OUT_DIR/issues.jsonl"
+      if [[ "$APPROVED" == all ]]; then
+        jq -sc '.' "$units" > "$OUT_DIR/approved-units.json"
+      else
+        [[ "$APPROVED" != *, && "$APPROVED" != ,* && "$APPROVED" != *,,* && -n "$APPROVED" ]]
+        jq -sc --arg approved "$APPROVED" '
+          . as $units | ($approved / ",") as $ids |
+          if ($ids | length) != ($ids | unique | length) then error("duplicate approved id")
+          elif any($ids[]; . as $id | ($units | map(.id) | index($id)) == null) then error("unknown approved id")
+          else [$ids[] as $id | $units[] | select(.id == $id)] end
+        ' "$units" > "$OUT_DIR/approved-units.json"
+      fi
+      existing=$(gh api --paginate --slurp "repos/$NWO/issues?state=all&per_page=100" | jq -ec 'add | select(type == "array")')
+      : > "$issues.tmp"
+      index=0
+      while IFS= read -r unit; do
+        index=$((index + 1))
+        id=$(jq -er '.id' <<<"$unit")
+        marker="<!-- breakdown-unit: $RUN/$id -->"
+        source_marker=""
+        if [[ "$(jq -r --arg source "$SOURCE" '.source // $source' <<<"$unit")" == discovery ]]; then
+          candidate="<!-- discovery-unit: $id -->"
+          if jq -e --arg marker "$candidate" '.body | contains($marker)' <<<"$unit" >/dev/null; then
+            source_marker=$candidate
+          fi
+        fi
+        matches=$(jq -c --arg marker "$marker" --arg source_marker "$source_marker" '
+          [.[] | select((.body // "") | contains($marker) or
+            ($source_marker != "" and contains($source_marker)))]
+        ' <<<"$existing")
+        count=$(jq 'length' <<<"$matches")
+        if test "$count" -gt 1; then
+          printf 'issues.jsonl:1: rule=unique-issue-marker unit=%s\n' "$id" >&2
+          exit 1
+        elif test "$count" -eq 1; then
+          number=$(jq -er '.[0].number' <<<"$matches")
+          url=$(jq -er '.[0].html_url // .[0].url' <<<"$matches")
+          reused=true
+        else
+          body_file="$OUT_DIR/issue-body-$index.md"
+          {
+            jq -r '.body' <<<"$unit"
+            printf '\n\n%s\n' "$marker"
+            jq -r --arg source "$SOURCE" '"\nBreakdown source: " + (.source // $source), (if has("findings") then "Finding lineage: " + (.findings | join(", ")) else empty end)' <<<"$unit"
+          } > "$body_file"
+          title=$(jq -er '.title' <<<"$unit")
+          labels=()
+          while IFS= read -r label; do labels+=(--label "$label"); done < <(jq -r '.labels[]' <<<"$unit")
+          url=$(gh issue create --repo "$NWO" --title "$title" --body-file "$body_file" "${labels[@]}")
+          number=${url##*/}
+          [[ "$number" =~ ^[1-9][0-9]*$ ]]
+          reused=false
+          existing=$(jq -c --argjson number "$number" --arg url "$url" --arg body "$(cat "$body_file")" '. + [{number:$number,html_url:$url,body:$body}]' <<<"$existing")
+        fi
+        jq -nc --arg id "$id" --argjson number "$number" --arg url "$url" --argjson reused "$reused" '{id:$id,number:$number,url:$url,reused:$reused}' >> "$issues.tmp"
+      done < <(jq -c '.[]' "$OUT_DIR/approved-units.json")
+      mv "$issues.tmp" "$issues"
+
+

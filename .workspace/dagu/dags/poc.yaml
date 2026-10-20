@@ -1,7 +1,7 @@
-# dagu-feature-bundle: @a4s/omp-dagu@0.3.10 source=pablontiv/a4s@85fe2c1040c24678d4026685d56e176e4f02e4dd bootstrap=bootstrap-backscroll-v0-3-10 dagu=2.20.1
+# dagu-feature-bundle: @a4s/omp-dagu@0.3.93 source=pablontiv/a4s@fc678c92df21c7307089ab7c226c16388ef89d80 bootstrap=bootstrap-backscroll-v0-3-93 dagu=2.20.1
 labels:
   - workspace=backscroll
-  - dagu-feature-bundle=0.3.10
+  - dagu-feature-bundle=0.3.93
 queue: backscroll
 type: graph
 dotenv: []
@@ -9,33 +9,82 @@ shell: bash
 max_active_steps: 1
 max_clean_up_time_sec: 120
 params:
-  - name: ISSUE
-    type: string
-    default: ""
-  - name: QUESTION
-    type: string
-    default: ""
-  - name: PRIMARY
-    type: string
-    default: "/Users/Shared/harness/backscroll"
-  - name: BASE_BRANCH
-    type: string
-    default: "main"
-  - name: OMP_SESSION_ID
-    type: string
-    default: ""
-  - name: TEST_PATHS
-    type: string
-    default: "(^|/)tests/|_test\\.go$|^scripts/test-.*\\.sh$"
+  type: object
+  additionalProperties: true
+  properties:
+    ISSUE:
+      type: string
+      minLength: 1
+    QUESTION:
+      type: string
+      default: ""
+    BASE_BRANCH:
+      type: string
+      default: "main"
+    OMP_SESSION_ID:
+      type: string
+      default: ""
+    TEST_PATHS:
+      type: string
+      default: "(^|/)tests/|_test\\.go$|^scripts/test-.*\\.sh$"
+  required: [ISSUE]
 env:
+  - PRIMARY: "/Users/Shared/harness/backscroll"
   - RUN: ${context.run.id}
   - WORKTREE: ${PRIMARY}/.workspace/worktrees/poc-${RUN}
-  - DAGU_FEATURE_BUNDLE: "dagu-feature-bundle=0.3.10 source=pablontiv/a4s@85fe2c1040c24678d4026685d56e176e4f02e4dd bootstrap=bootstrap-backscroll-v0-3-10"
+  - DAGU_FEATURE_BUNDLE: "dagu-feature-bundle=0.3.93 source=pablontiv/a4s@fc678c92df21c7307089ab7c226c16388ef89d80 bootstrap=bootstrap-backscroll-v0-3-93"
+  - DAGU_RESOURCE_GUARD: |
+      resource_lock() {
+        local primary common expected actual attempt
+        primary=$(cd "$PRIMARY" && pwd -P)
+        common=$(git -C "$PRIMARY" rev-parse --path-format=absolute --git-common-dir)
+        [[ "$(git -C "$PRIMARY" rev-parse --absolute-git-dir)" == "$common" &&
+           "$(cd "$(git -C "$PRIMARY" rev-parse --show-toplevel)" && pwd -P)" == "$primary" &&
+           "$RUN" =~ ^[A-Za-z0-9][A-Za-z0-9._-]*$ ]] ||
+          { echo 'dagu-feature: PRIMARY must be the main checkout; valid run required' >&2; exit 1; }
+        expected="$primary/.workspace/worktrees/poc-$RUN"
+        if [[ -e "$WORKTREE" && "$(cd "$WORKTREE" && pwd -P)" == "$primary" ]]; then
+          echo "dagu-feature: protected primary or unmanaged target $WORKTREE" >&2; exit 1
+        fi
+        mkdir -p "$primary/.workspace/worktrees"
+        actual="$(cd "$(dirname "$WORKTREE")" && pwd -P)/$(basename "$WORKTREE")"
+        if [[ -e "$WORKTREE" ]]; then actual=$(cd "$WORKTREE" && pwd -P); fi
+        [[ "$actual" == "$expected" && "$actual" != "$primary" ]] ||
+          { echo "dagu-feature: protected primary or unmanaged target $WORKTREE" >&2; exit 1; }
+        RESOURCE_LOCK="$common/poc/resource-$RUN.lock"
+        mkdir -p "$(dirname "$RESOURCE_LOCK")"
+        attempt=0
+        until mkdir "$RESOURCE_LOCK" 2>/dev/null; do
+          attempt=$((attempt + 1))
+          [[ "$attempt" -lt 100 ]] || { echo "dagu-feature: ownership lock unavailable $RESOURCE_LOCK" >&2; exit 1; }
+          sleep 0.1
+        done
+        trap 'rmdir "$RESOURCE_LOCK"' EXIT
+        if [[ -e "$WORKTREE" ]]; then
+          [[ "$(git -C "$WORKTREE" rev-parse --path-format=absolute --git-common-dir)" == "$common" &&
+             "$(git -C "$WORKTREE" branch --show-current)" == "poc/$RUN" &&
+             "$(cd "$(git -C "$WORKTREE" rev-parse --show-toplevel)" && pwd -P)" == "$expected" ]] ||
+            { echo 'dagu-feature: candidate worktree identity mismatch; preserved' >&2; exit 1; }
+        fi
+        PRIMARY=$primary WORKTREE=$expected
+      }
 steps:
+  - id: admission
+    run: |
+      set -euo pipefail
+      rejected=$(jq -er 'keys[] | select(. == "GATE" or . == "REBASE_RESOLVER" or . == "REQUIRED_CHECK" or . == "PRIMARY" or . == "BRANCH")' <<<"$DAGU_PARAMS_JSON") || [[ $? == 4 ]]
+      if [[ -n "$rejected" ]]; then
+        printf 'admission rejected run parameter: %s\n' "$rejected" >&2
+        printf 'adopted policy PRIMARY=%q BRANCH=%q\n' "$PRIMARY" "poc/$RUN" >&2
+        exit 1
+      fi
+
   - id: record
+    depends: admission
     run: |
       set -euo pipefail
       [[ "$RUN" =~ ^[A-Za-z0-9][A-Za-z0-9._-]*$ ]]
+      [[ "$ISSUE" =~ ^[1-9][0-9]*$ ]]
       cd "$PRIMARY"
       STATE=$(git rev-parse --path-format=absolute --git-path "poc/runs/$RUN")
       mkdir -p "$STATE"
@@ -60,19 +109,10 @@ steps:
         capture("^<!-- poc-verdict:(?<verdict>PASS|FAIL|INCONCLUSIVE) scope:(?<scope>OK|FAIL) run:(?<run>[^\\s]+) attempt:(?<attempt>[1-9][0-9]*) base:(?<base>[^\\s]+) -->$");
       JQ
       gh repo view --json nameWithOwner --jq .nameWithOwner > "$STATE/repo"
-      if [[ -z "$ISSUE" ]]; then
-        test -n "$QUESTION"
-        TITLE=$(jq -nr --arg q "$QUESTION" '$q|gsub("\\s+";" ")|"PoC: " + .|.[0:200]')
-        printf '%s\n' "$QUESTION" > "$STATE/issue-body.txt"
-        URL=$(gh issue create --repo "$(cat "$STATE/repo")" --title "$TITLE" --body-file "$STATE/issue-body.txt")
-        ISSUE=${URL##*/}
-        touch "$STATE/created"
-      fi
-      [[ "$ISSUE" =~ ^[1-9][0-9]*$ ]]
       printf '%s\n' "$ISSUE" > "$STATE/issue.number"
       gh issue view "$ISSUE" --repo "$(cat "$STATE/repo")" --json body > "$STATE/record-body.json"
       if [[ -z "$QUESTION" ]]; then
-        QUESTION=$(jq -r .body "$STATE/record-body.json")
+        QUESTION=$(jq -er -L "$STATE" 'include "sections"; .body | section("## PoC") | select(norm | length > 0)' "$STATE/record-body.json")
       fi
       test -n "$QUESTION"
       printf '%s\n' "$QUESTION" > "$STATE/question.txt"
@@ -117,9 +157,33 @@ steps:
       test "$primary_root" = "$primary_path" || { printf 'base: PRIMARY %s resolves to %s, repository root is %s\n' "$PRIMARY" "$primary_path" "$primary_root" >&2; exit 1; }
       test "$(git -C "$PRIMARY" rev-parse --absolute-git-dir)" = "$(git -C "$PRIMARY" rev-parse --path-format=absolute --git-common-dir)"
       test "$(git -C "$PRIMARY" symbolic-ref --short HEAD)" = "$BASE_BRANCH"
-      test -z "$(git -C "$PRIMARY" status --porcelain --untracked-files=all)"
+      primary_status=$(git -C "$PRIMARY" status --porcelain --untracked-files=all)
       git -C "$PRIMARY" fetch origin || { printf 'base: fetch origin failed; restore origin access and recover this run\n' >&2; exit 1; }
-      git -C "$PRIMARY" merge --ff-only "origin/$BASE_BRANCH" || { printf 'base: ff-only failed; reconcile primary with origin/%s preserving commits, then recover this run\n' "$BASE_BRANCH" >&2; exit 1; }
+      if [[ -z "$primary_status" ]]; then
+        git -C "$PRIMARY" merge --ff-only "origin/$BASE_BRANCH" || true
+      fi
+      observed_sha=$(git -C "$PRIMARY" rev-parse HEAD)
+      expected_sha=$(git -C "$PRIMARY" rev-parse "origin/$BASE_BRANCH")
+      observed_version=not-applicable
+      expected_version=not-applicable
+      manifest=packages/omp-dagu/package.json
+      if [[ -e "$PRIMARY/$manifest" ]] || git -C "$PRIMARY" cat-file -e "origin/$BASE_BRANCH:$manifest" 2>/dev/null; then
+        observed_version=$(jq -er '.version | select(type == "string" and length > 0)' "$PRIMARY/$manifest" 2>/dev/null) || observed_version=unavailable
+        expected_version=$(git -C "$PRIMARY" show "origin/$BASE_BRANCH:$manifest" | jq -er '.version | select(type == "string" and length > 0)') || expected_version=unavailable
+      fi
+      cause=
+      if [[ "$observed_sha" != "$expected_sha" ]]; then
+        cause=primary_ahead
+        if git -C "$PRIMARY" merge-base --is-ancestor "$observed_sha" "$expected_sha"; then cause=primary_behind; fi
+      elif [[ "$observed_version" != "$expected_version" || "$observed_version" == unavailable ]]; then
+        cause=version_stale
+      fi
+      if [[ -n "$cause" ]]; then
+        printf 'base: cause=%s observed_sha=%s expected_sha=%s observed_version=%s expected_version=%s; reconcile primary preserving commits\n' \
+          "$cause" "$observed_sha" "$expected_sha" "$observed_version" "$expected_version" >&2
+        exit 1
+      fi
+      test -z "$primary_status"
       STATE=$(git -C "$PRIMARY" rev-parse --path-format=absolute --git-path "poc/runs/$RUN")
       git -C "$PRIMARY" rev-parse HEAD > "$STATE/base.sha"
       printf 'BASE_SHA=%s\n' "$(cat "$STATE/base.sha")" >> "$DAGU_OUTPUT_FILE"
@@ -130,9 +194,17 @@ steps:
     depends: base
     run: |
       set -euo pipefail
+      eval "$DAGU_RESOURCE_GUARD"
+      resource_lock
       STATE=$(git -C "$PRIMARY" rev-parse --path-format=absolute --git-path "poc/runs/$RUN")
       git -C "$PRIMARY" check-ignore -q "$WORKTREE"
-      git -C "$PRIMARY" worktree add -b "poc/$RUN" "$WORKTREE" "$(cat "$STATE/base.sha")"
+      if [[ -e "$WORKTREE" ]]; then
+        printf 'Reusing %s\n' "$WORKTREE"
+      elif git -C "$PRIMARY" show-ref --verify --quiet "refs/heads/poc/$RUN"; then
+        git -C "$PRIMARY" worktree add "$WORKTREE" "poc/$RUN"
+      else
+        git -C "$PRIMARY" worktree add -b "poc/$RUN" "$WORKTREE" "$(cat "$STATE/base.sha")"
+      fi
       RESULT=$(git -C "$WORKTREE" rev-parse --path-format=absolute --git-path poc/result.md)
       mkdir -p "$(dirname "$RESULT")"
       printf '%s\n' "$RESULT" > "$STATE/result.path"
@@ -149,9 +221,35 @@ steps:
         and ## Después del PASS for PASS. Record references or digests of every executed
         release/image in Ruta ejercitada. Keep tests and Markdown in the cutover.
         An empty diff is valid. Complete only after recording observed evidence.
+      form:
+        type: object
+        properties:
+          decline:
+            type: string
+            default: ""
+
+  - id: decline
+    depends: run_poc
+    continue_on: skipped
+    preconditions:
+      - condition: "${steps.run_poc.outputs.decline}"
+        expected: "re:.+"
+    env:
+      - DECLINE: ${steps.run_poc.outputs.decline}
+    run: |
+      set -euo pipefail
+      STATE=$(git -C "$PRIMARY" rev-parse --path-format=absolute --git-path "poc/runs/$RUN")
+      gh issue comment "$(cat "$STATE/issue.number")" --repo "$(cat "$STATE/repo")" \
+        --body "PoC declined by operator: $DECLINE"
 
   - id: scope_gate
     depends: run_poc
+    continue_on:
+      failure: true
+      skipped: true
+    preconditions:
+      - condition: "${steps.run_poc.outputs.decline}"
+        expected: "re:^$"
     run: |
       set -euo pipefail
       STATE=$(git -C "$PRIMARY" rev-parse --path-format=absolute --git-path "poc/runs/$RUN")
@@ -164,26 +262,50 @@ steps:
       git -C "$WORKTREE" ls-files --others --exclude-standard -z > "$STATE/untracked.paths"
       while IFS= read -r -d '' path; do
         if [[ "$path" == *.md || "$path" =~ $TEST_PATHS ]]; then
-          printf 'Cutover path: %s\n' "$path" >&2
+          printf 'Cutover path: %s\n' "$path" | tee "$STATE/scope-errors" >&2
           exit 1
         fi
       done < <(cat "$STATE/tracked.paths" "$STATE/untracked.paths")
-      jq -eRs -L "$STATE" --rawfile question "$STATE/question.txt" '
+      jq -rRs -L "$STATE" --rawfile question "$STATE/question.txt" '
         include "sections";
         . as $result |
-        (split("\n")[0] | test("^VERDICT: (PASS|FAIL|INCONCLUSIVE)\\r?$")) and
-        (["## Pregunta", "## Proposición demostrada", "## Ruta ejercitada", "## Comandos y salida"] |
-          all(.[]; . as $heading | ($result|section($heading)|norm|length) > 0)) and
-        ((section("## Pregunta")|norm) == ($question|norm)) and
-        (if (split("\n")[0]|rtrimstr("\r")) == "VERDICT: PASS" then
-          (section("## Después del PASS")|norm|length) > 0 else true end)
-      ' "$STATE/result.md" >/dev/null
+        [
+          (if (split("\n")[0] | test("^VERDICT: (PASS|FAIL|INCONCLUSIVE)\\r?$")) then empty else "Invalid VERDICT line: expected VERDICT: PASS|FAIL|INCONCLUSIVE" end),
+          (["## Pregunta", "## Proposición demostrada", "## Ruta ejercitada", "## Comandos y salida"][] |
+            . as $heading | if ($result|section($heading)|norm|length) > 0 then empty else "Missing or empty required section: \($heading)" end),
+          (if (section("## Pregunta")|norm) == ($question|norm) then empty else "## Pregunta differs from QUESTION (normalized): result=\(section("## Pregunta")|norm|tojson) QUESTION=\($question|norm|tojson)" end),
+          (if (split("\n")[0]|rtrimstr("\r")) == "VERDICT: PASS" and (section("## Después del PASS")|norm|length) == 0 then "Missing or empty ## Después del PASS for PASS" else empty end)
+        ] | .[]
+      ' "$STATE/result.md" > "$STATE/scope-errors"
+      if [[ -s "$STATE/scope-errors" ]]; then
+        cat "$STATE/scope-errors" >&2
+        exit 1
+      fi
       printf 'OK\n' > "$STATE/scope"
 
-  - id: publish
+  - id: fix_result
     depends: scope_gate
+    continue_on: skipped
+    preconditions:
+      - condition: "${scope_gate.exit_code}"
+        expected: "re:^[1-9][0-9]*$"
+      - condition: "${steps.run_poc.outputs.decline}"
+        expected: "re:^$"
+    action: human.task
+    with:
+      prompt: "Correct result.md using scope_gate stderr, then rerun the experiment in the same worktree."
+      push_back:
+        rewind_to: run_poc
+
+  - id: publish
+    depends: fix_result
+    continue_on: skipped
+    preconditions:
+      - condition: "${steps.run_poc.outputs.decline}"
+        expected: "re:^$"
     run: &publish |
       set -euo pipefail
+      if jq -e 'has("GATE") or has("REBASE_RESOLVER") or has("REQUIRED_CHECK") or has("PRIMARY") or has("BRANCH")' <<<"${DAGU_PARAMS_JSON:-"{}"}" >/dev/null; then exit 0; fi
       STATE=$(git -C "$PRIMARY" rev-parse --path-format=absolute --git-path "poc/runs/$RUN")
       test -f "$STATE/issue.number" || exit 0
       REPO=$(cat "$STATE/repo")
@@ -198,6 +320,7 @@ steps:
       VERDICT=$(head -n 1 "$STATE/result.md" 2>/dev/null | tr -d '\r' | cut -d ' ' -f 2 || true)
       case "$VERDICT" in PASS|FAIL|INCONCLUSIVE) ;; *) VERDICT=ORCHESTRATION_FAILURE ;; esac
       printf '%s\n' "$VERDICT" > "$STATE/verdict"
+      rm -f "$STATE/comment.url"
       : > "$STATE/full.patch"
       : > "$STATE/diffstat"
       if [[ -d "$WORKTREE" && "$BASE_SHA" != unknown ]]; then
@@ -255,6 +378,10 @@ steps:
 
   - id: decide
     depends: publish
+    continue_on: skipped
+    preconditions:
+      - condition: "${steps.run_poc.outputs.decline}"
+        expected: "re:^$"
     action: human.task
     with:
       prompt: >-
@@ -273,6 +400,10 @@ steps:
 
   - id: dispose
     depends: decide
+    continue_on: skipped
+    preconditions:
+      - condition: "${steps.run_poc.outputs.decline}"
+        expected: "re:^$"
     env:
       - PROMOTE: ${steps.decide.outputs.promote}
     run: |
@@ -285,9 +416,7 @@ steps:
         test "$(cat "$STATE/scope")" = OK
         gh issue view "$ISSUE" --repo "$REPO" --json body > "$STATE/current-body.json"
         gh api --paginate --slurp "repos/$REPO/issues/$ISSUE/comments?per_page=100" > "$STATE/pages.json"
-        CREATED=no
-        if test -f "$STATE/created"; then CREATED=yes; fi
-        jq -er -L "$STATE" --arg created "$CREATED" --slurpfile issue "$STATE/current-body.json" '
+        jq -er -L "$STATE" --slurpfile issue "$STATE/current-body.json" '
           include "sections";
           [ .[][] ] as $comments |
           [$comments[] | . as $c | (.body|marker) as $m | {comment:$c,marker:$m}] |
@@ -300,8 +429,7 @@ steps:
            else $last.comment.body end) as $result |
           [$comments[] | select(.body|split("\n")[0]|test("^<!-- poc-triage:yes run:[^\\s]+ -->$"))] as $triages |
           (if ($triages|length) > 0 then $triages[-1].body|section("## Pregunta")|norm
-           elif $created == "yes" then $issue[0].body|split("\n\n## Después del PASS\n")[0]|norm
-           else "" end) as $question |
+           else $issue[0].body|section("## PoC")|norm end) as $question |
           if $last.marker.verdict == "PASS" and $last.marker.scope == "OK"
             and ($result|marker) == $last.marker
             and $question != "" and $question == ($result|section("## Pregunta")|norm)
@@ -310,17 +438,37 @@ steps:
             and ($issue[0].body|section("## Después del PASS")|norm|length) > 0
           then $last.comment.html_url else error("Latest verdict is not a current, complete PASS") end
         ' "$STATE/pages.json" > "$STATE/promotion.url"
-        dagu enqueue --run-id "feature-$RUN" "$PRIMARY/.workspace/dagu/dags/feature.yaml" -- \
-          ISSUE="$ISSUE" PRIMARY="$PRIMARY" BRANCH="dagu/issue-$ISSUE" \
+        dagu-feature-bundle enqueue --run-id "feature-$RUN" "$PRIMARY/.workspace/dagu/dags/feature.yaml" -- \
+          ISSUE="$ISSUE" \
           BASE_BRANCH="$BASE_BRANCH" OMP_SESSION_ID="$OMP_SESSION_ID" \
           POC_BASIS="$(cat "$STATE/promotion.url")"
-      elif [[ "$VERDICT" == FAIL && -f "$STATE/created" ]]; then
-        gh issue close "$ISSUE" --repo "$REPO" --reason 'not planned' --comment "VERDICT: FAIL; run:$RUN. $(cat "$STATE/comment.url")"
       else
         test "$PROMOTE" = no
       fi
 
 handler_on:
+  wait:
+    run: |
+      set -euo pipefail
+      if [[ ",$DAG_WAITING_STEPS," == *,fix_result,* ]]; then
+        STATE=$(git -C "$PRIMARY" rev-parse --path-format=absolute --git-path "poc/runs/$RUN")
+        # Dagu persists Waiting only after onWait exits.
+        nohup bash -c '
+          set -euo pipefail
+          RUN=$1
+          for attempt in $(seq 1 60); do
+            STATUS=$(dagu status poc --run-id "$RUN")
+            if grep -q "^Waiting -" <<<"$STATUS"; then
+              ITERATION=$(sed -nE "s/.*push-back iteration: ([0-9]+).*/\1/p" <<<"$STATUS" | head -1)
+              dagu human-task push-back poc --run-id "$RUN" --step fix_result --expected-iteration "${ITERATION:-0}"
+              exit 0
+            fi
+            sleep 1
+          done
+          printf "fix_result transition did not reach Waiting; inspect this checkpoint.\n" >&2
+          exit 1
+        ' _ "$RUN" </dev/null > "$STATE/scope-transition.log" 2>&1 &
+      fi
   failure:
     env:
       - PUBLICATION_FAILURE: "yes"
@@ -328,13 +476,36 @@ handler_on:
   exit:
     run: |
       set -euo pipefail
+      if jq -e 'has("GATE") or has("REBASE_RESOLVER") or has("REQUIRED_CHECK") or has("PRIMARY") or has("BRANCH")' <<<"${DAGU_PARAMS_JSON:-"{}"}" >/dev/null; then exit 0; fi
+      eval "$DAGU_RESOURCE_GUARD"
+      resource_lock
       [[ "$RUN" =~ ^[A-Za-z0-9][A-Za-z0-9._-]*$ ]]
       WT="$PRIMARY/.workspace/worktrees/poc-$RUN"
       BRANCH="poc/$RUN"
       WT_REAL="$WT"
       if [[ -d "$WT" ]]; then
         WT_REAL=$(cd "$WT" && pwd -P)
-        git -C "$PRIMARY" worktree remove "$WT_REAL"
+        REMOVE_ARGS=()
+        if [[ -n "$(git -C "$WT_REAL" status --porcelain --untracked-files=all)" ]]; then
+          STATE=$(git -C "$PRIMARY" rev-parse --path-format=absolute --git-path "poc/runs/$RUN")
+          BASE_SHA=$(cat "$STATE/base.sha" 2>/dev/null || printf unknown)
+          CURRENT_PATCH=$(mktemp)
+          trap 'rm -f "$CURRENT_PATCH"; rmdir "$RESOURCE_LOCK"' EXIT
+          if [[ -f "$STATE/full.patch" && -s "$STATE/comment.url" && "$BASE_SHA" != unknown ]] &&
+             git -C "$WT_REAL" diff --binary "$BASE_SHA" > "$CURRENT_PATCH"; then
+            while IFS= read -r -d '' path; do
+              (cd "$WT_REAL"; git diff --no-index --binary -- /dev/null "$path") >> "$CURRENT_PATCH" || test "$?" -eq 1
+            done < <(git -C "$WT_REAL" ls-files --others --exclude-standard -z)
+            if cmp -s "$CURRENT_PATCH" "$STATE/full.patch"; then
+              REMOVE_ARGS=(--force)
+            fi
+          fi
+          if [[ ${#REMOVE_ARGS[@]} -eq 0 ]]; then
+            printf 'cleanup retained: worktree %s has unpublished changes; evidence %s\n' "$WT" "$STATE" >&2
+            exit 1
+          fi
+        fi
+        git -C "$PRIMARY" worktree remove "${REMOVE_ARGS[@]}" "$WT_REAL"
       fi
       git -C "$PRIMARY" worktree prune
       if git -C "$PRIMARY" show-ref --verify --quiet "refs/heads/$BRANCH"; then
