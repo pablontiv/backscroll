@@ -706,6 +706,7 @@ func (s *startupSyncService) syncWithProgress(ctx context.Context, cfg *config.C
 				Timestamp:         timestamp,
 				ContentType:       msg.ContentType,
 				ToolName:          msg.ToolName,
+				ToolUseID:         msg.ToolUseID,
 				CommandHead:       msg.CommandHead,
 				IsError:           msg.IsError,
 				WasInterrupted:    msg.WasInterrupted,

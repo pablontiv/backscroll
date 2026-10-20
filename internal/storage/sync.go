@@ -29,6 +29,7 @@ type IndexedMessage struct {
 	ContentType string
 	// F0a rich capture
 	ToolName          string
+	ToolUseID         string // native call identity; independent of the canonical message UUID
 	CommandHead       string
 	IsError           *bool
 	WasInterrupted    bool
@@ -391,9 +392,9 @@ func (d *Database) SyncFilesContext(ctx context.Context, files []IndexedFile) (r
 				if eventErr == sql.ErrNoRows {
 					if _, err := tx.ExecContext(ctx, `
 					INSERT INTO tool_events
-					(message_uuid, source_path, ordinal, tool_name, command_head, is_error, exit_code, extraction_version)
-					VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-				`, uuidVal, file.SourcePath, msg.Ordinal, msg.ToolName, msg.CommandHead, isErrVal, exitCodeVal, msg.ExtractionVersion); err != nil {
+					(message_uuid, source_path, ordinal, tool_name, command_head, is_error, exit_code, extraction_version, native_call_id)
+					VALUES (?, ?, ?, ?, ?, ?, ?, ?, NULLIF(?, ''))
+				`, uuidVal, file.SourcePath, msg.Ordinal, msg.ToolName, msg.CommandHead, isErrVal, exitCodeVal, msg.ExtractionVersion, msg.ToolUseID); err != nil {
 						return fmt.Errorf("insert tool_event for %s: %w", file.SourcePath, err)
 					}
 				}
@@ -414,6 +415,20 @@ func (d *Database) SyncFilesContext(ctx context.Context, files []IndexedFile) (r
 						msg.UUID, msg.ToolName, msg.CommandHead, isErrVal, exitCodeVal,
 						msg.ExtractionVersion, file.SourcePath, msg.Ordinal); err != nil {
 						return fmt.Errorf("claim lossy tool_event for %s: %w", file.SourcePath, err)
+					}
+				}
+				// Native call identity is independent of a search row UUID. Fill
+				// missing proof, and reject contradictory identities transactionally.
+				if eventErr == nil && msg.ToolUseID != "" {
+					var nativeID sql.NullString
+					if err := tx.QueryRowContext(ctx, `SELECT native_call_id FROM tool_events WHERE source_path = ? AND ordinal = ?`, file.SourcePath, msg.Ordinal).Scan(&nativeID); err != nil {
+						return fmt.Errorf("inspect native call identity for %s: %w", file.SourcePath, err)
+					}
+					if nativeID.Valid && nativeID.String != "" && nativeID.String != msg.ToolUseID {
+						return fmt.Errorf("conflicting native call identity for %s ordinal %d", file.SourcePath, msg.Ordinal)
+					}
+					if _, err := tx.ExecContext(ctx, `UPDATE tool_events SET native_call_id = ? WHERE source_path = ? AND ordinal = ? AND NULLIF(native_call_id, '') IS NULL`, msg.ToolUseID, file.SourcePath, msg.Ordinal); err != nil {
+						return fmt.Errorf("enrich native call identity for %s: %w", file.SourcePath, err)
 					}
 				}
 				// A stable call may precede its result. Fill only unknown signals;

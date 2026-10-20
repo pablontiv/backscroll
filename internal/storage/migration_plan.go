@@ -530,6 +530,7 @@ var migrationPlanDispatch = map[compat.MigrationStep]migrationApplier{
 	{Version: 16, Name: "V16 parser-backed message origin"}:                              applyV16,
 	{Version: 17, Name: "V17 project attribution evidence"}:                              applyV17,
 	{Version: 18, Name: "V18 ingestion semantics fingerprint"}:                           applyV18,
+	{Version: 19, Name: "V19 native tool call identity"}:                                 applyV19,
 }
 
 func planStartsFromEmptySchema(plan compat.MigrationPlan) bool {
@@ -987,4 +988,13 @@ func applyV18(ctx context.Context, tx *sql.Tx, _ compat.SchemaShape) error {
 		return fmt.Errorf("apply v18 ingestion semantics fingerprint: %w", err)
 	}
 	return recordMigration(ctx, tx, 18, "V18 ingestion semantics fingerprint", sqlV18, "record migration v18")
+}
+
+const sqlV19 = `ALTER TABLE tool_events ADD COLUMN native_call_id TEXT;`
+
+func applyV19(ctx context.Context, tx *sql.Tx, _ compat.SchemaShape) error {
+	if _, err := tx.ExecContext(ctx, sqlV19); err != nil {
+		return fmt.Errorf("apply v19 native tool call identity: %w", err)
+	}
+	return recordMigration(ctx, tx, 19, "V19 native tool call identity", sqlV19, "record migration v19")
 }
