@@ -28,16 +28,7 @@ func Mine(sequences []Sequence, minSupport, minLen, maxLen int) []Pattern {
 	var patterns []Pattern
 
 	// Single-item frequency pass
-	freq := make(map[string]int)
-	for _, seq := range sequences {
-		seen := make(map[string]bool)
-		for _, item := range seq.Items {
-			if !seen[item] {
-				freq[item]++
-				seen[item] = true
-			}
-		}
-	}
+	freq := sequenceFrequencies(sequences)
 
 	// Collect frequent 1-patterns
 	var onePatterns []Pattern
@@ -90,16 +81,7 @@ func mineExtensions(projected []Sequence, base Pattern, minSupport, minLen, maxL
 
 	// Recursive case: mine extensions from projected database
 	// Step 1: Find frequent single items in the projected database
-	freq := make(map[string]int)
-	for _, seq := range projected {
-		seen := make(map[string]bool)
-		for _, item := range seq.Items {
-			if !seen[item] {
-				freq[item]++
-				seen[item] = true
-			}
-		}
-	}
+	freq := sequenceFrequencies(projected)
 
 	var patterns []Pattern
 	for item, count := range freq {
@@ -126,6 +108,22 @@ func mineExtensions(projected []Sequence, base Pattern, minSupport, minLen, maxL
 	}
 
 	return patterns
+}
+
+// sequenceFrequencies counts each item once per sequence in the supplied database.
+// The caller supplies either the initial corpus or the current projected suffixes.
+func sequenceFrequencies(db []Sequence) map[string]int {
+	freq := make(map[string]int)
+	for _, seq := range db {
+		seen := make(map[string]bool)
+		for _, item := range seq.Items {
+			if !seen[item] {
+				freq[item]++
+				seen[item] = true
+			}
+		}
+	}
+	return freq
 }
 
 // project extracts the suffix of a sequence after the first completion of the base pattern.
