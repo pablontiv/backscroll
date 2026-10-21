@@ -94,11 +94,11 @@ operates on the index synchronized at command startup. It never deletes indexed
 content: sessions whose source files have expired from disk remain preserved in
 the perennial event store, which has no deletion path.`,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			startup := startupResultFrom(cmd)
-			if startup.Config == nil {
-				return fmt.Errorf("startup configuration unavailable")
+			cfg, err := startupResultFrom(cmd).requireConfig()
+			if err != nil {
+				return err
 			}
-			return runner.runRebuild(cmd.Context(), stdout, stderr, startup.Config)
+			return runner.runRebuild(cmd.Context(), stdout, stderr, cfg)
 		},
 	}
 

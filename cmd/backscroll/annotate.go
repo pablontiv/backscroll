@@ -40,11 +40,11 @@ fallback. Re-annotating the same (source_path, ordinal, kind) replaces the label
 			})
 		},
 		RunE: func(cmd *cobra.Command, args []string) error {
-			startup := startupResultFrom(cmd)
-			if startup.Config == nil {
-				return fmt.Errorf("startup configuration unavailable")
+			cfg, err := startupResultFrom(cmd).requireConfig()
+			if err != nil {
+				return err
 			}
-			return runAnnotate(cmd.Context(), stdout, stderr, startup.Config, uuid, path, ordinal, kind, label, cmd.Flags().Changed("ordinal"))
+			return runAnnotate(cmd.Context(), stdout, stderr, cfg, uuid, path, ordinal, kind, label, cmd.Flags().Changed("ordinal"))
 		},
 	}
 

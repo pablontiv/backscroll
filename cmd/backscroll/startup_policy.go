@@ -99,6 +99,15 @@ func (r startupResult) startupFailure() *startupFailure {
 	return r.Failure
 }
 
+// requireConfig reads the invocation's prepared config without resolving it again.
+// Recovery keeps its separate fallback when no startup config is available.
+func (r startupResult) requireConfig() (*config.Config, error) {
+	if r.Config == nil {
+		return nil, fmt.Errorf("startup configuration unavailable")
+	}
+	return r.Config, nil
+}
+
 func (r startupResult) release(retErr error) error {
 	if r.Lease == nil {
 		return retErr

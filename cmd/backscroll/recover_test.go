@@ -205,6 +205,52 @@ func TestRecoverPostInstallSyncFailurePreservesSyncCause(t *testing.T) {
 	}
 }
 
+func TestRecoverLoadsFallbackConfigForRealDryRun(t *testing.T) {
+	dir := t.TempDir()
+	activePath := filepath.Join(dir, "active.db")
+	fromPath := filepath.Join(dir, "stranded.db")
+	setIndexPolicyEnv(t, activePath, filepath.Join(t.TempDir(), "config"))
+	t.Chdir(dir)
+	createRecoverTestDB(t, activePath, []storage.IndexedMessage{{
+		Ordinal:     0,
+		Role:        "user",
+		Text:        "active fallback row",
+		UUID:        "11111111-1111-4111-8111-111111111111",
+		ContentType: "text",
+		Timestamp:   "2026-08-18T00:00:00Z",
+	}})
+	createRecoverTestDB(t, fromPath, []storage.IndexedMessage{{
+		Ordinal:     1,
+		Role:        "assistant",
+		Text:        "stranded fallback row",
+		UUID:        "22222222-2222-4222-8222-222222222222",
+		ContentType: "text",
+		Timestamp:   "2026-08-18T00:01:00Z",
+	}})
+	before := inventoryDirectory(t, dir)
+
+	var stdout, stderr bytes.Buffer
+	cmd := newRecoverCmd(&stdout, &stderr, newStartupSyncService(), recovery.Execute)
+	cmd.SetArgs([]string{"--from", fromPath, "--dry-run"})
+	if err := cmd.Execute(); err != nil {
+		t.Fatalf("fallback recovery dry run: %v; stderr=%q", err, stderr.String())
+	}
+	for _, want := range []string{
+		"recovery dry run",
+		"active path: " + canonicalRecoverTestPath(t, activePath),
+		"input 1 records: 1",
+		"input 2 records: 1",
+		"final count: 2",
+	} {
+		if !strings.Contains(stdout.String(), want) {
+			t.Fatalf("fallback recovery stdout missing %q: %s", want, stdout.String())
+		}
+	}
+	if after := inventoryDirectory(t, dir); !reflect.DeepEqual(after, before) {
+		t.Fatalf("fallback dry run changed input inventory\nbefore: %s\nafter: %s", describeInventory(before), describeInventory(after))
+	}
+}
+
 func TestRecoverDryRunMatchesUnionApplyPlanWithoutWrites(t *testing.T) {
 	dir := t.TempDir()
 	home := filepath.Join(dir, "home")
