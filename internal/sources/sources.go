@@ -98,22 +98,8 @@ func ParseDocument(path string, sourceType string) (SourceItem, error) {
 
 // ParseDocumentContext is ParseDocument with cancellation support.
 func ParseDocumentContext(ctx context.Context, path string, sourceType string) (SourceItem, error) {
-	data, err := readSourceFile(ctx, path)
+	content, id, err := prepareSource(ctx, path, sourceType)
 	if err != nil {
-		return SourceItem{}, fmt.Errorf("failed to read file: %w", err)
-	}
-	if err := ctx.Err(); err != nil {
-		return SourceItem{}, err
-	}
-	content := string(data)
-	if err := ctx.Err(); err != nil {
-		return SourceItem{}, err
-	}
-	id, err := extractID(ctx, content, sourceType)
-	if err != nil {
-		return SourceItem{}, err
-	}
-	if err := ctx.Err(); err != nil {
 		return SourceItem{}, err
 	}
 
@@ -133,26 +119,35 @@ func ParseSectioned(path string, sourceType string) ([]SourceItem, error) {
 
 // ParseSectionedContext is ParseSectioned with cancellation support.
 func ParseSectionedContext(ctx context.Context, path string, sourceType string) ([]SourceItem, error) {
-	data, err := readSourceFile(ctx, path)
+	content, baseID, err := prepareSource(ctx, path, sourceType)
 	if err != nil {
-		return nil, fmt.Errorf("failed to read file: %w", err)
-	}
-	if err := ctx.Err(); err != nil {
-		return nil, err
-	}
-	content := string(data)
-	if err := ctx.Err(); err != nil {
-		return nil, err
-	}
-
-	baseID, err := extractID(ctx, content, sourceType)
-	if err != nil {
-		return nil, err
-	}
-	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
 	return splitSections(ctx, content, path, sourceType, baseID)
+}
+
+// prepareSource shares the cancellable read, conversion, and base-ID extraction
+// while leaving whole-document and section expansion to their respective parsers.
+func prepareSource(ctx context.Context, path, sourceType string) (string, string, error) {
+	data, err := readSourceFile(ctx, path)
+	if err != nil {
+		return "", "", fmt.Errorf("failed to read file: %w", err)
+	}
+	if err := ctx.Err(); err != nil {
+		return "", "", err
+	}
+	content := string(data)
+	if err := ctx.Err(); err != nil {
+		return "", "", err
+	}
+	baseID, err := extractID(ctx, content, sourceType)
+	if err != nil {
+		return "", "", err
+	}
+	if err := ctx.Err(); err != nil {
+		return "", "", err
+	}
+	return content, baseID, nil
 }
 
 func readSourceFile(ctx context.Context, path string) ([]byte, error) {

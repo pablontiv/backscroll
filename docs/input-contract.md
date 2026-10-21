@@ -473,11 +473,15 @@ Limits (observed format boundary and RED/GREEN evidence: [Codex input evidence](
 
 ## Markdown document inputs
 
-Whole-document Markdown uses `markdown_document`. Sectioned Markdown uses
-`markdown_sections`, which splits on headings starting with two hash characters
-followed by a space. When a file contains one or
-more such headings, content before the first heading is not indexed; when it
-contains none, the entire document is indexed as one record.
+Whole-document Markdown uses `markdown_document` and preserves every input byte
+in one record. Sectioned Markdown uses `markdown_sections`, which splits on
+headings starting with two hash characters followed by a space. Each section
+retains its heading and internal whitespace, with outer whitespace trimmed;
+content before the first heading is discarded. With no such headings, section
+mode returns one whole-document record with outer whitespace trimmed. Both
+modes share cancellable file reading and base-ID preparation while retaining
+their distinct record expansion. Indexed Markdown identity is the source path
+plus zero-based record ordinal; document UUIDs remain empty.
 
 ```toml
 version = 1
