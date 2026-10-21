@@ -231,8 +231,11 @@ Before step 2, assign `UUID`, `SOURCE_PATH`, and `ORDINAL` from one selected mac
 - Ordinary snapshot-read, metadata-read, and mutation owners validate active manifests and attempt one incremental sync before executing. Busy readers may follow the last committed snapshot; remediation (`recover`) skips preparation/pre-sync and only syncs after installing a replacement. See [startup classes and exceptions](sync.md). Session, plan, and Markdown files are ingestion inputs; SQLite is the perennial record used by search, context, list, patterns, status, and validate. Use search for discovery. For one selected search result, use context with its published UUID when non-null, or its exact source path plus ordinal only when UUID is null.
 - Zero-result guidance goes to stderr; stdout stays clean for `--json`.
 - Robot mode on search emits `result_N_field=value` lines and escapes search string values with backslash as `\\`, carriage return as `\r`, and newline as `\n`.
-- A malformed `categories.toml` fails the command (non-zero exit) rather
-  than masquerading as an empty result.
+- Category TOML is decoded once per file; the selected parsed rules supply
+  both the version and compiled mapper. Current/newer custom maps are used;
+  stale versions use the embedded map with a stderr notice, and malformed
+  TOML uses the embedded map silently. Invalid regexes in the selected map
+  fail the command with a non-zero exit and a stderr diagnostic.
 - Historical supply: rich capture exists for rows synced after migration
   v8; `rebuild` backfills expired-file derived data from stored text (lossy for tool
   events, marked `extraction_version=0`) and stale on-disk files re-parse

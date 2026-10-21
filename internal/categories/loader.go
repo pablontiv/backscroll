@@ -27,13 +27,13 @@ type tomlFile struct {
 // If config file exists but is older than the embedded default, uses the embedded
 // default and prints a notice to stderr.
 func Load() (*Mapper, error) {
-	// Always load embedded default to get its version
+	// Decode the embedded default first; its version governs config selection.
 	embeddedData, err := defaultCategoriesFS.ReadFile("default_categories.toml")
 	if err != nil {
 		return nil, fmt.Errorf("read embedded default categories: %w", err)
 	}
 
-	embeddedVersion, err := getVersion(embeddedData)
+	embedded, err := parseTOML(embeddedData)
 	if err != nil {
 		return nil, fmt.Errorf("parse embedded version: %w", err)
 	}
@@ -42,31 +42,28 @@ func Load() (*Mapper, error) {
 	configPath, err := configPath()
 	if err == nil {
 		if data, err := os.ReadFile(configPath); err == nil {
-			configVersion, err := getVersion(data)
-			if err == nil && configVersion < embeddedVersion {
+			config, err := parseTOML(data)
+			if err == nil && config.Version < embedded.Version {
 				// Config is stale; use embedded and print notice
 				_, _ = fmt.Fprintf(os.Stderr, "categories: config version %d older than built-in %d; using built-in (update your categories.toml or set BACKSCROLL_FORCE_INPUTS=1 on install)\n",
-					configVersion, embeddedVersion)
-				return parseMapper(embeddedData)
+					config.Version, embedded.Version)
+				return buildMapper(embedded)
 			}
 			// Config is current or newer; use it
 			if err == nil {
-				return parseMapper(data)
+				return buildMapper(config)
 			}
 		}
 	}
 
 	// Fallback to embedded default
-	return parseMapper(embeddedData)
+	return buildMapper(embedded)
 }
 
-// getVersion extracts the version field from TOML data without full parsing.
-func getVersion(data []byte) (int, error) {
+func parseTOML(data []byte) (tomlFile, error) {
 	var f tomlFile
-	if err := toml.Unmarshal(data, &f); err != nil {
-		return 0, err
-	}
-	return f.Version, nil
+	err := toml.Unmarshal(data, &f)
+	return f, err
 }
 
 func configPath() (string, error) {
@@ -81,12 +78,7 @@ func configPath() (string, error) {
 	return filepath.Join(base, "backscroll", "inputs", "categories.toml"), nil
 }
 
-func parseMapper(data []byte) (*Mapper, error) {
-	var f tomlFile
-	if err := toml.Unmarshal(data, &f); err != nil {
-		return nil, fmt.Errorf("parse categories TOML: %w", err)
-	}
-
+func buildMapper(f tomlFile) (*Mapper, error) {
 	mapper := &Mapper{
 		version: f.Version,
 		rules:   make([]Rule, len(f.Rules)),

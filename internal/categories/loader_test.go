@@ -1,9 +1,12 @@
 package categories
 
 import (
+	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"regexp"
+	"regexp/syntax"
 	"testing"
 )
 
@@ -41,6 +44,7 @@ func TestCategorizeFallthrough(t *testing.T) {
 }
 
 func TestLoadEmbedded(t *testing.T) {
+	t.Setenv("BACKSCROLL_CONFIG_DIR", t.TempDir())
 	m, err := Load()
 	if err != nil {
 		t.Fatalf("load: %v", err)
@@ -159,6 +163,7 @@ func TestLoadConfigDirWithHome(t *testing.T) {
 
 // TestCategorizeV2Categories tests new v2 categories are available and map correctly
 func TestCategorizeV2Categories(t *testing.T) {
+	t.Setenv("BACKSCROLL_CONFIG_DIR", t.TempDir())
 	m, err := Load()
 	if err != nil {
 		t.Fatalf("load: %v", err)
@@ -205,6 +210,7 @@ func TestCategorizeV2Categories(t *testing.T) {
 
 // TestCategorizeV2Precedence verifies that earlier rules take precedence (first match wins)
 func TestCategorizeV2Precedence(t *testing.T) {
+	t.Setenv("BACKSCROLL_CONFIG_DIR", t.TempDir())
 	m, err := Load()
 	if err != nil {
 		t.Fatalf("load: %v", err)
@@ -260,4 +266,110 @@ category = "SHELL_OTHER"
 	if cat := m.Categorize("Bash", "cd /path"); cat != "NAV" {
 		t.Errorf("cd: %q, want NAV (v2 rule); config was not replaced with embedded default", cat)
 	}
+}
+
+func TestLoadConfigSelection(t *testing.T) {
+	tests := []struct {
+		name         string
+		config       string
+		wantVersion  int
+		wantGit      string
+		wantRead     string
+		wantRegexErr bool
+	}{
+		{
+			name:        "current custom",
+			config:      customCategories(2, "^Bash git"),
+			wantVersion: 2,
+			wantGit:     "CUSTOM_GIT",
+			wantRead:    "CUSTOM_READ",
+		},
+		{
+			name:        "newer custom",
+			config:      customCategories(3, "^Bash git"),
+			wantVersion: 3,
+			wantGit:     "CUSTOM_GIT",
+			wantRead:    "CUSTOM_READ",
+		},
+		{
+			name:        "stale uses embedded",
+			config:      customCategories(1, "^Bash git"),
+			wantVersion: 2,
+			wantGit:     "GIT",
+			wantRead:    "FILE_READ",
+		},
+		{
+			name:        "stale regex uses embedded",
+			config:      customCategories(1, "["),
+			wantVersion: 2,
+			wantGit:     "GIT",
+			wantRead:    "FILE_READ",
+		},
+		{
+			name:        "malformed uses embedded",
+			config:      "version = 2\n[[rule\n",
+			wantVersion: 2,
+			wantGit:     "GIT",
+			wantRead:    "FILE_READ",
+		},
+		{
+			name:         "selected regex error",
+			config:       customCategories(2, "["),
+			wantRegexErr: true,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Setenv("BACKSCROLL_CONFIG_DIR", t.TempDir())
+			path, err := configPath()
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := os.MkdirAll(filepath.Dir(path), 0755); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(path, []byte(tt.config), 0644); err != nil {
+				t.Fatal(err)
+			}
+
+			mapper, loadErr := Load()
+			if tt.wantRegexErr {
+				var syntaxErr *syntax.Error
+				if !errors.As(loadErr, &syntaxErr) {
+					t.Fatalf("Load error = %v, want regexp syntax error", loadErr)
+				}
+				if syntaxErr.Code != syntax.ErrMissingBracket || syntaxErr.Expr != "[" {
+					t.Fatalf("regexp syntax error = %#v, want missing bracket in [", syntaxErr)
+				}
+				return
+			}
+			if loadErr != nil {
+				t.Fatal(loadErr)
+			}
+			if got := mapper.Version(); got != tt.wantVersion {
+				t.Errorf("version = %d, want %d", got, tt.wantVersion)
+			}
+			if got := mapper.Categorize("Bash", "git status"); got != tt.wantGit {
+				t.Errorf("git category = %q, want %q", got, tt.wantGit)
+			}
+			if got := mapper.Categorize("Read", ""); got != tt.wantRead {
+				t.Errorf("Read category = %q, want %q", got, tt.wantRead)
+			}
+			if got := mapper.Categorize("OtherTool", ""); got != "OtherTool" {
+				t.Errorf("unmatched category = %q, want OtherTool", got)
+			}
+		})
+	}
+}
+
+func customCategories(version int, pattern string) string {
+	return fmt.Sprintf(`version = %d
+[[rule]]
+tool = "Bash"
+pattern = %q
+category = "CUSTOM_GIT"
+[[rule]]
+tool = "Read"
+category = "CUSTOM_READ"
+`, version, pattern)
 }
