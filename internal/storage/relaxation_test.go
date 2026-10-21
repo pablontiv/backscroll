@@ -31,7 +31,7 @@ func relaxationDB(t *testing.T) *Database {
 func TestRelaxationStagesAndProtectedCore(t *testing.T) {
 	db := relaxationDB(t)
 	t.Run("punctuation cannot satisfy the two-term floor", func(t *testing.T) {
-		results, stages, err := db.SearchRelaxed("handshake adaptation ...", models.SearchOptions{SourcePath: "/target.jsonl", ContentType: "text", Limit: 5})
+		results, stages, _, err := db.SearchRelaxed("handshake adaptation ...", models.SearchOptions{SourcePath: "/target.jsonl", ContentType: "text", Limit: 5})
 		if err == nil || !strings.Contains(err.Error(), "has no searchable characters") || len(results) != 0 || len(stages) != 0 {
 			t.Fatalf("punctuation must be rejected before any stage, not allow single-term recall: err=%v stages=%v results=%+v", err, stages, results)
 		}
@@ -55,7 +55,7 @@ func TestRelaxationStagesAndProtectedCore(t *testing.T) {
 		{"remembered connector survive restarts", false, nil, []string{"strict", "drop-terms/1", "drop-terms/2"}},
 	} {
 		t.Run(tc.query, func(t *testing.T) {
-			results, stages, err := db.SearchRelaxed(tc.query, models.SearchOptions{SourcePath: "/target.jsonl", ContentType: "text", Limit: 5})
+			results, stages, _, err := db.SearchRelaxed(tc.query, models.SearchOptions{SourcePath: "/target.jsonl", ContentType: "text", Limit: 5})
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -87,12 +87,12 @@ func TestRelaxationPreservesEveryFilter(t *testing.T) {
 		{After: &after}, {Before: &before},
 		{Project: "beta", Role: "assistant"}, {SourcePath: "/target.jsonl", ContentType: "tool"},
 	} {
-		results, _, err := db.SearchRelaxed("violet handshake adaptation", opts)
+		results, _, _, err := db.SearchRelaxed("violet handshake adaptation", opts)
 		if err != nil || len(results) != 0 {
 			t.Fatalf("filter escaped: opts=%+v err=%v results=%+v", opts, err, results)
 		}
 	}
-	results, _, err := db.SearchRelaxed("violet handshake adaptation", models.SearchOptions{Project: "alpha", ContentType: "text", Role: "assistant", Tag: "testing", Source: "session", SourcePath: "/target*"})
+	results, _, _, err := db.SearchRelaxed("violet handshake adaptation", models.SearchOptions{Project: "alpha", ContentType: "text", Role: "assistant", Tag: "testing", Source: "session", SourcePath: "/target*"})
 	if err != nil || len(results) != 1 || results[0].SourcePath != "/target.jsonl" {
 		t.Fatalf("matching filters lost target: %v %+v", err, results)
 	}
@@ -109,12 +109,12 @@ func TestRelaxationToolFilterAndPagination(t *testing.T) {
 	if err := db.SyncFiles(files); err != nil {
 		t.Fatal(err)
 	}
-	results, _, err := db.SearchRelaxed("violet handshake adaptation", models.SearchOptions{ContentType: "tool"})
+	results, _, _, err := db.SearchRelaxed("violet handshake adaptation", models.SearchOptions{ContentType: "tool"})
 	if err != nil || len(results) != 1 || results[0].SourcePath != "/tool.jsonl" {
 		t.Fatalf("tool-only relaxation: %v %+v", err, results)
 	}
 	for _, query := range []string{"violet handshake", "violet handshake adaptation"} {
-		results, stages, err := db.SearchRelaxed(query, models.SearchOptions{SourcePath: "/target.jsonl", Offset: 1, Limit: 1})
+		results, stages, _, err := db.SearchRelaxed(query, models.SearchOptions{SourcePath: "/target.jsonl", Offset: 1, Limit: 1})
 		if err != nil || len(results) != 0 {
 			t.Fatalf("exhausted page should stay empty: %v %+v", err, results)
 		}
@@ -169,13 +169,13 @@ func TestRelaxationValidationAndLiterals(t *testing.T) {
 
 func TestRelaxationErrorsAreNotZeroResultFallbacks(t *testing.T) {
 	db := relaxationDB(t)
-	if _, _, err := db.SearchRelaxed(`"unclosed`, models.SearchOptions{}); err == nil {
+	if _, _, _, err := db.SearchRelaxed(`"unclosed`, models.SearchOptions{}); err == nil {
 		t.Fatal("invalid direct query accepted")
 	}
 	if err := db.Close(); err != nil {
 		t.Fatal(err)
 	}
-	if _, _, err := db.SearchRelaxed("violet handshake adaptation", models.SearchOptions{}); err == nil {
+	if _, _, _, err := db.SearchRelaxed("violet handshake adaptation", models.SearchOptions{}); err == nil {
 		t.Fatal("database failure treated as a retrieval miss")
 	}
 	if _, err := db.recallFrequency(recallTerm{text: "violet"}, "text"); err == nil {

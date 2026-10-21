@@ -17,7 +17,7 @@ func TestCanceledQueryContextsReturnNoPartialResults(t *testing.T) {
 	cancel()
 
 	t.Run("search", func(t *testing.T) {
-		results, err := db.SearchContext(ctx, "cancellation", models.SearchOptions{AllProjects: true})
+		results, _, err := db.SearchContext(ctx, "cancellation", models.SearchOptions{AllProjects: true})
 		if !errors.Is(err, context.Canceled) {
 			t.Fatalf("SearchContext error = %v, want context.Canceled", err)
 		}
@@ -27,7 +27,7 @@ func TestCanceledQueryContextsReturnNoPartialResults(t *testing.T) {
 	})
 
 	t.Run("relaxed", func(t *testing.T) {
-		results, _, err := db.SearchRelaxedContext(ctx, "cancellation query terms", models.SearchOptions{AllProjects: true})
+		results, _, _, err := db.SearchRelaxedContext(ctx, "cancellation query terms", models.SearchOptions{AllProjects: true})
 		if !errors.Is(err, context.Canceled) {
 			t.Fatalf("SearchRelaxedContext error = %v, want context.Canceled", err)
 		}

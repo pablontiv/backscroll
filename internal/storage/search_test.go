@@ -118,7 +118,7 @@ func TestRefillCandidatesWithoutDirectEchoesPreservesBoundaries(t *testing.T) {
 		{ID: 11, ContentType: "text", Text: "Bash command=backscroll search --text needle"},
 	}
 
-	filtered, err := refillCandidatesWithoutDirectEchoes(models.SearchOptions{Limit: len(results)}, func(opts models.SearchOptions) ([]SearchResult, error) {
+	filtered, _, err := refillCandidatesWithoutDirectEchoes(models.SearchOptions{Limit: len(results)}, func(opts models.SearchOptions) ([]SearchResult, error) {
 		if opts.Offset >= len(results) {
 			return nil, nil
 		}
@@ -143,7 +143,7 @@ func TestRefillCandidatesWithoutDirectEchoesPreservesBoundaries(t *testing.T) {
 
 func TestRefillToolCandidatesPagesPastEchoesAndDeduplicates(t *testing.T) {
 	var offsets []int
-	got, err := refillCandidatesWithoutDirectEchoes(models.SearchOptions{Limit: 3}, func(opts models.SearchOptions) ([]SearchResult, error) {
+	got, _, err := refillCandidatesWithoutDirectEchoes(models.SearchOptions{Limit: 3}, func(opts models.SearchOptions) ([]SearchResult, error) {
 		offsets = append(offsets, opts.Offset)
 		switch opts.Offset {
 		case 0:
@@ -180,10 +180,11 @@ func TestRefillToolCandidatesPagesPastEchoesAndDeduplicates(t *testing.T) {
 	}
 }
 
-func TestRefillToolCandidatesStopsAtExactFullNonEchoPage(t *testing.T) {
-	calls := 0
-	got, err := refillCandidatesWithoutDirectEchoes(models.SearchOptions{Limit: 2}, func(opts models.SearchOptions) ([]SearchResult, error) {
-		calls++
+func TestRefillToolCandidatesExactBoundaryIsNotCapped(t *testing.T) {
+	got, capped, err := refillCandidatesWithoutDirectEchoes(models.SearchOptions{Limit: 2}, func(opts models.SearchOptions) ([]SearchResult, error) {
+		if opts.Offset > 0 {
+			return nil, nil
+		}
 		return []SearchResult{
 			{ID: 1, ContentType: "tool", Text: "Bash command=rg one ."},
 			{ID: 2, ContentType: "tool", Text: "Bash command=rg two ."},
@@ -192,14 +193,14 @@ func TestRefillToolCandidatesStopsAtExactFullNonEchoPage(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if calls != 1 || len(got) != 2 {
-		t.Fatalf("calls/results = %d/%d, want 1/2", calls, len(got))
+	if capped || len(got) != 2 {
+		t.Fatalf("capped/results = %t/%d, want false/2", capped, len(got))
 	}
 }
 
 func TestRefillToolCandidatesExhaustsAfterFullEchoPage(t *testing.T) {
 	var offsets []int
-	got, err := refillCandidatesWithoutDirectEchoes(models.SearchOptions{Limit: 2}, func(opts models.SearchOptions) ([]SearchResult, error) {
+	got, _, err := refillCandidatesWithoutDirectEchoes(models.SearchOptions{Limit: 2}, func(opts models.SearchOptions) ([]SearchResult, error) {
 		offsets = append(offsets, opts.Offset)
 		if opts.Offset == 0 {
 			return []SearchResult{
@@ -219,7 +220,7 @@ func TestRefillToolCandidatesExhaustsAfterFullEchoPage(t *testing.T) {
 
 func TestRefillToolCandidatesPropagatesCancellationWithoutPartialResults(t *testing.T) {
 	calls := 0
-	got, err := refillCandidatesWithoutDirectEchoes(models.SearchOptions{Limit: 2}, func(opts models.SearchOptions) ([]SearchResult, error) {
+	got, _, err := refillCandidatesWithoutDirectEchoes(models.SearchOptions{Limit: 2}, func(opts models.SearchOptions) ([]SearchResult, error) {
 		calls++
 		if calls == 1 {
 			return []SearchResult{
@@ -234,5 +235,26 @@ func TestRefillToolCandidatesPropagatesCancellationWithoutPartialResults(t *test
 	}
 	if got != nil {
 		t.Fatalf("partial results returned on cancellation: %v", got)
+	}
+}
+
+func TestRefillCandidateCapRequiresEligibleUniqueOverflow(t *testing.T) {
+	for _, eligibleExtra := range []bool{false, true} {
+		rows := []SearchResult{
+			{ID: 1, ContentType: "tool", Text: "rg orchard"},
+			{ID: 2, ContentType: "tool", Text: "rg handshake"},
+			{ID: 2, ContentType: "tool", Text: "duplicate"},
+			{ID: 3, ContentType: "tool", Text: "Bash command=backscroll search orchard"},
+			{ID: 4, ContentType: "tool", Text: "paired output orchard", SearchEcho: true},
+		}
+		if eligibleExtra {
+			rows = append(rows, SearchResult{ID: 5, ContentType: "tool", Text: "rg eligible"})
+		}
+		got, capped, err := refillCandidatesWithoutDirectEchoes(models.SearchOptions{Limit: 2}, func(opts models.SearchOptions) ([]SearchResult, error) {
+			return paginate(rows, opts.Limit, opts.Offset), nil
+		})
+		if err != nil || capped != eligibleExtra || len(got) != 2 || got[0].ID != 1 || got[1].ID != 2 {
+			t.Fatalf("eligibleExtra=%t: results=%+v capped=%t err=%v", eligibleExtra, got, capped, err)
+		}
 	}
 }

@@ -35,7 +35,7 @@ func TestRelaxationUnfilteredIDFExcludesQueryEchoes(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	baseline, _, err := db.SearchRelaxed("violet handshake adaptation", models.SearchOptions{AllProjects: true, Limit: 20})
+	baseline, _, _, err := db.SearchRelaxed("violet handshake adaptation", models.SearchOptions{AllProjects: true, Limit: 20})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -75,7 +75,7 @@ func TestRelaxationUnfilteredIDFExcludesQueryEchoes(t *testing.T) {
 		t.Fatalf("unfiltered IDF counted query echoes: violet=%d handshake=%d adaptation=%d", violet, handshake, adaptation)
 	}
 
-	got, stages, err := db.SearchRelaxed("violet handshake adaptation", models.SearchOptions{AllProjects: true, Limit: 20})
+	got, stages, _, err := db.SearchRelaxed("violet handshake adaptation", models.SearchOptions{AllProjects: true, Limit: 20})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -114,7 +114,7 @@ func TestRelaxationUnfilteredIDFExcludesTextFallbackEchoes(t *testing.T) {
 	if err := db.SyncFiles(files); err != nil {
 		t.Fatal(err)
 	}
-	got, stages, err := db.SearchRelaxed("violet handshake adaptation", models.SearchOptions{AllProjects: true, Limit: 20})
+	got, stages, _, err := db.SearchRelaxed("violet handshake adaptation", models.SearchOptions{AllProjects: true, Limit: 20})
 	if err != nil || len(got) != 1 || got[0].SourcePath != "/target.jsonl" || fmt.Sprint(got[0].DroppedTerms) != "[adaptation]" {
 		t.Fatalf("text-fallback echoes inverted IDF: stages=%v results=%+v err=%v", stages, got, err)
 	}
@@ -178,7 +178,7 @@ func TestRelaxationUnfilteredIDFExcludesZeroValuedCodexShellEchoes(t *testing.T)
 		t.Fatalf("unfiltered IDF counted zero-valued shell echoes: violet=%d handshake=%d adaptation=%d", violet, handshake, adaptation)
 	}
 
-	got, stages, err := db.SearchRelaxed("violet handshake adaptation", models.SearchOptions{AllProjects: true, Limit: 20})
+	got, stages, _, err := db.SearchRelaxed("violet handshake adaptation", models.SearchOptions{AllProjects: true, Limit: 20})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -272,7 +272,7 @@ func TestRelaxationUnfilteredIDFTreatsEchoOnlyTermsAsAbsent(t *testing.T) {
 		t.Fatalf("echo-only term must have unfiltered DF=0: violet=%d handshake=%d zebra=%d", violet, handshake, zebra)
 	}
 
-	got, stages, err := db.SearchRelaxed("violet handshake zebra", models.SearchOptions{AllProjects: true, Limit: 20})
+	got, stages, _, err := db.SearchRelaxed("violet handshake zebra", models.SearchOptions{AllProjects: true, Limit: 20})
 	if err != nil {
 		t.Fatal(err)
 	}

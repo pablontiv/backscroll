@@ -30,9 +30,45 @@ backscroll search "artifact literal" --source-path "*/session.jsonl" --robot
 | `--source-path <PATH_OR_PATTERN>` | Filter a normal text query by indexed `source_path`; exact paths or `*`/SQL `LIKE` patterns |
 | `--relax` | Opt in to bounded lexical term dropping after zero rows; all scope filters stay fixed |
 
+## Pagination and candidate pool
+
+Search is ranked discovery, not an exhaustive export. Without `--content-type`,
+each FTS stream contributes its first **200 eligible unique non-echo results**
+after scope filters, ordered by BM25 score then row ID. RRF (k=60, stable ID
+tiebreaks) merges those bounded streams; `--limit` and `--offset` select a page
+from that merged pool of at most 400 rows. Increasing the offset cannot reach
+stream ranks 201 and later. With `--content-type text|code|reasoning|tool`,
+pagination instead applies directly in SQL to the selected content type.
+Explicit tool searches retain their existing query-echo inclusion.
+
+The search probes for one additional eligible unique non-echo result per stream,
+solely to prove that the candidate limit was reached; the extra result never
+enters RRF. Exactly 200 eligible results, duplicates, hidden query echoes, and
+out-of-scope matches alone do not prove a cap. The cap signal describes the
+result-producing stage, including with `--relax`, and appears on early pages
+as well as empty pages beyond the bounded pool. It is not a count of omitted
+matches or a promise that a particular later page exists.
+
+JSON and text keep their existing stdout shape and emit a notice on stderr:
+`search: unfiltered candidate limit reached (200 eligible results per FTS stream); pagination covers only the bounded merged pool; use --content-type for SQL pagination`.
+An empty capped page receives this notice instead of zero-match guidance.
+Robot output adds the following metadata, including on an empty capped page:
+
+```text
+candidate_limit=200
+candidate_limit_reached=true
+```
+
+These keys appear only when a cap is proven. They are separate from output-budget
+omission markers. The complete escaped robot payload, including both forms of
+metadata, shares the token budget. If the candidate metadata and any required
+omission record cannot fit, robot stdout is empty and the same cap notice goes
+to stderr. Refine scope/query or use typed pagination to reach beyond the
+candidate pool; increasing the output budget alone does not expand it.
+
 ## Output Formats
 
-`--json` and `--robot` are mutually exclusive; combined flags fail before startup side effects. Empty robot results produce zero stdout bytes, with actionable hints on stderr.
+`--json` and `--robot` are mutually exclusive; combined flags fail before startup side effects. Genuine zero-match robot results produce zero stdout bytes, with actionable hints on stderr. Empty pages from a proven capped candidate pool carry the metadata or stderr fallback described above.
 
 ### Text (default)
 
@@ -83,7 +119,7 @@ With `--fields full`, ordinary results encode the existing `models.SearchResult`
 
 Ordinary full-mode fields are: `Source`, `Role`, `UUID`, `Ordinal`, `Content`, `FilePath`, `Timestamp`, `SessionID`, `ProjectPath`, `Score`, `Tags`, `ContentType`, and `Rank`. `UUID` is nullable. `ProjectPath` is a legacy field name; its value is the project identifier (for example `backscroll` or `myproj`), not a filesystem path. Minimal mode uses the snake_case payload (`source_path`, `uuid`, `ordinal`, `snippet`, `score`, `role`, `timestamp`), with nullable `uuid`. After opt-in relaxation, both field sets additionally include `match_stage` and `dropped_terms`; ordinary results omit these keys. Thus the complete full projection is the ordinary field set plus those two conditional provenance fields.
 
-An empty minimal response is `[]`. An empty full response remains `null`.
+Empty minimal and full responses are both `[]`, including pages beyond the bounded candidate pool.
 
 ### Robot
 
@@ -144,9 +180,10 @@ result_3_omitted=7
 ```
 
 The robot estimator is applied once to the complete escaped payload, including
-all fields and the omission record; estimates rounded independently per line or
-per result are not added together. Whole trailing results may be removed to make
-room for the omission record. If even that record cannot fit, stdout is empty.
+all fields, the omission record, and any candidate-cap metadata; estimates rounded
+independently per line or per result are not added together. Whole trailing
+results may be removed to make room for metadata. If even the required metadata
+cannot fit, stdout is empty; a proven candidate cap is then reported on stderr.
 
 This is useful when feeding results into context-limited tools.
 
@@ -271,7 +308,7 @@ result_0_match_stage=drop-terms
 result_0_dropped_terms=["adaptation"]
 ```
 
-`dropped_terms` is a JSON string array encoded as a robot string: undo robot backslash/CR/LF escaping before JSON decoding. Human output includes `Match stage: drop-terms | Dropped terms: ["adaptation"]` in the result header. JSON adds optional snake_case `match_stage` and `dropped_terms` keys to both existing projections. Strict results have no extra result fields. An empty result page reports stages tried on **stderr**, for example `strict, drop-terms/1`; stdout retains its normal empty machine-readable shape. Skipped expansion/widening stages are identified as skipped, not as executed searches.
+`dropped_terms` is a JSON string array encoded as a robot string: undo robot backslash/CR/LF escaping before JSON decoding. Human output includes `Match stage: drop-terms | Dropped terms: ["adaptation"]` in the result header. JSON adds optional snake_case `match_stage` and `dropped_terms` keys to both existing projections. Strict results have no extra result fields. An empty uncapped result page reports stages tried on **stderr**, for example `strict, drop-terms/1`; stdout retains its normal empty machine-readable shape. Empty capped pages instead carry the candidate-pool signal from the successful stage. Skipped expansion/widening stages are identified as skipped, not as executed searches.
 
 This addresses **recoverable term overload**, not vocabulary invention. In the native regression, the target contains `violet handshake`, while unrelated records make `adaptation` a common term; strict search misses and dropping that term recovers the target. In contrast, the existing synthetic `s2_conversational_paraphrase` and `s5_progressive_refinement` targets share no surviving content terms with their original queries. The refinement `violet handshake` adds new vocabulary; this feature does not promise to recover those zero-overlap cases. An absent, high-IDF extra term can also prevent recovery at the two-term floor. No production p95 or broad semantic-recall gain is claimed from the small fixture corpus.
 

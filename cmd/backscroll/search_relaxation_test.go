@@ -106,3 +106,100 @@ func TestSearchRelaxationRecoverableE2E(t *testing.T) {
 		t.Fatalf("opt-in changed subsequent strict output: %v %q", err, strictAgain)
 	}
 }
+
+func TestSearchCandidatePaginationOutput(t *testing.T) {
+	testEnv(t)
+	sessions := t.TempDir()
+	var records strings.Builder
+	add := func(id string, content any) {
+		record := map[string]any{
+			"uuid": id, "type": "assistant", "cwd": "/synthetic/candidate",
+			"timestamp": "2026-01-01T00:00:00Z",
+			"message":   map[string]any{"role": "assistant", "content": content},
+		}
+		data, err := json.Marshal(record)
+		if err != nil {
+			t.Fatal(err)
+		}
+		records.Write(data)
+		records.WriteByte('\n')
+	}
+	for i := range 201 {
+		query := "orchard handshake exactboundary"
+		if i == 200 {
+			query = "orchard handshake overflowboundary"
+		}
+		add(fmt.Sprintf("text-%d", i), query)
+		add(fmt.Sprintf("tool-%d", i), queryEchoToolBlock(fmt.Sprintf("tool-%d", i), "rg "+query))
+	}
+	for i := range 450 {
+		add(fmt.Sprintf("noise-%d", i), "adaptation unrelated distractor")
+	}
+	if err := os.WriteFile(filepath.Join(sessions, "pool.jsonl"), []byte(records.String()), 0600); err != nil {
+		t.Fatal(err)
+	}
+	inputs := filepath.Join(os.Getenv("BACKSCROLL_CONFIG_DIR"), "backscroll", "inputs")
+	if err := os.MkdirAll(inputs, 0700); err != nil {
+		t.Fatal(err)
+	}
+	manifest := fmt.Sprintf("version = 1\n[[inputs]]\nid = \"candidates\"\nsource = \"session\"\nactive = true\n[inputs.discover]\nroots = [%q]\ninclude = [\"**/*.jsonl\"]\n[inputs.decode]\nformat = \"claude\"\n", sessions)
+	if err := os.WriteFile(filepath.Join(inputs, "candidates.inputs.toml"), []byte(manifest), 0600); err != nil {
+		t.Fatal(err)
+	}
+	run := func(query string, flags ...string) (string, string) {
+		t.Helper()
+		out, stderr, err := runCmd(append([]string{"search", "--text", query, "--all-projects"}, flags...)...)
+		if err != nil {
+			t.Fatalf("search %v: %v %s", flags, err, stderr)
+		}
+		return out, stderr
+	}
+	for _, fields := range []string{"minimal", "full"} {
+		for _, offset := range []string{"0", "400"} {
+			out, stderr := run("orchard handshake", "--json", "--fields", fields, "--offset", offset)
+			if !strings.HasPrefix(strings.TrimSpace(out), "[") {
+				t.Fatalf("JSON output must be an array: %s", out)
+			}
+			var rows []map[string]any
+			if err := json.Unmarshal([]byte(out), &rows); err != nil {
+				t.Fatalf("bare JSON array contract: %v %s", err, out)
+			}
+			want := 20
+			if offset == "400" {
+				want = 0
+			}
+			if len(rows) != want || !strings.Contains(stderr, "candidate limit reached (200") || strings.Contains(stderr, "no results") {
+				t.Fatalf("JSON page %s: rows=%d stderr=%s", offset, len(rows), stderr)
+			}
+		}
+	}
+	for _, flags := range [][]string{{"--robot", "--offset", "400"}, {"--robot", "--relax", "--offset", "400"}, {"--robot", "--limit", "1"}} {
+		out, stderr := run("orchard handshake", flags...)
+		if !strings.Contains(out, "candidate_limit=200\ncandidate_limit_reached=true\n") || strings.Contains(stderr, "candidate limit") {
+			t.Fatalf("robot cap: stdout=%s stderr=%s", out, stderr)
+		}
+	}
+	out, stderr := run("orchard handshake", "--robot", "--max-tokens", "1")
+	if out != "" || !strings.Contains(stderr, "candidate limit reached (200") {
+		t.Fatalf("tight-budget fallback: stdout=%q stderr=%s", out, stderr)
+	}
+	out, stderr = run("orchard handshake", "--offset", "400")
+	if out != "" || !strings.Contains(stderr, "candidate limit reached (200") {
+		t.Fatalf("text late page: stdout=%q stderr=%s", out, stderr)
+	}
+	for _, kind := range []string{"text", "tool"} {
+		out, stderr = run("orchard handshake", "--json", "--content-type", kind, "--offset", "200")
+		var rows []minimalSearchResult
+		if err := json.Unmarshal([]byte(out), &rows); err != nil || len(rows) != 1 || strings.Contains(stderr, "candidate limit") {
+			t.Fatalf("typed late %s page: stdout=%s stderr=%s err=%v", kind, out, stderr, err)
+		}
+	}
+	out, stderr = run("exactboundary", "--robot", "--limit", "1")
+	if strings.Contains(out, "candidate_limit") || strings.Contains(stderr, "candidate limit") {
+		t.Fatalf("exact boundary marked capped: stdout=%s stderr=%s", out, stderr)
+	}
+	out, stderr = run("orchard handshake adaptation", "--relax", "--robot", "--limit", "1")
+	if !strings.Contains(out, "candidate_limit_reached=true") || !strings.Contains(out, "match_stage=drop-terms") {
+		t.Fatalf("relaxed cap: stdout=%s stderr=%s", out, stderr)
+	}
+}

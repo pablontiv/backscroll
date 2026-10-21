@@ -169,9 +169,15 @@ A context UUID is opaque and is never synthesized for a result that lacks one. T
 Filters worth knowing: `--after` / `--before` for a date window, `--tag` for auto-detected session categories (debugging, refactoring, testing…), `--source-path` to pin one stored input path, `--source` to keep one source class, and `--role` to filter the stored role field. The role field is not a semantic-origin guarantee.
 
 Search is lexical: prose uses Porter-stemmed BM25, tool text uses trigram BM25,
-and unfiltered searches fuse those two lexical rankings with RRF. `--relax`
-optionally drops low-IDF terms after a strict zero-result search without changing
-scope or introducing semantic expansion.
+and unfiltered searches fuse those two lexical rankings with RRF over at most
+200 eligible unique non-echo candidates per FTS stream. `--limit`/`--offset` page
+that bounded merged pool, not every match. A proven 201st eligible candidate
+produces robot `candidate_limit=200` / `candidate_limit_reached=true` metadata
+(stderr fallback when it cannot fit); text and JSON report the cap on stderr
+without changing stdout. Typed `--content-type` searches retain direct SQL
+pagination. See [the search contract](docs/search.md#pagination-and-candidate-pool).
+`--relax` optionally drops low-IDF terms after a strict zero-result search without
+changing scope or introducing semantic expansion.
 
 ### Discover what recurs
 

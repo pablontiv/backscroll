@@ -26,12 +26,12 @@ func TestPairedEchoRefillAfterFTSRebuild(t *testing.T) {
 		t.Fatal(err)
 	}
 	for i := 0; i < 2; i++ {
-		got, err := db.Search("orchard", models.SearchOptions{AllProjects: true, Limit: 300})
+		got, _, err := db.Search("orchard", models.SearchOptions{AllProjects: true, Limit: 300})
 		if err != nil || len(got) != 1 || got[0].UUID == nil || *got[0].UUID != "legitimate" {
 			t.Fatalf("refill lost legitimate output: %v %v", got, err)
 		}
 	}
-	tools, err := db.Search("orchard", models.SearchOptions{AllProjects: true, ContentType: "tool", Limit: 300})
+	tools, _, err := db.Search("orchard", models.SearchOptions{AllProjects: true, ContentType: "tool", Limit: 300})
 	if err != nil || len(tools) != 206 {
 		t.Fatalf("tool-only data lost: count=%d err=%v", len(tools), err)
 	}

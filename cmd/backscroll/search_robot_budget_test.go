@@ -29,7 +29,7 @@ func TestSearchRobotLinesMinimalUsesBoundedSnippet(t *testing.T) {
 		Project:    "backscroll",
 	}}
 
-	got := searchRobotLines(results, "minimal", 0)
+	got := searchRobotLines(results, "minimal", 0, storage.SearchProvenance{})
 	want := []string{
 		"result_0_filepath=/tmp/session.jsonl",
 		"result_0_uuid=robot-minimal",
@@ -63,7 +63,7 @@ func TestSearchRobotLinesFullUsesCompleteContent(t *testing.T) {
 		ContentType: "text",
 	}}
 
-	got := searchRobotLines(results, "full", 0)
+	got := searchRobotLines(results, "full", 0, storage.SearchProvenance{})
 	want := []string{
 		"result_0_source=session",
 		"result_0_role=assistant",
@@ -89,7 +89,7 @@ func TestSearchRobotLinesBudgetsWholeResultsAndReportsOmission(t *testing.T) {
 		{SourcePath: "/c", Role: "assistant", Snippet: "gamma", Score: 3},
 	}
 
-	got := searchRobotLines(results, "minimal", 11)
+	got := searchRobotLines(results, "minimal", 11, storage.SearchProvenance{})
 	want := []string{
 		"result_0_filepath=/a",
 		"result_0_uuid=null",
@@ -139,7 +139,7 @@ func TestSearchRobotLinesRoundsOnlyTheCompletePayload(t *testing.T) {
 		{"full", 35, 3, 0},
 	} {
 		t.Run(fmt.Sprintf("%s/%d", tt.fields, tt.budget), func(t *testing.T) {
-			lines := searchRobotLines(results, tt.fields, tt.budget)
+			lines := searchRobotLines(results, tt.fields, tt.budget, storage.SearchProvenance{})
 			payload := strings.Join(lines, "\n")
 			if tokens := picokitoutput.TokenCount(payload); tt.budget > 0 && tokens > tt.budget {
 				t.Fatalf("complete payload uses %d tokens, budget is %d:\n%s", tokens, tt.budget, payload)
@@ -227,12 +227,54 @@ func TestSearchRobotLinesReportsWhenFirstResultExceedsBudget(t *testing.T) {
 		Score:      1,
 	}}
 
-	got := searchRobotLines(results, "minimal", 2)
+	got := searchRobotLines(results, "minimal", 2, storage.SearchProvenance{})
 	want := []string{
 		"result_0_truncated=true",
 		"result_0_omitted=1",
 	}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("oversized first result mismatch\ngot:  %#v\nwant: %#v", got, want)
+	}
+}
+
+func TestSearchRobotCandidateMetadataBudget(t *testing.T) {
+	provenance := storage.SearchProvenance{CandidateLimit: 200, CandidateLimitReached: true}
+	results := []storage.SearchResult{
+		{SourcePath: "/escaped\\path\nnext", Snippet: "orchard\nhandshake\\value", Text: strings.Repeat("full\\content\n", 20)},
+		{SourcePath: "/second", Snippet: "second", Text: "second"},
+	}
+	for _, fields := range []string{"minimal", "full"} {
+		for budget := range 160 {
+			if budget == 0 {
+				continue
+			}
+			lines := searchRobotLines(results, fields, budget, provenance)
+			payload := strings.Join(lines, "\n")
+			if robotLinesTokenCount(lines) > budget {
+				t.Fatalf("%s/%d exceeds complete escaped payload budget: %s", fields, budget, payload)
+			}
+			if len(lines) == 0 {
+				continue // caller emits the candidate notice on stderr
+			}
+			if strings.Count(payload, "candidate_limit=200") != 1 || strings.Count(payload, "candidate_limit_reached=true") != 1 {
+				t.Fatalf("%s/%d cap metadata: %s", fields, budget, payload)
+			}
+			emitted := strings.Count(payload, "_filepath=")
+			if emitted < len(results) {
+				marker := strings.Join(searchRobotTruncationLines(emitted, len(results)-emitted), "\n")
+				if strings.Count(payload, "_truncated=true") != 1 || !strings.Contains(payload, marker) {
+					t.Fatalf("%s/%d omission counts: %s", fields, budget, payload)
+				}
+			}
+		}
+	}
+	for budget := range 40 {
+		lines := searchRobotLines(nil, "minimal", budget, provenance)
+		if budget > 0 && robotLinesTokenCount(lines) > budget {
+			t.Fatalf("empty capped page exceeds %d: %v", budget, lines)
+		}
+		if len(lines) > 0 && strings.Join(lines, "\n") != "candidate_limit=200\ncandidate_limit_reached=true" {
+			t.Fatalf("empty capped page metadata: %v", lines)
+		}
 	}
 }

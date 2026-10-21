@@ -22,7 +22,7 @@ func TestNativeSessionIsolationAndPerennialOwnership(t *testing.T) {
 	if err != nil || len(sessions) != 2 {
 		t.Fatalf("sessions=%+v err=%v", sessions, err)
 	}
-	results, err := db.Search("native", models.SearchOptions{Project: "alpha"})
+	results, _, err := db.Search("native", models.SearchOptions{Project: "alpha"})
 	if err != nil || len(results) != 1 || results[0].SessionID != "s1" {
 		t.Fatalf("search=%+v err=%v", results, err)
 	}
@@ -39,11 +39,11 @@ func TestNativeSessionIsolationAndPerennialOwnership(t *testing.T) {
 	if _, err := db.DB().Exec(`INSERT INTO session_tags VALUES('/native/opencode.db','testing')`); err != nil {
 		t.Fatal(err)
 	}
-	tagged, err := db.Search("native", models.SearchOptions{Tag: "testing", Project: "beta"})
+	tagged, _, err := db.Search("native", models.SearchOptions{Tag: "testing", Project: "beta"})
 	if err != nil || len(tagged) != 0 {
 		t.Fatalf("path tags widened native sessions: %+v err=%v", tagged, err)
 	}
-	positive, err := db.Search("native", models.SearchOptions{Tag: "testing", Project: "alpha"})
+	positive, _, err := db.Search("native", models.SearchOptions{Tag: "testing", Project: "alpha"})
 	if err != nil || len(positive) != 1 {
 		t.Fatalf("scoped tags not applied: %+v %v", positive, err)
 	}
@@ -116,7 +116,7 @@ func TestNativeSessionTagsSurviveSiblingReplay(t *testing.T) {
 		if err := db.SyncFiles([]IndexedFile{file}); err != nil {
 			t.Fatal(err)
 		}
-		hits, err := db.Search("retainedquartz", models.SearchOptions{Tag: "testing"})
+		hits, _, err := db.Search("retainedquartz", models.SearchOptions{Tag: "testing"})
 		if err != nil || len(hits) != 1 || hits[0].SessionID != "s1" {
 			t.Fatalf("retained tagged hits=%+v err=%v", hits, err)
 		}
@@ -135,7 +135,7 @@ func TestNativeSessionTagsSurviveSiblingReplay(t *testing.T) {
 				t.Fatalf("list identity tags=%+v", item)
 			}
 		}
-		hits, err = db.Search("siblingquartz", models.SearchOptions{Tag: "testing"})
+		hits, _, err = db.Search("siblingquartz", models.SearchOptions{Tag: "testing"})
 		if err != nil || len(hits) != 0 {
 			t.Fatalf("stale sibling tags=%+v err=%v", hits, err)
 		}
@@ -152,7 +152,7 @@ func TestNativeSessionTagsSurviveSiblingReplay(t *testing.T) {
 		if err := db.SyncFiles([]IndexedFile{file}); err != nil {
 			t.Fatal(err)
 		}
-		hits, err := db.Search("siblingquartz", models.SearchOptions{Tag: "docs"})
+		hits, _, err := db.Search("siblingquartz", models.SearchOptions{Tag: "docs"})
 		if err != nil || len(hits) != 1 || hits[0].SessionID != "s2" {
 			t.Fatalf("updated sibling tags=%+v err=%v", hits, err)
 		}
@@ -180,7 +180,7 @@ func TestNativeSessionTagsSurviveSiblingReplay(t *testing.T) {
 	if err := db.DB().QueryRow("SELECT COUNT(*) FROM session_tags WHERE source_path='/native.db' AND tag='docs'").Scan(&count); err != nil || count != 1 {
 		t.Fatalf("rollback legacy tags=%d err=%v", count, err)
 	}
-	hits, err := db.Search("retainedquartz", models.SearchOptions{Tag: "testing"})
+	hits, _, err := db.Search("retainedquartz", models.SearchOptions{Tag: "testing"})
 	if err != nil || len(hits) != 1 {
 		t.Fatalf("rollback tags=%+v err=%v", hits, err)
 	}

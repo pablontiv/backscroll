@@ -118,7 +118,7 @@ Token budget guidance:
 - Tool/error investigation: 1000–1500 tokens; use literal strings of at least three characters.
 - Default ceiling: `--max-tokens 2000` unless a higher budget is justified.
 
-If output is truncated, treat it as evidence that more indexed data exists. Refine the query, selected source, or budget instead of abandoning the index.
+Search robot `result_N_truncated=true` / `result_N_omitted=M` means M results from the requested page did not fit the output budget (N is the number emitted). Refine the query, selected source, or budget. Separately, `candidate_limit=200` / `candidate_limit_reached=true` proves an eligible 201st unique non-echo match in at least one unfiltered FTS stream. Unfiltered offsets page only the merged pool of at most 400 candidates; even an empty page may carry that signal. Use narrower scope/query or typed `--content-type` SQL pagination for broader coverage; a larger output budget does not expand the candidate pool. Text/JSON report the cap on stderr, as does robot when cap metadata plus required omission markers cannot fit. Exactly 200 eligible matches is not marked capped.
 
 For explicit lexical term-overload recall, add `--relax` (for example `backscroll search --text '+violet handshake technique adaptation' --relax --robot --fields minimal --max-tokens 2000`); `+term`/quoted phrases stay protected, scope never widens, and relaxed results report `match_stage`/`dropped_terms`—this does not recover missing vocabulary.
 
