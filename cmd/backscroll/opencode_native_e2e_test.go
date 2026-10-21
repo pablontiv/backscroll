@@ -190,3 +190,50 @@ func TestOpenCodeNativeSessionsCLI(t *testing.T) {
 	}
 	t.Log("copied fixture: native sessions/projects, registry precedence, context/sequence/tag isolation, stable perennial identities, absent-cwd unknown proof verified through actual CLI")
 }
+
+func TestOpenCodeFencedNormalizationCLI(t *testing.T) {
+	e := newQueryEchoE2E(t)
+	root := e.addReaderManifest("normalization", "opencode")
+	path := filepath.Join(root, "opencode.db")
+	source := openOpenCodeFixture(t, path)
+	if _, err := source.Exec(`CREATE TABLE session(id TEXT PRIMARY KEY,directory TEXT); INSERT INTO session VALUES('native167','/projects/normalization')`); err != nil {
+		t.Fatal(err)
+	}
+	for i, text := range []string{
+		"  quartz167 beacon\n```python\nvalue =  167\nprint(value)\n```\n  finish\tmarker  ",
+		"  quartz167 beacon\nvalue =  167\nprint(value)\n  finish\tmarker  ",
+		"quartz167 <system-reminder>native visible</system-reminder>\n  second    line",
+	} {
+		id := fmt.Sprintf("native167-%d", i)
+		if _, err := source.Exec(`INSERT INTO message VALUES(?,?,?,?,?)`, id, "native167", i, i, `{"role":"user"}`); err != nil {
+			t.Fatal(err)
+		}
+		part, _ := json.Marshal(map[string]any{"type": "text", "text": text})
+		if _, err := source.Exec(`INSERT INTO part VALUES(?,?,?,?,?,?)`, id+"-part", id, "native167", i, i, string(part)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := source.Close(); err != nil {
+		t.Fatal(err)
+	}
+	code := e.searchJSON("quartz167", "code", 20)
+	if len(code) != 1 || code[0].Content != "quartz167 beacon ```python value = 167 print(value) ``` finish marker" {
+		t.Fatalf("code-filtered normalized fenced fixture = %+v", code)
+	}
+	plain := e.searchJSON("quartz167", "text", 20)
+	if len(plain) != 2 {
+		t.Fatalf("text-filtered controls = %+v", plain)
+	}
+	index, err := storage.OpenReadOnly(e.database)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer index.Close()
+	var text, origin, session, evidence string
+	if err := index.DB().QueryRow(`SELECT text,origin,session_id,project_evidence FROM search_items WHERE text LIKE '%system-reminder%'`).Scan(&text, &origin, &session, &evidence); err != nil {
+		t.Fatal(err)
+	}
+	if text != "quartz167 <system-reminder>native visible</system-reminder> second line" || origin != "human" || session != "native167" || evidence != "native_cwd" {
+		t.Fatalf("native envelope/ownership = %q/%q/%q/%q", text, origin, session, evidence)
+	}
+}

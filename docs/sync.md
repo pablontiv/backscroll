@@ -292,7 +292,7 @@ The SQLite database is the perennial event store, not a disposable cache. When a
 
 ## Noise filtering
 
-Each dedicated reader owns provider-specific record inclusion, text cleanup, and tool extraction. Discovery exclusions in the manifest remove configured paths such as Claude subagent sessions; readers remove provider noise such as system reminders, task notifications, and local command metadata. Pi, OMP, and Codex reasoning is indexed only when its manifest sets `index_reasoning = true`.
+Each dedicated reader owns provider-specific record inclusion, text cleanup, and tool extraction. Discovery exclusions in the manifest remove configured paths such as Claude subagent sessions; readers retain their existing provider removals, including system reminders, task notifications, local command metadata, and Codex structural wrappers. After native decoding and those removals, prose whitespace is collapsed consistently and fenced code is classified before collapse. OpenCode applies whitespace-only cleanup to its selected native text parts; epoch 3 replays available sources through the shared 200-path queue while preserving identified retained payloads and unavailable history. Tool payloads keep their serialization policy. Pi, OMP, and Codex reasoning is indexed only when its manifest sets `index_reasoning = true`.
 
 ## Exit codes
 

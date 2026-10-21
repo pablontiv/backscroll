@@ -108,8 +108,8 @@ func (*OMPReader) Parse(ctx context.Context, path string, def input_config.Input
 		}
 		var text string
 		if m.Role != "toolResult" && json.Unmarshal(m.Content, &text) == nil {
-			if cleaned := sync.CleanContent(text); cleaned != "" {
-				emit(0, cleaned, classifyText(cleaned))
+			if cleaned, kind := cleanText(text); cleaned != "" {
+				emit(0, cleaned, kind)
 			}
 			return nil
 		}
@@ -155,8 +155,8 @@ func (*OMPReader) Parse(ctx context.Context, path string, def input_config.Input
 			}
 			switch b.Type {
 			case "text":
-				if cleaned := sync.CleanContent(b.Text); cleaned != "" {
-					emit(i, cleaned, classifyText(cleaned))
+				if cleaned, kind := cleanText(b.Text); cleaned != "" {
+					emit(i, cleaned, kind)
 				}
 			case "thinking":
 				if m.Role == "assistant" && def.Decode.IndexReasoning {

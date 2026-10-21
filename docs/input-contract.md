@@ -556,7 +556,7 @@ visible without relying on main-file size, modification time, or
 records inside that same snapshot; a concurrent later commit is detected on the
 next startup rather than attached to older parsed records. Equal-timestamp
 additions, deletions, and part-only edits therefore invalidate the token, while
-an unchanged native snapshot hashes identically. OpenCode reader epoch 2 queues pre-native exports through the shared, bounded 200-path ingestion-fingerprint replay.
+an unchanged native snapshot hashes identically. OpenCode reader epoch 3 queues available older exports through the shared, bounded 200-path ingestion-fingerprint replay for native identity and normalized text.
 
 ### OpenCode native session identity
 
@@ -575,6 +575,15 @@ fixed `#t0` input and `#r0` output suffixes. Neither payload, source path, parse
 position, nor timestamp participates. Identified OpenCode records therefore use
 perennial append/reconciliation: insertion and reordering preserve anchors;
 mutation never replaces retained payload or proven session/project ownership.
+
+After native envelope selection, session prose uses collapsed whitespace across
+Claude, Pi, Codex, OMP, and OpenCode. Fenced code is classified before whitespace
+collapse. Each provider keeps its existing content removals and structural
+wrapper handling; OpenCode selects non-ignored native text parts and applies
+whitespace-only cleanup. Tool payload serialization and reasoning opt-in remain
+separate. Replay indexes newly available records with this policy; already
+identified retained payloads keep their original text/type and anchors, and
+unavailable perennial sources keep their rows and fingerprint.
 
 Migration V20 adds nullable `search_items.session_id` and provider-neutral
 `session_identity_tags`, because the prior schema had no native-session column

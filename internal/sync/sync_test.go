@@ -50,6 +50,16 @@ func TestCleanContent(t *testing.T) {
 			want:  "hello world test",
 		},
 		{
+			name:  "multiline fenced whitespace collapse",
+			input: "  before\n```go\nvalue :=  167\n```\n after\tmarker\u00a0 ",
+			want:  "before ```go value := 167 ``` after marker",
+		},
+		{
+			name:  "provider removal before whitespace",
+			input: "Caveat: before <system-reminder>```hidden```</system-reminder>\n\t after",
+			want:  "before after",
+		},
+		{
 			name:  "empty string",
 			input: "",
 			want:  "",

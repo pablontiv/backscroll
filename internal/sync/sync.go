@@ -15,8 +15,19 @@ func IsNoiseType(typ string) bool {
 	return noiseTypes[typ]
 }
 
-// CleanContent removes noise patterns from content
+// CleanContent removes provider noise and normalizes searchable whitespace.
 func CleanContent(content string) string {
+	return NormalizeWhitespace(RemoveContentNoise(content))
+}
+
+// NormalizeWhitespace collapses text whitespace without removing provider content.
+func NormalizeWhitespace(content string) string {
+	return strings.Join(strings.Fields(content), " ")
+}
+
+// RemoveContentNoise applies the established JSONL reader removals while keeping
+// whitespace intact for classification. Readers opt into this provider policy.
+func RemoveContentNoise(content string) string {
 	if content == "" {
 		return ""
 	}
@@ -60,11 +71,6 @@ func CleanContent(content string) string {
 	// Remove "Caveat: " prefix and "Request interrupted" patterns
 	content = strings.TrimPrefix(content, "Caveat: ")
 	content = strings.ReplaceAll(content, "Request interrupted", "")
-
-	// Clean extra whitespace
-	content = strings.TrimSpace(content)
-	// Collapse multiple spaces
-	content = strings.Join(strings.Fields(content), " ")
 
 	return content
 }

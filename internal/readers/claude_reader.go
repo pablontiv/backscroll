@@ -181,11 +181,11 @@ func extractClaudeMessages(ctx context.Context, rec claudeRecord) ([]models.Mess
 	var s string
 	if err := json.Unmarshal(rec.Message.Content, &s); err == nil {
 		interrupted := strings.Contains(s, interruptMarker)
-		text := sync.CleanContent(s)
+		text, kind := cleanText(s)
 		if text == "" {
 			return nil, nil
 		}
-		return []models.Message{{Role: role, Origin: origin, Content: text, ContentType: classifyText(text), Timestamp: ts,
+		return []models.Message{{Role: role, Origin: origin, Content: text, ContentType: kind, Timestamp: ts,
 			UUID: rec.UUID, WasInterrupted: interrupted}}, nil
 	}
 
@@ -200,6 +200,7 @@ func extractClaudeMessages(ctx context.Context, rec claudeRecord) ([]models.Mess
 
 	var out []models.Message
 	var textParts []string
+	textKind := "text"
 	interrupted := false
 	for i, b := range blocks {
 		if err := ctx.Err(); err != nil {
@@ -210,8 +211,11 @@ func extractClaudeMessages(ctx context.Context, rec claudeRecord) ([]models.Mess
 			if strings.Contains(b.Text, interruptMarker) {
 				interrupted = true
 			}
-			if c := sync.CleanContent(b.Text); c != "" {
+			if c, kind := cleanText(b.Text); c != "" {
 				textParts = append(textParts, c)
+				if kind == "code" {
+					textKind = kind
+				}
 			}
 		case "tool_use":
 			if t := SerializeToolInput(b.Name, b.Input); strings.TrimSpace(t) != "" {
@@ -251,7 +255,7 @@ func extractClaudeMessages(ctx context.Context, rec claudeRecord) ([]models.Mess
 	}
 	if len(textParts) > 0 {
 		text := strings.TrimSpace(strings.Join(textParts, " "))
-		out = append([]models.Message{{Role: role, Origin: origin, Content: text, ContentType: classifyText(text), Timestamp: ts,
+		out = append([]models.Message{{Role: role, Origin: origin, Content: text, ContentType: textKind, Timestamp: ts,
 			UUID: rec.UUID, WasInterrupted: interrupted}}, out...)
 	}
 	return out, nil
@@ -278,11 +282,4 @@ func isDirectSearchInput(tool string, input json.RawMessage) bool {
 		return false
 	}
 	return directsearch.IsDirectSearchCommand(obj.Command)
-}
-
-func classifyText(text string) string {
-	if strings.Contains(text, "```") {
-		return "code"
-	}
-	return "text"
 }
