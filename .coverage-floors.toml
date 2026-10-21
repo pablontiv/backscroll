@@ -6,7 +6,6 @@ packages = [
   "internal/hybrid",
   "internal/input_config",
   "internal/models",
-  "internal/plans",
   "internal/projects",
   "internal/reader",
   "internal/readers",
