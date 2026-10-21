@@ -511,27 +511,22 @@ func (d *Database) applySingleMigration(apply migrationApplier) error {
 	return nil
 }
 
-var migrationPlanDispatch = map[compat.MigrationStep]migrationApplier{
-	{Version: 1, Name: "V1 core schema"}:                                                 applyV1,
-	{Version: 2, Name: "V2 embedding tables"}:                                            applyV2,
-	{Version: 3, Name: "V3 embedding blob column"}:                                       applyV3,
-	{Version: 4, Name: "V4 tool_fts trigram index"}:                                      applyV4,
-	{Version: 5, Name: "V5 drop phantom session_events"}:                                 applyV5,
-	{Version: 6, Name: "V6 drop source_metadata when present"}:                           applyV6,
-	{Version: 7, Name: "V7 reasoning triggers"}:                                          applyV7,
-	{Version: 8, Name: "V8 perennity: extraction_version, was_interrupted, tool_events"}: applyV8,
-	{Version: 9, Name: "V9 tool_events uuid uniqueness index"}:                           applyV9,
-	{Version: 10, Name: "V10 template mining: message_templates, template_matches"}:      applyV10,
-	{Version: 11, Name: "V11 correction detection: correction_signals"}:                  applyV11,
-	{Version: 12, Name: "V12 agent classification: annotations"}:                         applyV12,
-	{Version: 13, Name: "V13 backfill discovery indexes"}:                                applyV13,
-	{Version: 14, Name: "V14 file metadata prefilter"}:                                   applyV14,
-	{Version: 15, Name: "V15 search echo provenance"}:                                    applyV15,
-	{Version: 16, Name: "V16 parser-backed message origin"}:                              applyV16,
-	{Version: 17, Name: "V17 project attribution evidence"}:                              applyV17,
-	{Version: 18, Name: "V18 ingestion semantics fingerprint"}:                           applyV18,
-	{Version: 19, Name: "V19 native tool call identity"}:                                 applyV19,
-	{Version: 20, Name: "V20 native session identity"}:                                   applyV20,
+var migrationPlanDispatch = registeredMigrationDispatch()
+
+func registeredMigrationDispatch() map[compat.MigrationStep]migrationApplier {
+	steps := compat.MigrationSteps()
+	appliers := newDatabaseMigrations()
+	if len(steps) != len(appliers) {
+		panic("migration registrations and appliers differ")
+	}
+	dispatch := make(map[compat.MigrationStep]migrationApplier, len(steps))
+	for index, step := range steps {
+		if step.Version != index+1 {
+			panic("migration registrations must be consecutive")
+		}
+		dispatch[step] = appliers[index]
+	}
+	return dispatch
 }
 
 func planStartsFromEmptySchema(plan compat.MigrationPlan) bool {

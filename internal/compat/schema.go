@@ -411,6 +411,12 @@ var allMigrationSteps = []MigrationStep{
 	{Version: 20, Name: "V20 native session identity"},
 }
 
+// MigrationSteps returns the authoritative ordered migration registrations.
+// Callers receive their own slice so operation-local changes cannot alter the catalog.
+func MigrationSteps() []MigrationStep {
+	return append([]MigrationStep(nil), allMigrationSteps...)
+}
+
 func hasObject(objects []sqliteObject, typ, name string) bool {
 	for _, object := range objects {
 		if object.typ == typ && object.name == name {
