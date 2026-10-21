@@ -1399,7 +1399,7 @@ func TestRecoverSQLiteSidecarPolicy(t *testing.T) {
 		fromPath := filepath.Join(dir, "stranded.db")
 		createRecoveryDB(t, activePath, []storage.IndexedMessage{{Ordinal: 0, Role: "user", Text: "active", UUID: "44444444-4444-4444-8444-444444444444", ContentType: "text"}})
 		createRecoveryDB(t, fromPath, []storage.IndexedMessage{{Ordinal: 0, Role: "assistant", Text: "stranded", UUID: "55555555-5555-4555-8555-555555555555", ContentType: "text"}})
-		if err := os.WriteFile(activePath+"-journal", []byte("hot journal sentinel"), 0o600); err != nil {
+		if err := os.WriteFile(activePath+"-journal", []byte("synthetic journal namespace sentinel"), 0o600); err != nil {
 			t.Fatalf("write rollback journal: %v", err)
 		}
 
@@ -1423,7 +1423,7 @@ func TestRecoverSQLiteSidecarPolicy(t *testing.T) {
 			t.Fatalf("write empty wal: %v", err)
 		}
 
-		// With the fix for issue #51, empty -shm is tolerated when -wal is zero bytes (no active writer)
+		// Empty WAL makes leftover regular SHM eligible; recovery also fingerprints the file set.
 		report, err := Execute(context.Background(), Options{ActivePath: activePath, FromPath: fromPath, DryRun: true})
 		if err != nil {
 			t.Fatalf("Execute error = %v, want success when -shm has no pending changes", err)
@@ -1753,7 +1753,7 @@ func TestEnsureSourceSidecarsToleratesZeroByteWAL(t *testing.T) {
 
 // TestEnsureSourceSidecarsToleratesSHMWithZeroWAL verifies that ensureSourceSidecarsSafe
 // tolerates a -shm file when the -wal is zero bytes (issue #51 fix).
-// The safety property is: if WAL has no pending changes, the database is not being actively written to.
+// Quiescent inputs remain a prerequisite; an empty WAL alone is not a writer reservation.
 func TestEnsureSourceSidecarsToleratesSHMWithZeroWAL(t *testing.T) {
 	dir := t.TempDir()
 	dbPath := filepath.Join(dir, "test.db")
@@ -1779,7 +1779,7 @@ func TestEnsureSourceSidecarsToleratesSHMWithZeroWAL(t *testing.T) {
 	}
 }
 
-// TestEnsureSourceSidecarsRejectsSHMWithoutWAL verifies that ensureSourceSidecarsSafe
+// TestEnsureSourceSidecarsToleratesSHMWithoutWAL verifies that ensureSourceSidecarsSafe
 // tolerates a -shm file when the -wal is absent (issue #51 fix).
 func TestEnsureSourceSidecarsToleratesSHMWithoutWAL(t *testing.T) {
 	dir := t.TempDir()

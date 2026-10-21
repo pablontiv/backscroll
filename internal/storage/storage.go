@@ -394,10 +394,15 @@ func openReadOnlyContext(ctx context.Context, path string) (*Database, error) {
 	return &Database{db: db, path: canonicalPath}, nil
 }
 
-// OpenImmutableReadOnly opens an existing SQLite database without creating or
-// touching SQLite sidecar files. It refuses non-empty WAL files because an
-// immutable view can miss committed frames that are not checkpointed into the
-// main database file.
+// OpenImmutableReadOnly opens an existing canonical SQLite main database with
+// mode=ro and immutable=1, preserving its bytes and SQLite sidecars. It refuses a
+// non-empty WAL observed before opening because committed frames may not yet be
+// checkpointed into the main file.
+//
+// Callers must supply a fully checkpointed, quiescent database in a trusted
+// filesystem namespace for the connection's lifetime. Recovery additionally
+// validates sidecar namespace entries and fingerprints file-set content and
+// identity before and after reading; those are separate recovery guarantees.
 func OpenImmutableReadOnly(path string) (*Database, error) {
 	return openImmutableReadOnlyContext(context.Background(), path)
 }
