@@ -115,8 +115,9 @@ func TestOpenCodeNativeToolIdentityAndMalformedMetadata(t *testing.T) {
 	if _, err := db.Exec(`DELETE FROM session`); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := reader.Parse(context.Background(), path, input_config.InputDefinition{}); err == nil {
-		t.Fatal("orphan session silently fell back")
+	orphaned, err := reader.Parse(context.Background(), path, input_config.InputDefinition{})
+	if err != nil || len(orphaned.Records) != 0 || orphaned.SkippedMessages != 4 {
+		t.Fatalf("orphan groups: %+v err=%v", orphaned, err)
 	}
 }
 

@@ -174,12 +174,10 @@ func parseOpenCodeSnapshot(ctx context.Context, tx *sql.Tx, dbPath string) (mode
 	if invalid {
 		return models.ParsedFile{}, fmt.Errorf("invalid OpenCode message/part relationship")
 	}
+	var skippedMessages int
 	if hasSession {
-		if err := tx.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM message m LEFT JOIN session s ON s.id=m.session_id WHERE s.id IS NULL)`).Scan(&invalid); err != nil {
+		if err := tx.QueryRowContext(ctx, `SELECT COUNT(*) FROM message m LEFT JOIN session s ON s.id=m.session_id WHERE s.id IS NULL`).Scan(&skippedMessages); err != nil {
 			return models.ParsedFile{}, err
-		}
-		if invalid {
-			return models.ParsedFile{}, fmt.Errorf("OpenCode message has no native session metadata")
 		}
 	}
 	directory, join, sessionColumn := "NULL", "", "NULL"
@@ -253,11 +251,11 @@ func parseOpenCodeSnapshot(ctx context.Context, tx *sql.Tx, dbPath string) (mode
 			return models.ParsedFile{}, err
 		}
 
-		if hasSession && !nativeSession.Valid {
-			return models.ParsedFile{}, fmt.Errorf("OpenCode message has no native session metadata")
-		}
 		if !validOpenCodeID(msgID) || !validOpenCodeID(partID) || !validOpenCodeID(sessionID) || partSession != sessionID {
 			return models.ParsedFile{}, fmt.Errorf("invalid OpenCode native identity or session relationship")
+		}
+		if hasSession && !nativeSession.Valid {
+			continue
 		}
 		if cwd.Valid && cwd.String != "" && (!filepath.IsAbs(cwd.String) || strings.IndexByte(cwd.String, 0) >= 0) {
 			return models.ParsedFile{}, fmt.Errorf("invalid OpenCode native directory")
@@ -317,9 +315,10 @@ func parseOpenCodeSnapshot(ctx context.Context, tx *sql.Tx, dbPath string) (mode
 	}
 
 	return models.ParsedFile{
-		Path:    dbPath,
-		Hash:    hash,
-		Records: msgs,
+		Path:            dbPath,
+		Hash:            hash,
+		Records:         msgs,
+		SkippedMessages: skippedMessages,
 	}, nil
 }
 

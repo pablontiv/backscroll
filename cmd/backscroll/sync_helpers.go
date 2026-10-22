@@ -390,6 +390,8 @@ func isRacyCleanFile(fileMtime string, lastIndexed string) bool {
 	return fileMt.After(indexTime.Add(-time.Duration(racyMarginSeconds) * time.Second))
 }
 
+type startupWarningWriterKey struct{}
+
 // maybeAutoSync preserves the legacy non-cancellable entry point by creating
 // production dependencies for this invocation rather than using shared state.
 func maybeAutoSync(cfg *config.Config, progress io.Writer) error {
@@ -644,6 +646,7 @@ func (s *startupSyncService) syncWithProgress(ctx context.Context, cfg *config.C
 	// selected replays are deterministic even when discovery order changes.
 	var indexedFiles []storage.IndexedFile
 	semanticsReplaysDone, staleReplaysDone := 0, 0
+	skippedOpenCodeMessages := 0
 	for _, claim := range uniqueClaims {
 		if err := ctx.Err(); err != nil {
 			return err
@@ -670,6 +673,9 @@ func (s *startupSyncService) syncWithProgress(ctx context.Context, cfg *config.C
 		pf, err := reader.Parse(ctx, ref, def)
 		if err != nil {
 			return fmt.Errorf("parse %s: %w", ref, err)
+		}
+		if reader.Name() == "opencode" {
+			skippedOpenCodeMessages += pf.SkippedMessages
 		}
 		if err := ctx.Err(); err != nil {
 			return err
@@ -819,6 +825,14 @@ func (s *startupSyncService) syncWithProgress(ctx context.Context, cfg *config.C
 
 	if err := ctx.Err(); err != nil {
 		return err
+	}
+
+	if skippedOpenCodeMessages > 0 {
+		warnings, ok := ctx.Value(startupWarningWriterKey{}).(io.Writer)
+		if !ok {
+			warnings = progress
+		}
+		_, _ = fmt.Fprintf(warnings, "warning: opencode: skipped %d messages without native session metadata\n", skippedOpenCodeMessages)
 	}
 
 	return nil

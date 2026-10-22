@@ -26,10 +26,11 @@ type SearchResult struct {
 
 // ParsedFile represents a parsed session or plan file.
 type ParsedFile struct {
-	Path    string
-	Hash    string // SHA-256 hex
-	Records []Message
-	Cwd     string // working directory, used for project identification
+	Path            string
+	Hash            string // SHA-256 hex
+	Records         []Message
+	Cwd             string // working directory, used for project identification
+	SkippedMessages int    // messages skipped because native session metadata is unavailable
 }
 
 // Message represents a message in a session.
