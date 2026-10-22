@@ -80,11 +80,22 @@ recovery, merge observation, and return to implementation or rebase when needed.
 Dagu verifies integration, updates the primary clone, and cleans up owned
 worktrees and branches at close.
 
-A failed or aborted run is terminal. Inspect its logs and resource evidence,
-preserve retained work, and fix the cause before enqueueing a replacement with
-the same `ISSUE`, branch, and coordinating session ID plus a suffixed run ID.
-Set `PR_NUMBER` when an open pull request exists. Dagu validates and transfers
-ownership of the retained branch and worktree while preserving HEAD and files.
+For Dagu `2.20.1`, recover in the same run when it becomes `Failed` with
+`process terminated unexpectedly - stale local process detected` while a
+checkpoint was `Waiting` or a resume was `Queued`. Confirm this by correlating
+`$DAGU_HOME/logs/admin/events/*.jsonl`: a scheduler (`start-all`)
+`dag.run.failed` must follow `dag.run.waiting` or `dag.run.queued` for the same
+`attempt_id`, DAG and run. Preserve those events, then use
+`dagu retry --run-id <run> --step <step> --downstream <dag>`, selecting the nearest
+preceding non-checkpoint step from the table in the installed `dagu-feature`
+skill's “Recover a checkpoint after native stale-process repair” section and
+following its precautions. This preserves the run, snapshot, parameters, branch,
+worktree and candidate. For other terminal failures or aborts, inspect the logs
+and resource evidence, preserve retained work, and fix the cause before
+enqueueing a replacement with the same `ISSUE`, branch, and coordinating session
+ID plus a suffixed run ID. Set `PR_NUMBER` when an open pull request exists.
+Dagu validates and transfers ownership of the retained branch and worktree while
+preserving HEAD and files.
 For fresh-clone recovery, fetch the durable checkpoint with
 `git fetch origin refs/dagu/checkpoints/issue-$ISSUE` and follow the bundle
 skill's checkpoint recovery procedure.
