@@ -215,10 +215,14 @@ func identityOf(r models.IndexedRecord) (recordIdentity, error) {
 	return recordIdentity{Kind: "path_ordinal", SourcePath: r.SourcePath, Ordinal: r.Ordinal}, nil
 }
 
-// ValidateRecoveryUUID accepts a canonical RFC UUID or the exact Claude
-// derived forms <uuid>#tN and <uuid>#rN. The complete accepted value remains
-// the recovery identity; this function only validates its syntax.
+// ValidateRecoveryUUID accepts the canonical identity domains emitted by the
+// readers: RFC UUIDs (including derived tool blocks), OMP physical blocks, and
+// Pi native calls/entries. Native components are opaque, not RFC UUIDs.
+// Validation preserves the complete identity; collision checks compare it exactly.
 func ValidateRecoveryUUID(value string) error {
+	if validNativeRecoveryUUID(value) {
+		return nil
+	}
 	base := value
 	if separator := strings.IndexByte(value, '#'); separator >= 0 {
 		base = value[:separator]
@@ -241,6 +245,58 @@ func ValidateRecoveryUUID(value string) error {
 		return fmt.Errorf("recovery UUID base %q is not canonical", base)
 	}
 	return nil
+}
+
+func validNativeRecoveryUUID(value string) bool {
+	if body, ok := strings.CutPrefix(value, "omp:"); ok {
+		block := strings.LastIndex(body, "#b")
+		if block < 0 || !recoveryDecimal(body[block+2:]) {
+			return false
+		}
+		// Both native components are nonempty, but may themselves contain
+		// separators. Their serialized identity is deliberately not decoded.
+		owner := body[:block]
+		return len(owner) >= 3 && strings.Contains(owner[1:len(owner)-1], ":")
+	}
+	body, ok := strings.CutPrefix(value, "pi:")
+	if !ok || len(body) < 2 {
+		return false
+	}
+	if call := strings.Index(body[1:], ":call:"); call >= 0 && call+1+len(":call:") < len(body) {
+		return true
+	}
+	entry := strings.Index(body[1:], ":entry:") + 1
+	if entry == 0 {
+		return false
+	}
+	record := body[entry+len(":entry:"):]
+	suffix := strings.LastIndexByte(record, '#')
+	if suffix <= 0 {
+		return false
+	}
+	kind := record[suffix+1:]
+	switch kind {
+	case "text", "result", "custom":
+		return true
+	}
+	for _, prefix := range []string{"call:", "thinking:"} {
+		if index, ok := strings.CutPrefix(kind, prefix); ok {
+			return recoveryDecimal(index)
+		}
+	}
+	return false
+}
+
+func recoveryDecimal(value string) bool {
+	if value == "" {
+		return false
+	}
+	for _, digit := range value {
+		if digit < '0' || digit > '9' {
+			return false
+		}
+	}
+	return true
 }
 
 type recordOccurrence struct {

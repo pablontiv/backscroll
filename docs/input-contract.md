@@ -295,7 +295,18 @@ not remove them. The perennial store has no deletion path.
 
 ## Complete OMP example
 
-Install `inputs/omp.inputs.toml` into the runtime manifest directory:
+Install the shipped preset using the explicit runtime configuration home:
+
+```bash
+config_home="${BACKSCROLL_CONFIG_DIR:-$HOME/.config}"
+backscroll presets install --config-home "$config_home"
+```
+
+This preserves existing manifests and writes missing presets under
+`$config_home/backscroll/inputs`. Confirm an existing active OMP definition before
+changing anything. Replacing it requires approval for that exact file; the
+`--overwrite` option refreshes all six shipped presets and requires approval for
+all six. The OMP definition is:
 
 ```toml
 version = 1
@@ -354,6 +365,14 @@ history, are indexed in order rather than reconstructing only the active branch.
 UUID-bearing rows use the existing perennial append-only sync path; no new
 source value or schema migration is introduced.
 
+Recovery treats native OMP and Pi identities as exact opaque domain identifiers,
+including their physical-block/entry suffixes. Duplicate canonical payloads
+collapse; conflicting payload, location or native ownership evidence rejects the
+recovery plan. `recover` retains canonical rows rather than promising preservation
+of rich tool metadata. Available native inputs can replay to restore call IDs and
+outcomes. For expired sources, `rebuild` rederives lossy tool events from stored
+text with unknown native call IDs; unknown is not a successful result.
+
 Excluded: title/header/admin records (`thinking_level_change`, `model_change`,
 `service_tier_change`, `model_usage`, `custom`, `label`, `title_change`,
 `ttsr_injection`, `credential_pin`, `mode_change`, `reset_boundary`), derived
@@ -371,13 +390,34 @@ and `--session-dir` require explicit user manifest roots; environment variables
 are not interpolated or used to infer those roots. This decoder does not access
 OMP SQL/Redis stores, mutate OMP configuration or change transcript files.
 
-Verify with an installed manifest (use your actual custom source path if needed):
+Verify the isolated mixed-provider path first, using temporary HOME, explicit
+config home and SQLite state, the actual integrated CLI, and deterministic native
+fixtures. Record expected and observed provider counts in one index, reasoning
+and append transitions, exact returned UUID context, ownership scopes and recovery
+boundaries. The regression is
+`TestMixedProviderNativeOwnershipReplayAndRecovery`; bounded-search acceptance
+also exercises more than 200 eligible matches per stream in that mixed index.
+
+Installed-target proof is separate. After isolated PASS, obtain authorization for
+the exact installed binary, configuration home, index and provider source scope.
+Check the installed artifact's `go version -m` revision against all required
+merged fixes as described in the [local install runbook](runbooks/local-install.md).
+Using that exact binary and runtime environment, inspect config and perform
+bounded recall with known operator-owned anchors, then tool-pattern checks:
 
 ```bash
-backscroll config --json
-backscroll search --text "a phrase you remember" --all-projects --source session --source-path '*omp*' --json
-backscroll search --text "a command fragment" --all-projects --source session --content-type tool --source-path '*omp*' --robot
+BACKSCROLL_CONFIG_DIR="$config_home" /approved/path/backscroll config --json
+BACKSCROLL_CONFIG_DIR="$config_home" /approved/path/backscroll search --text "a known owned phrase" --all-projects --source session --source-path '/approved/omp/root/*/*.jsonl' --limit 5 --json
+BACKSCROLL_CONFIG_DIR="$config_home" /approved/path/backscroll search --text "a known command fragment" --all-projects --source session --content-type tool --source-path '/approved/omp/root/*/*.jsonl' --limit 5 --robot
+BACKSCROLL_CONFIG_DIR="$config_home" /approved/path/backscroll patterns --kind commands --project approved-project --json
+BACKSCROLL_CONFIG_DIR="$config_home" /approved/path/backscroll patterns --kind failures --project approved-project --json
 ```
+
+These operational commands can synchronize the index. Record resolved OMP
+settings, counts, actual returned UUID/context ownership and known/unknown
+outcomes privately. Missing eligible files or anchors are unavailable evidence.
+Publish only synthetic data or sanitized counts. Isolated PASS alone leaves
+installed-target verification open.
 
 ## Complete Codex example
 

@@ -148,6 +148,20 @@ func TestValidateRecoveryUUID(t *testing.T) {
 		uuidA + "#t0",
 		uuidA + "#t007",
 		uuidA + "#r12",
+		"omp:session:record#b0",
+		"omp:session:with:separators:record#hash#b12",
+		"omp:::x#b0",
+		"omp:x::#b0",
+		"omp:session#b7:record#b4#b0",
+		"pi::call:session:call:opaque#native",
+		"pi::entry:session:entry:record#text",
+		"pi:session:entry:record#hash:entry:part#thinking:0",
+		"pi:session:call:opaque#native:call",
+		"pi:session:entry:record#text",
+		"pi:session:entry:record#result",
+		"pi:session:entry:record#custom",
+		"pi:session:entry:record#call:0",
+		"pi:session:entry:record#thinking:12",
 	}
 	for _, value := range valid {
 		if err := ValidateRecoveryUUID(value); err != nil {
@@ -167,11 +181,56 @@ func TestValidateRecoveryUUID(t *testing.T) {
 		uuidA + "#r1garbage",
 		uuidA + "#t1#r0",
 		"11111111111141118111111111111111#t0",
+		"omp::record#b0",
+		"omp:session:#b0",
+		"omp:session:record#b",
+		"omp:session:record#b-1",
+		"omp:session:record#b0junk",
+		"pi::call:call",
+		"pi:session:call:",
+		"pi:session:entry:#text",
+		"pi:session:entry:record#thinking:-1",
+		"pi:session:entry:record#call:",
+		"pi:session:entry:record#unsupported",
 	}
 	for _, value := range invalid {
 		if err := ValidateRecoveryUUID(value); err == nil {
 			t.Errorf("ValidateRecoveryUUID(%q) accepted malformed value", value)
 		}
+	}
+}
+
+func TestPlanRecoveryNativeOpaqueIdentityConflicts(t *testing.T) {
+	for _, id := range []string{
+		"omp:session:record#b2",
+		"pi:session:call:shared",
+		"pi:session:entry:record#text",
+		"pi:session:entry:record#result",
+		"pi:session:entry:record#custom",
+		"pi:session:entry:record#call:0",
+		"pi:session:entry:record#thinking:1",
+	} {
+		t.Run(id, func(t *testing.T) {
+			a := recordWithUUID(id, "/native/session", 0)
+			plan, diagnostics, err := PlanRecovery([]RecoveryInput{recoveryInput("native", 20, a, a)})
+			if err != nil || len(diagnostics) != 0 || len(plan.Records) != 1 || plan.ExactDuplicates != 1 || *plan.Records[0].Record.UUID != id {
+				t.Fatalf("exact identity recovery: plan=%+v diagnostics=%+v err=%v", plan, diagnostics, err)
+			}
+			for _, mutate := range []func(*models.IndexedRecord){
+				func(r *models.IndexedRecord) { r.Text = "contradictory payload" },
+				func(r *models.IndexedRecord) { r.SourcePath = "/other/owner" },
+				func(r *models.IndexedRecord) { r.SessionID = "other-session" },
+			} {
+				a.SessionID = "owning-session"
+				b := a
+				mutate(&b)
+				plan, diagnostics, err = PlanRecovery([]RecoveryInput{recoveryInput("native", 20, a, b)})
+				if err != nil || len(plan.Records) != 0 {
+					t.Fatalf("contradictory identity recovery: plan=%+v diagnostics=%+v err=%v", plan, diagnostics, err)
+				}
+				assertDiagnosticCounts(t, diagnostics, map[Code]int{CodeRecoveryConflict: 2})
+			}
+		})
 	}
 }
 
