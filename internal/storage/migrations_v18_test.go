@@ -23,8 +23,8 @@ func TestV18AddsNullableIngestionFingerprintWithoutGuessingHistory(t *testing.T)
 	if err != nil || diag != nil {
 		t.Fatalf("inspect v17 error=%v diagnostic=%+v", err, diag)
 	}
-	if len(plan.Steps) != 3 || plan.Steps[0] != (compat.MigrationStep{Version: 18, Name: "V18 ingestion semantics fingerprint"}) || plan.Steps[1].Version != 19 || plan.Steps[2].Version != 20 {
-		t.Fatalf("v17 migration plan = %+v, want v18 then v19 then v20", plan.Steps)
+	if len(plan.Steps) != 4 || plan.Steps[0] != (compat.MigrationStep{Version: 18, Name: "V18 ingestion semantics fingerprint"}) || plan.Steps[1].Version != 19 || plan.Steps[2].Version != 20 || plan.Steps[3].Version != 21 {
+		t.Fatalf("v17 migration plan = %+v, want v18 through v21", plan.Steps)
 	}
 	if err := applyMigrationPlanForTest(context.Background(), db, plan); err != nil {
 		t.Fatal(err)

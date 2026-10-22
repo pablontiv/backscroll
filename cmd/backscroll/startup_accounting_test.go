@@ -328,6 +328,12 @@ func TestStartupAccountingSequentialPhasesAndHandoff(t *testing.T) {
 		advance(500 * time.Millisecond)
 		return open(ctx, path)
 	}
+	metadata := s.getFileMetadata
+	s.getFileMetadata = func(path string) (*int64, *string, error) {
+		// Metadata snapshots add time during hashing and parsed-record construction.
+		advance(50 * time.Millisecond)
+		return metadata(path)
+	}
 	sync := s.syncFiles
 	s.syncFiles = func(ctx context.Context, db *storage.Database, files []storage.IndexedFile) error {
 		advance(400 * time.Millisecond)
@@ -347,7 +353,7 @@ func TestStartupAccountingSequentialPhasesAndHandoff(t *testing.T) {
 	if result.Failure != nil {
 		t.Fatal(result.Failure)
 	}
-	for phase, want := range map[string]time.Duration{"Lock Acquisition": time.Second, "Index Prepare": time.Second, "Discovery": 100 * time.Millisecond, "Metadata": 0, "Hashing": 200 * time.Millisecond, "Parsing": 300 * time.Millisecond, "Database": 400 * time.Millisecond, "Unattributed": 1800 * time.Millisecond, "Total": 4800 * time.Millisecond} {
+	for phase, want := range map[string]time.Duration{"Lock Acquisition": time.Second, "Index Prepare": time.Second, "Discovery": 100 * time.Millisecond, "Metadata": 0, "Hashing": 250 * time.Millisecond, "Parsing": 350 * time.Millisecond, "Database": 400 * time.Millisecond, "Unattributed": 1800 * time.Millisecond, "Total": 4900 * time.Millisecond} {
 		if got := diagnosticDuration(t, out.String(), phase); got != want {
 			t.Fatalf("%s=%v want %v: %s", phase, got, want, out.String())
 		}

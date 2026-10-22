@@ -71,15 +71,15 @@ func TestInspectIndexRecognizesPartialV6LineageAndPlansV7(t *testing.T) {
 }
 
 func TestInspectIndexCurrentShapeIsIdempotent(t *testing.T) {
-	db := openFixtureCopy(t, "v20.sql")
+	db := openFixtureCopy(t, "v21.sql")
 	defer db.Close()
 
 	plan, diag, err := InspectIndex(context.Background(), db)
 	if err != nil || diag != nil {
 		t.Fatalf("plan error=%v diagnostic=%+v", err, diag)
 	}
-	if plan.From.AppliedVersion != 20 {
-		t.Fatalf("applied version = %d, want 20", plan.From.AppliedVersion)
+	if plan.From.AppliedVersion != 21 {
+		t.Fatalf("applied version = %d, want 21", plan.From.AppliedVersion)
 	}
 	if len(plan.Steps) != 0 {
 		t.Fatalf("current shape has pending steps: %+v", plan.Steps)
@@ -371,8 +371,8 @@ func TestInspectIndexRecognizesObservedDevelopmentV13Shape(t *testing.T) {
 	if err != nil || diag != nil {
 		t.Fatalf("inspect error=%v diagnostic=%+v", err, diag)
 	}
-	if plan.From.AppliedVersion != 13 || len(plan.Steps) != 7 || plan.Steps[0].Version != 14 || plan.Steps[1].Version != 15 || plan.Steps[2].Version != 16 || plan.Steps[3].Version != 17 || plan.Steps[4].Version != 18 || plan.Steps[5].Version != 19 || plan.Steps[6].Version != 20 {
-		t.Fatalf("development V13 plan = %+v, want v13 with v14/v15/v16/v17/v18/v19/v20 migration steps", plan)
+	if plan.From.AppliedVersion != 13 || len(plan.Steps) != 8 || plan.Steps[0].Version != 14 || plan.Steps[1].Version != 15 || plan.Steps[2].Version != 16 || plan.Steps[3].Version != 17 || plan.Steps[4].Version != 18 || plan.Steps[5].Version != 19 || plan.Steps[6].Version != 20 || plan.Steps[7].Version != 21 {
+		t.Fatalf("development V13 plan = %+v, want v13 with v14 through v21 migration steps", plan)
 	}
 }
 
@@ -405,8 +405,8 @@ func TestInspectIndexRecognizesCanonicalAndExplicitLegacyV13Shapes(t *testing.T)
 			if plan.From.AppliedVersion != 13 {
 				t.Fatalf("applied version = %d, want 13", plan.From.AppliedVersion)
 			}
-			if len(plan.Steps) != 7 || plan.Steps[0].Version != 14 || plan.Steps[1].Version != 15 || plan.Steps[2].Version != 16 || plan.Steps[3].Version != 17 || plan.Steps[4].Version != 18 || plan.Steps[5].Version != 19 || plan.Steps[6].Version != 20 {
-				t.Fatalf("V13-compatible shape has pending steps: %+v, want v14/v15/v16/v17/v18/v19/v20 migrations", plan.Steps)
+			if len(plan.Steps) != 8 || plan.Steps[0].Version != 14 || plan.Steps[1].Version != 15 || plan.Steps[2].Version != 16 || plan.Steps[3].Version != 17 || plan.Steps[4].Version != 18 || plan.Steps[5].Version != 19 || plan.Steps[6].Version != 20 || plan.Steps[7].Version != 21 {
+				t.Fatalf("V13-compatible shape has pending steps: %+v, want v14 through v21 migrations", plan.Steps)
 			}
 		})
 	}

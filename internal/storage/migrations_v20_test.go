@@ -21,7 +21,7 @@ func TestV20RetainsCanonicalLegacyPayloadAndFingerprint(t *testing.T) {
 		t.Fatal(err)
 	}
 	plan, diagnostic, err := compat.InspectIndex(context.Background(), db.DB())
-	if err != nil || diagnostic != nil || len(plan.Steps) != 1 || plan.Steps[0].Version != 20 {
+	if err != nil || diagnostic != nil || len(plan.Steps) != 2 || plan.Steps[0].Version != 20 || plan.Steps[1].Version != 21 {
 		t.Fatalf("V19 plan=%+v diagnostic=%+v err=%v", plan, diagnostic, err)
 	}
 	if err := applyMigrationPlanForTest(context.Background(), db, plan); err != nil {
