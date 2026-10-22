@@ -1,7 +1,7 @@
-# dagu-feature-bundle: @a4s/omp-dagu@0.3.101 source=pablontiv/a4s@04846df5940d65b8e230eafadff6621ae9186122 bootstrap=bootstrap-backscroll-v0-3-101 dagu=2.20.1
+# dagu-feature-bundle: @a4s/omp-dagu@0.3.108 source=pablontiv/a4s@2a0c2b100719627eb3d9214d798ab7c57a47f661 bootstrap=bootstrap-backscroll-v0-3-108 dagu=2.20.1
 labels:
   - workspace=backscroll
-  - dagu-feature-bundle=0.3.101
+  - dagu-feature-bundle=0.3.108
 queue: backscroll
 type: graph
 dotenv: []
@@ -42,7 +42,7 @@ env:
   - A4S_BLOCKER_REPORTING: "ask"
   - WORKTREE: ${PRIMARY}/.workspace/worktrees/issue-${ISSUE}
   - RUN: ${context.run.id}
-  - DAGU_FEATURE_BUNDLE: "dagu-feature-bundle=0.3.101 source=pablontiv/a4s@04846df5940d65b8e230eafadff6621ae9186122 bootstrap=bootstrap-backscroll-v0-3-101"
+  - DAGU_FEATURE_BUNDLE: "dagu-feature-bundle=0.3.108 source=pablontiv/a4s@2a0c2b100719627eb3d9214d798ab7c57a47f661 bootstrap=bootstrap-backscroll-v0-3-108"
   - DAGU_RESOURCE_GUARD: |
       resource_lock() {
         local operation=$1 primary root expected actual common key attempt owner run status candidate branch issue
@@ -231,8 +231,9 @@ steps:
     run: |
       set -euo pipefail
       verify_triage_reviewer() {
-        local canonical home tmp encoded sessions_dir transcript expected_parent
+        local canonical home tmp encoded sessions_dir transcript expected_parent parent
         local rest triage_count cutoff required
+        local -a session_dirs parents matches
         for required in PRIMARY OMP_SESSION_ID REVIEW RUN; do
           if [[ -z "${!required:-}" ]]; then
             printf 'check.params=FAIL name=%s\nVERIFIER=FAIL\n' "$required"
@@ -308,24 +309,37 @@ steps:
           encoded=${encoded//:/-}
           encoded="--${encoded}--"
         fi
-        sessions_dir="$HOME/.omp/agent/sessions/$encoded"
-        printf 'primary.canonical=%s\nprimary.encoded=%s\nsessions.dir=%s\n' \
-          "$canonical" "$encoded" "$sessions_dir"
-
         shopt -s nullglob
-        matches=("$sessions_dir"/*_"$OMP_SESSION_ID"/"$REVIEW".jsonl)
-        printf 'transcript.match_count=%d\n' "${#matches[@]}"
-        if [[ ${#matches[@]} -ne 1 ]]; then
-          printf 'session.parentSession=<unavailable>\n'
-          printf 'session_init.agent=<unavailable>\n'
-          printf 'session_init.task=<unavailable>\n'
-          printf 'session_init.timestamp=<unavailable>\n'
-          printf 'last_yield.details.data.poc=<unavailable>\n'
-          printf 'check.transcript_unique=FAIL\nVERIFIER=FAIL\n'
+        session_dirs=("$HOME/.omp/agent/sessions/$encoded")
+        for sessions_dir in "$HOME"/.omp/profiles/*/agent; do
+          [[ -d "$sessions_dir" ]] && session_dirs+=("$sessions_dir/sessions/$encoded")
+        done
+        printf 'primary.canonical=%s\nprimary.encoded=%s\n' "$canonical" "$encoded"
+        parents=()
+        for sessions_dir in "${session_dirs[@]}"; do
+          printf 'sessions.dir=%s\n' "$sessions_dir"
+          for parent in "$sessions_dir"/*_"$OMP_SESSION_ID".jsonl; do
+            [[ -f "$parent" ]] && parents+=("$parent")
+          done
+        done
+        printf 'parent.match_count=%d\n' "${#parents[@]}"
+        if [[ ${#parents[@]} -gt 0 ]]; then
+          for parent in "${parents[@]}"; do printf 'parent.path=%s\n' "$parent"; done
+        fi
+        if [[ ${#parents[@]} -ne 1 ]]; then
+          printf 'check.parent_unique=FAIL\nVERIFIER=FAIL\n'
           return 1
         fi
-        transcript=${matches[0]}
-        expected_parent="${transcript%/*}.jsonl"
+        expected_parent=${parents[0]}
+        printf 'check.parent_unique=PASS\n'
+        transcript="${expected_parent%.jsonl}/$REVIEW.jsonl"
+        matches=()
+        [[ -f "$transcript" ]] && matches+=("$transcript")
+        printf 'transcript.match_count=%d\n' "${#matches[@]}"
+        if [[ ${#matches[@]} -ne 1 ]]; then
+          printf 'transcript.path=%s\ncheck.transcript_unique=FAIL\nVERIFIER=FAIL\n' "$transcript"
+          return 1
+        fi
         printf 'transcript.path=%s\nexpected.parentSession=%s\ncheck.transcript_unique=PASS\n' \
           "$transcript" "$expected_parent"
 
@@ -361,8 +375,7 @@ steps:
                 session_identity: (($sessions | length) == 1 and ($inits | length) >= 1
                   and ($inits | all(.agent == $init.agent and .task == $init.task))),
                 parentSession: ($session.parentSession == $expected_parent),
-                agent: ($init.agent == "triage-reviewer"),
-                task: (($init.task // "") | contains("TRIAGE_REVIEW AGENT=triage-reviewer DAG=feature RUN=\($run) ")),
+                task: ([($init.task // "") | capture("(?:^|\\s)TRIAGE_REVIEW DAG=feature RUN=(?<run>[A-Za-z0-9_.-]+) GENERATION=[0-9]+ REQUEST=[0-9]+(?=\\s|$)"; "g") | .run] | index($run) != null),
                 timestamp: ($started != null and $cutoff_epoch != null and $started > $cutoff_epoch),
                 poc: ($yield.message.details.data.poc == "no")
               }
@@ -376,7 +389,6 @@ steps:
             "cutoff=\($cutoff)",
             "check.session_identity=\(if .checks.session_identity then "PASS" else "FAIL" end)",
             "check.parentSession=\(if .checks.parentSession then "PASS" else "FAIL" end)",
-            "check.agent=\(if .checks.agent then "PASS" else "FAIL" end)",
             "check.task_run_marker=\(if .checks.task then "PASS" else "FAIL" end)",
             "check.timestamp_after_cutoff=\(if .checks.timestamp then "PASS" else "FAIL" end)",
             "check.last_yield_poc_no=\(if .checks.poc then "PASS" else "FAIL" end)",
@@ -850,6 +862,36 @@ steps:
     run: |
       set -euo pipefail
       umask 0022
+      lock="$(git -C "$PRIMARY" rev-parse --path-format=absolute --git-common-dir)/dagu-feature/gate.lock"
+      mkdir -p "${lock%/*}"
+      # Keep the same process and an inheritable descriptor for the entire body.
+      exec python3 -c '
+      import fcntl
+      import json
+      import os
+      import sys
+      import time
+
+      path, run = sys.argv[1:3]
+      fd = os.open(path, os.O_RDWR | os.O_CREAT, 0o600)
+      previous = None
+      while True:
+          try:
+              fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+              break
+          except BlockingIOError:
+              holder = os.pread(fd, 4096, 0).decode("utf-8", errors="replace") or "unknown"
+              if holder != previous:
+                  print(f"gate: waiting lock={path} run={run} pid={os.getpid()} holder={holder}", file=sys.stderr, flush=True)
+                  previous = holder
+              time.sleep(0.1)
+      owner = json.dumps({"run": run, "pid": os.getpid()})
+      os.ftruncate(fd, 0)
+      os.pwrite(fd, owner.encode(), 0)
+      os.set_inheritable(fd, True)
+      print(f"gate: acquired lock={path} holder={owner}", file=sys.stderr, flush=True)
+      os.execvp(sys.argv[3], sys.argv[3:])
+      ' "$lock" "$RUN" bash -euo pipefail -c "$(cat <<'GATE_BODY'
       cd "$WORKTREE"
       STATE=$(git -C "$PRIMARY" rev-parse --path-format=absolute --git-path "dagu-feature/runs/$RUN")
       sha=$(jq -r .sha "$STATE/candidate.json")
@@ -873,6 +915,8 @@ steps:
       jq -nc --arg sha "$sha" --arg gate "$GATE" '{sha:$sha,gate:$gate}' > "$STATE/gate.json"
       printf 'tested_sha=%s\n' "$sha" | tee -a "${DAGU_OUTPUT_FILE:-/dev/null}"
       git rev-parse HEAD > "$STATE/tested-sha"
+      GATE_BODY
+      )"
     outputs:
       - name: tested_sha
 
@@ -1417,10 +1461,24 @@ handler_on:
               STATUS=$(dagu status feature --run-id "$RUN")
               if grep -q "^Waiting -" <<<"$STATUS"; then
                 ITERATION=$(sed -nE "s/.*push-back iteration: ([0-9]+).*/\1/p" <<<"$STATUS" | head -1)
+                transition=0
                 if [[ "$(cat "$STATE/$ACTION")" == rewind ]]; then
-                  dagu human-task push-back feature --run-id "$RUN" --step "$STEP" --expected-iteration "${ITERATION:-0}"
+                  dagu human-task push-back feature --run-id "$RUN" --step "$STEP" --expected-iteration "${ITERATION:-0}" || transition=$?
                 else
-                  dagu human-task complete feature --run-id "$RUN" --step "$STEP"
+                  dagu human-task complete feature --run-id "$RUN" --step "$STEP" || transition=$?
+                fi
+                if (( transition != 0 )); then
+                  STATUS=$(dagu status feature --run-id "$RUN")
+                  if grep -q "^Failed -" <<<"$STATUS" &&
+                     ATTEMPT=$(curl -fsS --max-time 10 --get "http://127.0.0.1:${DAGU_PORT:-8080}/api/v1/event-logs" --data-urlencode "dagName=feature" --data-urlencode "dagRunId=$RUN" --data-urlencode "paginationMode=cursor" --data-urlencode "limit=1" | jq -er ".entries[0] | select(.type == \"dag.run.failed\" and .data.dag_run_status.error == \"process terminated unexpectedly - stale local process detected\") | .attemptId"); then
+                    case "$STEP" in
+                      dependency_review) RETRY=checkpoint_push ;;
+                      conflict_review) RETRY=rebase ;;
+                      quality_transition) RETRY=quality_admit ;;
+                    esac
+                    printf "stale-process repair: run=%s attempt=%s step=%s; recover: dagu retry --run-id %s --step %s --downstream feature\n" "$RUN" "${ATTEMPT:-unknown}" "$STEP" "$RUN" "$RETRY" >&2
+                  fi
+                  exit "$transition"
                 fi
                 exit 0
               fi
