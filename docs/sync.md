@@ -265,6 +265,33 @@ Plans and external Markdown documents are also declared as inputs. Use `decode.f
 
 Backscroll stores a content hash or reader watermark plus a versioned ingestion-semantics fingerprint for each indexed input. Unchanged files are skipped on later startup syncs only while the decoder epoch, format, source, and reasoning option also match. Available semantic mismatches share the 200-path bounded replay queue; unavailable sources remain untouched. OpenCode is the exception to the file-metadata shortcut: its SQLite watermark is queried on every owner sync because WAL commits may not change `opencode.db` itself. Files with stable message UUIDs are updated append-only; legacy or UUID-less inputs retain wipe-and-reload behavior while the source exists.
 
+Compatible cross-path copies of a native UUID share one canonical event before
+ordinal allocation, tool-event persistence, and template/correction mining.
+An existing canonical owner always wins, including when its source is absent
+from the batch or has expired. New shared UUIDs choose the lexically first
+incoming source path. Existing row IDs, opaque UUIDs, payloads, extraction epochs,
+and source/ordinal anchors remain stable. Unique fork tails retain their own
+source-local coordinates, with persisted ordinal reservations applied normally.
+Exact UUID context is the canonical owner's indexed neighborhood.
+
+Shared copies may monotonically enrich unknown origin, project/session proof,
+native tool-call identity, tool outcomes, search-echo, and interruption evidence
+at the owner's coordinate. Known false error and zero exit signals are proof.
+A copied subset updates only its canonical events and derived satellites;
+the owner's unrelated provenance and file hash/mtime/fingerprint retain their
+own replay state. Each actual input records its own successful file progress,
+including a fully shared transcript, so subsequent unchanged startup converges.
+Copied events for an absent owner are enriched individually, then project
+propagation, identity tags, templates, and corrections are derived once per
+owner path in the same transaction. Native-session records contribute to
+identity-scoped tags; file-level session tags use only records without native
+session identity. A copied call with a proven tool name can claim a lossy
+tool-event satellite at its retained coordinate.
+Cross-path payload disagreement or conflicting established proof fails the
+entire transaction, including all rows, satellites, tags, and file progress.
+Ordinary same-path perennial re-extraction keeps its existing payload-retention
+and monotonic-enrichment behavior.
+
 Pi reader epoch 2 captures native tool events and result signals when an
 unchanged source is replayed. Native session/entry/call identities use canonical
 UUID reconciliation and allow a later result to enrich its original call.
