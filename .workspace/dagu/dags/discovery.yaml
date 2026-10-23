@@ -1,7 +1,7 @@
-# dagu-feature-bundle: @a4s/omp-dagu@0.3.108 source=pablontiv/a4s@2a0c2b100719627eb3d9214d798ab7c57a47f661 bootstrap=bootstrap-backscroll-v0-3-108 dagu=2.20.1
+# dagu-feature-bundle: @a4s/omp-dagu@0.3.118 source=pablontiv/a4s@e6ed98efc72c6ed984ed55787e309073def77c18 bootstrap=bootstrap-backscroll-v0-3-118 dagu=2.20.1
 labels:
   - workspace=backscroll
-  - dagu-feature-bundle=0.3.108
+  - dagu-feature-bundle=0.3.118
 queue: backscroll
 type: graph
 dotenv: []
@@ -25,7 +25,7 @@ params:
     default: ""
 env:
   - RUN: ${context.run.id}
-  - DAGU_FEATURE_BUNDLE: "dagu-feature-bundle=0.3.108 source=pablontiv/a4s@2a0c2b100719627eb3d9214d798ab7c57a47f661 bootstrap=bootstrap-backscroll-v0-3-108"
+  - DAGU_FEATURE_BUNDLE: "dagu-feature-bundle=0.3.118 source=pablontiv/a4s@e6ed98efc72c6ed984ed55787e309073def77c18 bootstrap=bootstrap-backscroll-v0-3-118"
 steps:
   - id: snapshot
     run: |
@@ -92,9 +92,28 @@ steps:
         exactamente un objeto JSON por línea en
         ${steps.snapshot.outputs.OUT_DIR}/findings-<lente>.jsonl. Un archivo vacío
         representa cero hallazgos. SOURCE=${SOURCE}.
+      form:
+        type: object
+        properties:
+          CANCEL: {type: string, enum: ['yes', 'no']}
+
+  - id: discover_cancellation
+    depends: discover
+    env:
+      - CANCEL: ${steps.discover.outputs.CANCEL}
+      - CHECKPOINT: discover
+      - OUT_DIR: ${steps.snapshot.outputs.OUT_DIR}
+    run: &cancellation_gate |
+      set -euo pipefail
+      if [[ "$CANCEL" == yes ]]; then
+        jq -n --arg run "$RUN" --arg checkpoint "$CHECKPOINT" \
+          '{run:$run,checkpoint:$checkpoint,outcome:"cancelled",nativeExpected:"failed"}' > "$OUT_DIR/cancellation.json"
+        printf 'Cancellation requested at %s; terminating before successors; evidence=%s\n' "$CHECKPOINT" "$OUT_DIR"
+        exit 77
+      fi
 
   - id: check_findings
-    depends: discover
+    depends: discover_cancellation
     env:
       - OUT_DIR: ${steps.snapshot.outputs.OUT_DIR}
     run: |
@@ -170,9 +189,21 @@ steps:
         y escribe ${steps.snapshot.outputs.OUT_DIR}/verdicts.jsonl. Debe haber un
         veredicto por id actual. LIVE_TARGET=${LIVE_TARGET}; si está definido, la
         comprobación en vivo es exclusivamente de lectura y se marca live=true.
+      form:
+        type: object
+        properties:
+          CANCEL: {type: string, enum: ['yes', 'no']}
+
+  - id: validate_cancellation
+    depends: validate
+    env:
+      - CANCEL: ${steps.validate.outputs.CANCEL}
+      - CHECKPOINT: validate
+      - OUT_DIR: ${steps.snapshot.outputs.OUT_DIR}
+    run: *cancellation_gate
 
   - id: check_verdicts
-    depends: validate
+    depends: validate_cancellation
     env:
       - OUT_DIR: ${steps.snapshot.outputs.OUT_DIR}
     run: |
@@ -230,9 +261,21 @@ steps:
         The body includes ## Problem, ## Change, and ## Acceptance. Each confirmed
         finding appears exactly once. Derive a stable kebab-case unit id from the
         sorted finding IDs.
+      form:
+        type: object
+        properties:
+          CANCEL: {type: string, enum: ['yes', 'no']}
+
+  - id: consolidate_cancellation
+    depends: consolidate
+    env:
+      - CANCEL: ${steps.consolidate.outputs.CANCEL}
+      - CHECKPOINT: consolidate
+      - OUT_DIR: ${steps.snapshot.outputs.OUT_DIR}
+    run: *cancellation_gate
 
   - id: check_units
-    depends: consolidate
+    depends: consolidate_cancellation
     env:
       - OUT_DIR: ${steps.snapshot.outputs.OUT_DIR}
     run: |
@@ -315,4 +358,22 @@ steps:
       printf 'BACKEND_RUN_ID=%s\n' "$backend_run_id" >> "$DAGU_OUTPUT_FILE"
     outputs:
       - name: BACKEND_RUN_ID
+
+handler_on:
+  exit:
+    env:
+      - OUT_DIR: ${steps.snapshot.outputs.OUT_DIR}
+      - SNAPSHOT: ${steps.snapshot.outputs.SNAPSHOT}
+    run: |
+      set -euo pipefail
+      # Cancellation disposes its immutable snapshot while preserving findings and audit evidence.
+      if [[ -f "$OUT_DIR/cancellation.json" && "$SNAPSHOT" == "$OUT_DIR/snapshot" && -d "$SNAPSHOT" ]]; then
+        [[ "$(git -C "$SNAPSHOT" rev-parse --show-toplevel)" == "$SNAPSHOT" &&
+           "$(git -C "$SNAPSHOT" rev-parse --path-format=absolute --git-common-dir)" == "$(git -C "$PRIMARY" rev-parse --path-format=absolute --git-common-dir)" &&
+           -z "$(git -C "$SNAPSHOT" status --porcelain --untracked-files=all)" &&
+           -z "$(git -C "$SNAPSHOT" branch --show-current)" ]]
+        chmod -R u+w "$SNAPSHOT"
+        git -C "$PRIMARY" worktree remove "$SNAPSHOT"
+        printf 'cleanup snapshot=%s evidence=%s\n' "$SNAPSHOT" "$OUT_DIR"
+      fi
 
