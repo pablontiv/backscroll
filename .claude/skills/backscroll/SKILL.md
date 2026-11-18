@@ -1,6 +1,6 @@
 ---
 name: backscroll
-description: "Use when coding work may have relevant prior session history, including earlier features, bugs, tests, refactors, commands, errors, or decisions."
+description: "Use proactively before feature, bug, test, refactor, or decision work that may have prior history, and whenever earlier coding-agent sessions, conversations, commands, errors, or decisions may matter. Spanish triggers include 'sesiones anteriores', 'lo que hablamos', 'qué decidimos', 'ya lo hicimos', 'qué hicimos con', 'qué error dio', 'dónde corrí', 'historial de sesiones', and 'busca en sesiones'."
 user-invocable: true
 allowed-tools:
   - Bash

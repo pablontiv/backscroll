@@ -1,6 +1,6 @@
 ---
 name: backscroll
-description: "Use when starting feature, bug, test, refactor, or decision work that may have prior session history; when recalling what happened, which command failed, where something ran, or what was decided; and before considering raw coding-agent session files."
+description: "Use proactively before feature, bug, test, refactor, or decision work that may have prior history, and whenever earlier sessions, conversations, commands, errors, or decisions from Claude Code, Pi, OMP, OpenCode, or Codex CLI may matter. Spanish triggers include 'sesiones anteriores', 'lo que hablamos', 'qué decidimos', 'ya lo hicimos', 'qué hicimos con', 'qué error dio', 'dónde corrí', 'historial de sesiones', and 'busca en sesiones'."
 user-invocable: true
 allowed-tools:
   - Bash
@@ -42,8 +42,9 @@ Invoke `/skill:backscroll` automatically for:
 - Refactoring: query the module, interface, or previous pattern.
 - Decision questions: query the decision topic and alternatives.
 - Debugging execution: query command names, paths, flags, exit codes, and use the search command with `--content-type tool` and query text.
+- Questions about earlier sessions or conversations in any indexed agent (Claude Code, Pi, OMP, OpenCode, Codex CLI): query the topic, not the agent name.
 
-Spanish trigger equivalents include "ya lo hicimos", "qué hicimos con", "qué error dio", "dónde corrí", and "qué decidimos". Do not wait for explicit recall requests; missed lookup cost is rework and duplicate decisions.
+Spanish trigger equivalents include "ya lo hicimos", "qué hicimos con", "qué error dio", "dónde corrí", "qué decidimos", "sesiones anteriores", "lo que hablamos", "historial de sesiones", and "busca en sesiones". Do not wait for explicit recall requests; missed lookup cost is rework and duplicate decisions.
 
 ## 3) Canonical input location
 
