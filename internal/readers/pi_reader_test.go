@@ -201,6 +201,9 @@ func TestPiReader_MarksDirectBashSearchCalls(t *testing.T) {
 			}
 		case contains(m.Content, "result_0_snippet"):
 			sawResult = true
+			if m.SearchEcho || m.ToolName != "" || m.Origin != models.OriginAutomation {
+				t.Fatalf("unlinked output metadata = %+v", m)
+			}
 		}
 	}
 	if !sawSearch {
@@ -209,8 +212,8 @@ func TestPiReader_MarksDirectBashSearchCalls(t *testing.T) {
 	if !sawRg {
 		t.Fatal("missing rg toolCall")
 	}
-	if sawResult {
-		t.Fatal("toolResult rows must stay unindexed")
+	if !sawResult {
+		t.Fatal("missing searchable toolResult output")
 	}
 }
 

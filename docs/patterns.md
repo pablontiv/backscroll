@@ -63,6 +63,11 @@ Top `(tool_name, command_head)` pairs by frequency. The absolute top is
 usually unsurprising (Edit, Read); the informative reads are per-project
 (`--project`) and per-tag (`--tag debugging`) stratifications.
 
+Pi native `toolCall` blocks contribute one event each, including tools other
+than shell tools. `bash` arguments supply command heads before searchable input
+is truncated. Native `toolResult` output is paired by `toolCallId` and contributes
+no additional call event.
+
 ### failures — what breaks
 
 Failure signatures `(tool_name, is_error, exit_code)` for events with
@@ -70,6 +75,12 @@ Failure signatures `(tool_name, is_error, exit_code)` for events with
 signal (`is_error` NULL) are excluded and counted. `exit_code=?` means no
 exit code was recoverable (non-Bash tools have none; Bash text is
 regex-mined and capped at 4000 runes by toolfmt).
+
+Pi uses only explicit native `isError` true/false as its result signal.
+Interleaved and out-of-order results are matched by call ID. A missing result
+or a result without `isError` remains unsignalled, even if its output looks
+successful; explicit false counts as signalled success. Pi's native error flag
+does not imply an exit code.
 
 #### Failure census and weekly output compatibility (#147)
 

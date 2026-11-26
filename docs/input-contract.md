@@ -151,7 +151,7 @@ The built-in readers map native records as follows:
 | `claude` | `tool_result` block | `automation`, even though Claude carries the block in a user-role record |
 | `pi` (Pi/Pion) | Supported message role `user` or `assistant` | `human` or `assistant` |
 | `pi` (Pi/Pion) | `toolCall` or optional `thinking` block | `assistant` |
-| `pi` (Pi) | Supported `custom` tool-result record | `automation` |
+| `pi` (Pi/Pion) | Native `message.role="toolResult"` or supported Pi `custom` output | `automation` |
 | `omp` | User with `attribution="user"`, not synthetic | `human` |
 | `omp` | User with `synthetic=true` or `attribution="agent"` | `automation` |
 | `omp` | User without supported attribution | `unknown` |
@@ -260,6 +260,31 @@ records may use `recordType` as supported by [issue #98](https://github.com/pabl
 If both fields exist, they must match. Conflicts and unknown record kinds are
 skipped. A lone `recordType` supports only `message`; it does not map Pion
 `tool_start` or `tool_end` records onto Pi `custom` records.
+
+Native `toolCall` blocks produce one structured event per call, with the native
+tool name and call ID and a shell command head when present. Native
+`message.role="toolResult"` records link by `toolCallId`, including interleaved
+or out-of-order results. Their explicit `isError` true/false enriches the call;
+an absent signal stays unknown. Results remain searchable automation output,
+not additional calls. Direct-search output inherits echo provenance only from
+its matched native call. Legacy `custom` output remains searchable separately.
+
+When the source supplies a native session ID and complete entry/call IDs, stable
+identities are `pi:<session>:call:<callID>` for calls and
+`pi:<session>:entry:<entryID>#<kind>` for text, results and custom output.
+Thinking identities include their physical block index (`#thinking:<index>`).
+A call without its own ID uses its native entry plus physical block index
+(`#call:<index>`); its result linkage remains unknown. Toggling reasoning
+therefore does not move other identities. An identified native
+session with an emitted record missing identity fails parsing before storage
+changes. Legacy files without a native session ID retain UUID-less whole-file
+snapshot replacement; identity is never derived from paths or payloads.
+
+Pi decoder epoch 2 recovers these native events from unchanged available sources
+through the shared 200-path ingestion-semantics replay queue. Retained canonical
+calls can gain a later explicit result without replacement or extra events.
+Unavailable, expired or excluded sources retain their stored history and
+fingerprint; missing native evidence cannot be reconstructed as success.
 
 Installers preserve an existing manifest by default. Existing users whose Pi
 input still has `exclude = []` keep that behavior until they intentionally add
